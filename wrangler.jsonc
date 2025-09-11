@@ -43,13 +43,13 @@
     ]
   },
   // Containers are in beta - uncomment when available for your account
-  // "containers": [
-  //   {
-  //     "class_name": "DuckLakeContainer",
-  //     "image": "./containers/ducklake/Dockerfile",
-  //     "max_instances": 10
-  //   }
-  // ],
+  "containers": [
+    {
+      "class_name": "DuckLakeContainer",
+      "image": "./containers/ducklake/Dockerfile",
+      "max_instances": 10
+    }
+  ],
   // Migrations for Durable Objects
   "migrations": [
     {

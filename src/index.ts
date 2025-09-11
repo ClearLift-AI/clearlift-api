@@ -1,12 +1,33 @@
 import { ApiException, fromHono } from "chanfana";
 import { Hono } from "hono";
 import { Container } from "@cloudflare/containers";
-import { eventEndpoints } from "./endpoints/events/router";
-import { organizationsEndpoints } from "./endpoints/organizations/router";
-import { campaignsEndpoints } from "./endpoints/campaigns/router";
-import { platformsEndpoints } from "./endpoints/platforms/router";
-import { userEndpoints } from "./endpoints/user/router";
-import { datalakeEndpoints } from "./endpoints/datalake/router";
+// User endpoints
+import { GetUserProfile, UpdateUserProfile } from "./endpoints/user/profile";
+
+// Organization endpoints
+import { ListOrganizations } from "./endpoints/organizations/list";
+import { CreateOrganization } from "./endpoints/organizations/create";
+import { SwitchOrganization } from "./endpoints/organizations/switch";
+
+// Campaign endpoints
+import { ListCampaigns } from "./endpoints/campaigns/list";
+
+// Platform endpoints
+import { ListPlatforms } from "./endpoints/platforms/list";
+import { SyncPlatform } from "./endpoints/platforms/sync";
+import { GetSyncHistory } from "./endpoints/platforms/syncHistory";
+
+// Event endpoints
+import { EventQuery } from "./endpoints/events/eventQuery";
+import { GetConversions } from "./endpoints/events/conversions";
+import { GetEventInsights } from "./endpoints/events/insights";
+import { SyncEvents } from "./endpoints/events/sync";
+
+// Datalake endpoints
+import { CreateTable, ListTables, GetTableSchema, DropTable } from "./endpoints/datalake/tables";
+import { WriteData, BatchWriteData, QueryData } from "./endpoints/datalake/data";
+import { InitializeDatalake, GetStandardSchemas } from "./endpoints/datalake/init";
+import { SyncCampaignsToDatalake, SyncEventsToDatalake, GetSyncStatus } from "./endpoints/datalake/sync";
 import { HealthCheck } from "./endpoints/health";
 import { DebugDatabases, DebugMigrations, DebugTestWrite } from "./endpoints/debug";
 import { authMiddleware, requireOrgMiddleware } from "./middleware/auth";
@@ -96,62 +117,48 @@ openapi.post("/debug/test-write", DebugTestWrite);
 // Apply authentication middleware to all API routes
 app.use('/api/*', authMiddleware);
 
-// Helper function to register endpoints  
-function registerEndpoints(endpoints: any[], basePath: string) {
-  if (!endpoints || !Array.isArray(endpoints)) return;
-  
-  endpoints.forEach(EndpointClass => {
-    if (!EndpointClass) return;
-    
-    try {
-      // Create a temporary instance to get the schema
-      const tempInstance = new EndpointClass({} as any);
-      const schema = tempInstance.schema;
-      
-      if (!schema || !schema.method || !schema.path) return;
-      
-      const method = schema.method.toLowerCase();
-      const path = `${basePath}${schema.path}`;
-      
-      // Register the endpoint class (not the instance)
-      switch(method) {
-        case 'get':
-          openapi.get(path, EndpointClass);
-          break;
-        case 'post':
-          openapi.post(path, EndpointClass);
-          break;
-        case 'put':
-          openapi.put(path, EndpointClass);
-          break;
-        case 'delete':
-          openapi.delete(path, EndpointClass);
-          break;
-        case 'patch':
-          openapi.patch(path, EndpointClass);
-          break;
-      }
-    } catch (err) {
-      // Silently skip registration errors in production
-    }
-  });
-}
+// User endpoints (auth required, no org required)
+openapi.get('/api/user/profile', GetUserProfile);
+openapi.put('/api/user/profile', UpdateUserProfile);
 
-// Routes that require authentication but not necessarily an organization
-registerEndpoints(userEndpoints, '/api/user');
-registerEndpoints(organizationsEndpoints, '/api/organizations');
+// Organization endpoints (auth required, no org required)
+openapi.get('/api/organizations', ListOrganizations);
+openapi.post('/api/organizations', CreateOrganization);
+openapi.post('/api/organizations/switch', SwitchOrganization);
 
-// Routes that require both authentication and organization context
+// Apply organization context middleware
 app.use('/api/campaigns/*', requireOrgMiddleware);
 app.use('/api/platforms/*', requireOrgMiddleware);
 app.use('/api/events/*', requireOrgMiddleware);
 app.use('/api/datalake/*', requireOrgMiddleware);
 
-// Register endpoints that require organization context
-registerEndpoints(campaignsEndpoints, '/api/campaigns');
-registerEndpoints(platformsEndpoints, '/api/platforms');
-registerEndpoints(eventEndpoints, '/api/events');
-registerEndpoints(datalakeEndpoints, '/api/datalake');
+// Campaign endpoints (auth + org required)
+openapi.post('/api/campaigns', ListCampaigns);
+
+// Platform endpoints (auth + org required)
+openapi.get('/api/platforms/list', ListPlatforms);
+openapi.post('/api/platforms/sync', SyncPlatform);
+openapi.get('/api/platforms/sync/history', GetSyncHistory);
+
+// Event endpoints (auth + org required)
+openapi.post('/api/events/query', EventQuery);
+openapi.get('/api/events/conversions', GetConversions);
+openapi.get('/api/events/insights', GetEventInsights);
+openapi.post('/api/events/sync', SyncEvents);
+
+// Datalake endpoints (auth + org required)
+openapi.post('/api/datalake/tables', CreateTable);
+openapi.get('/api/datalake/tables', ListTables);
+openapi.get('/api/datalake/tables/:table/schema', GetTableSchema);
+openapi.delete('/api/datalake/tables/:table', DropTable);
+openapi.post('/api/datalake/tables/:table/data', WriteData);
+openapi.post('/api/datalake/tables/:table/batch', BatchWriteData);
+openapi.post('/api/datalake/query', QueryData);
+openapi.post('/api/datalake/init', InitializeDatalake);
+openapi.get('/api/datalake/schemas', GetStandardSchemas);
+openapi.post('/api/datalake/sync/campaigns', SyncCampaignsToDatalake);
+openapi.post('/api/datalake/sync/events', SyncEventsToDatalake);
+openapi.get('/api/datalake/sync/status', GetSyncStatus);
 
 // Export the Hono app
 export default app;
