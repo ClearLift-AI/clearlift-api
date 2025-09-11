@@ -1,4 +1,4 @@
-import { Container, getContainer } from 'cloudflare:workers';
+// Container import not needed for service - defined in main worker
 
 // Standard table schemas for the platform
 export const STANDARD_SCHEMAS = {
@@ -92,7 +92,7 @@ export class DatalakeManagementService {
    * Get a DuckLake container instance
    */
   private getContainerInstance() {
-    return getContainer(this.containerBinding, this.organizationId);
+    return this.containerBinding.get(this.containerBinding.idFromName(this.organizationId));
   }
 
   /**

@@ -1,4 +1,4 @@
-import { Container, getContainer } from 'cloudflare:workers';
+import { Container } from '@cloudflare/containers';
 
 export class DuckLakeContainer extends Container {
   defaultPort = 8080;
@@ -50,7 +50,7 @@ export class EventAnalyticsService {
    */
   private getContainerInstance() {
     // Use organization ID as the container instance ID for isolation
-    return getContainer(this.containerBinding, this.organizationId);
+    return this.containerBinding.get(this.containerBinding.idFromName(this.organizationId));
   }
 
   /**

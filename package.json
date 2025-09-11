@@ -30,6 +30,7 @@
     "test:db": "./test-database-access.sh"
   },
   "dependencies": {
+    "@cloudflare/containers": "^0.0.28",
     "chanfana": "2.8.1",
     "hono": "4.8.2",
     "zod": "3.25.67"

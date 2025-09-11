@@ -11,6 +11,9 @@ import { DebugDatabases, DebugMigrations, DebugTestWrite } from "./endpoints/deb
 import { authMiddleware, requireOrgMiddleware } from "./middleware/auth";
 import { ContentfulStatusCode } from "hono/utils/http-status";
 
+// Export the DuckLakeContainer from eventAnalytics
+export { DuckLakeContainer } from "./services/eventAnalytics";
+
 // Start a Hono app
 const app = new Hono<{ Bindings: Env }>();
 

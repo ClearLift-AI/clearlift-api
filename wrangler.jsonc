@@ -32,12 +32,20 @@
       "bucket_name": "event-datalake"
     }
   ],
+  // Durable Objects for container management
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DUCKLAKE",
+        "class_name": "DuckLakeContainer",
+        "script_name": "clearlift-api"
+      }
+    ]
+  },
   // Containers are in beta - uncomment when available for your account
   "containers": [
     {
-      "binding": "DUCKLAKE",
       "class_name": "DuckLakeContainer",
-      "script_name": "ducklake-container",
       "image": "./containers/ducklake/Dockerfile"
     }
   ]
