@@ -1,6 +1,6 @@
 -- Migration number: 0003 2025-09-11T12:00:00.000Z
 
-CREATE TABLE platform_connections (
+CREATE TABLE IF NOT EXISTS platform_connections (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
     platform TEXT NOT NULL,

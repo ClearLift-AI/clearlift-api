@@ -1,6 +1,6 @@
 -- Migration number: 0005 2025-09-11T12:00:00.000Z
 
-CREATE TABLE organization_members (
+CREATE TABLE IF NOT EXISTS organization_members (
     organization_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'viewer',

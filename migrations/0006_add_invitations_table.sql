@@ -1,6 +1,6 @@
 -- Migration number: 0006 2025-09-11T12:00:00.000Z
 
-CREATE TABLE invitations (
+CREATE TABLE IF NOT EXISTS invitations (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
     email TEXT NOT NULL,

@@ -1,6 +1,6 @@
 -- Migration number: 0002 2025-09-11T12:00:00.000Z
 
-CREATE TABLE sessions (
+CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     current_organization_id TEXT,
