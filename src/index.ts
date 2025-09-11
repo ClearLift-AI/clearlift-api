@@ -1,5 +1,6 @@
 import { ApiException, fromHono } from "chanfana";
 import { Hono } from "hono";
+import { Container } from "@cloudflare/containers";
 import { eventsRouter } from "./endpoints/events/router";
 import { organizationsRouter } from "./endpoints/organizations/router";
 import { campaignsRouter } from "./endpoints/campaigns/router";
@@ -11,8 +12,42 @@ import { DebugDatabases, DebugMigrations, DebugTestWrite } from "./endpoints/deb
 import { authMiddleware, requireOrgMiddleware } from "./middleware/auth";
 import { ContentfulStatusCode } from "hono/utils/http-status";
 
-// Export the DuckLakeContainer from eventAnalytics
-export { DuckLakeContainer } from "./services/eventAnalytics";
+// DuckLake Container Durable Object
+export class DuckLakeContainer extends Container<Env> {
+  constructor(ctx: any, env: Env) {
+    super(ctx, env);
+    
+    // Configure environment variables for the container
+    let envConfig: Record<string, string> = {};
+    
+    // Add R2 tokens if available
+    if (env.R2_READ_ONLY_TOKEN) {
+      envConfig.R2_READ_ONLY_TOKEN = env.R2_READ_ONLY_TOKEN;
+    }
+    if (env.R2_WRITE_TOKEN) {
+      envConfig.R2_WRITE_TOKEN = env.R2_WRITE_TOKEN;
+    }
+    
+    // Add catalog configuration
+    if (env.DATALAKE_CATALOG_URI) {
+      envConfig.DATALAKE_CATALOG_URI = env.DATALAKE_CATALOG_URI;
+    }
+    if (env.DATALAKE_WAREHOUSE_NAME) {
+      envConfig.DATALAKE_WAREHOUSE_NAME = env.DATALAKE_WAREHOUSE_NAME;
+    }
+    if (env.R2_S3_API_URL) {
+      envConfig.R2_S3_API_URL = env.R2_S3_API_URL;
+    }
+    if (env.R2_BUCKET) {
+      envConfig.R2_BUCKET = env.R2_BUCKET;
+    }
+    
+    // Container configuration
+    this.defaultPort = 8080;
+    this.sleepAfter = "5m";
+    this.envVars = envConfig;
+  }
+}
 
 // Start a Hono app
 const app = new Hono<{ Bindings: Env }>();

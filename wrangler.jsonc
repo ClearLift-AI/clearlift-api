@@ -48,5 +48,12 @@
       "class_name": "DuckLakeContainer",
       "image": "./containers/ducklake/Dockerfile"
     }
+  ],
+  // Migrations for Durable Objects
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DuckLakeContainer"]
+    }
   ]
 }

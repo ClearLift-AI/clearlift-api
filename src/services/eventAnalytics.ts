@@ -1,13 +1,3 @@
-import { Container } from '@cloudflare/containers';
-
-export class DuckLakeContainer extends Container {
-  defaultPort = 8080;
-  sleepAfter = '5m';
-  
-  // Reference the Dockerfile in containers/ducklake
-  image = './containers/ducklake/Dockerfile';
-}
-
 export interface ConversionEvent {
   id: string;
   organization_id: string;
