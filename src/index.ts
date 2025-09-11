@@ -104,36 +104,44 @@ function registerEndpoints(endpoints: any[], basePath: string) {
       return;
     }
     
-    // Access the prototype to get the schema without instantiation
-    const proto = EndpointClass.prototype;
-    if (!proto || !proto.schema) {
-      console.error('No schema found on endpoint class:', EndpointClass.name);
-      return;
-    }
-    
-    const schema = proto.schema;
-    const method = (schema.method || 'GET').toLowerCase();
-    const path = `${basePath}${schema.path || ''}`;
-    
-    // Register based on method type
-    switch(method) {
-      case 'get':
-        openapi.get(path, EndpointClass);
-        break;
-      case 'post':
-        openapi.post(path, EndpointClass);
-        break;
-      case 'put':
-        openapi.put(path, EndpointClass);
-        break;
-      case 'delete':
-        openapi.delete(path, EndpointClass);
-        break;
-      case 'patch':
-        openapi.patch(path, EndpointClass);
-        break;
-      default:
-        console.error('Unknown method:', method, 'for', path);
+    try {
+      // Create a dummy context to instantiate the class and get schema
+      const dummyContext = {} as any;
+      const instance = new EndpointClass(dummyContext);
+      
+      if (!instance.schema) {
+        console.error('No schema found on endpoint instance:', EndpointClass.name);
+        return;
+      }
+      
+      const schema = instance.schema;
+      const method = (schema.method || 'GET').toLowerCase();
+      const path = `${basePath}${schema.path || ''}`;
+      
+      console.log(`Registering ${method.toUpperCase()} ${path}`);
+      
+      // Register based on method type
+      switch(method) {
+        case 'get':
+          openapi.get(path, EndpointClass);
+          break;
+        case 'post':
+          openapi.post(path, EndpointClass);
+          break;
+        case 'put':
+          openapi.put(path, EndpointClass);
+          break;
+        case 'delete':
+          openapi.delete(path, EndpointClass);
+          break;
+        case 'patch':
+          openapi.patch(path, EndpointClass);
+          break;
+        default:
+          console.error('Unknown method:', method, 'for', path);
+      }
+    } catch (err) {
+      console.error('Error registering endpoint:', EndpointClass.name, err);
     }
   });
 }

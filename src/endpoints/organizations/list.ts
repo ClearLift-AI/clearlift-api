@@ -7,7 +7,7 @@ import { authMiddleware } from "../../middleware/auth";
 export class ListOrganizations extends OpenAPIRoute {
   schema = {
   method: "GET",
-  path: "/organizations",
+  path: "/",
   middleware: [authMiddleware],
   summary: "List user's organizations",
   description: "Get all organizations the authenticated user has access to",

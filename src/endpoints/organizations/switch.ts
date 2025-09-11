@@ -7,7 +7,7 @@ import { authMiddleware } from "../../middleware/auth";
 export class SwitchOrganization extends OpenAPIRoute {
   schema = {
   method: "POST",
-  path: "/organizations/switch",
+  path: "/switch",
   middleware: [authMiddleware],
   summary: "Switch current organization",
   description: "Switch the user's current active organization",

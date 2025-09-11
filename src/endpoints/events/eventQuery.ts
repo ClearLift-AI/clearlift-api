@@ -6,7 +6,7 @@ import { EventAnalyticsService } from "../../services/eventAnalytics";
 export class EventQuery extends OpenAPIRoute {
   schema = {
   method: "POST",
-  path: "/events/query",
+  path: "/query",
   security: "session",
   summary: "Execute a custom DuckDB query on event data",
   description: "Execute a custom DuckDB SQL query against the R2 Data Catalog via DuckLake",

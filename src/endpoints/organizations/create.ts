@@ -6,7 +6,7 @@ import { authMiddleware } from "../../middleware/auth";
 export class CreateOrganization extends OpenAPIRoute {
   schema = {
   method: "POST",
-  path: "/organizations",
+  path: "/",
   middleware: [authMiddleware],
   summary: "Create a new organization",
   description: "Create a new organization and add the current user as owner",

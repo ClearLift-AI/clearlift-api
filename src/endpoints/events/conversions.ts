@@ -6,7 +6,7 @@ import { EventAnalyticsService } from "../../services/eventAnalytics";
 export class GetConversions extends OpenAPIRoute {
   schema = {
   method: "GET",
-  path: "/events/conversions",
+  path: "/conversions",
   security: "session",
   summary: "Get conversion event metrics",
   description: "Retrieve aggregated conversion event metrics from R2 Data Catalog",

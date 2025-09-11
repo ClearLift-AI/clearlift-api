@@ -6,7 +6,7 @@ import { EventAnalyticsService, ConversionEvent } from "../../services/eventAnal
 export class SyncEvents extends OpenAPIRoute {
   schema = {
   method: "POST",
-  path: "/events/sync",
+  path: "/sync",
   security: "session",
   summary: "Sync events to R2 Data Catalog",
   description: "Write conversion events to R2 as Iceberg tables via DuckLake",

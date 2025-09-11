@@ -6,7 +6,7 @@ import { EventAnalyticsService } from "../../services/eventAnalytics";
 export class GetEventInsights extends OpenAPIRoute {
   schema = {
   method: "GET",
-  path: "/events/insights",
+  path: "/insights",
   security: "session",
   summary: "Get event-based insights",
   description: "Retrieve analytical insights from event data using DuckDB",
