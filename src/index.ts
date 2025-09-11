@@ -96,22 +96,38 @@ openapi.post("/debug/test-write", DebugTestWrite);
 // Apply authentication middleware to all API routes
 app.use('/api/*', authMiddleware);
 
-// Routes that require authentication but not necessarily an organization
-// Register user endpoints
-userEndpoints.forEach(EndpointClass => {
-  const instance = new EndpointClass();
-  const method = instance.schema.method.toLowerCase();
-  const path = `/api/user${instance.schema.path}`;
-  openapi[method](path, EndpointClass);
-});
+// Helper function to register endpoints
+function registerEndpoints(endpoints: any[], basePath: string) {
+  endpoints.forEach(EndpointClass => {
+    // Create a temporary instance to access the schema
+    const tempInstance = new EndpointClass({} as any);
+    const method = tempInstance.schema.method.toLowerCase();
+    const path = `${basePath}${tempInstance.schema.path}`;
+    
+    // Register based on method type
+    switch(method) {
+      case 'get':
+        openapi.get(path, EndpointClass);
+        break;
+      case 'post':
+        openapi.post(path, EndpointClass);
+        break;
+      case 'put':
+        openapi.put(path, EndpointClass);
+        break;
+      case 'delete':
+        openapi.delete(path, EndpointClass);
+        break;
+      case 'patch':
+        openapi.patch(path, EndpointClass);
+        break;
+    }
+  });
+}
 
-// Register organization endpoints
-organizationsEndpoints.forEach(EndpointClass => {
-  const instance = new EndpointClass();
-  const method = instance.schema.method.toLowerCase();
-  const path = `/api/organizations${instance.schema.path}`;
-  openapi[method](path, EndpointClass);
-});
+// Routes that require authentication but not necessarily an organization
+registerEndpoints(userEndpoints, '/api/user');
+registerEndpoints(organizationsEndpoints, '/api/organizations');
 
 // Routes that require both authentication and organization context
 app.use('/api/campaigns/*', requireOrgMiddleware);
@@ -119,37 +135,11 @@ app.use('/api/platforms/*', requireOrgMiddleware);
 app.use('/api/events/*', requireOrgMiddleware);
 app.use('/api/datalake/*', requireOrgMiddleware);
 
-// Register campaign endpoints
-campaignsEndpoints.forEach(EndpointClass => {
-  const instance = new EndpointClass();
-  const method = instance.schema.method.toLowerCase();
-  const path = `/api/campaigns${instance.schema.path}`;
-  openapi[method](path, EndpointClass);
-});
-
-// Register platform endpoints
-platformsEndpoints.forEach(EndpointClass => {
-  const instance = new EndpointClass();
-  const method = instance.schema.method.toLowerCase();
-  const path = `/api/platforms${instance.schema.path}`;
-  openapi[method](path, EndpointClass);
-});
-
-// Register event endpoints
-eventEndpoints.forEach(EndpointClass => {
-  const instance = new EndpointClass();
-  const method = instance.schema.method.toLowerCase();
-  const path = `/api/events${instance.schema.path}`;
-  openapi[method](path, EndpointClass);
-});
-
-// Register datalake endpoints
-datalakeEndpoints.forEach(EndpointClass => {
-  const instance = new EndpointClass();
-  const method = instance.schema.method.toLowerCase();
-  const path = `/api/datalake${instance.schema.path}`;
-  openapi[method](path, EndpointClass);
-});
+// Register endpoints that require organization context
+registerEndpoints(campaignsEndpoints, '/api/campaigns');
+registerEndpoints(platformsEndpoints, '/api/platforms');
+registerEndpoints(eventEndpoints, '/api/events');
+registerEndpoints(datalakeEndpoints, '/api/datalake');
 
 // Export the Hono app
 export default app;
