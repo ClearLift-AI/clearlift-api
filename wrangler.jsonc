@@ -30,11 +30,13 @@
       "bucket_name": "event-datalake"
     }
   ],
+  // Containers are in beta - uncomment when available for your account
   "containers": [
     {
       "binding": "DUCKLAKE",
       "class_name": "DuckLakeContainer",
-      "script_name": "ducklake-container"
+      "script_name": "ducklake-container",
+      "image": "./containers/ducklake/Dockerfile"
     }
   ]
 }
