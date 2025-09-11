@@ -1,8 +1,9 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService, STANDARD_SCHEMAS } from "../../services/datalakeManagement";
 
-export const CreateTable = new Endpoint({
+export const CreateTable = new OpenAPIRoute({
   method: "POST",
   path: "/tables",
   security: "session",
@@ -59,7 +60,7 @@ export const CreateTable = new Endpoint({
   }
 });
 
-export const ListTables = new Endpoint({
+export const ListTables = new OpenAPIRoute({
   method: "GET",
   path: "/tables",
   security: "session",
@@ -99,7 +100,7 @@ export const ListTables = new Endpoint({
   }
 });
 
-export const GetTableSchema = new Endpoint({
+export const GetTableSchema = new OpenAPIRoute({
   method: "GET",
   path: "/tables/:table/schema",
   security: "session",
@@ -169,7 +170,7 @@ export const GetTableSchema = new Endpoint({
   }
 });
 
-export const DropTable = new Endpoint({
+export const DropTable = new OpenAPIRoute({
   method: "DELETE",
   path: "/tables/:table",
   security: "session",

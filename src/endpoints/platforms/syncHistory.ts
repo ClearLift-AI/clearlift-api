@@ -1,7 +1,8 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 
-export const GetSyncHistory = new Endpoint({
+export const GetSyncHistory = new OpenAPIRoute({
   method: "GET",
   path: "/sync/history",
   security: "session",

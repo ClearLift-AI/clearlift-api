@@ -1,7 +1,8 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 
-export const SyncPlatform = new Endpoint({
+export const SyncPlatform = new OpenAPIRoute({
   method: "POST",
   path: "/sync",
   security: "session",

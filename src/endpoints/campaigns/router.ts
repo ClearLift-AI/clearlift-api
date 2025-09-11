@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { fromHono } from "chanfana";
 import { ListCampaigns } from "./list";
 

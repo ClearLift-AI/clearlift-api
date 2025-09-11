@@ -1,8 +1,9 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService, ConversionEvent } from "../../services/eventAnalytics";
 
-export const SyncEvents = new Endpoint({
+export const SyncEvents = new OpenAPIRoute({
   method: "POST",
   path: "/events/sync",
   security: "session",

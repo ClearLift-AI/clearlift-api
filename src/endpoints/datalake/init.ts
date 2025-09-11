@@ -1,8 +1,9 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService, STANDARD_SCHEMAS } from "../../services/datalakeManagement";
 
-export const InitializeDatalake = new Endpoint({
+export const InitializeDatalake = new OpenAPIRoute({
   method: "POST",
   path: "/init",
   security: "session",
@@ -60,7 +61,7 @@ export const InitializeDatalake = new Endpoint({
   }
 });
 
-export const GetStandardSchemas = new Endpoint({
+export const GetStandardSchemas = new OpenAPIRoute({
   method: "GET",
   path: "/schemas",
   summary: "Get standard table schemas",

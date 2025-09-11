@@ -1,7 +1,8 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../types";
 
-export const DebugDatabases = new Endpoint({
+export const DebugDatabases = new OpenAPIRoute({
   method: "GET",
   path: "/debug/databases",
   summary: "Debug database connections",
@@ -168,7 +169,7 @@ export const DebugDatabases = new Endpoint({
   return c.json(result);
 });
 
-export const DebugMigrations = new Endpoint({
+export const DebugMigrations = new OpenAPIRoute({
   method: "GET",
   path: "/debug/migrations",
   summary: "Debug migration status",
@@ -284,7 +285,7 @@ export const DebugMigrations = new Endpoint({
   return c.json(result);
 });
 
-export const DebugTestWrite = new Endpoint({
+export const DebugTestWrite = new OpenAPIRoute({
   method: "POST",
   path: "/debug/test-write",
   summary: "Test database write permissions",

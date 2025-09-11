@@ -1,8 +1,9 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 import { authMiddleware } from "../../middleware/auth";
 
-export const CreateOrganization = new Endpoint({
+export const CreateOrganization = new OpenAPIRoute({
   method: "POST",
   path: "/organizations",
   middleware: [authMiddleware],

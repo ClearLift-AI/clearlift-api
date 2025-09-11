@@ -1,7 +1,8 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../types";
 
-export const HealthCheck = new Endpoint({
+export const HealthCheck = new OpenAPIRoute({
   method: "GET",
   path: "/health",
   summary: "Health check endpoint",

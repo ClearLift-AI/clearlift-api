@@ -1,8 +1,9 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService } from "../../services/datalakeManagement";
 
-export const WriteData = new Endpoint({
+export const WriteData = new OpenAPIRoute({
   method: "POST",
   path: "/tables/:table/data",
   security: "session",
@@ -71,7 +72,7 @@ export const WriteData = new Endpoint({
   }
 });
 
-export const BatchWriteData = new Endpoint({
+export const BatchWriteData = new OpenAPIRoute({
   method: "POST",
   path: "/tables/:table/batch",
   security: "session",
@@ -147,7 +148,7 @@ export const BatchWriteData = new Endpoint({
   }
 });
 
-export const QueryData = new Endpoint({
+export const QueryData = new OpenAPIRoute({
   method: "POST",
   path: "/query",
   security: "session",

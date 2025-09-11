@@ -10,12 +10,14 @@
     {
       "binding": "DB",
       "database_name": "ClearLiftDash-D1",
-      "database_id": "89bd84be-b517-4c72-ab61-422384319361"
+      "database_id": "89bd84be-b517-4c72-ab61-422384319361",
+      "migrations_dir": "migrations"
     },
     {
       "binding": "AD_DATA",
       "database_name": "demo-ad-sync",
-      "database_id": "718751dd-7256-49bd-9396-18550eb0fe28"
+      "database_id": "718751dd-7256-49bd-9396-18550eb0fe28",
+      "migrations_dir": "migrations-ad-data"
     }
   ],
   "vars": {

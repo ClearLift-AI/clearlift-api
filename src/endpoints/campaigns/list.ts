@@ -1,7 +1,8 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 
-export const ListCampaigns = new Endpoint({
+export const ListCampaigns = new OpenAPIRoute({
   method: "POST",
   path: "/",
   security: "session",

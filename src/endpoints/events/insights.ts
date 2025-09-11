@@ -1,8 +1,9 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService } from "../../services/eventAnalytics";
 
-export const GetEventInsights = new Endpoint({
+export const GetEventInsights = new OpenAPIRoute({
   method: "GET",
   path: "/events/insights",
   security: "session",

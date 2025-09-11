@@ -1,9 +1,10 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 import { AuthService } from "../../services/auth";
 import { authMiddleware } from "../../middleware/auth";
 
-export const ListOrganizations = new Endpoint({
+export const ListOrganizations = new OpenAPIRoute({
   method: "GET",
   path: "/organizations",
   middleware: [authMiddleware],

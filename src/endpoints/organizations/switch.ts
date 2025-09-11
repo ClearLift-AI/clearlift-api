@@ -1,9 +1,10 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 import { AuthService } from "../../services/auth";
 import { authMiddleware } from "../../middleware/auth";
 
-export const SwitchOrganization = new Endpoint({
+export const SwitchOrganization = new OpenAPIRoute({
   method: "POST",
   path: "/organizations/switch",
   middleware: [authMiddleware],

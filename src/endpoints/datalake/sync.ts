@@ -1,8 +1,9 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService } from "../../services/datalakeManagement";
 
-export const SyncCampaignsToDatalake = new Endpoint({
+export const SyncCampaignsToDatalake = new OpenAPIRoute({
   method: "POST",
   path: "/sync/campaigns",
   security: "session",
@@ -169,7 +170,7 @@ export const SyncCampaignsToDatalake = new Endpoint({
   }
 });
 
-export const SyncEventsToDatalake = new Endpoint({
+export const SyncEventsToDatalake = new OpenAPIRoute({
   method: "POST",
   path: "/sync/events",
   security: "session",
@@ -282,7 +283,7 @@ export const SyncEventsToDatalake = new Endpoint({
   }
 });
 
-export const GetSyncStatus = new Endpoint({
+export const GetSyncStatus = new OpenAPIRoute({
   method: "GET",
   path: "/sync/status",
   security: "session",

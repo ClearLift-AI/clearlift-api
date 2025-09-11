@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { fromHono } from "chanfana";
 import { EventQuery } from "./eventQuery";
 import { GetConversions } from "./conversions";

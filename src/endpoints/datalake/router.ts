@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { fromHono } from "chanfana";
 import { CreateTable, ListTables, GetTableSchema, DropTable } from "./tables";
 import { WriteData, BatchWriteData, QueryData } from "./data";

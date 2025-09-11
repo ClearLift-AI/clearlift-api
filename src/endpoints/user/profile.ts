@@ -1,7 +1,8 @@
-import { Endpoint, z } from "chanfana";
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
 import { AppContext } from "../../types";
 
-export const GetUserProfile = new Endpoint({
+export const GetUserProfile = new OpenAPIRoute({
   method: "GET",
   path: "/profile",
   security: "session",
@@ -80,7 +81,7 @@ export const GetUserProfile = new Endpoint({
   }
 });
 
-export const UpdateUserProfile = new Endpoint({
+export const UpdateUserProfile = new OpenAPIRoute({
   method: "PUT",
   path: "/profile",
   security: "session",
