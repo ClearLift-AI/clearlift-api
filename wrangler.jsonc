@@ -46,7 +46,8 @@
   "containers": [
     {
       "class_name": "DuckLakeContainer",
-      "image": "./containers/ducklake/Dockerfile"
+      "image": "./containers/ducklake/Dockerfile",
+      "max_instances": 10
     }
   ],
   // Migrations for Durable Objects
