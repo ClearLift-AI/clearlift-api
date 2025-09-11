@@ -2,7 +2,8 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 
-export const GetUserProfile = new OpenAPIRoute({
+export class GetUserProfile extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/profile",
   security: "session",
@@ -35,7 +36,10 @@ export const GetUserProfile = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const session = c.get('session');
   const user = c.get('user');
   const organization = c.get('organization');
@@ -79,9 +83,11 @@ export const GetUserProfile = new OpenAPIRoute({
       message: error instanceof Error ? error.message : 'Database error'
     }, 500);
   }
-});
+  }
+}
 
-export const UpdateUserProfile = new OpenAPIRoute({
+export class UpdateUserProfile extends OpenAPIRoute {
+  schema = {
   method: "PUT",
   path: "/profile",
   security: "session",
@@ -108,7 +114,10 @@ export const UpdateUserProfile = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const user = c.get('user');
   
   if (!user) {
@@ -162,4 +171,5 @@ export const UpdateUserProfile = new OpenAPIRoute({
       message: error instanceof Error ? error.message : 'Database error'
     }, 500);
   }
-});
+  }
+}

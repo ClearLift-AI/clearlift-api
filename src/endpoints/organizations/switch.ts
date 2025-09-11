@@ -4,7 +4,8 @@ import { AppContext } from "../../types";
 import { AuthService } from "../../services/auth";
 import { authMiddleware } from "../../middleware/auth";
 
-export const SwitchOrganization = new OpenAPIRoute({
+export class SwitchOrganization extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/organizations/switch",
   middleware: [authMiddleware],
@@ -41,7 +42,10 @@ export const SwitchOrganization = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const user = c.get('user');
   const session = c.get('session');
   const { organization_id } = await c.req.json();
@@ -86,4 +90,5 @@ export const SwitchOrganization = new OpenAPIRoute({
       role: org.role as string
     }
   });
-});
+  }
+}

@@ -3,7 +3,8 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService } from "../../services/eventAnalytics";
 
-export const GetEventInsights = new OpenAPIRoute({
+export class GetEventInsights extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/events/insights",
   security: "session",
@@ -33,7 +34,10 @@ export const GetEventInsights = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   try {
     const { start_date, end_date, metric_type, organization_id } = c.req.query();
     
@@ -71,4 +75,5 @@ export const GetEventInsights = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to retrieve event insights' 
     }, 500);
   }
-});
+  }
+}

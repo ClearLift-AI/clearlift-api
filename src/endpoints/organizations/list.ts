@@ -4,7 +4,8 @@ import { AppContext } from "../../types";
 import { AuthService } from "../../services/auth";
 import { authMiddleware } from "../../middleware/auth";
 
-export const ListOrganizations = new OpenAPIRoute({
+export class ListOrganizations extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/organizations",
   middleware: [authMiddleware],
@@ -33,7 +34,10 @@ export const ListOrganizations = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const user = c.get('user');
   const currentOrgId = c.get('organizationId');
   
@@ -50,4 +54,5 @@ export const ListOrganizations = new OpenAPIRoute({
   }));
 
   return c.json({ organizations: orgsWithCurrent });
-});
+  }
+}

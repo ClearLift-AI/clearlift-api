@@ -3,7 +3,8 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { authMiddleware } from "../../middleware/auth";
 
-export const CreateOrganization = new OpenAPIRoute({
+export class CreateOrganization extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/organizations",
   middleware: [authMiddleware],
@@ -43,7 +44,10 @@ export const CreateOrganization = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const user = c.get('user');
   const { name, slug: providedSlug } = await c.req.json();
   
@@ -93,4 +97,5 @@ export const CreateOrganization = new OpenAPIRoute({
     console.error('Create organization error:', error);
     return c.json({ error: 'Failed to create organization' }, 500);
   }
-});
+  }
+}

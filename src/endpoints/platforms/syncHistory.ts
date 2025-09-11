@@ -2,7 +2,8 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 
-export const GetSyncHistory = new OpenAPIRoute({
+export class GetSyncHistory extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/sync/history",
   security: "session",
@@ -35,7 +36,10 @@ export const GetSyncHistory = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   
   if (!organizationId) {
@@ -95,4 +99,5 @@ export const GetSyncHistory = new OpenAPIRoute({
       message: error instanceof Error ? error.message : 'Failed to retrieve sync history'
     }, 500);
   }
-});
+  }
+}

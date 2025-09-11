@@ -3,7 +3,8 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService, STANDARD_SCHEMAS } from "../../services/datalakeManagement";
 
-export const CreateTable = new OpenAPIRoute({
+export class CreateTable extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/tables",
   security: "session",
@@ -32,7 +33,10 @@ export const CreateTable = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   
   if (!organizationId) {
@@ -58,9 +62,11 @@ export const CreateTable = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to create table'
     }, 500);
   }
-});
+  }
+}
 
-export const ListTables = new OpenAPIRoute({
+export class ListTables extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/tables",
   security: "session",
@@ -78,7 +84,10 @@ export const ListTables = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   
   if (!organizationId) {
@@ -98,9 +107,11 @@ export const ListTables = new OpenAPIRoute({
     console.error('List tables error:', error);
     return c.json({ tables: [] });
   }
-});
+  }
+}
 
-export const GetTableSchema = new OpenAPIRoute({
+export class GetTableSchema extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/tables/:table/schema",
   security: "session",
@@ -133,7 +144,10 @@ export const GetTableSchema = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   const { table } = c.req.param();
   const { namespace } = c.req.query();
@@ -168,9 +182,11 @@ export const GetTableSchema = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to get table schema'
     }, 500);
   }
-});
+  }
+}
 
-export const DropTable = new OpenAPIRoute({
+export class DropTable extends OpenAPIRoute {
+  schema = {
   method: "DELETE",
   path: "/tables/:table",
   security: "session",
@@ -200,7 +216,10 @@ export const DropTable = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   const { table } = c.req.param();
   const { namespace, confirm } = await c.req.json();
@@ -232,4 +251,5 @@ export const DropTable = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to drop table'
     }, 500);
   }
-});
+  }
+}

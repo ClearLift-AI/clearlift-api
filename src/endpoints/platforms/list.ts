@@ -2,7 +2,8 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 
-export const ListPlatforms = new OpenAPIRoute({
+export class ListPlatforms extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/list",
   security: "session",
@@ -34,7 +35,10 @@ export const ListPlatforms = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   
   if (!organizationId) {
@@ -83,4 +87,5 @@ export const ListPlatforms = new OpenAPIRoute({
       message: error instanceof Error ? error.message : 'Failed to retrieve platforms'
     }, 500);
   }
-});
+  }
+}

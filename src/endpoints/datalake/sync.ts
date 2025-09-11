@@ -3,7 +3,8 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService } from "../../services/datalakeManagement";
 
-export const SyncCampaignsToDatalake = new OpenAPIRoute({
+export class SyncCampaignsToDatalake extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/sync/campaigns",
   security: "session",
@@ -33,7 +34,10 @@ export const SyncCampaignsToDatalake = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   
   if (!organizationId) {
@@ -168,9 +172,11 @@ export const SyncCampaignsToDatalake = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to sync campaigns'
     }, 500);
   }
-});
+  }
+}
 
-export const SyncEventsToDatalake = new OpenAPIRoute({
+export class SyncEventsToDatalake extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/sync/events",
   security: "session",
@@ -212,7 +218,10 @@ export const SyncEventsToDatalake = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   const { events } = await c.req.json();
   
@@ -281,9 +290,11 @@ export const SyncEventsToDatalake = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to sync events'
     }, 500);
   }
-});
+  }
+}
 
-export const GetSyncStatus = new OpenAPIRoute({
+export class GetSyncStatus extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/sync/status",
   security: "session",
@@ -301,7 +312,10 @@ export const GetSyncStatus = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   
   if (!organizationId) {
@@ -351,4 +365,5 @@ export const GetSyncStatus = new OpenAPIRoute({
     console.error('Get sync status error:', error);
     return c.json({ tables: [] });
   }
-});
+  }
+}

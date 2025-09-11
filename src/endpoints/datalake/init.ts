@@ -3,7 +3,8 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService, STANDARD_SCHEMAS } from "../../services/datalakeManagement";
 
-export const InitializeDatalake = new OpenAPIRoute({
+export class InitializeDatalake extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/init",
   security: "session",
@@ -23,7 +24,10 @@ export const InitializeDatalake = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   const user = c.get('user');
   const organization = c.get('organization');
@@ -59,9 +63,11 @@ export const InitializeDatalake = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to initialize datalake'
     }, 500);
   }
-});
+  }
+}
 
-export const GetStandardSchemas = new OpenAPIRoute({
+export class GetStandardSchemas extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/schemas",
   summary: "Get standard table schemas",
@@ -74,8 +80,12 @@ export const GetStandardSchemas = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   return c.json({
     schemas: STANDARD_SCHEMAS
   });
-});
+  }
+}

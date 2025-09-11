@@ -3,7 +3,8 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService, ConversionEvent } from "../../services/eventAnalytics";
 
-export const SyncEvents = new OpenAPIRoute({
+export class SyncEvents extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/events/sync",
   security: "session",
@@ -54,7 +55,10 @@ export const SyncEvents = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   try {
     const { events, organization_id } = await c.req.json();
     
@@ -100,4 +104,5 @@ export const SyncEvents = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to sync events' 
     }, 500);
   }
-});
+  }
+}

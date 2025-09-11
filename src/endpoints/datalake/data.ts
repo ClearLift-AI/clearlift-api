@@ -3,7 +3,8 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService } from "../../services/datalakeManagement";
 
-export const WriteData = new OpenAPIRoute({
+export class WriteData extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/tables/:table/data",
   security: "session",
@@ -33,7 +34,10 @@ export const WriteData = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   const { table } = c.req.param();
   const { data, namespace } = await c.req.json();
@@ -70,9 +74,11 @@ export const WriteData = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to write data'
     }, 500);
   }
-});
+  }
+}
 
-export const BatchWriteData = new OpenAPIRoute({
+export class BatchWriteData extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/tables/:table/batch",
   security: "session",
@@ -104,7 +110,10 @@ export const BatchWriteData = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   const { table } = c.req.param();
   const { data, batch_size, namespace } = await c.req.json();
@@ -146,9 +155,11 @@ export const BatchWriteData = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to batch write data'
     }, 500);
   }
-});
+  }
+}
 
-export const QueryData = new OpenAPIRoute({
+export class QueryData extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/query",
   security: "session",
@@ -174,7 +185,10 @@ export const QueryData = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   const { query } = await c.req.json();
   
@@ -206,4 +220,5 @@ export const QueryData = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Query execution failed'
     }, 500);
   }
-});
+  }
+}

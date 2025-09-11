@@ -3,7 +3,8 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService } from "../../services/eventAnalytics";
 
-export const EventQuery = new OpenAPIRoute({
+export class EventQuery extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/events/query",
   security: "session",
@@ -36,7 +37,10 @@ export const EventQuery = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   try {
     const { query, organization_id } = await c.req.json();
     
@@ -69,4 +73,5 @@ export const EventQuery = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Query execution failed' 
     }, 500);
   }
-});
+  }
+}

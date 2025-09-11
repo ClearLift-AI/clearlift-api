@@ -2,7 +2,8 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../types";
 
-export const DebugDatabases = new OpenAPIRoute({
+export class DebugDatabases extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/debug/databases",
   summary: "Debug database connections",
@@ -46,7 +47,10 @@ export const DebugDatabases = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   // Check debug token
   const debugToken = c.req.header('x-debug-token');
   const expectedToken = c.env.DEBUG_TOKEN || 'debug-2024'; // Should be set in environment
@@ -167,9 +171,11 @@ export const DebugDatabases = new OpenAPIRoute({
   }
 
   return c.json(result);
-});
+  }
+}
 
-export const DebugMigrations = new OpenAPIRoute({
+export class DebugMigrations extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/debug/migrations",
   summary: "Debug migration status",
@@ -202,7 +208,10 @@ export const DebugMigrations = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   // Check debug token
   const debugToken = c.req.header('x-debug-token');
   const expectedToken = c.env.DEBUG_TOKEN || 'debug-2024';
@@ -283,9 +292,11 @@ export const DebugMigrations = new OpenAPIRoute({
   }
 
   return c.json(result);
-});
+  }
+}
 
-export const DebugTestWrite = new OpenAPIRoute({
+export class DebugTestWrite extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/debug/test-write",
   summary: "Test database write permissions",
@@ -318,7 +329,10 @@ export const DebugTestWrite = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   // Check debug token
   const debugToken = c.req.header('x-debug-token');
   const expectedToken = c.env.DEBUG_TOKEN || 'debug-2024';
@@ -391,4 +405,5 @@ export const DebugTestWrite = new OpenAPIRoute({
   }
 
   return c.json(result);
-});
+  }
+}

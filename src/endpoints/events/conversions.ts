@@ -3,7 +3,8 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService } from "../../services/eventAnalytics";
 
-export const GetConversions = new OpenAPIRoute({
+export class GetConversions extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/events/conversions",
   security: "session",
@@ -38,7 +39,10 @@ export const GetConversions = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   try {
     const { start_date, end_date, group_by, organization_id } = c.req.query();
     
@@ -73,4 +77,5 @@ export const GetConversions = new OpenAPIRoute({
       error: error instanceof Error ? error.message : 'Failed to retrieve conversion metrics' 
     }, 500);
   }
-});
+  }
+}

@@ -2,7 +2,8 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 
-export const ListCampaigns = new OpenAPIRoute({
+export class ListCampaigns extends OpenAPIRoute {
+  schema = {
   method: "POST",
   path: "/",
   security: "session",
@@ -60,7 +61,10 @@ export const ListCampaigns = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const organizationId = c.get('organizationId');
   
   if (!organizationId) {
@@ -179,4 +183,5 @@ export const ListCampaigns = new OpenAPIRoute({
       message: error instanceof Error ? error.message : 'Failed to retrieve campaign data'
     }, 500);
   }
-});
+  }
+}

@@ -2,7 +2,8 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../types";
 
-export const HealthCheck = new OpenAPIRoute({
+export class HealthCheck extends OpenAPIRoute {
+  schema = {
   method: "GET",
   path: "/health",
   summary: "Health check endpoint",
@@ -33,7 +34,10 @@ export const HealthCheck = new OpenAPIRoute({
       })
     }
   }
-}).handle(async (c: AppContext) => {
+
+  }
+
+  async handle(c: AppContext) {
   const response = {
     status: 'healthy' as const,
     service: 'clearlift-api' as const,
@@ -79,4 +83,5 @@ export const HealthCheck = new OpenAPIRoute({
   }
 
   return c.json(response);
-});
+  }
+}
