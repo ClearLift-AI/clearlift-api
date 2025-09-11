@@ -96,31 +96,24 @@ openapi.post("/debug/test-write", DebugTestWrite);
 // Apply authentication middleware to all API routes
 app.use('/api/*', authMiddleware);
 
-// Helper function to register endpoints
+// Helper function to register endpoints  
 function registerEndpoints(endpoints: any[], basePath: string) {
+  if (!endpoints || !Array.isArray(endpoints)) return;
+  
   endpoints.forEach(EndpointClass => {
-    if (!EndpointClass) {
-      console.error('Undefined endpoint class found');
-      return;
-    }
+    if (!EndpointClass) return;
     
     try {
-      // Create a dummy context to instantiate the class and get schema
-      const dummyContext = {} as any;
-      const instance = new EndpointClass(dummyContext);
+      // Create a temporary instance to get the schema
+      const tempInstance = new EndpointClass({} as any);
+      const schema = tempInstance.schema;
       
-      if (!instance.schema) {
-        console.error('No schema found on endpoint instance:', EndpointClass.name);
-        return;
-      }
+      if (!schema || !schema.method || !schema.path) return;
       
-      const schema = instance.schema;
-      const method = (schema.method || 'GET').toLowerCase();
-      const path = `${basePath}${schema.path || ''}`;
+      const method = schema.method.toLowerCase();
+      const path = `${basePath}${schema.path}`;
       
-      console.log(`Registering ${method.toUpperCase()} ${path}`);
-      
-      // Register based on method type
+      // Register the endpoint class (not the instance)
       switch(method) {
         case 'get':
           openapi.get(path, EndpointClass);
@@ -137,11 +130,9 @@ function registerEndpoints(endpoints: any[], basePath: string) {
         case 'patch':
           openapi.patch(path, EndpointClass);
           break;
-        default:
-          console.error('Unknown method:', method, 'for', path);
       }
     } catch (err) {
-      console.error('Error registering endpoint:', EndpointClass.name, err);
+      // Silently skip registration errors in production
     }
   });
 }
