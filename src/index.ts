@@ -99,10 +99,21 @@ app.use('/api/*', authMiddleware);
 // Helper function to register endpoints
 function registerEndpoints(endpoints: any[], basePath: string) {
   endpoints.forEach(EndpointClass => {
-    // Create a temporary instance to access the schema
-    const tempInstance = new EndpointClass({} as any);
-    const method = tempInstance.schema.method.toLowerCase();
-    const path = `${basePath}${tempInstance.schema.path}`;
+    if (!EndpointClass) {
+      console.error('Undefined endpoint class found');
+      return;
+    }
+    
+    // Access the prototype to get the schema without instantiation
+    const proto = EndpointClass.prototype;
+    if (!proto || !proto.schema) {
+      console.error('No schema found on endpoint class:', EndpointClass.name);
+      return;
+    }
+    
+    const schema = proto.schema;
+    const method = (schema.method || 'GET').toLowerCase();
+    const path = `${basePath}${schema.path || ''}`;
     
     // Register based on method type
     switch(method) {
@@ -121,6 +132,8 @@ function registerEndpoints(endpoints: any[], basePath: string) {
       case 'patch':
         openapi.patch(path, EndpointClass);
         break;
+      default:
+        console.error('Unknown method:', method, 'for', path);
     }
   });
 }
