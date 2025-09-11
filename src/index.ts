@@ -1,12 +1,12 @@
 import { ApiException, fromHono } from "chanfana";
 import { Hono } from "hono";
 import { Container } from "@cloudflare/containers";
-import { eventsRouter } from "./endpoints/events/router";
-import { organizationsRouter } from "./endpoints/organizations/router";
-import { campaignsRouter } from "./endpoints/campaigns/router";
-import { platformsRouter } from "./endpoints/platforms/router";
-import { userRouter } from "./endpoints/user/router";
-import { datalakeRouter } from "./endpoints/datalake/router";
+import { eventEndpoints } from "./endpoints/events/router";
+import { organizationsEndpoints } from "./endpoints/organizations/router";
+import { campaignsEndpoints } from "./endpoints/campaigns/router";
+import { platformsEndpoints } from "./endpoints/platforms/router";
+import { userEndpoints } from "./endpoints/user/router";
+import { datalakeEndpoints } from "./endpoints/datalake/router";
 import { HealthCheck } from "./endpoints/health";
 import { DebugDatabases, DebugMigrations, DebugTestWrite } from "./endpoints/debug";
 import { authMiddleware, requireOrgMiddleware } from "./middleware/auth";
@@ -97,8 +97,21 @@ openapi.post("/debug/test-write", DebugTestWrite);
 app.use('/api/*', authMiddleware);
 
 // Routes that require authentication but not necessarily an organization
-openapi.route("/api/user", userRouter);
-openapi.route("/api/organizations", organizationsRouter);
+// Register user endpoints
+userEndpoints.forEach(EndpointClass => {
+  const instance = new EndpointClass();
+  const method = instance.schema.method.toLowerCase();
+  const path = `/api/user${instance.schema.path}`;
+  openapi[method](path, EndpointClass);
+});
+
+// Register organization endpoints
+organizationsEndpoints.forEach(EndpointClass => {
+  const instance = new EndpointClass();
+  const method = instance.schema.method.toLowerCase();
+  const path = `/api/organizations${instance.schema.path}`;
+  openapi[method](path, EndpointClass);
+});
 
 // Routes that require both authentication and organization context
 app.use('/api/campaigns/*', requireOrgMiddleware);
@@ -106,11 +119,37 @@ app.use('/api/platforms/*', requireOrgMiddleware);
 app.use('/api/events/*', requireOrgMiddleware);
 app.use('/api/datalake/*', requireOrgMiddleware);
 
-// Register routers
-openapi.route("/api/campaigns", campaignsRouter);
-openapi.route("/api/platforms", platformsRouter);
-openapi.route("/api/events", eventsRouter);
-openapi.route("/api/datalake", datalakeRouter);
+// Register campaign endpoints
+campaignsEndpoints.forEach(EndpointClass => {
+  const instance = new EndpointClass();
+  const method = instance.schema.method.toLowerCase();
+  const path = `/api/campaigns${instance.schema.path}`;
+  openapi[method](path, EndpointClass);
+});
+
+// Register platform endpoints
+platformsEndpoints.forEach(EndpointClass => {
+  const instance = new EndpointClass();
+  const method = instance.schema.method.toLowerCase();
+  const path = `/api/platforms${instance.schema.path}`;
+  openapi[method](path, EndpointClass);
+});
+
+// Register event endpoints
+eventEndpoints.forEach(EndpointClass => {
+  const instance = new EndpointClass();
+  const method = instance.schema.method.toLowerCase();
+  const path = `/api/events${instance.schema.path}`;
+  openapi[method](path, EndpointClass);
+});
+
+// Register datalake endpoints
+datalakeEndpoints.forEach(EndpointClass => {
+  const instance = new EndpointClass();
+  const method = instance.schema.method.toLowerCase();
+  const path = `/api/datalake${instance.schema.path}`;
+  openapi[method](path, EndpointClass);
+});
 
 // Export the Hono app
 export default app;
