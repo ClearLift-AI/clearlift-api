@@ -1,8 +1,15 @@
 import { ApiException, fromHono } from "chanfana";
 import { Hono } from "hono";
-import { tasksRouter } from "./endpoints/tasks/router";
+import { eventsRouter } from "./endpoints/events/router";
+import { organizationsRouter } from "./endpoints/organizations/router";
+import { campaignsRouter } from "./endpoints/campaigns/router";
+import { platformsRouter } from "./endpoints/platforms/router";
+import { userRouter } from "./endpoints/user/router";
+import { datalakeRouter } from "./endpoints/datalake/router";
+import { HealthCheck } from "./endpoints/health";
+import { DebugDatabases, DebugMigrations, DebugTestWrite } from "./endpoints/debug";
+import { authMiddleware, requireOrgMiddleware } from "./middleware/auth";
 import { ContentfulStatusCode } from "hono/utils/http-status";
-import { DummyEndpoint } from "./endpoints/dummyEndpoint";
 
 // Start a Hono app
 const app = new Hono<{ Bindings: Env }>();
@@ -33,18 +40,39 @@ const openapi = fromHono(app, {
   docs_url: "/",
   schema: {
     info: {
-      title: "My Awesome API",
-      version: "2.0.0",
-      description: "This is the documentation for my awesome API.",
+      title: "ClearLift API",
+      version: "1.0.0",
+      description: "Production API for ClearLift advertising analytics platform",
     },
   },
 });
 
-// Register Tasks Sub router
-openapi.route("/tasks", tasksRouter);
+// Public endpoints (no auth required)
+openapi.get("/health", HealthCheck);
 
-// Register other endpoints
-openapi.post("/dummy/:slug", DummyEndpoint);
+// Debug endpoints (require debug token)
+openapi.get("/debug/databases", DebugDatabases);
+openapi.get("/debug/migrations", DebugMigrations);
+openapi.post("/debug/test-write", DebugTestWrite);
+
+// Apply authentication middleware to all API routes
+app.use('/api/*', authMiddleware);
+
+// Routes that require authentication but not necessarily an organization
+openapi.route("/api/user", userRouter);
+openapi.route("/api/organizations", organizationsRouter);
+
+// Routes that require both authentication and organization context
+app.use('/api/campaigns/*', requireOrgMiddleware);
+app.use('/api/platforms/*', requireOrgMiddleware);
+app.use('/api/events/*', requireOrgMiddleware);
+app.use('/api/datalake/*', requireOrgMiddleware);
+
+// Register routers
+openapi.route("/api/campaigns", campaignsRouter);
+openapi.route("/api/platforms", platformsRouter);
+openapi.route("/api/events", eventsRouter);
+openapi.route("/api/datalake", datalakeRouter);
 
 // Export the Hono app
 export default app;

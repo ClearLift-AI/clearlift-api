@@ -21,11 +21,13 @@
   "scripts": {
     "cf-typegen": "wrangler types",
     "deploy": "wrangler deploy",
-    "dev": "pnpm seedLocalDb && wrangler dev",
-    "predeploy": "wrangler d1 migrations apply DB --remote",
-    "seedLocalDb": "wrangler d1 migrations apply DB --local",
+    "dev": "npm run db:migrate:local && wrangler dev",
+    "predeploy": "npm run db:migrate:remote",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local && wrangler d1 migrations apply AD_DATA --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote && wrangler d1 migrations apply AD_DATA --remote",
     "schema": "npx chanfana",
-    "test": "wrangler deploy --dry-run && npx vitest run --config tests/vitest.config.mts"
+    "test": "wrangler deploy --dry-run && npx vitest run --config tests/vitest.config.mts",
+    "test:db": "./test-database-access.sh"
   },
   "dependencies": {
     "chanfana": "2.8.1",

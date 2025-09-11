@@ -9,8 +9,32 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "openapi-template-db",
-      "database_id": "55740947-42ed-47ce-870a-171930d0162d"
+      "database_name": "ClearLiftDash-D1",
+      "database_id": "89bd84be-b517-4c72-ab61-422384319361"
+    },
+    {
+      "binding": "AD_DATA",
+      "database_name": "demo-ad-sync",
+      "database_id": "718751dd-7256-49bd-9396-18550eb0fe28"
+    }
+  ],
+  "vars": {
+    "DATALAKE_CATALOG_URI": "https://catalog.cloudflarestorage.com/133c285e1182ce57a619c802eaf56fb0/event-datalake",
+    "DATALAKE_WAREHOUSE_NAME": "133c285e1182ce57a619c802eaf56fb0_event-datalake",
+    "R2_S3_API_URL": "https://133c285e1182ce57a619c802eaf56fb0.r2.cloudflarestorage.com/event-datalake",
+    "R2_BUCKET": "event-datalake"
+  },
+  "r2_buckets": [
+    {
+      "binding": "R2_EVENTS",
+      "bucket_name": "event-datalake"
+    }
+  ],
+  "containers": [
+    {
+      "binding": "DUCKLAKE",
+      "class_name": "DuckLakeContainer",
+      "script_name": "ducklake-container"
     }
   ]
 }
