@@ -2,6 +2,7 @@ import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService, ConversionEvent } from "../../services/eventAnalytics";
+import { EventValidator } from "../../utils/eventValidator";
 
 export class SyncEvents extends OpenAPIRoute {
   schema = {
@@ -60,7 +61,8 @@ export class SyncEvents extends OpenAPIRoute {
 
   async handle(c: AppContext) {
   try {
-    const { events, organization_id } = await c.req.json();
+    const body = await c.req.json();
+    const { events, organization_id, validate_only = false } = body;
     
     // Get organization ID from session if not provided
     const orgId = organization_id || c.get('organizationId');
@@ -73,6 +75,29 @@ export class SyncEvents extends OpenAPIRoute {
       return c.json({ error: 'No events provided' }, 400);
     }
     
+    // Validate and normalize events
+    const validation = EventValidator.validateEvents(events, orgId);
+    
+    if (!validation.valid) {
+      return c.json({
+        error: 'Some events failed validation',
+        details: {
+          valid_events: validation.validEvents.length,
+          invalid_events: validation.invalidEvents.length,
+          errors: validation.errors.slice(0, 10) // Limit errors returned
+        }
+      }, 400);
+    }
+    
+    // If validate only mode, return validation results
+    if (validate_only) {
+      return c.json({
+        success: true,
+        valid_events: validation.validEvents.length,
+        message: 'Events validated successfully'
+      });
+    }
+    
     // Check if DUCKLAKE container binding exists
     if (!c.env.DUCKLAKE) {
       return c.json({ 
@@ -80,23 +105,15 @@ export class SyncEvents extends OpenAPIRoute {
       }, 503);
     }
     
-    // Validate all events belong to the same organization
-    const invalidEvents = events.filter(e => e.organization_id !== orgId);
-    if (invalidEvents.length > 0) {
-      return c.json({ 
-        error: `${invalidEvents.length} events have mismatched organization_id` 
-      }, 400);
-    }
-    
     const analyticsService = new EventAnalyticsService(c.env.DUCKLAKE, orgId);
     
-    // Write events to R2 via DuckLake
-    await analyticsService.writeConversionEvents(events as ConversionEvent[]);
+    // Write validated events to R2 via DuckLake
+    await analyticsService.writeConversionEvents(validation.validEvents);
     
     return c.json({
       success: true,
-      events_synced: events.length,
-      message: `Successfully synced ${events.length} events to R2 Data Catalog`
+      events_synced: validation.validEvents.length,
+      message: `Successfully synced ${validation.validEvents.length} events to R2 Data Catalog`
     });
   } catch (error) {
     console.error('Sync events error:', error);
