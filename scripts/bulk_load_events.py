@@ -18,14 +18,8 @@ from tqdm import tqdm
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pyiceberg.catalog import RestCatalog
-from pyiceberg.schema import Schema
-from pyiceberg.types import (
-    NestedField, StringType, DoubleType, TimestampType, 
-    StructType, ListType, MapType
-)
-from pyiceberg.partitioning import PartitionSpec, PartitionField
-from pyiceberg.transforms import day, month, year, truncate
+from pyiceberg.catalog.rest import RestCatalog
+from pyiceberg import schema, types, partitioning, transforms
 import boto3
 from botocore.config import Config
 
@@ -89,7 +83,7 @@ class EventBulkLoader:
         self.catalog = RestCatalog(
             name="r2_catalog",
             uri=self.config['catalog_uri'],
-            credential=self.config['api_token'],
+            token=self.config['api_token'],
             warehouse=self.config['warehouse_name']
         )
         
@@ -104,46 +98,46 @@ class EventBulkLoader:
                 region_name='auto'
             )
     
-    def _get_event_schema(self) -> Schema:
+    def _get_event_schema(self):
         """Define the Iceberg schema for conversion events"""
-        return Schema(
-            NestedField(1, "id", StringType(), required=True),
-            NestedField(2, "organization_id", StringType(), required=True),
-            NestedField(3, "event_id", StringType(), required=True),
-            NestedField(4, "timestamp", TimestampType(), required=True),
-            NestedField(5, "event_type", StringType(), required=True),
-            NestedField(6, "event_value", DoubleType(), required=True),
-            NestedField(7, "currency", StringType(), required=True),
-            NestedField(8, "user_id", StringType(), required=True),
-            NestedField(9, "session_id", StringType(), required=True),
-            NestedField(10, "utm_source", StringType(), required=False),
-            NestedField(11, "utm_medium", StringType(), required=False),
-            NestedField(12, "utm_campaign", StringType(), required=False),
-            NestedField(13, "device_type", StringType(), required=False),
-            NestedField(14, "browser", StringType(), required=False),
-            NestedField(15, "country", StringType(), required=False),
-            NestedField(16, "attribution_path", StringType(), required=False),
+        return schema.Schema(
+            types.NestedField(1, "id", types.StringType(), required=True),
+            types.NestedField(2, "organization_id", types.StringType(), required=True),
+            types.NestedField(3, "event_id", types.StringType(), required=True),
+            types.NestedField(4, "timestamp", types.TimestampType(), required=True),
+            types.NestedField(5, "event_type", types.StringType(), required=True),
+            types.NestedField(6, "event_value", types.DoubleType(), required=True),
+            types.NestedField(7, "currency", types.StringType(), required=True),
+            types.NestedField(8, "user_id", types.StringType(), required=True),
+            types.NestedField(9, "session_id", types.StringType(), required=True),
+            types.NestedField(10, "utm_source", types.StringType(), required=False),
+            types.NestedField(11, "utm_medium", types.StringType(), required=False),
+            types.NestedField(12, "utm_campaign", types.StringType(), required=False),
+            types.NestedField(13, "device_type", types.StringType(), required=False),
+            types.NestedField(14, "browser", types.StringType(), required=False),
+            types.NestedField(15, "country", types.StringType(), required=False),
+            types.NestedField(16, "attribution_path", types.StringType(), required=False),
         )
     
-    def _get_partition_spec(self) -> PartitionSpec:
+    def _get_partition_spec(self):
         """Define partitioning strategy for the table"""
-        return PartitionSpec(
-            PartitionField(
+        return partitioning.PartitionSpec(
+            partitioning.PartitionField(
                 source_id=2,  # organization_id
                 field_id=1000,
-                transform=truncate(10),
+                transform=transforms.TruncateTransform(10),
                 name="organization_bucket"
             ),
-            PartitionField(
+            partitioning.PartitionField(
                 source_id=4,  # timestamp
                 field_id=1001,
-                transform=month(),
+                transform=transforms.MonthTransform(),
                 name="month"
             ),
-            PartitionField(
+            partitioning.PartitionField(
                 source_id=4,  # timestamp
                 field_id=1002,
-                transform=day(),
+                transform=transforms.DayTransform(),
                 name="day"
             )
         )

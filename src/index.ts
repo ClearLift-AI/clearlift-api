@@ -69,6 +69,18 @@ export class DuckLakeContainer extends Container<Env> {
     this.sleepAfter = "5m";
     this.envVars = envConfig;
   }
+
+  override onStart(): void {
+    console.log(`DuckLake container starting for organization: ${this.envVars.ORGANIZATION_ID || 'unknown'}`);
+  }
+
+  override onStop(): void {
+    console.log(`DuckLake container stopping`);
+  }
+
+  override onError(error: Error): void {
+    console.error(`DuckLake container error:`, error);
+  }
 }
 
 // Start a Hono app

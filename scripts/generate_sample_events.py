@@ -222,7 +222,13 @@ def save_events(events: List[Dict[str, Any]],
     if file_format == 'csv':
         with open(output_path, 'w', newline='') as f:
             if events:
-                writer = csv.DictWriter(f, fieldnames=events[0].keys())
+                # Get all unique keys from all events
+                all_keys = set()
+                for event in events:
+                    all_keys.update(event.keys())
+                fieldnames = sorted(all_keys)
+                
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(events)
         print(f"Saved {len(events)} events to {output_path} (CSV)")
