@@ -16,6 +16,7 @@ import { ListCampaigns } from "./endpoints/campaigns/list";
 import { ListPlatforms } from "./endpoints/platforms/list";
 import { SyncPlatform } from "./endpoints/platforms/sync";
 import { GetSyncHistory } from "./endpoints/platforms/syncHistory";
+import { ConnectGoogleAds, HandleOAuthCallback } from "./endpoints/platforms/connect";
 
 // Event endpoints
 import { EventQuery } from "./endpoints/events/eventQuery";
@@ -126,10 +127,12 @@ app.use('/api/datalake/*', requireOrgMiddleware);
 // User endpoints
 openapi.get("/api/user/profile", GetUserProfile);
 openapi.put("/api/user/profile", UpdateUserProfile);
+openapi.patch("/api/user/profile", UpdateUserProfile); // Support PATCH method
 
 // Organization endpoints
 openapi.get("/api/organizations", ListOrganizations);
 openapi.post("/api/organizations", CreateOrganization);
+openapi.post("/api/organizations/create", CreateOrganization); // Alternative path for client compatibility
 openapi.post("/api/organizations/switch", SwitchOrganization);
 
 // Campaign endpoints
@@ -137,8 +140,11 @@ openapi.get("/api/campaigns", ListCampaigns);
 
 // Platform endpoints
 openapi.get("/api/platforms", ListPlatforms);
+openapi.get("/api/platforms/list", ListPlatforms); // Alternative path for client compatibility
 openapi.post("/api/platforms/sync", SyncPlatform);
 openapi.get("/api/platforms/sync-history", GetSyncHistory);
+openapi.post("/api/platforms/connect/google-ads", ConnectGoogleAds);
+openapi.get("/api/platforms/connect/callback", HandleOAuthCallback);
 
 // Event endpoints
 openapi.post("/api/events/query", EventQuery);

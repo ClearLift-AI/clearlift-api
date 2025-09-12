@@ -88,7 +88,7 @@ export class GetUserProfile extends OpenAPIRoute {
 
 export class UpdateUserProfile extends OpenAPIRoute {
   schema = {
-  method: "PUT",
+  method: ["PUT", "PATCH"], // Support both PUT and PATCH methods
   path: "/profile",
   security: "session",
   summary: "Update user profile",

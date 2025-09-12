@@ -29,6 +29,11 @@ declare global {
     
     // Debug token for accessing debug endpoints
     DEBUG_TOKEN?: string;
+    
+    // Google OAuth credentials
+    GOOGLE_CLIENT_ID?: string;
+    GOOGLE_CLIENT_SECRET?: string;
+    GOOGLE_ADS_DEVELOPER_TOKEN?: string;
   }
 }
 
