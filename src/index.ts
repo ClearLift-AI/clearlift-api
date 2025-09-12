@@ -24,7 +24,6 @@ import { GetConversions } from "./endpoints/events/conversions";
 import { GetEventInsights } from "./endpoints/events/insights";
 import { SyncEvents } from "./endpoints/events/sync";
 import { BulkUploadEvents } from "./endpoints/events/bulkUpload";
-import { GenerateEvents, GenerateEventsSimple } from "./endpoints/events/generate";
 
 // Datalake endpoints
 import { CreateTable, ListTables, GetTableSchema, DropTable } from "./endpoints/datalake/tables";
@@ -166,8 +165,6 @@ openapi.get("/api/events/conversions", GetConversions);
 openapi.get("/api/events/insights", GetEventInsights);
 openapi.post("/api/events/sync", SyncEvents);
 openapi.post("/api/events/bulk-upload", BulkUploadEvents);
-openapi.post("/api/events/generate", GenerateEvents);
-openapi.get("/api/events/generate", GenerateEventsSimple);
 
 // Datalake endpoints
 openapi.post("/api/datalake/tables", CreateTable);
