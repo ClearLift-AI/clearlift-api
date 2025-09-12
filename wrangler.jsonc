@@ -46,7 +46,7 @@
   "containers": [
     {
       "class_name": "DuckLakeContainer",
-      "image": "./containers/ducklake",
+      "image": "./containers/ducklake/Dockerfile",
       "max_instances": 10
     }
   ],
