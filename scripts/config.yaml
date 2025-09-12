@@ -1,0 +1,61 @@
+# Configuration for R2 Data Lake Bulk Loader
+# These values can be overridden by environment variables
+
+# R2 Data Catalog Settings
+catalog_uri: "https://catalog.cloudflarestorage.com/133c285e1182ce57a619c802eaf56fb0/event-datalake"
+warehouse_name: "133c285e1182ce57a619c802eaf56fb0_event-datalake"
+
+# Authentication
+# Set these as environment variables for security:
+# - CLOUDFLARE_API_TOKEN
+# - CLOUDFLARE_ACCOUNT_ID
+# api_token: "your-api-token-here"
+# account_id: "your-account-id-here"
+
+# R2 Storage Settings
+s3_endpoint: "https://133c285e1182ce57a619c802eaf56fb0.r2.cloudflarestorage.com"
+bucket_name: "event-datalake"
+
+# Table Configuration
+namespace: "default"
+table_name: "conversion_events"
+
+# Performance Settings
+batch_size: 10000  # Number of records per batch
+max_workers: 4     # Number of parallel workers for processing
+compression: "snappy"  # Parquet compression: snappy, gzip, brotli, lz4, zstd
+
+# Data Quality Settings
+validation:
+  strict_mode: false  # If true, fail on any validation error
+  max_errors: 100     # Maximum validation errors before failing
+  log_errors: true    # Log validation errors
+
+# Partitioning Strategy
+partitioning:
+  enabled: true
+  columns:
+    - name: "organization_id"
+      transform: "truncate[10]"  # Bucket organizations
+    - name: "timestamp"
+      transform: "month"          # Partition by month
+    - name: "timestamp"
+      transform: "day"            # Sub-partition by day
+
+# File Format Settings
+file_format:
+  type: "parquet"
+  row_group_size: 50000
+  page_size: 1048576  # 1MB
+  
+# Retry Configuration
+retry:
+  max_attempts: 3
+  backoff_seconds: 5
+  exponential_backoff: true
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "bulk_loader.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
