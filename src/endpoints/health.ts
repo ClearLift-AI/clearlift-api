@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../types";
 
@@ -11,7 +11,7 @@ export class HealthCheck extends OpenAPIRoute {
   responses: {
     200: {
       description: "API is healthy",
-      body: z.object({
+      ...contentJson(z.object({
         status: z.literal('healthy'),
         service: z.literal('clearlift-api'),
         timestamp: z.string(),
@@ -31,7 +31,7 @@ export class HealthCheck extends OpenAPIRoute {
             error: z.string().optional()
           })
         }).optional()
-      })
+      }))
     }
   }
 

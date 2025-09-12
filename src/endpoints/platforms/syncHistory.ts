@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 
@@ -18,7 +18,7 @@ export class GetSyncHistory extends OpenAPIRoute {
   responses: {
     200: {
       description: "Sync history retrieved successfully",
-      body: z.object({
+      ...contentJson(z.object({
         history: z.array(z.object({
           id: z.number(),
           organization_id: z.string(),
@@ -33,7 +33,7 @@ export class GetSyncHistory extends OpenAPIRoute {
           date_to: z.string().nullable(),
           duration_seconds: z.number().nullable()
         }))
-      })
+      }))
     }
   }
 

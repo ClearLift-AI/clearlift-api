@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService } from "../../services/eventAnalytics";
@@ -11,30 +11,30 @@ export class EventQuery extends OpenAPIRoute {
   summary: "Execute a custom DuckDB query on event data",
   description: "Execute a custom DuckDB SQL query against the R2 Data Catalog via DuckLake",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       query: z.string().describe("The DuckDB SQL query to execute"),
       organization_id: z.string().optional().describe("Organization ID (uses session org if not provided)")
-    })
+    }))
   },
   responses: {
     200: {
       description: "Query executed successfully",
-      body: z.object({
+      ...contentJson(z.object({
         data: z.any().describe("Query results"),
         rowCount: z.number().optional()
-      })
+      }))
     },
     400: {
       description: "Invalid query",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     },
     500: {
       description: "Query execution failed",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 

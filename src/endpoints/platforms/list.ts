@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 
@@ -12,7 +12,7 @@ export class ListPlatforms extends OpenAPIRoute {
   responses: {
     200: {
       description: "Platforms retrieved successfully",
-      body: z.object({
+      ...contentJson(z.object({
         platforms: z.array(z.object({
           id: z.string(),
           platform: z.string(),
@@ -25,14 +25,14 @@ export class ListPlatforms extends OpenAPIRoute {
           sync_status: z.string(),
           is_active: z.boolean()
         }))
-      })
+      }))
     },
     404: {
       description: "No platforms connected",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string(),
         message: z.string()
-      })
+      }))
     }
   }
 

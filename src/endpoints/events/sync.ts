@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService, ConversionEvent } from "../../services/eventAnalytics";
@@ -11,7 +11,7 @@ export class SyncEvents extends OpenAPIRoute {
   summary: "Sync events to R2 Data Catalog",
   description: "Write conversion events to R2 as Iceberg tables via DuckLake",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       events: z.array(z.object({
         id: z.string(),
         organization_id: z.string(),
@@ -31,28 +31,28 @@ export class SyncEvents extends OpenAPIRoute {
         attribution_path: z.string().optional()
       })).describe("Array of conversion events to sync"),
       organization_id: z.string().optional().describe("Organization ID (uses session org if not provided)")
-    })
+    }))
   },
   responses: {
     200: {
       description: "Events synced successfully",
-      body: z.object({
+      ...contentJson(z.object({
         success: z.boolean(),
         events_synced: z.number(),
         message: z.string()
-      })
+      }))
     },
     400: {
       description: "Invalid request",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     },
     503: {
       description: "Service unavailable",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 

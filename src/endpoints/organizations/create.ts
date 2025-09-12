@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { authMiddleware } from "../../middleware/auth";
@@ -11,16 +11,16 @@ export class CreateOrganization extends OpenAPIRoute {
   summary: "Create a new organization",
   description: "Create a new organization and add the current user as owner",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       name: z.string().min(1).max(100).describe("Organization name"),
       slug: z.string().min(1).max(50).regex(/^[a-z0-9-]+$/).optional()
         .describe("URL-friendly slug (auto-generated if not provided)")
-    })
+    }))
   },
   responses: {
     201: {
       description: "Organization created successfully",
-      body: z.object({
+      ...contentJson(z.object({
         organization: z.object({
           id: z.string(),
           name: z.string(),
@@ -29,19 +29,19 @@ export class CreateOrganization extends OpenAPIRoute {
           updated_at: z.string(),
           subscription_tier: z.string()
         })
-      })
+      }))
     },
     400: {
       description: "Invalid request",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     },
     409: {
       description: "Organization slug already exists",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 

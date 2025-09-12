@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService, STANDARD_SCHEMAS } from "../../services/datalakeManagement";
@@ -11,26 +11,26 @@ export class CreateTable extends OpenAPIRoute {
   summary: "Create a new table in the datalake",
   description: "Create a new Iceberg table in the R2 Data Catalog",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       table_name: z.string().describe("Name of the table to create"),
       schema: z.record(z.string()).describe("Table schema as column_name: data_type pairs"),
       namespace: z.string().optional().default('default').describe("Namespace for the table")
-    })
+    }))
   },
   responses: {
     200: {
       description: "Table created successfully",
-      body: z.object({
+      ...contentJson(z.object({
         success: z.boolean(),
         message: z.string(),
         table: z.string().optional()
-      })
+      }))
     },
     400: {
       description: "Invalid request",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 
@@ -75,13 +75,13 @@ export class ListTables extends OpenAPIRoute {
   responses: {
     200: {
       description: "Tables retrieved successfully",
-      body: z.object({
+      ...contentJson(z.object({
         tables: z.array(z.object({
           catalog: z.string(),
           schema: z.string(),
           name: z.string()
         }))
-      })
+      }))
     }
   }
 
@@ -128,20 +128,20 @@ export class GetTableSchema extends OpenAPIRoute {
   responses: {
     200: {
       description: "Schema retrieved successfully",
-      body: z.object({
+      ...contentJson(z.object({
         table: z.string(),
         schema: z.array(z.object({
           column_name: z.string(),
           data_type: z.string(),
           is_nullable: z.string()
         }))
-      })
+      }))
     },
     404: {
       description: "Table not found",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 
@@ -196,24 +196,24 @@ export class DropTable extends OpenAPIRoute {
     params: z.object({
       table: z.string().describe("Table name")
     }),
-    body: z.object({
+    body: contentJson(z.object({
       namespace: z.string().optional().default('default').describe("Table namespace"),
       confirm: z.boolean().describe("Confirmation flag to drop the table")
-    })
+    }))
   },
   responses: {
     200: {
       description: "Table dropped successfully",
-      body: z.object({
+      ...contentJson(z.object({
         success: z.boolean(),
         message: z.string()
-      })
+      }))
     },
     400: {
       description: "Invalid request or confirmation required",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 

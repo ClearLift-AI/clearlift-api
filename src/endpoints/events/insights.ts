@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService } from "../../services/eventAnalytics";
@@ -22,16 +22,16 @@ export class GetEventInsights extends OpenAPIRoute {
   responses: {
     200: {
       description: "Insights retrieved successfully",
-      body: z.object({
+      ...contentJson(z.object({
         data: z.any().describe("Insight data (structure varies by metric_type)"),
         metric_type: z.string()
-      })
+      }))
     },
     503: {
       description: "Service unavailable",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 

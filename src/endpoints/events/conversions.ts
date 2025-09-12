@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { EventAnalyticsService } from "../../services/eventAnalytics";
@@ -21,7 +21,7 @@ export class GetConversions extends OpenAPIRoute {
   responses: {
     200: {
       description: "Conversion metrics retrieved successfully",
-      body: z.object({
+      ...contentJson(z.object({
         data: z.array(z.object({
           period: z.string(),
           event_type: z.string(),
@@ -30,13 +30,13 @@ export class GetConversions extends OpenAPIRoute {
           avg_value: z.number(),
           unique_users: z.number()
         }))
-      })
+      }))
     },
     503: {
       description: "Service unavailable",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 

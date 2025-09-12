@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService } from "../../services/datalakeManagement";
@@ -14,10 +14,10 @@ export class WriteData extends OpenAPIRoute {
     params: z.object({
       table: z.string().describe("Table name")
     }),
-    body: z.object({
+    body: contentJson(z.object({
       data: z.array(z.record(z.any())).describe("Array of records to insert"),
       namespace: z.string().optional().default('default').describe("Table namespace")
-    })
+    }))
   },
   responses: {
     200: {
@@ -88,11 +88,11 @@ export class BatchWriteData extends OpenAPIRoute {
     params: z.object({
       table: z.string().describe("Table name")
     }),
-    body: z.object({
+    body: contentJson(z.object({
       data: z.array(z.record(z.any())).describe("Array of records to insert"),
       batch_size: z.number().optional().default(1000).describe("Number of records per batch"),
       namespace: z.string().optional().default('default').describe("Table namespace")
-    })
+    }))
   },
   responses: {
     200: {
@@ -166,9 +166,9 @@ export class QueryData extends OpenAPIRoute {
   summary: "Execute a custom query",
   description: "Run a custom DuckDB SQL query on the datalake",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       query: z.string().describe("SQL query to execute")
-    })
+    }))
   },
   responses: {
     200: {

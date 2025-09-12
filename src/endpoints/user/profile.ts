@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 
@@ -12,7 +12,7 @@ export class GetUserProfile extends OpenAPIRoute {
   responses: {
     200: {
       description: "User profile retrieved successfully",
-      body: z.object({
+      ...contentJson(z.object({
         user: z.object({
           id: z.string(),
           email: z.string(),
@@ -33,7 +33,7 @@ export class GetUserProfile extends OpenAPIRoute {
           slug: z.string(),
           role: z.string()
         }))
-      })
+      }))
     }
   }
 
@@ -94,15 +94,15 @@ export class UpdateUserProfile extends OpenAPIRoute {
   summary: "Update user profile",
   description: "Update the authenticated user's profile information",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       name: z.string().optional().describe("User's display name"),
       avatar_url: z.string().optional().describe("User's avatar URL")
-    })
+    }))
   },
   responses: {
     200: {
       description: "Profile updated successfully",
-      body: z.object({
+      ...contentJson(z.object({
         success: z.boolean(),
         user: z.object({
           id: z.string(),
@@ -111,7 +111,7 @@ export class UpdateUserProfile extends OpenAPIRoute {
           avatar_url: z.string().nullable(),
           updated_at: z.string()
         })
-      })
+      }))
     }
   }
 

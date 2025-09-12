@@ -117,48 +117,48 @@ openapi.post("/debug/test-write", DebugTestWrite);
 // Apply authentication middleware to all API routes
 app.use('/api/*', authMiddleware);
 
-// User endpoints (auth required, no org required)
-openapi.get('/api/user/profile', GetUserProfile);
-openapi.put('/api/user/profile', UpdateUserProfile);
-
-// Organization endpoints (auth required, no org required)
-openapi.get('/api/organizations', ListOrganizations);
-openapi.post('/api/organizations', CreateOrganization);
-openapi.post('/api/organizations/switch', SwitchOrganization);
-
 // Apply organization context middleware
 app.use('/api/campaigns/*', requireOrgMiddleware);
 app.use('/api/platforms/*', requireOrgMiddleware);
 app.use('/api/events/*', requireOrgMiddleware);
 app.use('/api/datalake/*', requireOrgMiddleware);
 
-// Campaign endpoints (auth + org required)
-openapi.post('/api/campaigns', ListCampaigns);
+// User endpoints
+openapi.get("/api/user/profile", GetUserProfile);
+openapi.put("/api/user/profile", UpdateUserProfile);
 
-// Platform endpoints (auth + org required)
-openapi.get('/api/platforms/list', ListPlatforms);
-openapi.post('/api/platforms/sync', SyncPlatform);
-openapi.get('/api/platforms/sync/history', GetSyncHistory);
+// Organization endpoints
+openapi.get("/api/organizations", ListOrganizations);
+openapi.post("/api/organizations", CreateOrganization);
+openapi.post("/api/organizations/switch", SwitchOrganization);
 
-// Event endpoints (auth + org required)
-openapi.post('/api/events/query', EventQuery);
-openapi.get('/api/events/conversions', GetConversions);
-openapi.get('/api/events/insights', GetEventInsights);
-openapi.post('/api/events/sync', SyncEvents);
+// Campaign endpoints
+openapi.get("/api/campaigns", ListCampaigns);
 
-// Datalake endpoints (auth + org required)
-openapi.post('/api/datalake/tables', CreateTable);
-openapi.get('/api/datalake/tables', ListTables);
-openapi.get('/api/datalake/tables/:table/schema', GetTableSchema);
-openapi.delete('/api/datalake/tables/:table', DropTable);
-openapi.post('/api/datalake/tables/:table/data', WriteData);
-openapi.post('/api/datalake/tables/:table/batch', BatchWriteData);
-openapi.post('/api/datalake/query', QueryData);
-openapi.post('/api/datalake/init', InitializeDatalake);
-openapi.get('/api/datalake/schemas', GetStandardSchemas);
-openapi.post('/api/datalake/sync/campaigns', SyncCampaignsToDatalake);
-openapi.post('/api/datalake/sync/events', SyncEventsToDatalake);
-openapi.get('/api/datalake/sync/status', GetSyncStatus);
+// Platform endpoints
+openapi.get("/api/platforms", ListPlatforms);
+openapi.post("/api/platforms/sync", SyncPlatform);
+openapi.get("/api/platforms/sync-history", GetSyncHistory);
+
+// Event endpoints
+openapi.post("/api/events/query", EventQuery);
+openapi.get("/api/events/conversions", GetConversions);
+openapi.get("/api/events/insights", GetEventInsights);
+openapi.post("/api/events/sync", SyncEvents);
+
+// Datalake endpoints
+openapi.post("/api/datalake/tables", CreateTable);
+openapi.get("/api/datalake/tables", ListTables);
+openapi.get("/api/datalake/tables/:namespace/:table/schema", GetTableSchema);
+openapi.delete("/api/datalake/tables/:namespace/:table", DropTable);
+openapi.post("/api/datalake/data/write", WriteData);
+openapi.post("/api/datalake/data/batch-write", BatchWriteData);
+openapi.post("/api/datalake/data/query", QueryData);
+openapi.post("/api/datalake/initialize", InitializeDatalake);
+openapi.get("/api/datalake/schemas", GetStandardSchemas);
+openapi.post("/api/datalake/sync/campaigns", SyncCampaignsToDatalake);
+openapi.post("/api/datalake/sync/events", SyncEventsToDatalake);
+openapi.get("/api/datalake/sync/status", GetSyncStatus);
 
 // Export the Hono app
 export default app;

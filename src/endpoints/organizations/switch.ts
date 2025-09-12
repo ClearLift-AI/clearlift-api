@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { AuthService } from "../../services/auth";
@@ -12,14 +12,14 @@ export class SwitchOrganization extends OpenAPIRoute {
   summary: "Switch current organization",
   description: "Switch the user's current active organization",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       organization_id: z.string().describe("Organization ID to switch to")
-    })
+    }))
   },
   responses: {
     200: {
       description: "Organization switched successfully",
-      body: z.object({
+      ...contentJson(z.object({
         success: z.boolean(),
         organization: z.object({
           id: z.string(),
@@ -27,19 +27,19 @@ export class SwitchOrganization extends OpenAPIRoute {
           slug: z.string(),
           role: z.string()
         })
-      })
+      }))
     },
     403: {
       description: "Access denied",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     },
     404: {
       description: "Organization not found",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 

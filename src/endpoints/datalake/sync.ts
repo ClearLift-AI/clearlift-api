@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { DatalakeManagementService } from "../../services/datalakeManagement";
@@ -11,12 +11,12 @@ export class SyncCampaignsToDatalake extends OpenAPIRoute {
   summary: "Sync campaign data to datalake",
   description: "Copy campaign data from AD_DATA database to datalake Iceberg tables",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       start_date: z.string().optional().describe("Start date (YYYY-MM-DD)"),
       end_date: z.string().optional().describe("End date (YYYY-MM-DD)"),
       platforms: z.array(z.string()).optional().describe("Filter by platforms"),
       overwrite: z.boolean().optional().default(false).describe("Overwrite existing data")
-    })
+    }))
   },
   responses: {
     200: {
@@ -183,7 +183,7 @@ export class SyncEventsToDatalake extends OpenAPIRoute {
   summary: "Sync event data to datalake",
   description: "Write event data to datalake Iceberg tables",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       events: z.array(z.object({
         event_id: z.string(),
         timestamp: z.string(),
@@ -200,7 +200,7 @@ export class SyncEventsToDatalake extends OpenAPIRoute {
         country: z.string().optional(),
         attribution_path: z.string().optional()
       })).describe("Array of events to sync")
-    })
+    }))
   },
   responses: {
     200: {

@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 
@@ -10,18 +10,18 @@ export class ListCampaigns extends OpenAPIRoute {
   summary: "Get campaign data",
   description: "Retrieve campaign performance metrics from AD_DATA database",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       lookback_days: z.number().optional().default(30).describe("Number of days to look back"),
       start_date: z.string().optional().describe("Start date (YYYY-MM-DD)"),
       end_date: z.string().optional().describe("End date (YYYY-MM-DD)"),
       platforms: z.array(z.string()).optional().describe("Filter by platforms"),
       group_by: z.enum(['day', 'campaign', 'platform']).optional().default('day')
-    })
+    }))
   },
   responses: {
     200: {
       description: "Campaign data retrieved successfully",
-      body: z.object({
+      ...contentJson(z.object({
         campaigns: z.array(z.object({
           id: z.string(),
           organization_id: z.string(),
@@ -51,14 +51,14 @@ export class ListCampaigns extends OpenAPIRoute {
           avg_cpc: z.number(),
           avg_roas: z.number()
         }).optional()
-      })
+      }))
     },
     404: {
       description: "No campaign data found",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string(),
         message: z.string()
-      })
+      }))
     }
   }
 

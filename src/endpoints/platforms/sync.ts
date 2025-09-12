@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 
@@ -10,35 +10,35 @@ export class SyncPlatform extends OpenAPIRoute {
   summary: "Trigger platform data sync",
   description: "Initiate data synchronization for a specific platform",
   request: {
-    body: z.object({
+    body: contentJson(z.object({
       platform: z.enum(['google-ads', 'meta-ads', 'tiktok-ads']).describe("Platform to sync"),
       date_from: z.string().optional().describe("Start date for sync (YYYY-MM-DD)"),
       date_to: z.string().optional().describe("End date for sync (YYYY-MM-DD)"),
       sync_type: z.enum(['full', 'incremental']).optional().default('incremental')
-    })
+    }))
   },
   responses: {
     200: {
       description: "Sync initiated successfully",
-      body: z.object({
+      ...contentJson(z.object({
         success: z.boolean(),
         sync_id: z.number(),
         message: z.string()
-      })
+      }))
     },
     404: {
       description: "Platform not connected",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string(),
         message: z.string()
-      })
+      }))
     },
     409: {
       description: "Sync already in progress",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string(),
         message: z.string()
-      })
+      }))
     }
   }
 

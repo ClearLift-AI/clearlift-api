@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { AuthService } from "../../services/auth";
@@ -14,7 +14,7 @@ export class ListOrganizations extends OpenAPIRoute {
   responses: {
     200: {
       description: "List of organizations",
-      body: z.object({
+      ...contentJson(z.object({
         organizations: z.array(z.object({
           id: z.string(),
           name: z.string(),
@@ -25,13 +25,13 @@ export class ListOrganizations extends OpenAPIRoute {
           subscription_tier: z.string(),
           is_current: z.boolean()
         }))
-      })
+      }))
     },
     401: {
       description: "Unauthorized",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 

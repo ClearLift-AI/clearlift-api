@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../types";
 
@@ -16,7 +16,7 @@ export class DebugDatabases extends OpenAPIRoute {
   responses: {
     200: {
       description: "Database debug information",
-      body: z.object({
+      ...contentJson(z.object({
         main_db: z.object({
           connected: z.boolean(),
           tables: z.array(z.object({
@@ -38,13 +38,13 @@ export class DebugDatabases extends OpenAPIRoute {
           tables: z.array(z.string()),
           error: z.string().optional()
         })
-      })
+      }))
     },
     401: {
       description: "Invalid debug token",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 
@@ -188,7 +188,7 @@ export class DebugMigrations extends OpenAPIRoute {
   responses: {
     200: {
       description: "Migration status information",
-      body: z.object({
+      ...contentJson(z.object({
         main_db: z.object({
           has_migrations_table: z.boolean(),
           applied_migrations: z.array(z.string()),
@@ -199,13 +199,13 @@ export class DebugMigrations extends OpenAPIRoute {
           applied_migrations: z.array(z.string()),
           error: z.string().optional()
         })
-      })
+      }))
     },
     401: {
       description: "Invalid debug token",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 
@@ -309,7 +309,7 @@ export class DebugTestWrite extends OpenAPIRoute {
   responses: {
     200: {
       description: "Write test results",
-      body: z.object({
+      ...contentJson(z.object({
         main_db: z.object({
           can_write: z.boolean(),
           test_id: z.string().optional(),
@@ -320,13 +320,13 @@ export class DebugTestWrite extends OpenAPIRoute {
           test_id: z.string().optional(),
           error: z.string().optional()
         })
-      })
+      }))
     },
     401: {
       description: "Invalid debug token",
-      body: z.object({
+      ...contentJson(z.object({
         error: z.string()
-      })
+      }))
     }
   }
 
