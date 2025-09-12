@@ -69,18 +69,8 @@ export class DuckLakeContainer extends Container<Env> {
     this.defaultPort = 8080;
     this.sleepAfter = "5m";
     this.envVars = envConfig;
-    
-    // Start the container on Durable Object initialization
-    ctx.blockConcurrencyWhile(async () => {
-      if (!this.ctx.container.running) {
-        console.log('Starting DuckLake container...');
-        await this.ctx.container.start({
-          env: envConfig,
-          entrypoint: ["node", "server.js"]
-        });
-        console.log('DuckLake container started successfully');
-      }
-    });
+    // Container will auto-start when it receives its first request
+    // No manual start needed - handled by Container class
   }
 
   override onStart(): void {

@@ -40,49 +40,33 @@ export class EventAnalyticsService {
    */
   private getContainerInstance() {
     // Use organization ID as the container instance ID for isolation
-    return this.containerBinding.get(this.containerBinding.idFromName(this.organizationId));
+    const containerId = this.containerBinding.idFromName(this.organizationId);
+    return this.containerBinding.get(containerId);
   }
 
   /**
    * Execute a DuckDB query via the DuckLake container
    */
-  async executeQuery(query: string, retries: number = 3): Promise<any> {
+  async executeQuery(query: string): Promise<any> {
     const container = this.getContainerInstance();
     
-    for (let attempt = 0; attempt < retries; attempt++) {
-      try {
-        const response = await container.fetch(new Request('http://ducklake/query', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.organizationId}` // Use org ID as auth token for now
-          },
-          body: JSON.stringify({ query })
-        }));
+    // Container will auto-start on first request if not running
+    const response = await container.fetch(new Request('http://ducklake/query', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.organizationId}` // Use org ID as auth token for now
+      },
+      body: JSON.stringify({ query })
+    }));
 
-        if (!response.ok) {
-          const error = await response.text();
-          
-          // If container not running, wait and retry
-          if (error.includes('container is not running') && attempt < retries - 1) {
-            console.log(`Container not ready, retrying in ${(attempt + 1) * 1000}ms...`);
-            await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 1000));
-            continue;
-          }
-          
-          throw new Error(`DuckLake query failed: ${error}`);
-        }
-
-        const result = await response.json();
-        return result.data;
-      } catch (error) {
-        if (attempt === retries - 1) {
-          throw error;
-        }
-        console.log(`Query attempt ${attempt + 1} failed, retrying...`);
-        await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 1000));
-      }
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`DuckLake query failed: ${error}`);
     }
+
+    const result = await response.json();
+    return result.data;
   }
 
   /**
