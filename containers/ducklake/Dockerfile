@@ -24,7 +24,7 @@ COPY package*.json ./
 RUN npm ci --only=production
 
 # Copy application code
-COPY . ./
+COPY server.js ./
 
 # Expose port for Hono API
 EXPOSE 8080
