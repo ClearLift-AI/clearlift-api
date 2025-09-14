@@ -132,3 +132,12 @@ openapi.get("/api/datalake/sync/status", GetSyncStatus);
 
 // Export the Hono app
 export default app;
+
+// Temporary stub class for migration - will be removed after deployment
+export class DuckLakeContainer {
+  constructor(state: any, env: any) {}
+  
+  async fetch(request: Request): Promise<Response> {
+    return new Response('Deprecated - DuckLake container has been replaced with MotherDuck', { status: 410 });
+  }
+}
