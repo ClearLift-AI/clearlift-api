@@ -25,19 +25,5 @@
       "binding": "R2_EVENTS",
       "bucket_name": "event-datalake"
     }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "DUCKLAKE",
-        "class_name": "DuckLakeContainer"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "tag": "v1",
-      "deleted_classes": ["DuckLakeContainer"]
-    }
   ]
 }
