@@ -9,8 +9,8 @@ declare global {
     // R2 Bucket
     R2_EVENTS: R2Bucket;
     
-    // Container bindings
-    DUCKLAKE: any; // Container binding for DuckLake
+    // MotherDuck
+    MOTHERDUCK_TOKEN?: string;
     
     // Environment variables for R2 Data Catalog
     DATALAKE_CATALOG_URI: string;

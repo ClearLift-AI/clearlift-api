@@ -1,7 +1,8 @@
 import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
-import { EventAnalyticsService, ConversionEvent } from "../../services/eventAnalytics";
+import { ConversionEvent } from "../../services/eventAnalytics";
+import { MotherDuckService } from "../../services/motherDuckService";
 import { EventValidator } from "../../utils/eventValidator";
 
 export class SyncEvents extends OpenAPIRoute {
@@ -98,17 +99,19 @@ export class SyncEvents extends OpenAPIRoute {
       });
     }
     
-    // Check if DUCKLAKE container binding exists
-    if (!c.env.DUCKLAKE) {
+    // Check if MotherDuck token exists
+    if (!c.env.MOTHERDUCK_TOKEN) {
       return c.json({ 
-        error: 'DuckLake container not configured. Cannot sync events to R2 Data Catalog.' 
+        error: 'MotherDuck not configured. Cannot sync events.' 
       }, 503);
     }
     
-    const analyticsService = new EventAnalyticsService(c.env.DUCKLAKE, orgId);
+    const motherDuckService = new MotherDuckService({
+      token: c.env.MOTHERDUCK_TOKEN
+    });
     
-    // Write validated events to R2 via DuckLake
-    await analyticsService.writeConversionEvents(validation.validEvents);
+    // Write validated events to MotherDuck
+    await motherDuckService.writeConversionEvents(validation.validEvents);
     
     return c.json({
       success: true,
