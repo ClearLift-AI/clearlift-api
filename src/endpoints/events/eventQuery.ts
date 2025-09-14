@@ -1,7 +1,7 @@
 import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
-import { EventAnalyticsService } from "../../services/eventAnalytics";
+import { MotherDuckService } from "../../services/motherDuckService";
 
 export class EventQuery extends OpenAPIRoute {
   schema = {
@@ -51,17 +51,19 @@ export class EventQuery extends OpenAPIRoute {
       return c.json({ error: 'Organization ID is required' }, 400);
     }
     
-    // Check if DUCKLAKE container binding exists
-    if (!c.env.DUCKLAKE) {
+    // Check if MotherDuck token exists
+    if (!c.env.MOTHERDUCK_TOKEN) {
       return c.json({ 
-        error: 'DuckLake container not configured. Event analytics is not available.' 
+        error: 'MotherDuck not configured. Event analytics is not available.' 
       }, 503);
     }
     
-    const analyticsService = new EventAnalyticsService(c.env.DUCKLAKE, orgId);
+    const motherDuckService = new MotherDuckService({
+      token: c.env.MOTHERDUCK_TOKEN
+    });
     
     // Execute the query
-    const data = await analyticsService.executeQuery(query);
+    const data = await motherDuckService.executeQuery(query);
     
     return c.json({
       data,

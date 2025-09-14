@@ -20,41 +20,10 @@
       "migrations_dir": "migrations-ad-data"
     }
   ],
-  "vars": {
-    "DATALAKE_CATALOG_URI": "https://catalog.cloudflarestorage.com/133c285e1182ce57a619c802eaf56fb0/event-datalake",
-    "DATALAKE_WAREHOUSE_NAME": "133c285e1182ce57a619c802eaf56fb0_event-datalake",
-    "R2_S3_API_URL": "https://133c285e1182ce57a619c802eaf56fb0.r2.cloudflarestorage.com/event-datalake",
-    "R2_BUCKET": "event-datalake"
-  },
   "r2_buckets": [
     {
       "binding": "R2_EVENTS",
       "bucket_name": "event-datalake"
-    }
-  ],
-  // Durable Objects for container management
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "DUCKLAKE",
-        "class_name": "DuckLakeContainer",
-        "script_name": "clearlift-api"
-      }
-    ]
-  },
-  // Containers are in beta - uncomment when available for your account
-  "containers": [
-    {
-      "class_name": "DuckLakeContainer",
-      "image": "./containers/ducklake/Dockerfile",
-      "max_instances": 10
-    }
-  ],
-  // Migrations for Durable Objects
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["DuckLakeContainer"]
     }
   ]
 }

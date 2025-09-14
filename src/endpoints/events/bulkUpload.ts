@@ -1,7 +1,7 @@
 import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
-import { EventAnalyticsService } from "../../services/eventAnalytics";
+import { MotherDuckService } from "../../services/motherDuckService";
 import { EventParser } from "../../utils/eventParser";
 import { EventValidator } from "../../utils/eventValidator";
 
@@ -122,21 +122,23 @@ export class BulkUploadEvents extends OpenAPIRoute {
         });
       }
 
-      // Check if DUCKLAKE container binding exists
-      if (!c.env.DUCKLAKE) {
+      // Check if MotherDuck token exists
+      if (!c.env.MOTHERDUCK_TOKEN) {
         return c.json({
-          error: 'DuckLake container not configured. Cannot upload events to R2 Data Catalog.'
+          error: 'MotherDuck not configured. Cannot upload events.'
         }, 503);
       }
 
       // Process batches
-      const analyticsService = new EventAnalyticsService(c.env.DUCKLAKE, organizationId);
+      const motherDuckService = new MotherDuckService({
+        token: c.env.MOTHERDUCK_TOKEN
+      });
       let batchesProcessed = 0;
       const processingErrors: string[] = [];
 
       for (const batch of validation.batches) {
         try {
-          await analyticsService.writeConversionEvents(batch);
+          await motherDuckService.writeConversionEvents(batch);
           batchesProcessed++;
         } catch (error) {
           processingErrors.push(`Batch ${batchesProcessed + 1}: ${error.message}`);

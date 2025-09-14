@@ -1,7 +1,7 @@
 import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
-import { EventAnalyticsService } from "../../services/eventAnalytics";
+import { MotherDuckService } from "../../services/motherDuckService";
 
 export class GetEventInsights extends OpenAPIRoute {
   schema = {
@@ -48,22 +48,29 @@ export class GetEventInsights extends OpenAPIRoute {
       return c.json({ error: 'Organization ID is required' }, 400);
     }
     
-    // Check if DUCKLAKE container binding exists
-    if (!c.env.DUCKLAKE) {
+    // Check if MotherDuck token exists
+    if (!c.env.MOTHERDUCK_TOKEN) {
       return c.json({ 
         data: [],
         metric_type,
-        message: 'DuckLake container not configured. Event analytics is not available.'
+        message: 'MotherDuck not configured. Event analytics is not available.'
       });
     }
     
-    const analyticsService = new EventAnalyticsService(c.env.DUCKLAKE, orgId);
-    
-    const insights = await analyticsService.getEventInsights({
-      start_date,
-      end_date,
-      metric_type: metric_type as 'conversion_rate' | 'revenue' | 'user_journey'
+    const motherDuckService = new MotherDuckService({
+      token: c.env.MOTHERDUCK_TOKEN
     });
+    
+    // For now, return empty insights as getEventInsights needs to be implemented
+    const insights: any[] = [];
+    
+    // TODO: Implement getEventInsights in MotherDuckService
+    // const insights = await motherDuckService.getEventInsights({
+    //   organization_id: orgId,
+    //   start_date,
+    //   end_date,
+    //   metric_type: metric_type as 'conversion_rate' | 'revenue' | 'user_journey'
+    // });
     
     return c.json({ 
       data: insights,

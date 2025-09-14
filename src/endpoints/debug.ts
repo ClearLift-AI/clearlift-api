@@ -155,8 +155,8 @@ export class DebugDatabases extends OpenAPIRoute {
     result.ad_data.error = 'AD_DATA binding not found';
   }
 
-  // Test Datalake (if available)
-  if (c.env.DUCKLAKE) {
+  // Test MotherDuck (if available)
+  if (c.env.MOTHERDUCK_TOKEN) {
     try {
       result.datalake.available = true;
       // For now, just indicate it's available
@@ -167,7 +167,7 @@ export class DebugDatabases extends OpenAPIRoute {
       result.datalake.error = error instanceof Error ? error.message : 'Unknown error';
     }
   } else {
-    result.datalake.error = 'DUCKLAKE binding not found';
+    result.datalake.error = 'MotherDuck token not configured';
   }
 
   return c.json(result);

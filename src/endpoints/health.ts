@@ -19,7 +19,7 @@ export class HealthCheck extends OpenAPIRoute {
           db: z.boolean(),
           ad_data: z.boolean(),
           events: z.boolean(),
-          ducklake: z.boolean()
+          motherduck: z.boolean()
         }),
         databases: z.object({
           main: z.object({
@@ -46,7 +46,7 @@ export class HealthCheck extends OpenAPIRoute {
       db: !!c.env.DB,
       ad_data: !!c.env.AD_DATA,
       events: !!c.env.R2_EVENTS,
-      ducklake: !!c.env.DUCKLAKE
+      motherduck: !!c.env.MOTHERDUCK_TOKEN
     },
     databases: {
       main: {
