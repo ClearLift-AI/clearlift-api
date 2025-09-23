@@ -1,0 +1,334 @@
+import { OpenAPIRoute } from "chanfana";
+import { z } from "zod";
+import { AppContext } from "../../../types";
+import { Session } from "../../../middleware/auth";
+import { D1Adapter } from "../../../adapters/d1";
+import { DuckDBAdapter } from "../../../adapters/platforms/duckdb";
+import { success, error } from "../../../utils/response";
+
+/**
+ * GET /v1/analytics/conversions - Get conversion events from DuckDB
+ */
+export class GetConversions extends OpenAPIRoute {
+  public schema = {
+    tags: ["Analytics"],
+    summary: "Get conversion events",
+    description: "Fetches conversion events from DuckDB using the organization's tag mapping",
+    operationId: "get-conversions",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        lookback: z.string().optional().describe("Time period: 1h, 24h, 7d, 30d"),
+        event_type: z.string().optional().describe("Filter by event type"),
+        limit: z.string().optional().describe("Maximum number of events")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Conversion events",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                events: z.array(z.any()),
+                summary: z.object({
+                  total_events: z.number(),
+                  unique_users: z.number(),
+                  total_value: z.number(),
+                  events_by_type: z.record(z.number()),
+                  top_sources: z.array(z.object({
+                    source: z.string(),
+                    count: z.number()
+                  }))
+                })
+              }),
+              meta: z.object({
+                timestamp: z.string(),
+                lookback: z.string(),
+                org_tag: z.string()
+              })
+            })
+          }
+        }
+      },
+      "403": { description: "No organization selected or no tag mapping" },
+      "500": { description: "Query failed" }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+
+    if (!session.current_organization_id) {
+      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    }
+
+    // Get organization's tag from mapping
+    const d1 = new D1Adapter(c.env.DB);
+    const orgTag = await d1.getOrgTag(session.current_organization_id);
+
+    if (!orgTag) {
+      return error(
+        c,
+        "NO_TAG_MAPPING",
+        "Organization has no tag mapping for analytics access",
+        403
+      );
+    }
+
+    // Get query parameters
+    const lookback = c.req.query("lookback") || "7d";
+    const eventType = c.req.query("event_type");
+    const limit = parseInt(c.req.query("limit") || "100");
+
+    // Query DuckDB
+    const duckdb = new DuckDBAdapter();
+
+    try {
+      const result = await duckdb.getConversions(
+        session.token, // Use session token for DuckDB auth
+        orgTag,
+        {
+          lookback,
+          event_type: eventType,
+          limit
+        }
+      );
+
+      return success(
+        c,
+        result,
+        {
+          lookback,
+          org_tag: orgTag
+        }
+      );
+    } catch (err) {
+      console.error("Failed to fetch conversions:", err);
+      return error(c, "QUERY_FAILED", "Failed to fetch conversion data", 500);
+    }
+  }
+}
+
+/**
+ * GET /v1/analytics/stats - Get aggregated statistics
+ */
+export class GetAnalyticsStats extends OpenAPIRoute {
+  public schema = {
+    tags: ["Analytics"],
+    summary: "Get analytics statistics",
+    description: "Fetches aggregated statistics from DuckDB",
+    operationId: "get-analytics-stats",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        lookback: z.string().optional().describe("Time period: 1h, 24h, 7d, 30d")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Analytics statistics",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.any()
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+
+    if (!session.current_organization_id) {
+      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    }
+
+    const d1 = new D1Adapter(c.env.DB);
+    const orgTag = await d1.getOrgTag(session.current_organization_id);
+
+    if (!orgTag) {
+      return error(c, "NO_TAG_MAPPING", "No analytics access", 403);
+    }
+
+    const lookback = c.req.query("lookback") || "7d";
+    const duckdb = new DuckDBAdapter();
+
+    try {
+      const stats = await duckdb.getStats(session.token, orgTag, lookback);
+      return success(c, stats);
+    } catch (err) {
+      console.error("Failed to fetch stats:", err);
+      return error(c, "QUERY_FAILED", "Failed to fetch statistics", 500);
+    }
+  }
+}
+
+/**
+ * POST /v1/analytics/query - Execute custom analytics query
+ */
+export class CustomAnalyticsQuery extends OpenAPIRoute {
+  public schema = {
+    tags: ["Analytics"],
+    summary: "Execute custom analytics query",
+    description: "Execute a custom SQL query against the analytics database",
+    operationId: "custom-analytics-query",
+    security: [{ bearerAuth: [] }],
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              sql: z.string().min(1).max(10000)
+            })
+          }
+        }
+      }
+    },
+    responses: {
+      "200": {
+        description: "Query results",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                columns: z.array(z.string()).optional(),
+                rows: z.array(z.any()).optional(),
+                rowCount: z.number().optional(),
+                executionTime: z.number().optional()
+              })
+            })
+          }
+        }
+      },
+      "400": { description: "Invalid query" },
+      "403": { description: "Unauthorized" }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { sql } = data.body;
+
+    if (!session.current_organization_id) {
+      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    }
+
+    // Check if user has admin role for custom queries
+    if (session.role !== "owner" && session.role !== "admin") {
+      return error(
+        c,
+        "INSUFFICIENT_PERMISSIONS",
+        "Custom queries require admin access",
+        403
+      );
+    }
+
+    const d1 = new D1Adapter(c.env.DB);
+    const orgTag = await d1.getOrgTag(session.current_organization_id);
+
+    if (!orgTag) {
+      return error(c, "NO_TAG_MAPPING", "No analytics access", 403);
+    }
+
+    const duckdb = new DuckDBAdapter();
+
+    try {
+      const result = await duckdb.customQuery(session.token, orgTag, sql);
+
+      if (!result.success) {
+        return error(
+          c,
+          "QUERY_ERROR",
+          result.error || "Query execution failed",
+          400
+        );
+      }
+
+      return success(c, {
+        columns: result.columns,
+        rows: result.rows,
+        rowCount: result.rowCount,
+        executionTime: result.executionTime
+      });
+    } catch (err) {
+      console.error("Custom query failed:", err);
+      return error(c, "QUERY_FAILED", "Query execution failed", 500);
+    }
+  }
+}
+
+/**
+ * GET /v1/analytics/funnel - Get conversion funnel
+ */
+export class GetConversionFunnel extends OpenAPIRoute {
+  public schema = {
+    tags: ["Analytics"],
+    summary: "Get conversion funnel",
+    description: "Calculate conversion funnel for specified event steps",
+    operationId: "get-conversion-funnel",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        steps: z.string().describe("Comma-separated event types"),
+        lookback: z.string().optional().describe("Time period")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Funnel data",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                steps: z.array(z.any()),
+                conversion_rates: z.array(z.number()),
+                overall_conversion: z.number()
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+
+    if (!session.current_organization_id) {
+      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    }
+
+    const stepsParam = c.req.query("steps");
+    if (!stepsParam) {
+      return error(c, "INVALID_REQUEST", "Steps parameter is required", 400);
+    }
+
+    const steps = stepsParam.split(",").map((s) => s.trim());
+    const lookback = c.req.query("lookback") || "7d";
+
+    const d1 = new D1Adapter(c.env.DB);
+    const orgTag = await d1.getOrgTag(session.current_organization_id);
+
+    if (!orgTag) {
+      return error(c, "NO_TAG_MAPPING", "No analytics access", 403);
+    }
+
+    const duckdb = new DuckDBAdapter();
+
+    try {
+      const funnel = await duckdb.getFunnel(session.token, orgTag, steps, lookback);
+      return success(c, funnel);
+    } catch (err) {
+      console.error("Failed to fetch funnel:", err);
+      return error(c, "QUERY_FAILED", "Failed to calculate funnel", 500);
+    }
+  }
+}

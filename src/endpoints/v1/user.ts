@@ -1,0 +1,247 @@
+import { OpenAPIRoute, contentJson } from "chanfana";
+import { z } from "zod";
+import { AppContext } from "../../types";
+import { Session } from "../../middleware/auth";
+import { D1Adapter } from "../../adapters/d1";
+import { success, error } from "../../utils/response";
+
+/**
+ * GET /v1/user/me - Get current user profile
+ */
+export class GetUserProfile extends OpenAPIRoute {
+  public schema = {
+    tags: ["User"],
+    summary: "Get current user profile",
+    operationId: "get-user-profile",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      "200": {
+        description: "User profile",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                user: z.object({
+                  id: z.string(),
+                  email: z.string(),
+                  name: z.string().nullable(),
+                  created_at: z.string(),
+                  last_login_at: z.string().nullable(),
+                  avatar_url: z.string().nullable()
+                })
+              })
+            })
+          }
+        }
+      },
+      "401": {
+        description: "Unauthorized"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+
+    const d1 = new D1Adapter(c.env.DB);
+    const user = await d1.getUser(session.user_id);
+
+    if (!user) {
+      return error(c, "USER_NOT_FOUND", "User not found", 404);
+    }
+
+    return success(c, { user });
+  }
+}
+
+/**
+ * PATCH /v1/user/me - Update current user profile
+ */
+export class UpdateUserProfile extends OpenAPIRoute {
+  public schema = {
+    tags: ["User"],
+    summary: "Update current user profile",
+    operationId: "update-user-profile",
+    security: [{ bearerAuth: [] }],
+    request: {
+      body: contentJson(
+        z.object({
+          name: z.string().min(1).max(100)
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Updated user profile",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                user: z.object({
+                  id: z.string(),
+                  email: z.string(),
+                  name: z.string(),
+                  updated_at: z.string()
+                })
+              })
+            })
+          }
+        }
+      },
+      "400": {
+        description: "Invalid request"
+      },
+      "401": {
+        description: "Unauthorized"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { name } = data.body;
+
+    const d1 = new D1Adapter(c.env.DB);
+
+    const updated = await d1.updateUser(session.user_id, {
+      name,
+      updated_at: new Date().toISOString()
+    });
+
+    if (!updated) {
+      return error(c, "UPDATE_FAILED", "Failed to update user profile", 500);
+    }
+
+    return success(c, {
+      user: {
+        id: session.user_id,
+        email: session.email,
+        name,
+        updated_at: new Date().toISOString()
+      }
+    });
+  }
+}
+
+/**
+ * GET /v1/user/organizations - Get user's organizations
+ */
+export class GetUserOrganizations extends OpenAPIRoute {
+  public schema = {
+    tags: ["User"],
+    summary: "Get user's organizations",
+    operationId: "get-user-organizations",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      "200": {
+        description: "User's organizations",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                organizations: z.array(
+                  z.object({
+                    id: z.string(),
+                    name: z.string(),
+                    slug: z.string(),
+                    role: z.string(),
+                    joined_at: z.string(),
+                    created_at: z.string(),
+                    updated_at: z.string(),
+                    subscription_tier: z.string(),
+                    members_count: z.number(),
+                    platforms_count: z.number()
+                  })
+                ),
+                current_organization_id: z.string().nullable()
+              })
+            })
+          }
+        }
+      },
+      "401": {
+        description: "Unauthorized"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+
+    const d1 = new D1Adapter(c.env.DB);
+    const organizations = await d1.getUserOrganizations(session.user_id);
+
+    return success(c, {
+      organizations,
+      current_organization_id: session.current_organization_id
+    });
+  }
+}
+
+/**
+ * POST /v1/user/organizations/:orgId/select - Set current organization
+ */
+export class SetCurrentOrganization extends OpenAPIRoute {
+  public schema = {
+    tags: ["User"],
+    summary: "Set current organization",
+    operationId: "set-current-organization",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        orgId: z.string().uuid()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Organization selected",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                organization_id: z.string(),
+                message: z.string()
+              })
+            })
+          }
+        }
+      },
+      "403": {
+        description: "No access to organization"
+      },
+      "404": {
+        description: "Organization not found"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { orgId } = data.params;
+
+    const d1 = new D1Adapter(c.env.DB);
+
+    // Check if user has access to this organization
+    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
+    if (!hasAccess) {
+      return error(c, "FORBIDDEN", "No access to this organization", 403);
+    }
+
+    // Update session's current organization
+    const updated = await d1.setCurrentOrganization(session.token, orgId);
+    if (!updated) {
+      return error(c, "UPDATE_FAILED", "Failed to set organization", 500);
+    }
+
+    return success(c, {
+      organization_id: orgId,
+      message: "Organization selected successfully"
+    });
+  }
+}

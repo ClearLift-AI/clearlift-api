@@ -1,62 +1,48 @@
-import { ApiException, fromHono } from "chanfana";
+import { fromHono } from "chanfana";
 import { Hono } from "hono";
-// User endpoints
-import { GetUserProfile, UpdateUserProfile } from "./endpoints/user/profile";
 
-// Organization endpoints
-import { ListOrganizations } from "./endpoints/organizations/list";
-import { CreateOrganization } from "./endpoints/organizations/create";
-import { SwitchOrganization } from "./endpoints/organizations/switch";
+// Middleware
+import { corsMiddleware } from "./middleware/cors";
+import { auth, requireOrg } from "./middleware/auth";
+import { errorHandler } from "./middleware/errorHandler";
 
-// Campaign endpoints
-import { ListCampaigns } from "./endpoints/campaigns/list";
+// V1 Endpoints
+import { HealthEndpoint } from "./endpoints/v1/health";
+import {
+  GetUserProfile,
+  UpdateUserProfile,
+  GetUserOrganizations,
+  SetCurrentOrganization
+} from "./endpoints/v1/user";
+import {
+  GetFacebookCampaigns,
+  GetFacebookCampaign,
+  GetFacebookAds,
+  GetFacebookMetrics
+} from "./endpoints/v1/platform/fb";
+import {
+  GetConversions,
+  GetAnalyticsStats,
+  CustomAnalyticsQuery,
+  GetConversionFunnel
+} from "./endpoints/v1/analytics/conversions";
 
-// Platform endpoints
-import { ListPlatforms } from "./endpoints/platforms/list";
-import { SyncPlatform } from "./endpoints/platforms/sync";
-import { GetSyncHistory } from "./endpoints/platforms/syncHistory";
-import { ConnectGoogleAds, HandleOAuthCallback } from "./endpoints/platforms/connect";
+// Import types
+import { Session } from "./middleware/auth";
 
-// Event endpoints
-import { EventQuery } from "./endpoints/events/eventQuery";
-import { GetConversions } from "./endpoints/events/conversions";
-import { GetEventInsights } from "./endpoints/events/insights";
-import { SyncEvents } from "./endpoints/events/sync";
-import { BulkUploadEvents } from "./endpoints/events/bulkUpload";
+// Define Variables type
+type Variables = {
+  session: Session;
+};
 
-// Datalake endpoints
-import { CreateTable, ListTables, GetTableSchema, DropTable } from "./endpoints/datalake/tables";
-import { WriteData, BatchWriteData, QueryData } from "./endpoints/datalake/data";
-import { InitializeDatalake, GetStandardSchemas } from "./endpoints/datalake/init";
-import { SyncCampaignsToDatalake, SyncEventsToDatalake, GetSyncStatus } from "./endpoints/datalake/sync";
-import { HealthCheck } from "./endpoints/health";
-import { DebugDatabases, DebugMigrations, DebugTestWrite } from "./endpoints/debug";
-import { authMiddleware, requireOrgMiddleware } from "./middleware/auth";
-import { ContentfulStatusCode } from "hono/utils/http-status";
+// Start a Hono app with proper types
+const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// Start a Hono app
-const app = new Hono<{ Bindings: Env }>();
+// Global error handler
+app.onError(errorHandler);
 
-app.onError((err, c) => {
-  if (err instanceof ApiException) {
-    // If it's a Chanfana ApiException, let Chanfana handle the response
-    return c.json(
-      { success: false, errors: err.buildResponse() },
-      err.status as ContentfulStatusCode,
-    );
-  }
-
-  console.error("Global error handler caught:", err); // Log the error if it's not known
-
-  // For other errors, return a generic 500 response
-  return c.json(
-    {
-      success: false,
-      errors: [{ code: 7000, message: "Internal Server Error" }],
-    },
-    500,
-  );
-});
+// Apply CORS to all routes
+app.use("*", corsMiddleware);
 
 // Setup OpenAPI registry
 const openapi = fromHono(app, {
@@ -65,70 +51,49 @@ const openapi = fromHono(app, {
     info: {
       title: "ClearLift API",
       version: "1.0.0",
-      description: "Production API for ClearLift advertising analytics platform",
+      description: "Production API for ClearLift analytics platform",
     },
-  },
+    servers: [
+      {
+        url: "https://api.clearlift.ai",
+        description: "Production"
+      },
+      {
+        url: "http://localhost:8787",
+        description: "Development"
+      }
+    ],
+    security: [
+      {
+        bearerAuth: []
+      }
+    ]
+  }
 });
 
-// Public endpoints (no auth required)
-openapi.get("/health", HealthCheck);
+// Create V1 router
+const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// Debug endpoints (require debug token)
-openapi.get("/debug/databases", DebugDatabases);
-openapi.get("/debug/migrations", DebugMigrations);
-openapi.post("/debug/test-write", DebugTestWrite);
+// Health check (no auth)
+openapi.get("/v1/health", HealthEndpoint);
 
-// Apply authentication middleware to all API routes
-app.use('/api/*', authMiddleware);
+// User endpoints (session auth only)
+openapi.get("/v1/user/me", auth, GetUserProfile);
+openapi.patch("/v1/user/me", auth, UpdateUserProfile);
+openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
+openapi.post("/v1/user/organizations/:orgId/select", auth, SetCurrentOrganization);
 
-// Apply organization context middleware
-app.use('/api/campaigns/*', requireOrgMiddleware);
-app.use('/api/platforms/*', requireOrgMiddleware);
-app.use('/api/events/*', requireOrgMiddleware);
-app.use('/api/datalake/*', requireOrgMiddleware);
+// Platform endpoints (session + org auth)
+openapi.get("/v1/platform/fb/campaigns", auth, requireOrg, GetFacebookCampaigns);
+openapi.get("/v1/platform/fb/campaigns/:campaignId", auth, requireOrg, GetFacebookCampaign);
+openapi.get("/v1/platform/fb/ads", auth, requireOrg, GetFacebookAds);
+openapi.get("/v1/platform/fb/metrics", auth, requireOrg, GetFacebookMetrics);
 
-// User endpoints
-openapi.get("/api/user/profile", GetUserProfile);
-openapi.put("/api/user/profile", UpdateUserProfile);
-openapi.patch("/api/user/profile", UpdateUserProfile); // Support PATCH method
-
-// Organization endpoints
-openapi.get("/api/organizations", ListOrganizations);
-openapi.post("/api/organizations", CreateOrganization);
-openapi.post("/api/organizations/create", CreateOrganization); // Alternative path for client compatibility
-openapi.post("/api/organizations/switch", SwitchOrganization);
-
-// Campaign endpoints
-openapi.get("/api/campaigns", ListCampaigns);
-
-// Platform endpoints
-openapi.get("/api/platforms", ListPlatforms);
-openapi.get("/api/platforms/list", ListPlatforms); // Alternative path for client compatibility
-openapi.post("/api/platforms/sync", SyncPlatform);
-openapi.get("/api/platforms/sync-history", GetSyncHistory);
-openapi.post("/api/platforms/connect/google-ads", ConnectGoogleAds);
-openapi.get("/api/platforms/connect/callback", HandleOAuthCallback);
-
-// Event endpoints
-openapi.post("/api/events/query", EventQuery);
-openapi.get("/api/events/conversions", GetConversions);
-openapi.get("/api/events/insights", GetEventInsights);
-openapi.post("/api/events/sync", SyncEvents);
-openapi.post("/api/events/bulk-upload", BulkUploadEvents);
-
-// Datalake endpoints
-openapi.post("/api/datalake/tables", CreateTable);
-openapi.get("/api/datalake/tables", ListTables);
-openapi.get("/api/datalake/tables/:namespace/:table/schema", GetTableSchema);
-openapi.delete("/api/datalake/tables/:namespace/:table", DropTable);
-openapi.post("/api/datalake/data/write", WriteData);
-openapi.post("/api/datalake/data/batch-write", BatchWriteData);
-openapi.post("/api/datalake/data/query", QueryData);
-openapi.post("/api/datalake/initialize", InitializeDatalake);
-openapi.get("/api/datalake/schemas", GetStandardSchemas);
-openapi.post("/api/datalake/sync/campaigns", SyncCampaignsToDatalake);
-openapi.post("/api/datalake/sync/events", SyncEventsToDatalake);
-openapi.get("/api/datalake/sync/status", GetSyncStatus);
+// Analytics endpoints (session + org auth)
+openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
+openapi.get("/v1/analytics/stats", auth, requireOrg, GetAnalyticsStats);
+openapi.post("/v1/analytics/query", auth, requireOrg, CustomAnalyticsQuery);
+openapi.get("/v1/analytics/funnel", auth, requireOrg, GetConversionFunnel);
 
 // Export the Hono app
 export default app;
