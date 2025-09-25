@@ -125,6 +125,7 @@ export class GetAnalyticsStats extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
+        org_id: z.string().describe("Organization ID"),
         lookback: z.string().optional().describe("Time period: 1h, 24h, 7d, 30d")
       })
     },
@@ -145,13 +146,14 @@ export class GetAnalyticsStats extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const session = c.get("session");
+    const orgId = c.get("org_id");
 
-    if (!session.current_organization_id) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    if (!orgId) {
+      return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
     }
 
     const d1 = new D1Adapter(c.env.DB);
-    const orgTag = await d1.getOrgTag(session.current_organization_id);
+    const orgTag = await d1.getOrgTag(orgId);
 
     if (!orgTag) {
       return error(c, "NO_TAG_MAPPING", "No analytics access", 403);
@@ -166,111 +168,6 @@ export class GetAnalyticsStats extends OpenAPIRoute {
     } catch (err) {
       console.error("Failed to fetch stats:", err);
       return error(c, "QUERY_FAILED", "Failed to fetch statistics", 500);
-    }
-  }
-}
-
-/**
- * POST /v1/analytics/query - Execute custom analytics query
- */
-export class CustomAnalyticsQuery extends OpenAPIRoute {
-  public schema = {
-    tags: ["Analytics"],
-    summary: "Execute custom analytics query",
-    description: "Execute a custom SQL query against the analytics database",
-    operationId: "custom-analytics-query",
-    security: [{ bearerAuth: [] }],
-    request: {
-      query: z.object({
-        org_id: z.string().describe("Organization ID")
-      }),
-      body: {
-        content: {
-          "application/json": {
-            schema: z.object({
-              sql: z.string().min(1).max(10000)
-            })
-          }
-        }
-      }
-    },
-    responses: {
-      "200": {
-        description: "Query results",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                columns: z.array(z.string()).optional(),
-                rows: z.array(z.any()).optional(),
-                rowCount: z.number().optional(),
-                executionTime: z.number().optional()
-              })
-            })
-          }
-        }
-      },
-      "400": { description: "Invalid query" },
-      "403": { description: "Unauthorized" }
-    }
-  };
-
-  public async handle(c: AppContext) {
-    const session = c.get("session");
-    const orgId = c.get("org_id");
-    const data = await this.getValidatedData<typeof this.schema>();
-    const { sql } = data.body;
-
-    if (!orgId) {
-      return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
-    }
-
-    // Check if user has admin role for custom queries
-    const role = await c.env.DB.prepare(`
-      SELECT role FROM organization_members
-      WHERE user_id = ? AND organization_id = ?
-    `).bind(session.user_id, orgId).first<{role: string}>();
-
-    if (!role || (role.role !== "owner" && role.role !== "admin")) {
-      return error(
-        c,
-        "INSUFFICIENT_PERMISSIONS",
-        "Custom queries require admin access",
-        403
-      );
-    }
-
-    const d1 = new D1Adapter(c.env.DB);
-    const orgTag = await d1.getOrgTag(orgId);
-
-    if (!orgTag) {
-      return error(c, "NO_TAG_MAPPING", "No analytics access", 403);
-    }
-
-    const duckdb = new DuckDBAdapter();
-
-    try {
-      const result = await duckdb.customQuery(session.token, orgTag, sql);
-
-      if (!result.success) {
-        return error(
-          c,
-          "QUERY_ERROR",
-          result.error || "Query execution failed",
-          400
-        );
-      }
-
-      return success(c, {
-        columns: result.columns,
-        rows: result.rows,
-        rowCount: result.rowCount,
-        executionTime: result.executionTime
-      });
-    } catch (err) {
-      console.error("Custom query failed:", err);
-      return error(c, "QUERY_FAILED", "Query execution failed", 500);
     }
   }
 }
