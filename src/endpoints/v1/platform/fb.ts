@@ -93,7 +93,8 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
       );
     } catch (err) {
       console.error("Failed to fetch Facebook campaigns:", err);
-      return error(c, "FETCH_FAILED", "Failed to fetch campaign data", 500);
+      const errorMessage = err instanceof Error ? err.message : "Failed to fetch campaign data";
+      return error(c, "FETCH_FAILED", errorMessage, 500);
     }
   }
 }
@@ -170,7 +171,8 @@ export class GetFacebookCampaign extends OpenAPIRoute {
       return success(c, { campaign });
     } catch (err) {
       console.error("Failed to fetch Facebook campaign:", err);
-      return error(c, "FETCH_FAILED", "Failed to fetch campaign", 500);
+      const errorMessage = err instanceof Error ? err.message : "Failed to fetch campaign";
+      return error(c, "FETCH_FAILED", errorMessage, 500);
     }
   }
 }
@@ -248,7 +250,8 @@ export class GetFacebookAds extends OpenAPIRoute {
       );
     } catch (err) {
       console.error("Failed to fetch Facebook ads:", err);
-      return error(c, "FETCH_FAILED", "Failed to fetch ads data", 500);
+      const errorMessage = err instanceof Error ? err.message : "Failed to fetch ads data";
+      return error(c, "FETCH_FAILED", errorMessage, 500);
     }
   }
 }
@@ -320,7 +323,8 @@ export class GetFacebookMetrics extends OpenAPIRoute {
       return success(c, { metrics, group_by: groupBy });
     } catch (err) {
       console.error("Failed to fetch Facebook metrics:", err);
-      return error(c, "FETCH_FAILED", "Failed to fetch metrics", 500);
+      const errorMessage = err instanceof Error ? err.message : "Failed to fetch metrics";
+      return error(c, "FETCH_FAILED", errorMessage, 500);
     }
   }
 }
