@@ -156,8 +156,7 @@ export class GetUserOrganizations extends OpenAPIRoute {
                     members_count: z.number(),
                     platforms_count: z.number()
                   })
-                ),
-                current_organization_id: z.string().nullable()
+                )
               })
             })
           }
@@ -176,72 +175,7 @@ export class GetUserOrganizations extends OpenAPIRoute {
     const organizations = await d1.getUserOrganizations(session.user_id);
 
     return success(c, {
-      organizations,
-      current_organization_id: session.current_organization_id
-    });
-  }
-}
-
-/**
- * POST /v1/user/organizations/:orgId/select - Set current organization
- */
-export class SetCurrentOrganization extends OpenAPIRoute {
-  public schema = {
-    tags: ["User"],
-    summary: "Set current organization",
-    operationId: "set-current-organization",
-    security: [{ bearerAuth: [] }],
-    request: {
-      params: z.object({
-        orgId: z.string().uuid()
-      })
-    },
-    responses: {
-      "200": {
-        description: "Organization selected",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                organization_id: z.string(),
-                message: z.string()
-              })
-            })
-          }
-        }
-      },
-      "403": {
-        description: "No access to organization"
-      },
-      "404": {
-        description: "Organization not found"
-      }
-    }
-  };
-
-  public async handle(c: AppContext) {
-    const session = c.get("session");
-    const data = await this.getValidatedData<typeof this.schema>();
-    const { orgId } = data.params;
-
-    const d1 = new D1Adapter(c.env.DB);
-
-    // Check if user has access to this organization
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
-
-    // Update session's current organization
-    const updated = await d1.setCurrentOrganization(session.token, orgId);
-    if (!updated) {
-      return error(c, "UPDATE_FAILED", "Failed to set organization", 500);
-    }
-
-    return success(c, {
-      organization_id: orgId,
-      message: "Organization selected successfully"
+      organizations
     });
   }
 }

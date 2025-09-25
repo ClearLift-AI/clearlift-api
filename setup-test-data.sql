@@ -53,11 +53,10 @@ INSERT OR REPLACE INTO organization_members (
   NULL
 );
 
--- Create test session with current_organization_id
+-- Create test session
 INSERT OR REPLACE INTO sessions (
   token,
   user_id,
-  current_organization_id,
   created_at,
   expires_at,
   ip_address,
@@ -65,7 +64,6 @@ INSERT OR REPLACE INTO sessions (
 ) VALUES (
   '3c83ba76-0e57-4ad4-b373-606660f7c580',
   'test-user-001',
-  'test-org-001',
   datetime('now'),
   datetime('now', '+30 days'),
   '127.0.0.1',

@@ -5,12 +5,7 @@ export interface Session {
   user_id: string;
   email: string;
   name: string | null;
-  current_organization_id: string | null;
   expires_at: string;
-  org_id?: string;
-  org_name?: string;
-  org_slug?: string;
-  role?: string;
   token: string;
 }
 
@@ -46,18 +41,11 @@ export async function auth(c: AppContext, next: Next) {
     const session = await c.env.DB.prepare(`
       SELECT
         s.user_id,
-        s.current_organization_id,
         s.expires_at,
         u.email,
-        u.name,
-        o.id as org_id,
-        o.name as org_name,
-        o.slug as org_slug,
-        om.role
+        u.name
       FROM sessions s
       JOIN users u ON s.user_id = u.id
-      LEFT JOIN organizations o ON s.current_organization_id = o.id
-      LEFT JOIN organization_members om ON om.user_id = u.id AND om.organization_id = o.id
       WHERE s.token = ? AND s.expires_at > datetime('now')
     `).bind(token).first<Session>();
 
@@ -93,6 +81,7 @@ export async function auth(c: AppContext, next: Next) {
 /**
  * Middleware to require organization context
  * Must be used after auth middleware
+ * Extracts org_id from query parameter and validates access
  */
 export async function requireOrg(c: AppContext, next: Next) {
   const session = c.get("session");
@@ -107,19 +96,25 @@ export async function requireOrg(c: AppContext, next: Next) {
     }, 401);
   }
 
-  // Check if user has a current organization
-  if (!session.current_organization_id) {
+  // Get org_id from query parameter
+  const orgId = c.req.query("org_id");
+
+  if (!orgId) {
     return c.json({
       success: false,
       error: {
-        code: "NO_ORGANIZATION",
-        message: "No organization selected"
+        code: "MISSING_ORG_ID",
+        message: "org_id query parameter is required"
       }
-    }, 403);
+    }, 400);
   }
 
   // Verify user has access to the organization
-  if (!session.org_id || !session.role) {
+  const { D1Adapter } = await import("../adapters/d1");
+  const d1 = new D1Adapter(c.env.DB);
+  const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
+
+  if (!hasAccess) {
     return c.json({
       success: false,
       error: {
@@ -129,27 +124,38 @@ export async function requireOrg(c: AppContext, next: Next) {
     }, 403);
   }
 
+  // Store org_id in context for downstream use
+  c.set("org_id" as any, orgId);
+
   await next();
 }
 
 /**
  * Optional middleware to check specific role
+ * Must be used after requireOrg
  */
 export function requireRole(roles: string[]) {
   return async (c: AppContext, next: Next) => {
     const session = c.get("session");
+    const orgId = c.get("org_id" as any) as string;
 
-    if (!session || !session.role) {
+    if (!session || !orgId) {
       return c.json({
         success: false,
         error: {
           code: "FORBIDDEN",
-          message: "Insufficient permissions"
+          message: "Insufficient context"
         }
       }, 403);
     }
 
-    if (!roles.includes(session.role)) {
+    // Get user's role in the organization
+    const role = await c.env.DB.prepare(`
+      SELECT role FROM organization_members
+      WHERE user_id = ? AND organization_id = ?
+    `).bind(session.user_id, orgId).first<{role: string}>();
+
+    if (!role || !roles.includes(role.role)) {
       return c.json({
         success: false,
         error: {

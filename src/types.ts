@@ -14,6 +14,7 @@ declare global {
 // Define context variables that can be set/get
 type Variables = {
   session: Session;
+  org_id?: string;
 };
 
 export type AppContext = Context<{

@@ -18,6 +18,7 @@ export class GetConversions extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
+        org_id: z.string().describe("Organization ID"),
         lookback: z.string().optional().describe("Time period: 1h, 24h, 7d, 30d"),
         event_type: z.string().optional().describe("Filter by event type"),
         limit: z.string().optional().describe("Maximum number of events")
@@ -59,14 +60,15 @@ export class GetConversions extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const session = c.get("session");
+    const orgId = c.get("org_id");
 
-    if (!session.current_organization_id) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    if (!orgId) {
+      return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
     }
 
     // Get organization's tag from mapping
     const d1 = new D1Adapter(c.env.DB);
-    const orgTag = await d1.getOrgTag(session.current_organization_id);
+    const orgTag = await d1.getOrgTag(orgId);
 
     if (!orgTag) {
       return error(
@@ -179,6 +181,9 @@ export class CustomAnalyticsQuery extends OpenAPIRoute {
     operationId: "custom-analytics-query",
     security: [{ bearerAuth: [] }],
     request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
       body: {
         content: {
           "application/json": {
@@ -213,15 +218,21 @@ export class CustomAnalyticsQuery extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const session = c.get("session");
+    const orgId = c.get("org_id");
     const data = await this.getValidatedData<typeof this.schema>();
     const { sql } = data.body;
 
-    if (!session.current_organization_id) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    if (!orgId) {
+      return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
     }
 
     // Check if user has admin role for custom queries
-    if (session.role !== "owner" && session.role !== "admin") {
+    const role = await c.env.DB.prepare(`
+      SELECT role FROM organization_members
+      WHERE user_id = ? AND organization_id = ?
+    `).bind(session.user_id, orgId).first<{role: string}>();
+
+    if (!role || (role.role !== "owner" && role.role !== "admin")) {
       return error(
         c,
         "INSUFFICIENT_PERMISSIONS",
@@ -231,7 +242,7 @@ export class CustomAnalyticsQuery extends OpenAPIRoute {
     }
 
     const d1 = new D1Adapter(c.env.DB);
-    const orgTag = await d1.getOrgTag(session.current_organization_id);
+    const orgTag = await d1.getOrgTag(orgId);
 
     if (!orgTag) {
       return error(c, "NO_TAG_MAPPING", "No analytics access", 403);
@@ -276,6 +287,7 @@ export class GetConversionFunnel extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
+        org_id: z.string().describe("Organization ID"),
         steps: z.string().describe("Comma-separated event types"),
         lookback: z.string().optional().describe("Time period")
       })
@@ -301,9 +313,10 @@ export class GetConversionFunnel extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const session = c.get("session");
+    const orgId = c.get("org_id");
 
-    if (!session.current_organization_id) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    if (!orgId) {
+      return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
     }
 
     const stepsParam = c.req.query("steps");
@@ -315,7 +328,7 @@ export class GetConversionFunnel extends OpenAPIRoute {
     const lookback = c.req.query("lookback") || "7d";
 
     const d1 = new D1Adapter(c.env.DB);
-    const orgTag = await d1.getOrgTag(session.current_organization_id);
+    const orgTag = await d1.getOrgTag(orgId);
 
     if (!orgTag) {
       return error(c, "NO_TAG_MAPPING", "No analytics access", 403);

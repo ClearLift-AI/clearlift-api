@@ -16,6 +16,7 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
+        org_id: z.string().describe("Organization ID"),
         start_date: z.string().optional(),
         end_date: z.string().optional(),
         limit: z.string().optional(),
@@ -52,10 +53,10 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
+    const orgId = c.get("org_id");
 
-    if (!session.current_organization_id) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    if (!orgId) {
+      return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
     }
 
     const dateRange = getDateRange(c);
@@ -75,13 +76,13 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
 
     try {
       const campaigns = await fb.getCampaigns(
-        session.current_organization_id,
+        orgId,
         dateRange,
         { limit, offset, sort_by: sortBy, order }
       );
 
       const summary = await fb.getSummary(
-        session.current_organization_id,
+        orgId,
         dateRange
       );
 
@@ -111,6 +112,7 @@ export class GetFacebookCampaign extends OpenAPIRoute {
         campaignId: z.string()
       }),
       query: z.object({
+        org_id: z.string().describe("Organization ID"),
         start_date: z.string().optional(),
         end_date: z.string().optional()
       })
@@ -134,12 +136,12 @@ export class GetFacebookCampaign extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
+    const orgId = c.get("org_id");
     const data = await this.getValidatedData<typeof this.schema>();
     const { campaignId } = data.params;
 
-    if (!session.current_organization_id) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    if (!orgId) {
+      return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
     }
 
     const dateRange = getDateRange(c);
@@ -156,7 +158,7 @@ export class GetFacebookCampaign extends OpenAPIRoute {
 
     try {
       const campaign = await fb.getCampaign(
-        session.current_organization_id,
+        orgId,
         campaignId,
         dateRange
       );
@@ -184,6 +186,7 @@ export class GetFacebookAds extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
+        org_id: z.string().describe("Organization ID"),
         start_date: z.string().optional(),
         end_date: z.string().optional(),
         campaign_id: z.string().optional(),
@@ -211,10 +214,10 @@ export class GetFacebookAds extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
+    const orgId = c.get("org_id");
 
-    if (!session.current_organization_id) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    if (!orgId) {
+      return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
     }
 
     const dateRange = getDateRange(c);
@@ -233,7 +236,7 @@ export class GetFacebookAds extends OpenAPIRoute {
 
     try {
       const ads = await fb.getAds(
-        session.current_organization_id,
+        orgId,
         dateRange,
         { campaign_id: campaignId, limit, offset }
       );
@@ -261,6 +264,7 @@ export class GetFacebookMetrics extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
+        org_id: z.string().describe("Organization ID"),
         start_date: z.string().optional(),
         end_date: z.string().optional(),
         campaign_id: z.string().optional(),
@@ -286,10 +290,10 @@ export class GetFacebookMetrics extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
+    const orgId = c.get("org_id");
 
-    if (!session.current_organization_id) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    if (!orgId) {
+      return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
     }
 
     const dateRange = getDateRange(c);
@@ -308,7 +312,7 @@ export class GetFacebookMetrics extends OpenAPIRoute {
 
     try {
       const metrics = await fb.getDailyMetrics(
-        session.current_organization_id,
+        orgId,
         dateRange,
         { campaign_id: campaignId, group_by: groupBy }
       );

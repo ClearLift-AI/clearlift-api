@@ -167,19 +167,6 @@ export class D1Adapter {
     return orgId;
   }
 
-  /**
-   * Update user's current organization
-   */
-  async setCurrentOrganization(sessionToken: string, orgId: string): Promise<boolean> {
-    const result = await this.db
-      .prepare(
-        "UPDATE sessions SET current_organization_id = ? WHERE token = ?"
-      )
-      .bind(orgId, sessionToken)
-      .run();
-
-    return result.success && result.meta.changes > 0;
-  }
 
   /**
    * Get platform connections for organization

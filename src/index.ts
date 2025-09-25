@@ -11,8 +11,7 @@ import { HealthEndpoint } from "./endpoints/v1/health";
 import {
   GetUserProfile,
   UpdateUserProfile,
-  GetUserOrganizations,
-  SetCurrentOrganization
+  GetUserOrganizations
 } from "./endpoints/v1/user";
 import {
   GetFacebookCampaigns,
@@ -81,7 +80,6 @@ openapi.get("/v1/health", HealthEndpoint);
 openapi.get("/v1/user/me", auth, GetUserProfile);
 openapi.patch("/v1/user/me", auth, UpdateUserProfile);
 openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
-openapi.post("/v1/user/organizations/:orgId/select", auth, SetCurrentOrganization);
 
 // Platform endpoints (session + org auth)
 openapi.get("/v1/platform/fb/campaigns", auth, requireOrg, GetFacebookCampaigns);
