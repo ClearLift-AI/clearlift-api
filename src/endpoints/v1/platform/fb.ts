@@ -65,15 +65,24 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
     const order = c.req.query("order") as "asc" | "desc" | undefined;
 
     // Use SECRET_KEY for server-side access (bypasses RLS)
-    // In local dev, this comes from .dev.vars as a string
-    // In production, it's from secrets_store_secrets which needs toString()
-    const supabaseKey = typeof c.env.SUPABASE_SECRET_KEY === 'string'
-      ? c.env.SUPABASE_SECRET_KEY
-      : await c.env.SUPABASE_SECRET_KEY;
+    // Handle both local (string) and production (secret store) environments
+    let supabaseKey: string;
+
+    // In local dev, SUPABASE_SECRET_KEY comes from .dev.vars as a string
+    // In production, it's a SecretStore binding that needs to be accessed with .get()
+    if (typeof c.env.SUPABASE_SECRET_KEY === 'string') {
+      // Local development - direct string from .dev.vars
+      supabaseKey = c.env.SUPABASE_SECRET_KEY;
+    } else if (c.env.SUPABASE_SECRET_KEY && typeof c.env.SUPABASE_SECRET_KEY.get === 'function') {
+      // Production - SecretStore binding, use .get() without parameters
+      supabaseKey = await c.env.SUPABASE_SECRET_KEY.get();
+    } else {
+      throw new Error('SUPABASE_SECRET_KEY not properly configured');
+    }
 
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      supabaseKey as string
+      supabaseKey
     );
 
     try {
@@ -150,15 +159,24 @@ export class GetFacebookCampaign extends OpenAPIRoute {
     const dateRange = getDateRange(c);
 
     // Use SECRET_KEY for server-side access (bypasses RLS)
-    // In local dev, this comes from .dev.vars as a string
-    // In production, it's from secrets_store_secrets which needs toString()
-    const supabaseKey = typeof c.env.SUPABASE_SECRET_KEY === 'string'
-      ? c.env.SUPABASE_SECRET_KEY
-      : await c.env.SUPABASE_SECRET_KEY;
+    // Handle both local (string) and production (secret store) environments
+    let supabaseKey: string;
+
+    // In local dev, SUPABASE_SECRET_KEY comes from .dev.vars as a string
+    // In production, it's a SecretStore binding that needs to be accessed with .get()
+    if (typeof c.env.SUPABASE_SECRET_KEY === 'string') {
+      // Local development - direct string from .dev.vars
+      supabaseKey = c.env.SUPABASE_SECRET_KEY;
+    } else if (c.env.SUPABASE_SECRET_KEY && typeof c.env.SUPABASE_SECRET_KEY.get === 'function') {
+      // Production - SecretStore binding, use .get() without parameters
+      supabaseKey = await c.env.SUPABASE_SECRET_KEY.get();
+    } else {
+      throw new Error('SUPABASE_SECRET_KEY not properly configured');
+    }
 
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      supabaseKey as string
+      supabaseKey
     );
 
     try {
@@ -231,15 +249,24 @@ export class GetFacebookAds extends OpenAPIRoute {
     const campaignId = c.req.query("campaign_id");
 
     // Use SECRET_KEY for server-side access (bypasses RLS)
-    // In local dev, this comes from .dev.vars as a string
-    // In production, it's from secrets_store_secrets which needs toString()
-    const supabaseKey = typeof c.env.SUPABASE_SECRET_KEY === 'string'
-      ? c.env.SUPABASE_SECRET_KEY
-      : await c.env.SUPABASE_SECRET_KEY;
+    // Handle both local (string) and production (secret store) environments
+    let supabaseKey: string;
+
+    // In local dev, SUPABASE_SECRET_KEY comes from .dev.vars as a string
+    // In production, it's a SecretStore binding that needs to be accessed with .get()
+    if (typeof c.env.SUPABASE_SECRET_KEY === 'string') {
+      // Local development - direct string from .dev.vars
+      supabaseKey = c.env.SUPABASE_SECRET_KEY;
+    } else if (c.env.SUPABASE_SECRET_KEY && typeof c.env.SUPABASE_SECRET_KEY.get === 'function') {
+      // Production - SecretStore binding, use .get() without parameters
+      supabaseKey = await c.env.SUPABASE_SECRET_KEY.get();
+    } else {
+      throw new Error('SUPABASE_SECRET_KEY not properly configured');
+    }
 
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      supabaseKey as string
+      supabaseKey
     );
 
     try {
@@ -310,15 +337,24 @@ export class GetFacebookMetrics extends OpenAPIRoute {
     const groupBy = (c.req.query("group_by") || "day") as "day" | "week" | "month";
 
     // Use SECRET_KEY for server-side access (bypasses RLS)
-    // In local dev, this comes from .dev.vars as a string
-    // In production, it's from secrets_store_secrets which needs toString()
-    const supabaseKey = typeof c.env.SUPABASE_SECRET_KEY === 'string'
-      ? c.env.SUPABASE_SECRET_KEY
-      : await c.env.SUPABASE_SECRET_KEY;
+    // Handle both local (string) and production (secret store) environments
+    let supabaseKey: string;
+
+    // In local dev, SUPABASE_SECRET_KEY comes from .dev.vars as a string
+    // In production, it's a SecretStore binding that needs to be accessed with .get()
+    if (typeof c.env.SUPABASE_SECRET_KEY === 'string') {
+      // Local development - direct string from .dev.vars
+      supabaseKey = c.env.SUPABASE_SECRET_KEY;
+    } else if (c.env.SUPABASE_SECRET_KEY && typeof c.env.SUPABASE_SECRET_KEY.get === 'function') {
+      // Production - SecretStore binding, use .get() without parameters
+      supabaseKey = await c.env.SUPABASE_SECRET_KEY.get();
+    } else {
+      throw new Error('SUPABASE_SECRET_KEY not properly configured');
+    }
 
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      supabaseKey as string
+      supabaseKey
     );
 
     try {
