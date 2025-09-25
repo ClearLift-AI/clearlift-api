@@ -64,7 +64,7 @@ export function errorHandler(error: Error, c: Context): Response {
       }
     };
 
-    return c.json(response, error.statusCode);
+    return c.json(response, error.statusCode as any);
   }
 
   // Handle validation errors from Zod
@@ -80,7 +80,7 @@ export function errorHandler(error: Error, c: Context): Response {
       }
     };
 
-    return c.json(response, 400);
+    return c.json(response, 400 as any);
   }
 
   // Handle database errors
@@ -95,7 +95,7 @@ export function errorHandler(error: Error, c: Context): Response {
       }
     };
 
-    return c.json(response, 500);
+    return c.json(response, 500 as any);
   }
 
   // Default error response
@@ -110,7 +110,7 @@ export function errorHandler(error: Error, c: Context): Response {
     }
   };
 
-  return c.json(response, 500);
+  return c.json(response, 500 as any);
 }
 
 /**

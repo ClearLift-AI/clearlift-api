@@ -36,7 +36,7 @@ export const corsMiddleware = honoCors({
  * Simple CORS headers for OPTIONS preflight
  */
 export async function handleOptions(c: Context) {
-  return c.text("", 204, {
+  return c.text("", 204 as any, {
     "Access-Control-Allow-Origin": c.req.header("Origin") || "*",
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",

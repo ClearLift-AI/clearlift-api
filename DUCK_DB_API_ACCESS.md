@@ -1,562 +1,202 @@
-# Clearlift DuckDB API Access Guide For the EVENTS DB
+API Endpoint
 
-## Production Endpoint
+  POST https://query.clearlift.ai/events/{tag}
 
-```
-https://query.clearlift.ai
-```
+  Authentication
 
-## Quick Start
-
-```javascript
-// Simple query example
-const response = await fetch('https://query.clearlift.ai/api/query', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    session_token: 'your-session-token-here',
-    tag: 'org-tag-here',
-    query_type: 'events',
-    lookback: '24h',
-    limit: 100
-  })
-});
-
-const data = await response.json();
-```
-
-## Authentication
-
-All API requests require session-based authentication using a session token obtained from the Clearlift platform.
-
-### Obtaining a Session Token
-
-Session tokens are managed through the Clearlift platform's authentication system. They are stored in the D1 database with user permissions and organization access controls.
-
-### Authentication Methods
-
-#### Method 1: Session Token in Request Body (Recommended)
-
-```javascript
-{
-  "session_token": "your-session-token-here",
-  "tag": "a3f7c2",
-  // ... other parameters
-}
-```
-
-#### Method 2: Query Parameter (GET requests)
-
-```
-GET https://query.clearlift.ai/api/query?session_token=your-token&tag=a3f7c2&lookback=24h
-```
-
-## API Endpoints
-
-### POST /api/query
-
-Main endpoint for querying event data.
-
-**Request Body:**
-
-```typescript
-{
-  session_token: string;      // Required: Your authentication token
-  tag: string;                 // Required: Organization tag (e.g., 'a3f7c2')
-  query_type?: 'events' | 'stats' | 'raw';  // Default: 'events'
-  lookback?: string;          // Time range: '24h', '7d', '30m' (default: '24h')
-  limit?: number;             // Max results (default: 100)
-  custom_query?: string;      // SQL query (only for query_type: 'raw')
-}
-```
-
-**Response:**
-
-```typescript
-{
-  success: boolean;
-  columns: string[];          // Column names
-  rows: any[];               // Query results
-  rowCount: number;
-  executionTime: number;      // Query execution time in ms
-  context: {
-    user_id: string;
-    tag: string;
-    session_id: string;
-  }
-}
-```
-
-## Code Examples
-
-### Frontend Application (React/Next.js)
-
-```typescript
-// utils/clearlift-api.ts
-class ClearliftAPI {
-  private baseURL = 'https://query.clearlift.ai';
-  private sessionToken: string;
-
-  constructor(sessionToken: string) {
-    this.sessionToken = sessionToken;
+  All requests require a valid session token obtained from the Clearlift platform:
+  {
+    "session_token": "your-session-token-here"
   }
 
-  async queryEvents(tag: string, lookback = '24h', limit = 100) {
-    const response = await fetch(`${this.baseURL}/api/query`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        session_token: this.sessionToken,
-        tag,
-        query_type: 'events',
-        lookback,
-        limit
-      })
-    });
+  Query Parameters
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Query failed');
+  1. Time Range Options
+
+  Option A - Relative Lookback:
+  {
+    "lookback": "24h"  // Supported: 1h, 6h, 12h, 24h, 48h, 7d, 14d, 30d, 90d
+  }
+
+  Option B - Absolute Time Range:
+  {
+    "timeRange": {
+      "start": "2025-09-16T00:00:00Z",
+      "end": "2025-09-16T23:59:59Z"
     }
-
-    return response.json();
   }
 
-  async getStats(tag: string, lookback = '7d') {
-    const response = await fetch(`${this.baseURL}/api/query`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+  2. Field Selection
+
+  Specify which fields to return (default: all fields):
+  {
+    "select": ["timestamp", "eventType", "sessionId", "userId", "pageData"]
+  }
+
+  Available fields:
+  - timestamp - Event timestamp
+  - sessionId - User session identifier
+  - userId - User identifier
+  - eventType - Type of event (page_view, click, scroll, etc.)
+  - eventData - Event-specific data
+  - pageData - Page context (URL, title, path, etc.)
+  - deviceInfo - Device/browser information
+  - utmParams - UTM tracking parameters
+
+  3. Filtering
+
+  Filter events by specific criteria:
+  {
+    "filters": {
+      "eventType": ["page_view", "click"],
+      "pageData.hostname": "example.com",
+      "deviceInfo.browser": "Chrome"
+    }
+  }
+
+  4. Aggregation
+
+  Get summarized statistics instead of raw events:
+  {
+    "aggregate": {
+      "groupBy": ["eventType"],
+      "metrics": ["count", "distinct_users", "distinct_sessions"],
+      "timeGranularity": "hour"  // Options: minute, hour, day, week, month
+    }
+  }
+
+  Supported metrics:
+  - count - Total event count
+  - distinct_users - Unique user count
+  - distinct_sessions - Unique session count
+
+  5. Sorting & Pagination
+
+  {
+    "orderBy": [
+      { "field": "timestamp", "direction": "DESC" }
+    ],
+    "limit": 100,    // Max results (default: 100, max: 1000)
+    "offset": 0      // Skip N results for pagination
+  }
+
+  Example Queries
+
+  Get Recent Events
+
+  curl -X POST https://query.clearlift.ai/events/a3f7c2 \
+    -H "Content-Type: application/json" \
+    -d '{
+      "session_token": "your-token",
+      "lookback": "24h",
+      "limit": 50
+    }'
+
+  Get Page Views for Specific Date
+
+  curl -X POST https://query.clearlift.ai/events/a3f7c2 \
+    -H "Content-Type: application/json" \
+    -d '{
+      "session_token": "your-token",
+      "timeRange": {
+        "start": "2025-09-16T00:00:00Z",
+        "end": "2025-09-16T23:59:59Z"
       },
-      body: JSON.stringify({
-        session_token: this.sessionToken,
-        tag,
-        query_type: 'stats',
-        lookback
-      })
-    });
-
-    return response.json();
-  }
-
-  async customQuery(tag: string, sql: string) {
-    const response = await fetch(`${this.baseURL}/api/query`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+      "filters": {
+        "eventType": "page_view"
       },
-      body: JSON.stringify({
-        session_token: this.sessionToken,
-        tag,
-        query_type: 'raw',
-        custom_query: sql
-      })
-    });
+      "select": ["timestamp", "userId", "pageData.url", "pageData.title"]
+    }'
 
-    return response.json();
-  }
-}
+  Get Daily Event Counts by Type
 
-// Usage in React component
-const api = new ClearliftAPI('your-session-token');
+  curl -X POST https://query.clearlift.ai/events/a3f7c2 \
+    -H "Content-Type: application/json" \
+    -d '{
+      "session_token": "your-token",
+      "lookback": "7d",
+      "aggregate": {
+        "groupBy": ["eventType"],
+        "metrics": ["count", "distinct_users"]
+      }
+    }'
 
-// Get recent events
-const events = await api.queryEvents('a3f7c2', '24h', 50);
+  Get Hourly Time Series
 
-// Get statistics
-const stats = await api.getStats('a3f7c2', '7d');
-```
+  curl -X POST https://query.clearlift.ai/events/a3f7c2 \
+    -H "Content-Type: application/json" \
+    -d '{
+      "session_token": "your-token",
+      "lookback": "24h",
+      "aggregate": {
+        "timeGranularity": "hour",
+        "metrics": ["count"]
+      }
+    }'
 
-### Cloudflare Worker Integration
+  Get User Journey for Specific Session
 
-```typescript
-// worker.ts
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    // Forward analytics request to Clearlift
-    const clearliftData = await queryClearlift(env.CLEARLIFT_SESSION_TOKEN);
+  curl -X POST https://query.clearlift.ai/events/a3f7c2 \
+    -H "Content-Type: application/json" \
+    -d '{
+      "session_token": "your-token",
+      "filters": {
+        "sessionId": "e62a-6dfa-f2a9-mflqt038"
+      },
+      "orderBy": [
+        { "field": "timestamp", "direction": "ASC" }
+      ],
+      "limit": 100
+    }'
 
-    return new Response(JSON.stringify(clearliftData), {
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-};
+  Response Format
 
-async function queryClearlift(sessionToken: string) {
-  const response = await fetch('https://query.clearlift.ai/api/query', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
+  Success Response
+
+  {
+    "success": true,
+    "columns": ["timestamp", "eventType", "sessionId", "userId"],
+    "rows": [
+      {
+        "timestamp": "2025-09-16T16:39:34.733Z",
+        "eventType": "page_view",
+        "sessionId": "abc-123",
+        "userId": "user_001"
+      }
+    ],
+    "rowCount": 1,
+    "executionTime": 1234,
+    "metadata": {
+      "tag": "a3f7c2",
+      "partitioningUsed": "hive",
+      "optimized": true
     },
-    body: JSON.stringify({
-      session_token: sessionToken,
-      tag: 'a3f7c2',
-      query_type: 'events',
-      lookback: '1h',
-      limit: 10
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Clearlift query failed: ${response.status}`);
-  }
-
-  return response.json();
-}
-```
-
-### Node.js Backend
-
-```javascript
-// clearlift-client.js
-const fetch = require('node-fetch');
-
-class ClearliftClient {
-  constructor(sessionToken) {
-    this.sessionToken = sessionToken;
-    this.baseURL = 'https://query.clearlift.ai';
-  }
-
-  async query(params) {
-    const response = await fetch(`${this.baseURL}/api/query`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        session_token: this.sessionToken,
-        ...params
-      })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || `HTTP ${response.status}`);
-    }
-
-    return data;
-  }
-
-  // Convenience methods
-  async getRecentEvents(tag, hours = 24) {
-    return this.query({
-      tag,
-      query_type: 'events',
-      lookback: `${hours}h`,
-      limit: 100
-    });
-  }
-
-  async getDailyStats(tag, days = 7) {
-    return this.query({
-      tag,
-      query_type: 'stats',
-      lookback: `${days}d`
-    });
-  }
-}
-
-// Usage
-const client = new ClearliftClient('your-session-token');
-
-// Get events from last 48 hours
-const events = await client.getRecentEvents('a3f7c2', 48);
-console.log(`Found ${events.rowCount} events`);
-
-// Get weekly statistics
-const stats = await client.getDailyStats('a3f7c2', 7);
-```
-
-### cURL Examples
-
-```bash
-# Query recent events
-curl -X POST https://query.clearlift.ai/api/query \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_token": "your-session-token",
-    "tag": "a3f7c2",
-    "query_type": "events",
-    "lookback": "24h",
-    "limit": 10
-  }'
-
-# Get statistics
-curl -X POST https://query.clearlift.ai/api/query \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_token": "your-session-token",
-    "tag": "a3f7c2",
-    "query_type": "stats",
-    "lookback": "7d"
-  }'
-
-# GET request with query parameters
-curl "https://query.clearlift.ai/api/query?session_token=your-token&tag=a3f7c2&query_type=events&lookback=1h&limit=5"
-```
-
-## Query Types
-
-### 1. Events Query (`query_type: 'events'`)
-
-Returns raw event records with all fields.
-
-```javascript
-{
-  query_type: 'events',
-  lookback: '24h',    // Time range
-  limit: 100          // Max records
-}
-```
-
-**Returns:** Individual event records with timestamp, sessionId, userId, eventType, etc.
-
-### 2. Statistics Query (`query_type: 'stats'`)
-
-Returns aggregated statistics about events.
-
-```javascript
-{
-  query_type: 'stats',
-  lookback: '7d'      // Time range for statistics
-}
-```
-
-**Returns:** Aggregated data like event counts, unique sessions, users by time period.
-
-### 3. Raw SQL Query (`query_type: 'raw'`)
-
-Execute custom SQL queries (with tag-based access control).
-
-```javascript
-{
-  query_type: 'raw',
-  custom_query: `
-    SELECT eventType, COUNT(*) as count
-    FROM read_json('s3://event-datalake/events/tag=a3f7c2/year=2025/month=9/day=*/*/*.json')
-    GROUP BY eventType
-    ORDER BY count DESC
-  `
-}
-```
-
-**Note:** Raw queries must include appropriate tag filtering for security.
-
-## Response Handling
-
-### Success Response
-
-```javascript
-{
-  "success": true,
-  "columns": ["timestamp", "sessionId", "eventType", ...],
-  "rows": [
-    {
-      "timestamp": "2025-09-16T12:00:00Z",
-      "sessionId": "abc-123",
-      "eventType": "page_view",
-      // ... more fields
-    }
-  ],
-  "rowCount": 42,
-  "executionTime": 1250,  // milliseconds
-  "context": {
-    "user_id": "user-uuid",
-    "tag": "a3f7c2",
-    "session_id": "sess-prefix..."
-  }
-}
-```
-
-### Error Response
-
-```javascript
-{
-  "error": "Unauthorized: Invalid session or insufficient permissions",
-  "debug": {
-    "session_token_prefix": "3c83ba76",
-    "requested_tag": "a3f7c2"
-  }
-}
-```
-
-### Common HTTP Status Codes
-
-- `200` - Success
-- `400` - Bad request (missing parameters)
-- `401` - Unauthorized (invalid/expired session)
-- `403` - Forbidden (no access to requested tag)
-- `500` - Internal server error
-- `503` - Service unavailable (container starting)
-
-## Best Practices
-
-### 1. Error Handling
-
-```javascript
-try {
-  const response = await fetch('https://query.clearlift.ai/api/query', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params)
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    // Handle different error types
-    switch (response.status) {
-      case 401:
-        // Session expired, re-authenticate
-        await refreshSession();
-        break;
-      case 503:
-        // Container starting, retry after delay
-        await new Promise(r => setTimeout(r, 5000));
-        return retry();
-      default:
-        console.error('Query failed:', data.error);
+    "context": {
+      "user_id": "d0cf0973-1f80-4551-819b-0601e3fbe989",
+      "authorized_tags": ["a3f7c2"]
     }
   }
 
-  return data;
-} catch (error) {
-  console.error('Network error:', error);
-}
-```
+  Error Response
 
-### 2. CORS Configuration
-
-The API supports CORS with the following headers:
-
-```
-Access-Control-Allow-Origin: *
-Access-Control-Allow-Methods: GET, POST, OPTIONS
-Access-Control-Allow-Headers: Content-Type, Authorization, X-Session-Token
-```
-
-### 3. Performance Optimization
-
-```javascript
-// Cache responses when appropriate
-const cache = new Map();
-
-async function getCachedQuery(params) {
-  const cacheKey = JSON.stringify(params);
-
-  if (cache.has(cacheKey)) {
-    const cached = cache.get(cacheKey);
-    if (Date.now() - cached.timestamp < 300000) { // 5 min cache
-      return cached.data;
-    }
+  {
+    "success": false,
+    "error": "Error message here"
   }
 
-  const data = await queryAPI(params);
-  cache.set(cacheKey, { data, timestamp: Date.now() });
-  return data;
-}
-```
+  Performance Tips
 
-### 4. Batch Requests
+  1. Use Time Filters - Always specify a time range to leverage Hive partitioning
+  2. Limit Results - Use reasonable limits to reduce query time
+  3. Select Only Needed Fields - Reduces data transfer and processing
+  4. Use Aggregation - For dashboards and reports, use aggregation instead of fetching raw events
+  5. Leverage Partition Pruning - Queries automatically optimize based on year/month/day/hour partitions
 
-For multiple queries, execute them in parallel:
+  Rate Limits & Best Practices
 
-```javascript
-const [events, stats, customData] = await Promise.all([
-  api.queryEvents('a3f7c2', '24h'),
-  api.getStats('a3f7c2', '7d'),
-  api.customQuery('a3f7c2', customSQL)
-]);
-```
-
-## Common Use Cases
-
-### 1. Real-time Dashboard
-
-```javascript
-// Refresh dashboard every 30 seconds
-setInterval(async () => {
-  const data = await api.queryEvents('a3f7c2', '1h', 50);
-  updateDashboard(data.rows);
-}, 30000);
-```
-
-### 2. Daily Reports
-
-```javascript
-// Generate daily report
-async function generateDailyReport(tag) {
-  const stats = await api.getStats(tag, '1d');
-  const events = await api.queryEvents(tag, '24h', 1000);
-
-  return {
-    date: new Date().toISOString().split('T')[0],
-    summary: stats,
-    details: events.rows
-  };
-}
-```
-
-### 3. User Activity Timeline
-
-```javascript
-// Get user's activity for the past week
-const userActivity = await api.customQuery('a3f7c2', `
-  SELECT timestamp, eventType, pageData
-  FROM read_json('s3://event-datalake/events/tag=a3f7c2/*/*/*/*/*.json')
-  WHERE userId = 'user-123'
-    AND timestamp > CURRENT_TIMESTAMP - INTERVAL '7 days'
-  ORDER BY timestamp DESC
-`);
-```
-
-### 4. Export Data
-
-```javascript
-// Export events to CSV
-async function exportToCSV(tag, lookback) {
-  const data = await api.queryEvents(tag, lookback, 10000);
-
-  const csv = [
-    data.columns.join(','),
-    ...data.rows.map(row =>
-      data.columns.map(col => row[col]).join(',')
-    )
-  ].join('\n');
-
-  // Download CSV
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `events-${tag}-${lookback}.csv`;
-  a.click();
-}
-```
-
-## Troubleshooting
-
-### Container Startup Time
-
-The first request after inactivity may take 20-30 seconds as the container starts. Subsequent requests are faster.
-
-### Session Expiration
-
-Sessions expire after a configured period. Handle 401 responses by re-authenticating.
-
-### Rate Limiting
-
-The API may implement rate limiting per session. Implement exponential backoff for retries.
-
-### Large Result Sets
-
-For queries returning large amounts of data, use pagination with `limit` and consider implementing streaming if available.
-
-## Support
-
-For issues or questions about API access, contact the Clearlift support team or refer to the main documentation.
+  - Maximum query timeout: 60 seconds
+  - Maximum result size: 10MB
+  - For large exports, use pagination with offset and limit
+  - Cache aggregated results when possible
+  - Use specific time ranges rather than broad lookbacks
+  

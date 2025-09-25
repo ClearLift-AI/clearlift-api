@@ -2,13 +2,27 @@
  * DuckDB Adapter for querying analytics from query.clearlift.ai
  */
 
+// New API Request/Response Types
 export interface DuckDBQueryRequest {
   session_token: string;
-  tag: string;
-  query_type: "events" | "stats" | "raw";
-  lookback?: string; // e.g., "24h", "7d", "30d"
+  lookback?: string;
+  timeRange?: {
+    start: string;
+    end: string;
+  };
+  select?: string[];
+  filters?: Record<string, any>;
+  aggregate?: {
+    groupBy?: string[];
+    metrics?: string[];
+    timeGranularity?: "minute" | "hour" | "day" | "week" | "month";
+  };
+  orderBy?: Array<{
+    field: string;
+    direction: "ASC" | "DESC";
+  }>;
   limit?: number;
-  custom_query?: string; // For raw SQL queries
+  offset?: number;
 }
 
 export interface DuckDBQueryResponse {
@@ -17,35 +31,48 @@ export interface DuckDBQueryResponse {
   rows?: any[];
   rowCount?: number;
   executionTime?: number;
+  metadata?: {
+    tag?: string;
+    partitioningUsed?: string;
+    optimized?: boolean;
+  };
   context?: {
-    user_id: string;
-    tag: string;
-    session_id: string;
+    user_id?: string;
+    authorized_tags?: string[];
   };
   error?: string;
-  debug?: any;
 }
 
 export interface ConversionEvent {
   timestamp: string;
-  event_id: string;
-  event_type: string;
-  event_value?: number;
-  user_id?: string;
-  session_id?: string;
-  utm_source?: string;
-  utm_medium?: string;
-  utm_campaign?: string;
-  device_type?: string;
-  browser?: string;
-  country?: string;
-  attribution_path?: any;
+  eventType: string;
+  sessionId: string;
+  userId?: string;
+  eventData?: any;
+  pageData?: {
+    url?: string;
+    title?: string;
+    path?: string;
+    hostname?: string;
+  };
+  deviceInfo?: {
+    browser?: string;
+    device?: string;
+    os?: string;
+  };
+  utmParams?: {
+    source?: string;
+    medium?: string;
+    campaign?: string;
+    term?: string;
+    content?: string;
+  };
 }
 
 export interface ConversionSummary {
   total_events: number;
   unique_users: number;
-  total_value: number;
+  unique_sessions: number;
   events_by_type: Record<string, number>;
   top_sources: Array<{ source: string; count: number }>;
   conversion_rate?: number;
@@ -57,8 +84,11 @@ export class DuckDBAdapter {
   /**
    * Execute a query against the DuckDB API
    */
-  private async query(request: DuckDBQueryRequest): Promise<DuckDBQueryResponse> {
-    const url = `${this.baseUrl}/api/query`;
+  private async query(
+    orgTag: string,
+    request: DuckDBQueryRequest
+  ): Promise<DuckDBQueryResponse> {
+    const url = `${this.baseUrl}/events/${orgTag}`;
 
     try {
       const response = await fetch(url, {
@@ -74,8 +104,7 @@ export class DuckDBAdapter {
       if (!response.ok) {
         return {
           success: false,
-          error: data?.error || `HTTP ${response.status}`,
-          debug: (data as any)?.debug
+          error: data?.error || `HTTP ${response.status}`
         };
       }
 
@@ -104,15 +133,30 @@ export class DuckDBAdapter {
     events: ConversionEvent[];
     summary: ConversionSummary;
   }> {
+    const filters: any = {};
+    if (options?.event_type) {
+      filters.eventType = options.event_type;
+    }
+
     const request: DuckDBQueryRequest = {
       session_token: sessionToken,
-      tag: orgTag,
-      query_type: "events",
       lookback: options?.lookback || "7d",
+      select: [
+        "timestamp",
+        "eventType",
+        "sessionId",
+        "userId",
+        "eventData",
+        "pageData",
+        "deviceInfo",
+        "utmParams"
+      ],
+      filters: Object.keys(filters).length > 0 ? filters : undefined,
+      orderBy: [{ field: "timestamp", direction: "DESC" }],
       limit: options?.limit || 100
     };
 
-    const response = await this.query(request);
+    const response = await this.query(orgTag, request);
 
     if (!response.success || !response.rows) {
       return {
@@ -120,7 +164,7 @@ export class DuckDBAdapter {
         summary: {
           total_events: 0,
           unique_users: 0,
-          total_value: 0,
+          unique_sessions: 0,
           events_by_type: {},
           top_sources: []
         }
@@ -129,30 +173,20 @@ export class DuckDBAdapter {
 
     // Transform rows to ConversionEvent format
     const events: ConversionEvent[] = response.rows.map((row) => ({
-      timestamp: row.timestamp || row.created_at,
-      event_id: row.eventId || row.event_id,
-      event_type: row.eventType || row.event_type,
-      event_value: row.eventValue || row.event_value,
-      user_id: row.userId || row.user_id,
-      session_id: row.sessionId || row.session_id,
-      utm_source: row.utm_source,
-      utm_medium: row.utm_medium,
-      utm_campaign: row.utm_campaign,
-      device_type: row.device_type || row.deviceType,
-      browser: row.browser,
-      country: row.country,
-      attribution_path: row.attribution_path
+      timestamp: row.timestamp,
+      eventType: row.eventType,
+      sessionId: row.sessionId,
+      userId: row.userId,
+      eventData: row.eventData,
+      pageData: row.pageData,
+      deviceInfo: row.deviceInfo,
+      utmParams: row.utmParams
     }));
 
-    // Filter by event type if specified
-    const filteredEvents = options?.event_type
-      ? events.filter((e) => e.event_type === options.event_type)
-      : events;
-
     // Calculate summary
-    const summary = this.calculateSummary(filteredEvents);
+    const summary = this.calculateSummary(events);
 
-    return { events: filteredEvents, summary };
+    return { events, summary };
   }
 
   /**
@@ -165,12 +199,15 @@ export class DuckDBAdapter {
   ): Promise<any> {
     const request: DuckDBQueryRequest = {
       session_token: sessionToken,
-      tag: orgTag,
-      query_type: "stats",
-      lookback
+      lookback,
+      aggregate: {
+        groupBy: ["eventType"],
+        metrics: ["count", "distinct_users", "distinct_sessions"],
+        timeGranularity: "day"
+      }
     };
 
-    const response = await this.query(request);
+    const response = await this.query(orgTag, request);
 
     if (!response.success || !response.rows) {
       return {
@@ -183,26 +220,30 @@ export class DuckDBAdapter {
       };
     }
 
-    // Process stats data
     return this.processStats(response.rows);
   }
 
   /**
-   * Execute a custom SQL query
+   * Execute a custom analytics query
    */
   async customQuery(
     sessionToken: string,
     orgTag: string,
-    sql: string
+    queryOptions: {
+      lookback?: string;
+      timeRange?: { start: string; end: string };
+      filters?: Record<string, any>;
+      aggregate?: any;
+      select?: string[];
+      limit?: number;
+    }
   ): Promise<DuckDBQueryResponse> {
     const request: DuckDBQueryRequest = {
       session_token: sessionToken,
-      tag: orgTag,
-      query_type: "raw",
-      custom_query: sql
+      ...queryOptions
     };
 
-    return this.query(request);
+    return this.query(orgTag, request);
   }
 
   /**
@@ -214,50 +255,44 @@ export class DuckDBAdapter {
     steps: string[],
     lookback: string = "7d"
   ): Promise<any> {
-    // Build funnel query
-    const sql = `
-      WITH funnel_steps AS (
-        SELECT
-          user_id,
-          event_type,
-          MIN(timestamp) as first_occurrence
-        FROM events
-        WHERE tag = '${orgTag}'
-          AND event_type IN (${steps.map((s) => `'${s}'`).join(",")})
-          AND timestamp > NOW() - INTERVAL '${lookback}'
-        GROUP BY user_id, event_type
-      )
-      SELECT
-        event_type as step,
-        COUNT(DISTINCT user_id) as users,
-        COUNT(*) as events
-      FROM funnel_steps
-      GROUP BY event_type
-      ORDER BY ARRAY_POSITION(ARRAY[${steps.map((s) => `'${s}'`).join(",")}], event_type)
-    `;
+    // Query for each funnel step
+    const stepPromises = steps.map(async (step) => {
+      const request: DuckDBQueryRequest = {
+        session_token: sessionToken,
+        lookback,
+        filters: { eventType: step },
+        aggregate: {
+          metrics: ["count", "distinct_users"]
+        }
+      };
 
-    const response = await this.customQuery(sessionToken, orgTag, sql);
+      const response = await this.query(orgTag, request);
+      return {
+        step,
+        data: response.rows?.[0] || { count: 0, distinct_users: 0 }
+      };
+    });
 
-    if (!response.success || !response.rows) {
-      return { steps: [], conversion_rates: [] };
-    }
+    const funnelData = await Promise.all(stepPromises);
 
     // Calculate conversion rates
-    const funnel = response.rows;
     const conversionRates: number[] = [];
-
-    for (let i = 1; i < funnel.length; i++) {
-      const rate = funnel[i - 1].users > 0
-        ? (funnel[i].users / funnel[i - 1].users) * 100
-        : 0;
+    for (let i = 1; i < funnelData.length; i++) {
+      const prevUsers = funnelData[i - 1].data.distinct_users || 0;
+      const currUsers = funnelData[i].data.distinct_users || 0;
+      const rate = prevUsers > 0 ? (currUsers / prevUsers) * 100 : 0;
       conversionRates.push(rate);
     }
 
     return {
-      steps: funnel,
+      steps: funnelData.map(f => ({
+        step: f.step,
+        users: f.data.distinct_users || 0,
+        events: f.data.count || 0
+      })),
       conversion_rates: conversionRates,
-      overall_conversion: funnel.length > 1 && funnel[0].users > 0
-        ? (funnel[funnel.length - 1].users / funnel[0].users) * 100
+      overall_conversion: funnelData.length > 1 && funnelData[0].data.distinct_users > 0
+        ? (funnelData[funnelData.length - 1].data.distinct_users / funnelData[0].data.distinct_users) * 100
         : 0
     };
   }
@@ -267,26 +302,28 @@ export class DuckDBAdapter {
    */
   private calculateSummary(events: ConversionEvent[]): ConversionSummary {
     const uniqueUsers = new Set<string>();
+    const uniqueSessions = new Set<string>();
     const eventsByType: Record<string, number> = {};
     const sourceCount: Record<string, number> = {};
-    let totalValue = 0;
 
     events.forEach((event) => {
       // Count unique users
-      if (event.user_id) {
-        uniqueUsers.add(event.user_id);
+      if (event.userId) {
+        uniqueUsers.add(event.userId);
+      }
+
+      // Count unique sessions
+      if (event.sessionId) {
+        uniqueSessions.add(event.sessionId);
       }
 
       // Count events by type
-      eventsByType[event.event_type] = (eventsByType[event.event_type] || 0) + 1;
+      eventsByType[event.eventType] = (eventsByType[event.eventType] || 0) + 1;
 
       // Count sources
-      if (event.utm_source) {
-        sourceCount[event.utm_source] = (sourceCount[event.utm_source] || 0) + 1;
+      if (event.utmParams?.source) {
+        sourceCount[event.utmParams.source] = (sourceCount[event.utmParams.source] || 0) + 1;
       }
-
-      // Sum values
-      totalValue += event.event_value || 0;
     });
 
     // Get top sources
@@ -298,70 +335,45 @@ export class DuckDBAdapter {
     return {
       total_events: events.length,
       unique_users: uniqueUsers.size,
-      total_value: totalValue,
+      unique_sessions: uniqueSessions.size,
       events_by_type: eventsByType,
       top_sources: topSources
     };
   }
 
   /**
-   * Process statistics data from DuckDB
+   * Process aggregated statistics data
    */
   private processStats(rows: any[]): any {
-    const daily: Record<string, any> = {};
+    let totalEvents = 0;
+    let totalUniqueUsers = 0;
     const eventTypes: Record<string, number> = {};
-    const sources: Record<string, number> = {};
-    const devices: Record<string, number> = {};
-    const uniqueUsers = new Set<string>();
+    const dailyData: any[] = [];
 
     rows.forEach((row) => {
-      // Group by date
-      const date = row.date || row.timestamp?.split("T")[0];
-      if (date) {
-        if (!daily[date]) {
-          daily[date] = { events: 0, users: new Set(), value: 0 };
-        }
-        daily[date].events += row.count || 1;
-        if (row.user_id) daily[date].users.add(row.user_id);
-        daily[date].value += row.value || 0;
+      if (row.count) totalEvents += row.count;
+      if (row.distinct_users) totalUniqueUsers = Math.max(totalUniqueUsers, row.distinct_users);
+
+      if (row.eventType) {
+        eventTypes[row.eventType] = row.count || 0;
       }
 
-      // Count by type
-      if (row.event_type) {
-        eventTypes[row.event_type] = (eventTypes[row.event_type] || 0) + (row.count || 1);
-      }
-
-      // Count by source
-      if (row.utm_source) {
-        sources[row.utm_source] = (sources[row.utm_source] || 0) + (row.count || 1);
-      }
-
-      // Count by device
-      if (row.device_type) {
-        devices[row.device_type] = (devices[row.device_type] || 0) + (row.count || 1);
-      }
-
-      // Track unique users
-      if (row.user_id) {
-        uniqueUsers.add(row.user_id);
+      // If we have time-based data
+      if (row.time_bucket) {
+        dailyData.push({
+          date: row.time_bucket,
+          events: row.count || 0,
+          users: row.distinct_users || 0,
+          sessions: row.distinct_sessions || 0
+        });
       }
     });
 
-    // Convert daily data
-    const dailyEvents = Object.entries(daily).map(([date, data]: [string, any]) => ({
-      date,
-      events: data.events,
-      users: data.users.size,
-      value: data.value
-    }));
-
     return {
-      daily_events: dailyEvents,
+      daily_events: dailyData,
       event_types: eventTypes,
-      sources,
-      devices,
-      total_events: dailyEvents.reduce((sum, day) => sum + day.events, 0),
-      unique_users: uniqueUsers.size
+      total_events: totalEvents,
+      unique_users: totalUniqueUsers
     };
   }
 }

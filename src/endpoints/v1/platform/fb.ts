@@ -63,9 +63,14 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
     const sortBy = c.req.query("sort_by") as string | undefined;
     const order = c.req.query("order") as "asc" | "desc" | undefined;
 
+    // Use SECRET_KEY for server-side access (bypasses RLS)
+    // In local dev, this comes from .dev.vars as a string
+    // In production, it's from secrets_store_secrets
+    const supabaseKey = c.env.SUPABASE_SECRET_KEY;
+
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      c.env.SUPABASE_SECRET_KEY.toString()
+      supabaseKey
     );
 
     try {
@@ -139,9 +144,14 @@ export class GetFacebookCampaign extends OpenAPIRoute {
 
     const dateRange = getDateRange(c);
 
+    // Use SECRET_KEY for server-side access (bypasses RLS)
+    // In local dev, this comes from .dev.vars as a string
+    // In production, it's from secrets_store_secrets
+    const supabaseKey = c.env.SUPABASE_SECRET_KEY;
+
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      c.env.SUPABASE_SECRET_KEY.toString()
+      supabaseKey
     );
 
     try {
@@ -211,9 +221,14 @@ export class GetFacebookAds extends OpenAPIRoute {
     const { limit, offset } = getPagination(c);
     const campaignId = c.req.query("campaign_id");
 
+    // Use SECRET_KEY for server-side access (bypasses RLS)
+    // In local dev, this comes from .dev.vars as a string
+    // In production, it's from secrets_store_secrets
+    const supabaseKey = c.env.SUPABASE_SECRET_KEY;
+
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      c.env.SUPABASE_SECRET_KEY.toString()
+      supabaseKey
     );
 
     try {
@@ -281,9 +296,14 @@ export class GetFacebookMetrics extends OpenAPIRoute {
     const campaignId = c.req.query("campaign_id");
     const groupBy = (c.req.query("group_by") || "day") as "day" | "week" | "month";
 
+    // Use SECRET_KEY for server-side access (bypasses RLS)
+    // In local dev, this comes from .dev.vars as a string
+    // In production, it's from secrets_store_secrets
+    const supabaseKey = c.env.SUPABASE_SECRET_KEY;
+
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      c.env.SUPABASE_SECRET_KEY.toString()
+      supabaseKey
     );
 
     try {
