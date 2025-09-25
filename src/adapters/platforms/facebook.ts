@@ -10,8 +10,8 @@ import {
 
 export interface FacebookAdsRow {
   org_id: string;
-  ad_id: number;
-  campaign_id: number;
+  ad_id: string;
+  campaign_id: string;
   date_reported: string;
   ad_name: string;
   adset_name: string;
