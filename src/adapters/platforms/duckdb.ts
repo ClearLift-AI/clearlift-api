@@ -202,8 +202,8 @@ export class DuckDBAdapter {
       lookback,
       aggregate: {
         groupBy: ["eventType"],
-        metrics: ["count", "distinct_users", "distinct_sessions"],
-        timeGranularity: "day"
+        metrics: ["count", "distinct_users", "distinct_sessions"]
+        // Remove timeGranularity for now as it returns empty time_bucket objects
       }
     };
 
@@ -377,6 +377,8 @@ export class DuckDBAdapter {
     return {
       daily_events: dailyData,
       event_types: eventTypes,
+      sources: {}, // TODO: implement source aggregation
+      devices: {}, // TODO: implement device aggregation
       total_events: totalEvents,
       unique_users: totalUniqueUsers
     };
