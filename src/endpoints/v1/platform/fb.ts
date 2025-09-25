@@ -66,12 +66,14 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
 
     // Use SECRET_KEY for server-side access (bypasses RLS)
     // In local dev, this comes from .dev.vars as a string
-    // In production, it's from secrets_store_secrets
-    const supabaseKey = c.env.SUPABASE_SECRET_KEY;
+    // In production, it's from secrets_store_secrets which needs toString()
+    const supabaseKey = typeof c.env.SUPABASE_SECRET_KEY === 'string'
+      ? c.env.SUPABASE_SECRET_KEY
+      : await c.env.SUPABASE_SECRET_KEY;
 
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      supabaseKey
+      supabaseKey as string
     );
 
     try {
@@ -149,12 +151,14 @@ export class GetFacebookCampaign extends OpenAPIRoute {
 
     // Use SECRET_KEY for server-side access (bypasses RLS)
     // In local dev, this comes from .dev.vars as a string
-    // In production, it's from secrets_store_secrets
-    const supabaseKey = c.env.SUPABASE_SECRET_KEY;
+    // In production, it's from secrets_store_secrets which needs toString()
+    const supabaseKey = typeof c.env.SUPABASE_SECRET_KEY === 'string'
+      ? c.env.SUPABASE_SECRET_KEY
+      : await c.env.SUPABASE_SECRET_KEY;
 
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      supabaseKey
+      supabaseKey as string
     );
 
     try {
@@ -228,12 +232,14 @@ export class GetFacebookAds extends OpenAPIRoute {
 
     // Use SECRET_KEY for server-side access (bypasses RLS)
     // In local dev, this comes from .dev.vars as a string
-    // In production, it's from secrets_store_secrets
-    const supabaseKey = c.env.SUPABASE_SECRET_KEY;
+    // In production, it's from secrets_store_secrets which needs toString()
+    const supabaseKey = typeof c.env.SUPABASE_SECRET_KEY === 'string'
+      ? c.env.SUPABASE_SECRET_KEY
+      : await c.env.SUPABASE_SECRET_KEY;
 
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      supabaseKey
+      supabaseKey as string
     );
 
     try {
@@ -305,12 +311,14 @@ export class GetFacebookMetrics extends OpenAPIRoute {
 
     // Use SECRET_KEY for server-side access (bypasses RLS)
     // In local dev, this comes from .dev.vars as a string
-    // In production, it's from secrets_store_secrets
-    const supabaseKey = c.env.SUPABASE_SECRET_KEY;
+    // In production, it's from secrets_store_secrets which needs toString()
+    const supabaseKey = typeof c.env.SUPABASE_SECRET_KEY === 'string'
+      ? c.env.SUPABASE_SECRET_KEY
+      : await c.env.SUPABASE_SECRET_KEY;
 
     const fb = new FacebookAdapter(
       c.env.SUPABASE_URL,
-      supabaseKey
+      supabaseKey as string
     );
 
     try {
