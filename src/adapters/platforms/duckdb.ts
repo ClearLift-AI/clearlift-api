@@ -351,20 +351,25 @@ export class DuckDBAdapter {
     const dailyData: any[] = [];
 
     rows.forEach((row) => {
-      if (row.count) totalEvents += row.count;
-      if (row.distinct_users) totalUniqueUsers = Math.max(totalUniqueUsers, row.distinct_users);
+      // Handle new API field names
+      const count = row.event_count || row.count || 0;
+      const uniqueUsers = row.unique_users || row.distinct_users || 0;
+      const uniqueSessions = row.unique_sessions || row.distinct_sessions || 0;
+
+      if (count) totalEvents += Number(count);
+      if (uniqueUsers) totalUniqueUsers = Math.max(totalUniqueUsers, Number(uniqueUsers));
 
       if (row.eventType) {
-        eventTypes[row.eventType] = row.count || 0;
+        eventTypes[row.eventType] = Number(count);
       }
 
       // If we have time-based data
       if (row.time_bucket) {
         dailyData.push({
           date: row.time_bucket,
-          events: row.count || 0,
-          users: row.distinct_users || 0,
-          sessions: row.distinct_sessions || 0
+          events: Number(count),
+          users: Number(uniqueUsers),
+          sessions: Number(uniqueSessions)
         });
       }
     });
