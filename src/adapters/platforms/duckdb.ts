@@ -210,6 +210,7 @@ export class DuckDBAdapter {
     const response = await this.query(orgTag, request);
 
     if (!response.success || !response.rows) {
+      console.error("Stats query failed or returned no rows:", response);
       return {
         daily_events: [],
         event_types: {},
@@ -220,6 +221,7 @@ export class DuckDBAdapter {
       };
     }
 
+    console.log("Stats response rows:", response.rows?.length, "First row:", response.rows?.[0]);
     return this.processStats(response.rows);
   }
 
