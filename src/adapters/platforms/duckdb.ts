@@ -90,8 +90,6 @@ export class DuckDBAdapter {
   ): Promise<DuckDBQueryResponse> {
     const url = `${this.baseUrl}/events/${orgTag}`;
 
-    console.log("DuckDB query:", url, JSON.stringify(request, null, 2));
-
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -116,6 +114,11 @@ export class DuckDBAdapter {
           success: false,
           error: data.error
         };
+      }
+
+      // Log successful responses to debug
+      if (data.success && data.rows) {
+        console.log(`DuckDB returned ${data.rows.length} rows`);
       }
 
       return data;
