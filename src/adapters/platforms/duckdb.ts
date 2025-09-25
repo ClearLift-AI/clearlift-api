@@ -90,6 +90,8 @@ export class DuckDBAdapter {
   ): Promise<DuckDBQueryResponse> {
     const url = `${this.baseUrl}/events/${orgTag}`;
 
+    console.log("DuckDB query:", url, JSON.stringify(request, null, 2));
+
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -105,6 +107,14 @@ export class DuckDBAdapter {
         return {
           success: false,
           error: data?.error || `HTTP ${response.status}`
+        };
+      }
+
+      // Check if the response has an error even if HTTP was ok
+      if (!data.success && data.error) {
+        return {
+          success: false,
+          error: data.error
         };
       }
 
@@ -209,8 +219,7 @@ export class DuckDBAdapter {
 
     const response = await this.query(orgTag, request);
 
-    if (!response.success || !response.rows) {
-      console.error("Stats query failed or returned no rows:", response);
+    if (!response.success || !response.rows || response.rows.length === 0) {
       return {
         daily_events: [],
         event_types: {},
@@ -221,7 +230,6 @@ export class DuckDBAdapter {
       };
     }
 
-    console.log("Stats response rows:", response.rows?.length, "First row:", response.rows?.[0]);
     return this.processStats(response.rows);
   }
 
