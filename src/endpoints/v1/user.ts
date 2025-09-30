@@ -153,6 +153,7 @@ export class GetUserOrganizations extends OpenAPIRoute {
                     created_at: z.string(),
                     updated_at: z.string(),
                     subscription_tier: z.string(),
+                    org_tag: z.string().nullable(),
                     members_count: z.number(),
                     platforms_count: z.number()
                   })

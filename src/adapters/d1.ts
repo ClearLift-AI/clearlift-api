@@ -88,10 +88,12 @@ export class D1Adapter {
           o.subscription_tier,
           om.role,
           om.joined_at,
+          otm.short_tag as org_tag,
           (SELECT COUNT(*) FROM organization_members WHERE organization_id = o.id) as members_count,
           (SELECT COUNT(*) FROM platform_connections WHERE organization_id = o.id AND is_active = 1) as platforms_count
         FROM organizations o
         JOIN organization_members om ON o.id = om.organization_id
+        LEFT JOIN org_tag_mappings otm ON o.id = otm.organization_id
         WHERE om.user_id = ?
         ORDER BY om.joined_at DESC
       `)
