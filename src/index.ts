@@ -25,6 +25,7 @@ import {
   GetConversionFunnel
 } from "./endpoints/v1/analytics/conversions";
 import { GetEventSchema } from "./endpoints/v1/analytics/schema";
+import { GetEvents } from "./endpoints/v1/analytics/events";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -88,6 +89,7 @@ openapi.get("/v1/platform/fb/ads", auth, requireOrg, GetFacebookAds);
 openapi.get("/v1/platform/fb/metrics", auth, requireOrg, GetFacebookMetrics);
 
 // Analytics endpoints (session + org auth)
+openapi.get("/v1/analytics/events", auth, GetEvents);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/stats", auth, requireOrg, GetAnalyticsStats);
 openapi.get("/v1/analytics/funnel", auth, requireOrg, GetConversionFunnel);
