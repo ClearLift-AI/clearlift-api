@@ -75,11 +75,18 @@ export class GetEvents extends OpenAPIRoute {
     // 1. Look up which org_id this org_tag belongs to (via org_tag_mappings)
     // 2. Check if session.user_id has access to that org_id (via organization_members)
 
+    // Get R2 SQL token from Secrets Store
+    const r2SqlToken = await c.env.R2_SQL_TOKEN.get();
+
+    if (!r2SqlToken) {
+      return error(c, "CONFIGURATION_ERROR", "R2 SQL token not configured", 500);
+    }
+
     // Create R2 SQL adapter
     const r2sql = new R2SQLAdapter(
       c.env.CLOUDFLARE_ACCOUNT_ID,
       c.env.R2_BUCKET_NAME,
-      c.env.R2_SQL_TOKEN
+      r2SqlToken
     );
 
     try {
