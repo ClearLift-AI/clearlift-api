@@ -95,7 +95,7 @@ export class GetConversions extends OpenAPIRoute {
       // Build query options
       const options = {
         lookback,
-        filters: eventType ? { eventType } : undefined,
+        filters: eventType ? { event_type: eventType } : undefined,
         limit
       };
 

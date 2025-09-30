@@ -7,45 +7,78 @@
  * aggregations client-side.
  */
 
-// Event schema - matches the 60-field schema in R2
+// Event schema - matches R2 SQL schema (snake_case field names)
 export interface EventRecord {
   // Core fields
   org_tag: string;
   timestamp: string;
-  sessionId: string;
-  userId?: string;
-  eventType: string;
+  session_id: string;
+  user_id?: string | null;
+  anonymous_id: string;
+  event_id: string;
+  event_type: string;
 
   // Event data
-  eventData?: Record<string, any>;
+  event_data?: string | null;
+  event_category?: string | null;
+  event_action?: string | null;
+  event_label?: string | null;
+  event_value?: number | null;
 
   // Page context
-  pageData?: {
-    url?: string;
-    title?: string;
-    path?: string;
-    hostname?: string;
-    referrer?: string;
-  };
+  page_url: string;
+  page_title: string;
+  page_path: string;
+  page_hostname: string;
+  page_search?: string | null;
+  page_hash?: string | null;
+  referrer?: string | null;
+  referrer_domain?: string | null;
 
   // Device/browser info
-  deviceInfo?: {
-    browser?: string;
-    device?: string;
-    os?: string;
-    viewport?: string;
-  };
+  device_type: string;
+  viewport_width: number;
+  viewport_height: number;
+  screen_width?: number | null;
+  screen_height?: number | null;
+  browser_name: string;
+  browser_version?: string | null;
+  browser_language: string;
+  os_name?: string | null;
+  os_version?: string | null;
+  user_agent?: string | null;
+
+  // Geo data
+  geo_country?: string | null;
+  geo_region?: string | null;
+  geo_city?: string | null;
+  geo_timezone?: string | null;
 
   // UTM parameters
-  utmParams?: {
-    source?: string;
-    medium?: string;
-    campaign?: string;
-    term?: string;
-    content?: string;
-  };
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_term?: string | null;
+  utm_content?: string | null;
 
-  // Additional fields (expand as needed for all 60 fields)
+  // Ad click IDs
+  gclid?: string | null;
+  fbclid?: string | null;
+
+  // Performance metrics
+  scroll_depth?: number | null;
+  engagement_time?: number | null;
+  page_load_time?: number | null;
+  ttfb?: number | null;
+  dom_content_loaded?: number | null;
+  first_contentful_paint?: number | null;
+  largest_contentful_paint?: number | null;
+
+  // Consent
+  consent_analytics: boolean;
+  consent_marketing?: boolean | null;
+
+  // Additional fields
   [key: string]: any;
 }
 
@@ -349,24 +382,23 @@ export class R2SQLAdapter {
 
     for (const event of events) {
       // Count unique users
-      if (event.userId) {
-        uniqueUsers.add(event.userId);
+      if (event.user_id) {
+        uniqueUsers.add(event.user_id);
       }
 
       // Count unique sessions
-      if (event.sessionId) {
-        uniqueSessions.add(event.sessionId);
+      if (event.session_id) {
+        uniqueSessions.add(event.session_id);
       }
 
       // Count events by type
-      if (event.eventType) {
-        eventsByType[event.eventType] = (eventsByType[event.eventType] || 0) + 1;
+      if (event.event_type) {
+        eventsByType[event.event_type] = (eventsByType[event.event_type] || 0) + 1;
       }
 
       // Count sources
-      const source = event.utmParams?.source;
-      if (source) {
-        sourceCount[source] = (sourceCount[source] || 0) + 1;
+      if (event.utm_source) {
+        sourceCount[event.utm_source] = (sourceCount[event.utm_source] || 0) + 1;
       }
     }
 
@@ -437,7 +469,7 @@ export class R2SQLAdapter {
     // Fetch raw events with minimal fields for performance
     const result = await this.getEvents(orgTag, {
       lookback,
-      select: ["eventType", "userId", "sessionId", "timestamp"],
+      select: ["event_type", "user_id", "session_id", "timestamp"],
       limit: 10000 // Fetch more for better stats
     });
 
@@ -483,9 +515,9 @@ export class R2SQLAdapter {
     const result = await this.getEvents(orgTag, {
       lookback,
       filters: {
-        eventType: steps
+        event_type: steps
       },
-      select: ["eventType", "userId", "sessionId", "timestamp"],
+      select: ["event_type", "user_id", "session_id", "timestamp"],
       limit: 10000
     });
 
@@ -500,8 +532,8 @@ export class R2SQLAdapter {
 
     // Calculate metrics for each step
     const stepData = steps.map(step => {
-      const stepEvents = result.events.filter(e => e.eventType === step);
-      const uniqueUsers = new Set(stepEvents.map(e => e.userId).filter(Boolean));
+      const stepEvents = result.events.filter(e => e.event_type === step);
+      const uniqueUsers = new Set(stepEvents.map(e => e.user_id).filter(Boolean));
 
       return {
         step,
