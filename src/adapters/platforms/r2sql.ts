@@ -184,6 +184,7 @@ export class R2SQLAdapter {
 
   /**
    * Build WHERE clause for time filtering
+   * Note: R2 SQL does not support CURRENT_TIMESTAMP or INTERVAL, so we calculate timestamps in JS
    */
   private buildTimeFilter(options: QueryOptions): string {
     if (options.timeRange) {
@@ -196,14 +197,22 @@ export class R2SQLAdapter {
       if (!match) return "";
 
       const [, amount, unit] = match;
-      const intervals: Record<string, string> = {
-        h: "HOUR",
-        d: "DAY",
-        w: "WEEK",
-        m: "MONTH"
+      const amountNum = parseInt(amount);
+
+      // Calculate milliseconds for each unit
+      const msMultipliers: Record<string, number> = {
+        h: 60 * 60 * 1000,           // hours
+        d: 24 * 60 * 60 * 1000,      // days
+        w: 7 * 24 * 60 * 60 * 1000,  // weeks
+        m: 30 * 24 * 60 * 60 * 1000  // months (approximate)
       };
 
-      return `timestamp >= CURRENT_TIMESTAMP - INTERVAL '${amount}' ${intervals[unit]}`;
+      const lookbackMs = amountNum * msMultipliers[unit];
+      const now = new Date();
+      const startTime = new Date(now.getTime() - lookbackMs);
+
+      // Generate absolute timestamp for R2 SQL
+      return `timestamp >= '${startTime.toISOString()}'`;
     }
 
     return "";

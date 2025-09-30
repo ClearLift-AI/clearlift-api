@@ -1,0 +1,352 @@
+{
+  "fields": [
+    {
+      "name": "org_tag",
+      "type": "string",
+      "required": true,
+      "description": "Organization identifier for multi-tenant partitioning"
+    },
+    {
+      "name": "event_id",
+      "type": "string",
+      "required": true,
+      "description": "Unique identifier for this event (UUID)"
+    },
+    {
+      "name": "timestamp",
+      "type": "string",
+      "required": true,
+      "description": "ISO 8601 timestamp when the event occurred"
+    },
+    {
+      "name": "event_type",
+      "type": "string",
+      "required": true,
+      "description": "Type of event (page_view, click, scroll, form_submit, etc.)"
+    },
+    {
+      "name": "anonymous_id",
+      "type": "string",
+      "required": true,
+      "description": "Anonymous identifier for all users (persisted in localStorage)"
+    },
+    {
+      "name": "user_id",
+      "type": "string",
+      "required": false,
+      "description": "Authenticated user identifier"
+    },
+    {
+      "name": "session_id",
+      "type": "string",
+      "required": true,
+      "description": "Session identifier (30-minute timeout)"
+    },
+    {
+      "name": "is_new_session",
+      "type": "bool",
+      "required": false,
+      "description": "Whether this is the first event in the session"
+    },
+    {
+      "name": "page_url",
+      "type": "string",
+      "required": true,
+      "description": "Current page URL (PII redacted)"
+    },
+    {
+      "name": "page_title",
+      "type": "string",
+      "required": true,
+      "description": "Page title from document.title"
+    },
+    {
+      "name": "page_path",
+      "type": "string",
+      "required": true,
+      "description": "URL path without domain"
+    },
+    {
+      "name": "page_hostname",
+      "type": "string",
+      "required": true,
+      "description": "Domain name"
+    },
+    {
+      "name": "page_search",
+      "type": "string",
+      "required": false,
+      "description": "Query string parameters"
+    },
+    {
+      "name": "page_hash",
+      "type": "string",
+      "required": false,
+      "description": "URL fragment/anchor"
+    },
+    {
+      "name": "referrer",
+      "type": "string",
+      "required": false,
+      "description": "Referring URL"
+    },
+    {
+      "name": "referrer_domain",
+      "type": "string",
+      "required": false,
+      "description": "Referring domain for traffic source analysis"
+    },
+    {
+      "name": "device_type",
+      "type": "string",
+      "required": true,
+      "description": "Device category (desktop, mobile, tablet)"
+    },
+    {
+      "name": "viewport_width",
+      "type": "int64",
+      "required": true,
+      "description": "Browser viewport width in pixels"
+    },
+    {
+      "name": "viewport_height",
+      "type": "int64",
+      "required": true,
+      "description": "Browser viewport height in pixels"
+    },
+    {
+      "name": "screen_width",
+      "type": "int64",
+      "required": false,
+      "description": "Screen width in pixels"
+    },
+    {
+      "name": "screen_height",
+      "type": "int64",
+      "required": false,
+      "description": "Screen height in pixels"
+    },
+    {
+      "name": "browser_name",
+      "type": "string",
+      "required": true,
+      "description": "Browser name (Chrome, Firefox, Safari, etc.)"
+    },
+    {
+      "name": "browser_version",
+      "type": "string",
+      "required": false,
+      "description": "Browser version"
+    },
+    {
+      "name": "browser_language",
+      "type": "string",
+      "required": true,
+      "description": "Browser language setting (en-US, etc.)"
+    },
+    {
+      "name": "os_name",
+      "type": "string",
+      "required": false,
+      "description": "Operating system (Windows, macOS, iOS, Android, etc.)"
+    },
+    {
+      "name": "os_version",
+      "type": "string",
+      "required": false,
+      "description": "Operating system version"
+    },
+    {
+      "name": "user_agent",
+      "type": "string",
+      "required": false,
+      "description": "User agent string (anonymized if privacy mode enabled)"
+    },
+    {
+      "name": "geo_country",
+      "type": "string",
+      "required": false,
+      "description": "ISO country code (server-enriched from IP)"
+    },
+    {
+      "name": "geo_region",
+      "type": "string",
+      "required": false,
+      "description": "Region/state (server-enriched from IP)"
+    },
+    {
+      "name": "geo_city",
+      "type": "string",
+      "required": false,
+      "description": "City (server-enriched from IP)"
+    },
+    {
+      "name": "geo_timezone",
+      "type": "string",
+      "required": false,
+      "description": "IANA timezone"
+    },
+    {
+      "name": "utm_source",
+      "type": "string",
+      "required": false,
+      "description": "Campaign traffic source"
+    },
+    {
+      "name": "utm_medium",
+      "type": "string",
+      "required": false,
+      "description": "Campaign medium (cpc, email, etc.)"
+    },
+    {
+      "name": "utm_campaign",
+      "type": "string",
+      "required": false,
+      "description": "Campaign name"
+    },
+    {
+      "name": "utm_term",
+      "type": "string",
+      "required": false,
+      "description": "Campaign search term"
+    },
+    {
+      "name": "utm_content",
+      "type": "string",
+      "required": false,
+      "description": "Campaign content variant"
+    },
+    {
+      "name": "gclid",
+      "type": "string",
+      "required": false,
+      "description": "Google Click ID for attribution"
+    },
+    {
+      "name": "fbclid",
+      "type": "string",
+      "required": false,
+      "description": "Facebook Click ID for attribution"
+    },
+    {
+      "name": "event_category",
+      "type": "string",
+      "required": false,
+      "description": "Event category for grouping (engagement, conversion, etc.)"
+    },
+    {
+      "name": "event_action",
+      "type": "string",
+      "required": false,
+      "description": "Specific action (button_click, video_play, etc.)"
+    },
+    {
+      "name": "event_label",
+      "type": "string",
+      "required": false,
+      "description": "Event label for additional context"
+    },
+    {
+      "name": "event_value",
+      "type": "float64",
+      "required": false,
+      "description": "Numeric value (revenue, score, etc.)"
+    },
+    {
+      "name": "event_data",
+      "type": "json",
+      "required": false,
+      "description": "Event-specific data (click coordinates, form fields, etc.)"
+    },
+    {
+      "name": "scroll_depth",
+      "type": "int64",
+      "required": false,
+      "description": "Maximum scroll percentage reached (0-100)"
+    },
+    {
+      "name": "engagement_time",
+      "type": "int64",
+      "required": false,
+      "description": "Active time on page in milliseconds"
+    },
+    {
+      "name": "page_load_time",
+      "type": "int64",
+      "required": false,
+      "description": "Page load time in milliseconds"
+    },
+    {
+      "name": "ttfb",
+      "type": "int64",
+      "required": false,
+      "description": "Time to first byte in milliseconds"
+    },
+    {
+      "name": "dom_content_loaded",
+      "type": "int64",
+      "required": false,
+      "description": "DOM content loaded time in milliseconds"
+    },
+    {
+      "name": "first_contentful_paint",
+      "type": "int64",
+      "required": false,
+      "description": "First contentful paint in milliseconds"
+    },
+    {
+      "name": "largest_contentful_paint",
+      "type": "int64",
+      "required": false,
+      "description": "Largest contentful paint in milliseconds"
+    },
+    {
+      "name": "consent_analytics",
+      "type": "bool",
+      "required": true,
+      "description": "User consent for analytics tracking"
+    },
+    {
+      "name": "consent_marketing",
+      "type": "bool",
+      "required": false,
+      "description": "User consent for marketing tracking"
+    },
+    {
+      "name": "ip_anonymized",
+      "type": "bool",
+      "required": false,
+      "description": "Whether IP address was anonymized"
+    },
+    {
+      "name": "do_not_track",
+      "type": "bool",
+      "required": false,
+      "description": "Browser Do Not Track setting"
+    },
+    {
+      "name": "sdk_version",
+      "type": "string",
+      "required": false,
+      "description": "Tracking library version"
+    },
+    {
+      "name": "client_timestamp",
+      "type": "string",
+      "required": false,
+      "description": "Client-side event timestamp"
+    },
+    {
+      "name": "server_timestamp",
+      "type": "string",
+      "required": false,
+      "description": "Server-side receipt timestamp"
+    },
+    {
+      "name": "custom_dimensions",
+      "type": "json",
+      "required": false,
+      "description": "Custom properties for specific implementations"
+    }
+  ]
+}
