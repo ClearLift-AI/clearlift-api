@@ -20,6 +20,7 @@ import {
   GetFacebookMetrics
 } from "./endpoints/v1/platform/fb";
 import { GetEvents } from "./endpoints/v1/analytics/events";
+import { GetConversions } from "./endpoints/v1/analytics/conversions";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -82,8 +83,9 @@ openapi.get("/v1/platform/fb/campaigns/:campaignId", auth, requireOrg, GetFacebo
 openapi.get("/v1/platform/fb/ads", auth, requireOrg, GetFacebookAds);
 openapi.get("/v1/platform/fb/metrics", auth, requireOrg, GetFacebookMetrics);
 
-// Analytics endpoints (session auth only)
+// Analytics endpoints
 openapi.get("/v1/analytics/events", auth, GetEvents);
+openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 
 // Export the Hono app
 export default app;
