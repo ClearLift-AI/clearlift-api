@@ -1,7 +1,7 @@
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
-import { FacebookAdapter } from "../../../adapters/platforms/facebook";
+import { GenericPlatformAdapter } from "../../../adapters/platforms/base";
 import { success, error, getDateRange, getPagination } from "../../../utils/response";
 
 /**
@@ -11,12 +11,12 @@ export class GetAds extends OpenAPIRoute {
   public schema = {
     tags: ["Analytics"],
     summary: "Get ad platform performance data",
-    description: "Fetches ad performance data from various platforms (Facebook, Google, TikTok, etc.) with flexible aggregation",
+    description: "Fetches ad performance data from various platforms. Platform availability is dynamic - if the platform's data table exists in Supabase, it will work automatically.",
     operationId: "get-ads",
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({
-        platform_slug: z.enum(["facebook", "google", "tiktok"]).describe("Platform identifier")
+        platform_slug: z.string().regex(/^[a-z_]+$/).describe("Platform slug (e.g., facebook, google, tiktok)")
       }),
       query: z.object({
         org_id: z.string().describe("Organization ID"),
@@ -89,54 +89,43 @@ export class GetAds extends OpenAPIRoute {
     }
 
     try {
-      // Route to appropriate platform adapter
+      // Create generic adapter with dynamic table name
+      const tableName = `${platform_slug}_ads_performance`;
+      const adapter = new GenericPlatformAdapter(c.env.SUPABASE_URL, supabaseKey, tableName);
+
       let results: any;
       let summary: any;
 
-      switch (platform_slug) {
-        case "facebook": {
-          const fb = new FacebookAdapter(c.env.SUPABASE_URL, supabaseKey);
-
-          // Get data based on grouping
-          switch (groupBy) {
-            case "campaign": {
-              results = await fb.getCampaigns(orgId, dateRange, { limit, offset, sort_by: sortBy, order });
-              summary = await fb.getSummary(orgId, dateRange);
-              break;
-            }
-            case "ad": {
-              results = await fb.getAds(orgId, dateRange, { campaign_id: campaignId, limit, offset });
-              summary = await fb.getSummary(orgId, dateRange);
-              break;
-            }
-            case "date": {
-              results = await fb.getDailyMetrics(orgId, dateRange, { campaign_id: campaignId, group_by: "day" });
-              summary = await fb.getSummary(orgId, dateRange);
-              break;
-            }
-            case "campaign_date": {
-              // For campaign+date breakdown, fetch raw data and group client-side
-              const rawData = await fb.getAds(orgId, dateRange, { campaign_id: campaignId });
-              results = this.groupByCampaignAndDate(rawData);
-              summary = await fb.getSummary(orgId, dateRange);
-              break;
-            }
-            case "none":
-            default: {
-              // Just return summary
-              summary = await fb.getSummary(orgId, dateRange);
-              results = null;
-              break;
-            }
-          }
+      // Get data based on grouping
+      switch (groupBy) {
+        case "campaign": {
+          results = await adapter.getCampaigns(orgId, dateRange, { limit, offset, sort_by: sortBy, order });
+          summary = await adapter.getSummary(orgId, dateRange);
           break;
         }
-        case "google":
-        case "tiktok": {
-          return error(c, "NOT_IMPLEMENTED", `Platform '${platform_slug}' not yet implemented`, 400);
+        case "ad": {
+          results = await adapter.getAds(orgId, dateRange, { campaign_id: campaignId, limit, offset });
+          summary = await adapter.getSummary(orgId, dateRange);
+          break;
         }
+        case "date": {
+          results = await adapter.getDailyMetrics(orgId, dateRange, { campaign_id: campaignId, group_by: "day" });
+          summary = await adapter.getSummary(orgId, dateRange);
+          break;
+        }
+        case "campaign_date": {
+          // For campaign+date breakdown, fetch raw data and group client-side
+          const rawData = await adapter.getAds(orgId, dateRange, { campaign_id: campaignId });
+          results = this.groupByCampaignAndDate(rawData);
+          summary = await adapter.getSummary(orgId, dateRange);
+          break;
+        }
+        case "none":
         default: {
-          return error(c, "INVALID_PLATFORM", `Unknown platform: ${platform_slug}`, 400);
+          // Just return summary
+          summary = await adapter.getSummary(orgId, dateRange);
+          results = null;
+          break;
         }
       }
 
@@ -151,6 +140,17 @@ export class GetAds extends OpenAPIRoute {
       );
     } catch (err) {
       console.error(`Failed to fetch ${platform_slug} ads:`, err);
+
+      // Check if it's a platform not available error
+      if (err instanceof Error && err.message.includes("PLATFORM_NOT_AVAILABLE")) {
+        return error(
+          c,
+          "PLATFORM_NOT_AVAILABLE",
+          `Platform '${platform_slug}' is not available (table '${platform_slug}_ads_performance' does not exist in Supabase)`,
+          404
+        );
+      }
+
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch ad data";
       return error(c, "QUERY_FAILED", errorMessage, 500);
     }
