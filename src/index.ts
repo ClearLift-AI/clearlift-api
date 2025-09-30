@@ -13,14 +13,9 @@ import {
   UpdateUserProfile,
   GetUserOrganizations
 } from "./endpoints/v1/user";
-import {
-  GetFacebookCampaigns,
-  GetFacebookCampaign,
-  GetFacebookAds,
-  GetFacebookMetrics
-} from "./endpoints/v1/platform/fb";
 import { GetEvents } from "./endpoints/v1/analytics/events";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
+import { GetAds } from "./endpoints/v1/analytics/ads";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -77,15 +72,10 @@ openapi.get("/v1/user/me", auth, GetUserProfile);
 openapi.patch("/v1/user/me", auth, UpdateUserProfile);
 openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
 
-// Platform endpoints (session + org auth)
-openapi.get("/v1/platform/fb/campaigns", auth, requireOrg, GetFacebookCampaigns);
-openapi.get("/v1/platform/fb/campaigns/:campaignId", auth, requireOrg, GetFacebookCampaign);
-openapi.get("/v1/platform/fb/ads", auth, requireOrg, GetFacebookAds);
-openapi.get("/v1/platform/fb/metrics", auth, requireOrg, GetFacebookMetrics);
-
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, GetEvents);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
+openapi.get("/v1/analytics/ads/:platform_slug", auth, requireOrg, GetAds);
 
 // Export the Hono app
 export default app;
