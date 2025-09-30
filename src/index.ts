@@ -24,6 +24,7 @@ import {
   GetAnalyticsStats,
   GetConversionFunnel
 } from "./endpoints/v1/analytics/conversions";
+import { GetEventSchema } from "./endpoints/v1/analytics/schema";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -90,6 +91,7 @@ openapi.get("/v1/platform/fb/metrics", auth, requireOrg, GetFacebookMetrics);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/stats", auth, requireOrg, GetAnalyticsStats);
 openapi.get("/v1/analytics/funnel", auth, requireOrg, GetConversionFunnel);
+openapi.get("/v1/analytics/schema", GetEventSchema);
 
 // Export the Hono app
 export default app;

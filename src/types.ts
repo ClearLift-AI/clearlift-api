@@ -8,6 +8,10 @@ declare global {
     SUPABASE_URL: string;
     SUPABASE_SECRET_KEY: string;
     SUPABASE_PUBLISHABLE_KEY: string;
+    // R2 SQL Configuration
+    CLOUDFLARE_ACCOUNT_ID: string;
+    R2_BUCKET_NAME: string;
+    R2_SQL_TOKEN: string;
   }
 }
 

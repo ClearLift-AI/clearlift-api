@@ -3,17 +3,17 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { Session } from "../../../middleware/auth";
 import { D1Adapter } from "../../../adapters/d1";
-import { DuckDBAdapter } from "../../../adapters/platforms/duckdb";
+import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
 import { success, error } from "../../../utils/response";
 
 /**
- * GET /v1/analytics/conversions - Get conversion events from DuckDB
+ * GET /v1/analytics/conversions - Get conversion events from R2 SQL
  */
 export class GetConversions extends OpenAPIRoute {
   public schema = {
     tags: ["Analytics"],
     summary: "Get conversion events",
-    description: "Fetches conversion events from DuckDB using the organization's tag mapping",
+    description: "Fetches conversion events from R2 SQL using the organization's tag mapping",
     operationId: "get-conversions",
     security: [{ bearerAuth: [] }],
     request: {
@@ -84,23 +84,34 @@ export class GetConversions extends OpenAPIRoute {
     const eventType = c.req.query("event_type");
     const limit = parseInt(c.req.query("limit") || "100");
 
-    // Query DuckDB
-    const duckdb = new DuckDBAdapter();
+    // Create R2 SQL adapter
+    const r2sql = new R2SQLAdapter(
+      c.env.CLOUDFLARE_ACCOUNT_ID,
+      c.env.R2_BUCKET_NAME,
+      c.env.R2_SQL_TOKEN
+    );
 
     try {
-      const result = await duckdb.getConversions(
-        session.token, // Use session token for DuckDB auth
-        orgTag,
-        {
-          lookback,
-          event_type: eventType,
-          limit
-        }
-      );
+      // Build query options
+      const options = {
+        lookback,
+        filters: eventType ? { eventType } : undefined,
+        limit
+      };
+
+      // Fetch events with summary
+      const result = await r2sql.getEventsWithSummary(orgTag, options);
+
+      if (result.error) {
+        return error(c, "QUERY_FAILED", result.error, 500);
+      }
 
       return success(
         c,
-        result,
+        {
+          events: result.events,
+          summary: result.summary
+        },
         {
           lookback,
           org_tag: orgTag
@@ -120,7 +131,7 @@ export class GetAnalyticsStats extends OpenAPIRoute {
   public schema = {
     tags: ["Analytics"],
     summary: "Get analytics statistics",
-    description: "Fetches aggregated statistics from DuckDB",
+    description: "Fetches aggregated statistics from R2 SQL",
     operationId: "get-analytics-stats",
     security: [{ bearerAuth: [] }],
     request: {
@@ -160,10 +171,20 @@ export class GetAnalyticsStats extends OpenAPIRoute {
     }
 
     const lookback = c.req.query("lookback") || "7d";
-    const duckdb = new DuckDBAdapter();
+
+    const r2sql = new R2SQLAdapter(
+      c.env.CLOUDFLARE_ACCOUNT_ID,
+      c.env.R2_BUCKET_NAME,
+      c.env.R2_SQL_TOKEN
+    );
 
     try {
-      const stats = await duckdb.getStats(session.token, orgTag, lookback);
+      const stats = await r2sql.getStats(orgTag, lookback);
+
+      if (stats.error) {
+        return error(c, "QUERY_FAILED", stats.error, 500);
+      }
+
       return success(c, stats);
     } catch (err) {
       console.error("Failed to fetch stats:", err);
@@ -231,10 +252,19 @@ export class GetConversionFunnel extends OpenAPIRoute {
       return error(c, "NO_TAG_MAPPING", "No analytics access", 403);
     }
 
-    const duckdb = new DuckDBAdapter();
+    const r2sql = new R2SQLAdapter(
+      c.env.CLOUDFLARE_ACCOUNT_ID,
+      c.env.R2_BUCKET_NAME,
+      c.env.R2_SQL_TOKEN
+    );
 
     try {
-      const funnel = await duckdb.getFunnel(session.token, orgTag, steps, lookback);
+      const funnel = await r2sql.getFunnel(orgTag, steps, lookback);
+
+      if (funnel.error) {
+        return error(c, "QUERY_FAILED", funnel.error, 500);
+      }
+
       return success(c, funnel);
     } catch (err) {
       console.error("Failed to fetch funnel:", err);
