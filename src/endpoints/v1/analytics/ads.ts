@@ -89,8 +89,13 @@ export class GetAds extends OpenAPIRoute {
     }
 
     try {
-      // Create generic adapter with dynamic table name
-      const tableName = `${platform_slug}_ads_performance`;
+      // Map platform slug to actual table name (for backwards compatibility)
+      const platformTableMap: Record<string, string> = {
+        'meta': 'facebook_ads_performance',
+        'facebook': 'facebook_ads_performance'
+      };
+
+      const tableName = platformTableMap[platform_slug] || `${platform_slug}_ads_performance`;
       const adapter = new GenericPlatformAdapter(c.env.SUPABASE_URL, supabaseKey, tableName);
 
       let results: any;
@@ -129,6 +134,8 @@ export class GetAds extends OpenAPIRoute {
         }
       }
 
+      // Normalize platform name for client compatibility
+      // Return the slug as-is (client expects 'meta' when it sends 'meta')
       return success(
         c,
         {
