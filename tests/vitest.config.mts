@@ -27,5 +27,13 @@ export default defineWorkersConfig({
         },
       },
     },
+    server: {
+      deps: {
+        inline: [
+          "@supabase/postgrest-js",
+          "@supabase/supabase-js"
+        ]
+      }
+    }
   },
 });

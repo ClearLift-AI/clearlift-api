@@ -46,12 +46,12 @@ const APIService = {
         return await this._apiCall(`/v1/analytics/events?org_tag=${orgTag}&limit=${limit}&lookback=${lookbackStr}`, null, 'GET');
     },
 
-    async fetchAds(orgId, platform = 'facebook', lookback = 30) {
+    async fetchAds(orgId, platform = 'facebook', lookback = 30, groupBy = 'campaign') {
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - lookback);
         const endDate = new Date();
         return await this._apiCall(
-            `/v1/analytics/ads/${platform}?org_id=${orgId}&start_date=${startDate.toISOString().split('T')[0]}&end_date=${endDate.toISOString().split('T')[0]}&group_by=campaign`,
+            `/v1/analytics/ads/${platform}?org_id=${orgId}&start_date=${startDate.toISOString().split('T')[0]}&end_date=${endDate.toISOString().split('T')[0]}&group_by=${groupBy}`,
             null,
             'GET'
         );
@@ -115,13 +115,17 @@ const APIService = {
 // =============== Data Processor ===============
 const DataProcessor = {
     processEventsData(eventsResponse) {
+        console.log('processEventsData called with:', eventsResponse);
         if (!eventsResponse || !eventsResponse.success) return null;
 
         const events = eventsResponse.data.events || [];
+        console.log(`Processing ${events.length} events`);
 
-        // Calculate unique sessions and users
+        // Calculate unique sessions and users (use anonymous_id for visitors)
         const uniqueSessions = new Set(events.map(e => e.session_id)).size;
-        const uniqueUsers = new Set(events.filter(e => e.user_id).map(e => e.user_id)).size;
+        const uniqueUsers = new Set(events.map(e => e.anonymous_id || e.user_id).filter(id => id)).size;
+
+        console.log('Unique calculations:', { uniqueSessions, uniqueUsers, sampleIds: events.slice(0, 3).map(e => ({anon: e.anonymous_id, user: e.user_id})) });
 
         // Count event types
         const eventTypes = {};
@@ -131,7 +135,7 @@ const DataProcessor = {
 
         // Top pages
         const pageViews = {};
-        events.filter(e => e.event_type === 'pageview').forEach(e => {
+        events.filter(e => e.event_type === 'page_view').forEach(e => {
             pageViews[e.page_path] = (pageViews[e.page_path] || 0) + 1;
         });
         const topPages = Object.entries(pageViews)
@@ -149,21 +153,60 @@ const DataProcessor = {
             .slice(0, 5)
             .map(([source, count]) => ({ source, count }));
 
-        return {
+        // Build time series data (sessions and events by date)
+        const timeSeriesMap = new Map();
+        events.forEach(e => {
+            const date = e.timestamp ? e.timestamp.split('T')[0] : null;
+            if (!date) return;
+
+            if (!timeSeriesMap.has(date)) {
+                timeSeriesMap.set(date, {
+                    date,
+                    sessions: new Set(),
+                    events: 0
+                });
+            }
+
+            const dayData = timeSeriesMap.get(date);
+            dayData.events++;
+            if (e.session_id) dayData.sessions.add(e.session_id);
+        });
+
+        const timeSeries = Array.from(timeSeriesMap.values())
+            .sort((a, b) => a.date.localeCompare(b.date))
+            .map(d => ({
+                date: d.date,
+                sessions: d.sessions.size,
+                events: d.events
+            }));
+
+        const result = {
             totalEvents: events.length,
             uniqueSessions,
             uniqueUsers,
             eventTypes,
             topPages,
             topSources,
+            timeSeries,
             rawEvents: events
         };
+
+        console.log('processEventsData returning:', {
+            totalEvents: result.totalEvents,
+            uniqueSessions: result.uniqueSessions,
+            uniqueUsers: result.uniqueUsers,
+            eventTypesCount: Object.keys(result.eventTypes).length,
+            timeSeriesCount: result.timeSeries.length
+        });
+
+        return result;
     },
 
-    processApiData(campaignData, conversionData) {
+    processApiData(campaignData, conversionData, dailyAdsData) {
         console.log('processApiData called with:', {
             campaignData: campaignData,
-            conversionData: conversionData
+            conversionData: conversionData,
+            dailyAdsData: dailyAdsData
         });
 
         if (!campaignData && !conversionData) {
@@ -171,10 +214,10 @@ const DataProcessor = {
             return null;
         }
 
-        const campaigns = campaignData?.data?.campaigns || campaignData?.campaigns || [];
-        const campaignSummary = campaignData?.data?.summary || campaignData?.summary || {};
-        const convSummary = conversionData?.data?.summary || conversionData?.summary || {};
-        const convEvents = conversionData?.data?.events || conversionData?.events || [];
+        const campaigns = campaignData?.data?.results || [];
+        const campaignSummary = campaignData?.data?.summary || {};
+        const convSummary = conversionData?.data?.summary || {};
+        const convEvents = conversionData?.data?.events || [];
 
         console.log('Extracted data:', {
             campaignsCount: campaigns.length,
@@ -182,6 +225,9 @@ const DataProcessor = {
             convSummary: convSummary,
             convEventsCount: convEvents.length
         });
+
+        // Build time series from daily ads data
+        const timeSeries = this.buildTimeSeries(dailyAdsData, conversionData);
 
         const totalSpend = campaignSummary.total_spend || 0;
         const totalRevenue = campaignSummary.total_revenue || 0;
@@ -215,7 +261,7 @@ const DataProcessor = {
                 ctr: campaignSummary.ctr_change || 0
             },
             campaigns: campaigns,
-            timeSeries: campaignData?.data?.time_series || campaignData?.time_series || {},
+            timeSeries: timeSeries,
             platforms: platformStats,
             platformTimeSeries: campaignData?.data?.platform_time_series || campaignData?.platform_time_series || null,
             campaignTimeSeries: campaignData?.data?.campaign_time_series || campaignData?.campaign_time_series || null,
@@ -224,6 +270,80 @@ const DataProcessor = {
 
         console.log('processApiData returning:', result);
         return result;
+    },
+
+    buildTimeSeries(dailyAdsData, conversionData) {
+        console.log('buildTimeSeries called with:', {
+            hasDailyAds: !!dailyAdsData,
+            hasConversions: !!conversionData
+        });
+
+        if (!dailyAdsData && !conversionData) {
+            return { dates: [], spend: [], conversions: [], revenue: [] };
+        }
+
+        // Get daily ads array
+        const dailyAds = dailyAdsData?.data?.results || [];
+        const dailyConversions = conversionData?.data?.by_date || [];
+
+        // Create a map of date -> data
+        const dateMap = new Map();
+
+        // Add ads data
+        dailyAds.forEach(day => {
+            if (day.date) {
+                dateMap.set(day.date, {
+                    date: day.date,
+                    spend: day.spend || 0,
+                    impressions: day.impressions || 0,
+                    clicks: day.clicks || 0,
+                    conversions: 0,
+                    revenue: 0
+                });
+            }
+        });
+
+        // Merge conversion data
+        dailyConversions.forEach(day => {
+            if (day.date) {
+                if (dateMap.has(day.date)) {
+                    const existing = dateMap.get(day.date);
+                    existing.conversions = day.conversions || 0;
+                    existing.revenue = day.revenue || 0;
+                } else {
+                    dateMap.set(day.date, {
+                        date: day.date,
+                        spend: 0,
+                        impressions: 0,
+                        clicks: 0,
+                        conversions: day.conversions || 0,
+                        revenue: day.revenue || 0
+                    });
+                }
+            }
+        });
+
+        // Convert to arrays sorted by date
+        const sortedData = Array.from(dateMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+        const timeSeries = {
+            dates: sortedData.map(d => d.date),
+            spend: sortedData.map(d => d.spend),
+            conversions: sortedData.map(d => d.conversions),
+            revenue: sortedData.map(d => d.revenue),
+            impressions: sortedData.map(d => d.impressions),
+            clicks: sortedData.map(d => d.clicks)
+        };
+
+        console.log('buildTimeSeries returning:', {
+            datesCount: timeSeries.dates.length,
+            firstDate: timeSeries.dates[0],
+            lastDate: timeSeries.dates[timeSeries.dates.length - 1],
+            totalSpend: timeSeries.spend.reduce((a, b) => a + b, 0),
+            totalConversions: timeSeries.conversions.reduce((a, b) => a + b, 0)
+        });
+
+        return timeSeries;
     },
 
     derivePlatformStats(campaigns, summary) {
@@ -312,6 +432,17 @@ const UIManager = {
         const tbody = document.getElementById('topSourcesTableBody');
         if (!tbody) return;
 
+        if (eventsData.topSources.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="3" style="text-align: center; padding: 20px; color: #94a3b8;">
+                        No UTM source data available
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+
         tbody.innerHTML = eventsData.topSources.map((source, index) => `
             <tr>
                 <td>${index + 1}</td>
@@ -319,6 +450,44 @@ const UIManager = {
                 <td>${this.formatNumber(source.count)}</td>
             </tr>
         `).join('');
+    },
+
+    updateWebsiteCharts(eventsData) {
+        console.log('updateWebsiteCharts called with:', eventsData);
+        if (!eventsData) {
+            console.warn('No eventsData provided to updateWebsiteCharts');
+            return;
+        }
+
+        // Update Event Types Chart
+        console.log('Updating event types chart, chart exists:', !!AppState.charts.eventTypes, 'data exists:', !!eventsData.eventTypes);
+        if (AppState.charts.eventTypes && eventsData.eventTypes) {
+            const eventTypeData = Object.entries(eventsData.eventTypes)
+                .sort((a, b) => b[1] - a[1]);
+
+            AppState.charts.eventTypes.data.labels = eventTypeData.map(([type]) =>
+                type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+            );
+            AppState.charts.eventTypes.data.datasets[0].data = eventTypeData.map(([_, count]) => count);
+            console.log('Event types chart updated with:', {
+                labels: AppState.charts.eventTypes.data.labels,
+                data: AppState.charts.eventTypes.data.datasets[0].data
+            });
+            AppState.charts.eventTypes.update();
+        }
+
+        // Update Traffic Timeline Chart
+        console.log('Updating traffic timeline chart, chart exists:', !!AppState.charts.trafficTimeline, 'timeSeries exists:', !!eventsData.timeSeries);
+        if (AppState.charts.trafficTimeline && eventsData.timeSeries) {
+            const dates = eventsData.timeSeries.map(d => d.date);
+            const sessions = eventsData.timeSeries.map(d => d.sessions);
+            const events = eventsData.timeSeries.map(d => d.events);
+
+            AppState.charts.trafficTimeline.data.labels = dates;
+            AppState.charts.trafficTimeline.data.datasets[0].data = sessions;
+            AppState.charts.trafficTimeline.data.datasets[1].data = events;
+            AppState.charts.trafficTimeline.update();
+        }
     },
 
     showNoDataMessage() {
@@ -632,6 +801,80 @@ const UIManager = {
                 }
             });
         }
+
+        // Website Analytics Charts
+        const eventTypesCanvas = document.getElementById('eventTypesChart');
+        if (eventTypesCanvas && window.Chart) {
+            AppState.charts.eventTypes = new Chart(eventTypesCanvas, {
+                type: 'doughnut',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        data: [],
+                        backgroundColor: [
+                            '#3b82f6',  // blue
+                            '#10b981',  // green
+                            '#f59e0b',  // orange
+                            '#ef4444',  // red
+                            '#8b5cf6',  // purple
+                            '#06b6d4',  // cyan
+                            '#ec4899'   // pink
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { padding: 15 }
+                        }
+                    }
+                }
+            });
+        }
+
+        const trafficTimelineCanvas = document.getElementById('trafficTimelineChart');
+        if (trafficTimelineCanvas && window.Chart) {
+            AppState.charts.trafficTimeline = new Chart(trafficTimelineCanvas, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'Sessions',
+                            data: [],
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            tension: 0.3,
+                            fill: true
+                        },
+                        {
+                            label: 'Events',
+                            data: [],
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            tension: 0.3,
+                            fill: true
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top' }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { precision: 0 }
+                        }
+                    }
+                }
+            });
+        }
     },
 
     updateCharts(data) {
@@ -867,7 +1110,7 @@ const UIManager = {
                     const dailyData = dates.map(() => dailySpend);
 
                     datasets.push({
-                        label: campaign.name,
+                        label: campaign.campaign_name,
                         data: dailyData,
                         backgroundColor: color,
                         borderColor: color,
@@ -970,7 +1213,7 @@ const UIManager = {
             console.log('Updating Budget Pie chart with platforms:', platformData);
 
             const labels = platformData.map(([key]) => CONFIG.PLATFORMS[key]?.name || key);
-            const values = platformData.map(([_, stats]) => stats.budget || stats.spend || 0);
+            const values = platformData.map(([_, stats]) => stats.spend || 0);
 
             AppState.charts.budgetPie.data.labels = labels;
             AppState.charts.budgetPie.data.datasets[0].data = values;
@@ -1036,14 +1279,13 @@ const UIManager = {
 
         tbody.innerHTML = campaigns.slice(0, 10).map(campaign => `
             <tr>
-                <td>${campaign.name || 'Unnamed Campaign'}</td>
-                <td><span class="platform-badge">${campaign.platform || 'Unknown'}</span></td>
-                <td><span class="status-${campaign.status}">${campaign.status || 'Unknown'}</span></td>
+                <td>${campaign.campaign_name || 'Unnamed Campaign'}</td>
+                <td><span class="platform-badge">meta</span></td>
+                <td><span class="status-${(campaign.status || 'unknown').toLowerCase()}">${campaign.status || 'Unknown'}</span></td>
                 <td>${(campaign.metrics?.roas || 0).toFixed(1)}x</td>
                 <td>${(campaign.metrics?.ctr || 0).toFixed(1)}%</td>
-                <td>${this.formatCurrency(campaign.budget_total || 0)}</td>
+                <td>${this.formatCurrency(campaign.metrics?.spend || 0)}</td>
                 <td>${campaign.metrics?.conversions || 0}</td>
-                <td>${new Date(campaign.created_at || Date.now()).toLocaleDateString()}</td>
             </tr>
         `).join('');
     },
@@ -1342,9 +1584,19 @@ const Dashboard = {
             let selectedOrg = organizations.find(org => org.id === currentOrgId);
 
             if (!selectedOrg) {
+                // Fallback to first org if current org not found
                 selectedOrg = organizations[0];
                 localStorage.setItem('current_org_id', selectedOrg.id);
                 localStorage.setItem('current_org_name', selectedOrg.name);
+                if (selectedOrg.org_tag) {
+                    localStorage.setItem('current_org_tag', selectedOrg.org_tag);
+                }
+            } else {
+                // Org was found - only update org_tag from API (in case it changed server-side)
+                // DO NOT overwrite org_id or org_name that were set by switchOrganization()
+                if (selectedOrg.org_tag) {
+                    localStorage.setItem('current_org_tag', selectedOrg.org_tag);
+                }
             }
 
             const currentOrgName = document.getElementById('currentOrgName');
@@ -1355,14 +1607,12 @@ const Dashboard = {
             const orgDropdownMenu = document.getElementById('orgDropdownMenu');
             if (orgDropdownMenu) {
                 orgDropdownMenu.innerHTML = organizations.map(org => `
-                    <button class="org-dropdown-item ${org.id === selectedOrg.id ? 'active' : ''}"
-                            onclick="Dashboard.switchOrganization('${org.id}', '${org.name}')">
-                        <div class="org-item-content">
-                            <span class="org-item-name">${org.name}</span>
-                            <span class="org-item-role">${org.role}</span>
-                        </div>
+                    <div class="org-item ${org.id === selectedOrg.id ? 'active' : ''}"
+                         onclick="Dashboard.switchOrganization('${org.id}', '${org.name}', '${org.org_tag || ''}')">
+                        <span class="org-name">${org.name}</span>
+                        <span class="org-role">${org.role}</span>
                         ${org.id === selectedOrg.id ? '<i class="fas fa-check"></i>' : ''}
-                    </button>
+                    </div>
                 `).join('');
             }
 
@@ -1372,11 +1622,41 @@ const Dashboard = {
         }
     },
 
-    switchOrganization(orgId, orgName) {
+    switchOrganization(orgId, orgName, orgTag) {
+        console.log('🔄 Switching to org:', { orgId, orgName, orgTag });
+
         localStorage.setItem('current_org_id', orgId);
         localStorage.setItem('current_org_name', orgName);
+        if (orgTag) {
+            localStorage.setItem('current_org_tag', orgTag);
+        }
 
-        window.location.reload();
+        console.log('✅ localStorage after switch:', {
+            id: localStorage.getItem('current_org_id'),
+            name: localStorage.getItem('current_org_name'),
+            tag: localStorage.getItem('current_org_tag')
+        });
+
+        // Update AppState
+        AppState.currentOrg = { id: orgId };
+
+        // Update UI immediately
+        const orgNameEl = document.getElementById('currentOrgName');
+        if (orgNameEl) {
+            orgNameEl.textContent = orgName;
+            console.log('✅ Updated org name in UI to:', orgName);
+        }
+
+        // Close dropdown
+        const orgMenu = document.getElementById('orgDropdownMenu');
+        if (orgMenu) {
+            orgMenu.classList.remove('show');
+            console.log('✅ Closed dropdown menu');
+        }
+
+        // Reload data with new org (no page refresh!)
+        console.log('🔄 Reloading data for new org...');
+        this.loadData();
     },
 
     async loadData() {
@@ -1388,8 +1668,13 @@ const Dashboard = {
                     console.warn('Events fetch failed:', err);
                     return null;
                 }),
-                APIService.fetchAds(AppState.currentOrg.id, 'facebook', AppState.lookbackDays).catch(err => {
+                APIService.fetchAds(AppState.currentOrg.id, 'meta', AppState.lookbackDays).catch(err => {
                     console.warn('Ads fetch failed:', err);
+                    return null;
+                }),
+                // Fetch daily ads data for time series charts
+                APIService.fetchAds(AppState.currentOrg.id, 'meta', AppState.lookbackDays, 'date').catch(err => {
+                    console.warn('Daily ads fetch failed:', err);
                     return null;
                 }),
                 APIService.fetchConversions(AppState.currentOrg.id, AppState.lookbackDays).catch(err => {
@@ -1398,16 +1683,18 @@ const Dashboard = {
                 })
             ];
 
-            const [eventsResponse, adsResponse, conversionData] = await Promise.all(promises);
+            const [eventsResponse, adsResponse, dailyAdsResponse, conversionData] = await Promise.all(promises);
 
             // Process events data
+            console.log('📊 eventsResponse received:', eventsResponse);
             AppState.eventsData = DataProcessor.processEventsData(eventsResponse);
+            console.log('📊 AppState.eventsData set to:', AppState.eventsData);
 
             // Process ads as campaign data
             AppState.campaignData = adsResponse;
             AppState.conversionData = conversionData;
 
-            const processedData = DataProcessor.processApiData(adsResponse, conversionData);
+            const processedData = DataProcessor.processApiData(adsResponse, conversionData, dailyAdsResponse);
 
             if (!processedData && !AppState.eventsData) {
                 console.log('No data received from API');
@@ -1557,10 +1844,15 @@ const Dashboard = {
         const data = AppState.processedData;
 
         // Update events analytics
+        console.log('📊 updateUI called, AppState.eventsData:', AppState.eventsData);
         if (AppState.eventsData) {
+            console.log('📊 Updating events UI components...');
             UIManager.updateEventsKPIs(AppState.eventsData);
+            UIManager.updateWebsiteCharts(AppState.eventsData);
             UIManager.updateTopPages(AppState.eventsData);
             UIManager.updateTopSources(AppState.eventsData);
+        } else {
+            console.log('📊 No eventsData available, skipping events UI updates');
         }
 
         // Update ads/campaigns analytics
@@ -1630,8 +1922,19 @@ const Dashboard = {
         if (orgBtn && orgMenu) {
             orgBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                orgMenu.style.display =
-                    orgMenu.style.display === 'block' ? 'none' : 'block';
+                orgMenu.classList.toggle('show');
+            });
+
+            // Close dropdown when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!orgBtn.contains(e.target) && !orgMenu.contains(e.target)) {
+                    orgMenu.classList.remove('show');
+                }
+            });
+        } else {
+            console.warn('Organization dropdown elements not found:', {
+                orgBtn: !!orgBtn,
+                orgMenu: !!orgMenu
             });
         }
 

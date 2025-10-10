@@ -12,6 +12,8 @@ declare global {
     CLOUDFLARE_ACCOUNT_ID: string;
     R2_BUCKET_NAME: string;
     R2_SQL_TOKEN: string;
+    // Encryption key for field-level encryption (optional)
+    ENCRYPTION_KEY?: string;
   }
 }
 
