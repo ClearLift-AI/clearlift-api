@@ -290,7 +290,8 @@ export class R2SQLAdapter {
     const offset = options.offset || 0;
 
     // Start with SELECT
-    let sql = `SELECT ${select} FROM clearlift.events`;
+    // Note: Table is clearlift.event_stream (namespace.table)
+    let sql = `SELECT ${select} FROM clearlift.event_stream`;
 
     // Build WHERE clauses
     const whereClauses: string[] = [];

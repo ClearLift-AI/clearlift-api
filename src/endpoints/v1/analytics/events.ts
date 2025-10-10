@@ -75,8 +75,19 @@ export class GetEvents extends OpenAPIRoute {
     // 1. Look up which org_id this org_tag belongs to (via org_tag_mappings)
     // 2. Check if session.user_id has access to that org_id (via organization_members)
 
-    // Get R2 SQL token from Secrets Store
-    const r2SqlToken = await c.env.R2_SQL_TOKEN.get();
+    // Get R2 SQL token (handle both Secret Store and .dev.vars)
+    let r2SqlToken: string | null = null;
+
+    if (typeof c.env.R2_SQL_TOKEN === 'string') {
+      r2SqlToken = c.env.R2_SQL_TOKEN;
+    } else if (c.env.R2_SQL_TOKEN && typeof c.env.R2_SQL_TOKEN.get === 'function') {
+      try {
+        r2SqlToken = await c.env.R2_SQL_TOKEN.get();
+      } catch (e) {
+        // Secret Store not available locally, this is expected
+        console.log('R2_SQL_TOKEN Secret Store not available, using .dev.vars');
+      }
+    }
 
     if (!r2SqlToken) {
       return error(c, "CONFIGURATION_ERROR", "R2 SQL token not configured", 500);

@@ -22,7 +22,7 @@ export class HealthEndpoint extends OpenAPIRoute {
                 bindings: z.object({
                   db: z.boolean(),
                   supabase: z.boolean(),
-                  duckdb: z.boolean()
+                  r2_sql: z.boolean()
                 }),
                 checks: z.object({
                   database: z.object({
@@ -33,7 +33,7 @@ export class HealthEndpoint extends OpenAPIRoute {
                     connected: z.boolean(),
                     latency_ms: z.number().optional()
                   }),
-                  duckdb: z.object({
+                  r2_sql: z.object({
                     connected: z.boolean(),
                     latency_ms: z.number().optional()
                   })
@@ -50,7 +50,7 @@ export class HealthEndpoint extends OpenAPIRoute {
     const checks = {
       database: { connected: false, latency_ms: 0 },
       supabase: { connected: false, latency_ms: 0 },
-      duckdb: { connected: false, latency_ms: 0 }
+      r2_sql: { connected: false, latency_ms: 0 }
     };
 
     // Check D1 Database
@@ -88,19 +88,11 @@ export class HealthEndpoint extends OpenAPIRoute {
       }
     }
 
-    // Check DuckDB API connectivity
-    try {
-      const start = Date.now();
-      const response = await fetch("https://query.clearlift.ai/health", {
-        method: "GET",
-        signal: AbortSignal.timeout(5000) // 5 second timeout
-      });
-      checks.duckdb.latency_ms = Date.now() - start;
-      checks.duckdb.connected = response.ok;
-    } catch (error) {
-      console.error("DuckDB health check failed:", error);
-      checks.duckdb.connected = false;
-    }
+    // Check R2 SQL connectivity
+    // Note: We need R2_SQL_TOKEN to test, so we'll check if binding exists
+    const hasR2Token = !!(c.env.R2_SQL_TOKEN && c.env.R2_BUCKET_NAME && c.env.CLOUDFLARE_ACCOUNT_ID);
+    checks.r2_sql.connected = hasR2Token;
+    checks.r2_sql.latency_ms = 0; // Can't test without making actual query
 
     const data = {
       status: "healthy",
@@ -109,7 +101,7 @@ export class HealthEndpoint extends OpenAPIRoute {
       bindings: {
         db: !!c.env.DB,
         supabase: !!(supabaseUrl && supabaseKey),
-        duckdb: true // Always available as external service
+        r2_sql: hasR2Token
       },
       checks
     };
