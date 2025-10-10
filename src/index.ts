@@ -16,6 +16,19 @@ import {
 import { GetEvents } from "./endpoints/v1/analytics/events";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetAds } from "./endpoints/v1/analytics/ads";
+import {
+  GetOnboardingStatus,
+  StartOnboarding,
+  CompleteOnboardingStep,
+  ResetOnboarding
+} from "./endpoints/v1/onboarding";
+import {
+  ListConnectors,
+  ListConnectedPlatforms,
+  InitiateOAuthFlow,
+  HandleOAuthCallback,
+  DisconnectPlatform
+} from "./endpoints/v1/connectors";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -76,6 +89,19 @@ openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
 openapi.get("/v1/analytics/events", auth, GetEvents);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/ads/:platform_slug", auth, requireOrg, GetAds);
+
+// Onboarding endpoints
+openapi.get("/v1/onboarding/status", auth, GetOnboardingStatus);
+openapi.post("/v1/onboarding/start", auth, StartOnboarding);
+openapi.post("/v1/onboarding/complete-step", auth, CompleteOnboardingStep);
+openapi.post("/v1/onboarding/reset", auth, ResetOnboarding);
+
+// Connector endpoints
+openapi.get("/v1/connectors", auth, ListConnectors);
+openapi.get("/v1/connectors/connected", auth, ListConnectedPlatforms);
+openapi.post("/v1/connectors/:provider/connect", auth, InitiateOAuthFlow);
+openapi.get("/v1/connectors/:provider/callback", HandleOAuthCallback); // No auth - OAuth callback
+openapi.delete("/v1/connectors/:connection_id", auth, DisconnectPlatform);
 
 // Export the Hono app
 export default app;
