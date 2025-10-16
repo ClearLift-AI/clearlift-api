@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
 import { success, error } from "../../../utils/response";
+import { EventResponseSchema } from "../../../schemas/analytics";
 
 /**
  * GET /v1/analytics/events - Get raw events from R2 SQL
@@ -17,22 +18,19 @@ export class GetEvents extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
-        org_tag: z.string().describe("Organization tag for data partitioning"),
+        org_id: z.string().describe("Organization ID"),
         lookback: z.string().optional().describe("Time period: 1h, 24h, 7d, 30d (default: 24h)"),
         limit: z.string().optional().describe("Maximum number of events (default: 100, max: 1000)")
       })
     },
     responses: {
       "200": {
-        description: "Raw events from R2",
+        description: "Raw events from R2 SQL with validated core fields (60+ fields allowed via passthrough)",
         content: {
           "application/json": {
             schema: z.object({
               success: z.boolean(),
-              data: z.object({
-                events: z.array(z.any()),
-                count: z.number()
-              }),
+              data: EventResponseSchema,
               meta: z.object({
                 timestamp: z.string(),
                 lookback: z.string(),
@@ -56,12 +54,12 @@ export class GetEvents extends OpenAPIRoute {
     }
 
     // Get query parameters
-    const orgTag = c.req.query("org_tag");
+    const orgIdParam = c.req.query("org_id");
     const lookback = c.req.query("lookback") || "24h";
     const limit = parseInt(c.req.query("limit") || "100");
 
-    if (!orgTag) {
-      return error(c, "MISSING_ORG_TAG", "org_tag query parameter is required", 400);
+    if (!orgIdParam) {
+      return error(c, "MISSING_ORG_ID", "org_id query parameter is required", 400);
     }
 
     // Validate limit
@@ -69,11 +67,25 @@ export class GetEvents extends OpenAPIRoute {
       return error(c, "INVALID_LIMIT", "Limit cannot exceed 1000", 400);
     }
 
-    // TODO: Validate that the session's user has access to this org_tag
-    // For now, we'll trust the session validation
-    // In production, you'd want to:
-    // 1. Look up which org_id this org_tag belongs to (via org_tag_mappings)
-    // 2. Check if session.user_id has access to that org_id (via organization_members)
+    // Verify user has access to the organization
+    const { D1Adapter } = await import("../../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, orgIdParam);
+
+    if (!hasAccess) {
+      return error(c, "FORBIDDEN", "No access to this organization", 403);
+    }
+
+    // Look up the org_tag for this organization
+    const orgTagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
+    `).bind(orgIdParam).first<{ short_tag: string }>();
+
+    if (!orgTagMapping?.short_tag) {
+      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag for analytics", 404);
+    }
+
+    const orgTag = orgTagMapping.short_tag;
 
     // Get R2 SQL token (handle both Secret Store and .dev.vars)
     let r2SqlToken: string | null = null;

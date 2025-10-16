@@ -62,7 +62,7 @@ INSERT OR REPLACE INTO sessions (
   ip_address,
   user_agent
 ) VALUES (
-  '3c83ba76-0e57-4ad4-b373-606660f7c580',
+  '00000000-test-1234-0000-000000000000',
   'test-user-001',
   datetime('now'),
   datetime('now', '+30 days'),

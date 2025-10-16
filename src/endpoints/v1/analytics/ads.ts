@@ -3,6 +3,12 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { GenericPlatformAdapter } from "../../../adapters/platforms/base";
 import { success, error, getDateRange, getPagination } from "../../../utils/response";
+import {
+  CampaignSummarySchema,
+  AdPerformanceSchema,
+  DailyMetricsSchema,
+  PlatformSummarySchema
+} from "../../../schemas/analytics";
 
 /**
  * GET /v1/analytics/ads/:platform_slug - Get ad platform data
@@ -33,15 +39,21 @@ export class GetAds extends OpenAPIRoute {
     },
     responses: {
       "200": {
-        description: "Ad platform data",
+        description: "Ad platform data with validated core fields and flexible schema for platform-specific fields",
         content: {
           "application/json": {
             schema: z.object({
               success: z.boolean(),
               data: z.object({
                 platform: z.string(),
-                results: z.any(),
-                summary: z.any()
+                results: z.union([
+                  z.array(CampaignSummarySchema), // group_by=campaign
+                  z.array(AdPerformanceSchema),    // group_by=ad
+                  z.array(DailyMetricsSchema),     // group_by=date
+                  z.array(z.any()),                // group_by=campaign_date (complex structure)
+                  z.null()                         // group_by=none
+                ]).nullable(),
+                summary: PlatformSummarySchema
               }),
               meta: z.object({
                 timestamp: z.string(),
@@ -57,6 +69,7 @@ export class GetAds extends OpenAPIRoute {
       "400": { description: "Invalid platform or parameters" },
       "401": { description: "Unauthorized" },
       "403": { description: "No organization selected" },
+      "404": { description: "Platform not available (table does not exist)" },
       "500": { description: "Query failed" }
     }
   };

@@ -1,352 +1,2953 @@
 {
-  "fields": [
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ClearLift API",
+    "version": "1.0.0",
+    "description": "Production API for ClearLift analytics platform"
+  },
+  "servers": [
     {
-      "name": "org_tag",
-      "type": "string",
-      "required": true,
-      "description": "Organization identifier for multi-tenant partitioning"
+      "url": "https://api.clearlift.ai",
+      "description": "Production"
     },
     {
-      "name": "event_id",
-      "type": "string",
-      "required": true,
-      "description": "Unique identifier for this event (UUID)"
-    },
-    {
-      "name": "timestamp",
-      "type": "string",
-      "required": true,
-      "description": "ISO 8601 timestamp when the event occurred"
-    },
-    {
-      "name": "event_type",
-      "type": "string",
-      "required": true,
-      "description": "Type of event (page_view, click, scroll, form_submit, etc.)"
-    },
-    {
-      "name": "anonymous_id",
-      "type": "string",
-      "required": true,
-      "description": "Anonymous identifier for all users (persisted in localStorage)"
-    },
-    {
-      "name": "user_id",
-      "type": "string",
-      "required": false,
-      "description": "Authenticated user identifier"
-    },
-    {
-      "name": "session_id",
-      "type": "string",
-      "required": true,
-      "description": "Session identifier (30-minute timeout)"
-    },
-    {
-      "name": "is_new_session",
-      "type": "bool",
-      "required": false,
-      "description": "Whether this is the first event in the session"
-    },
-    {
-      "name": "page_url",
-      "type": "string",
-      "required": true,
-      "description": "Current page URL (PII redacted)"
-    },
-    {
-      "name": "page_title",
-      "type": "string",
-      "required": true,
-      "description": "Page title from document.title"
-    },
-    {
-      "name": "page_path",
-      "type": "string",
-      "required": true,
-      "description": "URL path without domain"
-    },
-    {
-      "name": "page_hostname",
-      "type": "string",
-      "required": true,
-      "description": "Domain name"
-    },
-    {
-      "name": "page_search",
-      "type": "string",
-      "required": false,
-      "description": "Query string parameters"
-    },
-    {
-      "name": "page_hash",
-      "type": "string",
-      "required": false,
-      "description": "URL fragment/anchor"
-    },
-    {
-      "name": "referrer",
-      "type": "string",
-      "required": false,
-      "description": "Referring URL"
-    },
-    {
-      "name": "referrer_domain",
-      "type": "string",
-      "required": false,
-      "description": "Referring domain for traffic source analysis"
-    },
-    {
-      "name": "device_type",
-      "type": "string",
-      "required": true,
-      "description": "Device category (desktop, mobile, tablet)"
-    },
-    {
-      "name": "viewport_width",
-      "type": "int64",
-      "required": true,
-      "description": "Browser viewport width in pixels"
-    },
-    {
-      "name": "viewport_height",
-      "type": "int64",
-      "required": true,
-      "description": "Browser viewport height in pixels"
-    },
-    {
-      "name": "screen_width",
-      "type": "int64",
-      "required": false,
-      "description": "Screen width in pixels"
-    },
-    {
-      "name": "screen_height",
-      "type": "int64",
-      "required": false,
-      "description": "Screen height in pixels"
-    },
-    {
-      "name": "browser_name",
-      "type": "string",
-      "required": true,
-      "description": "Browser name (Chrome, Firefox, Safari, etc.)"
-    },
-    {
-      "name": "browser_version",
-      "type": "string",
-      "required": false,
-      "description": "Browser version"
-    },
-    {
-      "name": "browser_language",
-      "type": "string",
-      "required": true,
-      "description": "Browser language setting (en-US, etc.)"
-    },
-    {
-      "name": "os_name",
-      "type": "string",
-      "required": false,
-      "description": "Operating system (Windows, macOS, iOS, Android, etc.)"
-    },
-    {
-      "name": "os_version",
-      "type": "string",
-      "required": false,
-      "description": "Operating system version"
-    },
-    {
-      "name": "user_agent",
-      "type": "string",
-      "required": false,
-      "description": "User agent string (anonymized if privacy mode enabled)"
-    },
-    {
-      "name": "geo_country",
-      "type": "string",
-      "required": false,
-      "description": "ISO country code (server-enriched from IP)"
-    },
-    {
-      "name": "geo_region",
-      "type": "string",
-      "required": false,
-      "description": "Region/state (server-enriched from IP)"
-    },
-    {
-      "name": "geo_city",
-      "type": "string",
-      "required": false,
-      "description": "City (server-enriched from IP)"
-    },
-    {
-      "name": "geo_timezone",
-      "type": "string",
-      "required": false,
-      "description": "IANA timezone"
-    },
-    {
-      "name": "utm_source",
-      "type": "string",
-      "required": false,
-      "description": "Campaign traffic source"
-    },
-    {
-      "name": "utm_medium",
-      "type": "string",
-      "required": false,
-      "description": "Campaign medium (cpc, email, etc.)"
-    },
-    {
-      "name": "utm_campaign",
-      "type": "string",
-      "required": false,
-      "description": "Campaign name"
-    },
-    {
-      "name": "utm_term",
-      "type": "string",
-      "required": false,
-      "description": "Campaign search term"
-    },
-    {
-      "name": "utm_content",
-      "type": "string",
-      "required": false,
-      "description": "Campaign content variant"
-    },
-    {
-      "name": "gclid",
-      "type": "string",
-      "required": false,
-      "description": "Google Click ID for attribution"
-    },
-    {
-      "name": "fbclid",
-      "type": "string",
-      "required": false,
-      "description": "Facebook Click ID for attribution"
-    },
-    {
-      "name": "event_category",
-      "type": "string",
-      "required": false,
-      "description": "Event category for grouping (engagement, conversion, etc.)"
-    },
-    {
-      "name": "event_action",
-      "type": "string",
-      "required": false,
-      "description": "Specific action (button_click, video_play, etc.)"
-    },
-    {
-      "name": "event_label",
-      "type": "string",
-      "required": false,
-      "description": "Event label for additional context"
-    },
-    {
-      "name": "event_value",
-      "type": "float64",
-      "required": false,
-      "description": "Numeric value (revenue, score, etc.)"
-    },
-    {
-      "name": "event_data",
-      "type": "json",
-      "required": false,
-      "description": "Event-specific data (click coordinates, form fields, etc.)"
-    },
-    {
-      "name": "scroll_depth",
-      "type": "int64",
-      "required": false,
-      "description": "Maximum scroll percentage reached (0-100)"
-    },
-    {
-      "name": "engagement_time",
-      "type": "int64",
-      "required": false,
-      "description": "Active time on page in milliseconds"
-    },
-    {
-      "name": "page_load_time",
-      "type": "int64",
-      "required": false,
-      "description": "Page load time in milliseconds"
-    },
-    {
-      "name": "ttfb",
-      "type": "int64",
-      "required": false,
-      "description": "Time to first byte in milliseconds"
-    },
-    {
-      "name": "dom_content_loaded",
-      "type": "int64",
-      "required": false,
-      "description": "DOM content loaded time in milliseconds"
-    },
-    {
-      "name": "first_contentful_paint",
-      "type": "int64",
-      "required": false,
-      "description": "First contentful paint in milliseconds"
-    },
-    {
-      "name": "largest_contentful_paint",
-      "type": "int64",
-      "required": false,
-      "description": "Largest contentful paint in milliseconds"
-    },
-    {
-      "name": "consent_analytics",
-      "type": "bool",
-      "required": true,
-      "description": "User consent for analytics tracking"
-    },
-    {
-      "name": "consent_marketing",
-      "type": "bool",
-      "required": false,
-      "description": "User consent for marketing tracking"
-    },
-    {
-      "name": "ip_anonymized",
-      "type": "bool",
-      "required": false,
-      "description": "Whether IP address was anonymized"
-    },
-    {
-      "name": "do_not_track",
-      "type": "bool",
-      "required": false,
-      "description": "Browser Do Not Track setting"
-    },
-    {
-      "name": "sdk_version",
-      "type": "string",
-      "required": false,
-      "description": "Tracking library version"
-    },
-    {
-      "name": "client_timestamp",
-      "type": "string",
-      "required": false,
-      "description": "Client-side event timestamp"
-    },
-    {
-      "name": "server_timestamp",
-      "type": "string",
-      "required": false,
-      "description": "Server-side receipt timestamp"
-    },
-    {
-      "name": "custom_dimensions",
-      "type": "json",
-      "required": false,
-      "description": "Custom properties for specific implementations"
+      "url": "http://localhost:8787",
+      "description": "Development"
     }
-  ]
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "components": {
+    "schemas": {},
+    "parameters": {}
+  },
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Health check endpoint",
+        "operationId": "health-check",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string"
+                        },
+                        "service": {
+                          "type": "string"
+                        },
+                        "timestamp": {
+                          "type": "string"
+                        },
+                        "bindings": {
+                          "type": "object",
+                          "properties": {
+                            "db": {
+                              "type": "boolean"
+                            },
+                            "supabase": {
+                              "type": "boolean"
+                            },
+                            "r2_sql": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "db",
+                            "supabase",
+                            "r2_sql"
+                          ]
+                        },
+                        "checks": {
+                          "type": "object",
+                          "properties": {
+                            "database": {
+                              "type": "object",
+                              "properties": {
+                                "connected": {
+                                  "type": "boolean"
+                                },
+                                "latency_ms": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "connected"
+                              ]
+                            },
+                            "supabase": {
+                              "type": "object",
+                              "properties": {
+                                "connected": {
+                                  "type": "boolean"
+                                },
+                                "latency_ms": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "connected"
+                              ]
+                            },
+                            "r2_sql": {
+                              "type": "object",
+                              "properties": {
+                                "connected": {
+                                  "type": "boolean"
+                                },
+                                "latency_ms": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "connected"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "database",
+                            "supabase",
+                            "r2_sql"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "service",
+                        "timestamp",
+                        "bindings",
+                        "checks"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/user/me": {
+      "get": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Get current user profile",
+        "operationId": "get-user-profile",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "last_login_at": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "avatar_url": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "email",
+                            "name",
+                            "created_at",
+                            "last_login_at",
+                            "avatar_url"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "user"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Update current user profile",
+        "operationId": "update-user-profile",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated user profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "updated_at": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "email",
+                            "name",
+                            "updated_at"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "user"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/user/organizations": {
+      "get": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Get user's organizations",
+        "operationId": "get-user-organizations",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User's organizations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "organizations": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "slug": {
+                                "type": "string"
+                              },
+                              "role": {
+                                "type": "string"
+                              },
+                              "joined_at": {
+                                "type": "string"
+                              },
+                              "created_at": {
+                                "type": "string"
+                              },
+                              "updated_at": {
+                                "type": "string"
+                              },
+                              "subscription_tier": {
+                                "type": "string"
+                              },
+                              "org_tag": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "members_count": {
+                                "type": "number"
+                              },
+                              "platforms_count": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "slug",
+                              "role",
+                              "joined_at",
+                              "created_at",
+                              "updated_at",
+                              "subscription_tier",
+                              "org_tag",
+                              "members_count",
+                              "platforms_count"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "organizations"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/analytics/events": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Get raw events",
+        "description": "Fetches raw events from R2 SQL for a specific org_tag",
+        "operationId": "get-events",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization tag for data partitioning"
+            },
+            "required": true,
+            "description": "Organization tag for data partitioning",
+            "name": "org_tag",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Time period: 1h, 24h, 7d, 30d (default: 24h)"
+            },
+            "required": false,
+            "description": "Time period: 1h, 24h, 7d, 30d (default: 24h)",
+            "name": "lookback",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Maximum number of events (default: 100, max: 1000)"
+            },
+            "required": false,
+            "description": "Maximum number of events (default: 100, max: 1000)",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw events from R2 SQL with validated core fields (60+ fields allowed via passthrough)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "org_tag": {
+                                "type": "string"
+                              },
+                              "event_id": {
+                                "type": "string"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "event_type": {
+                                "type": "string"
+                              },
+                              "anonymous_id": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "user_id": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "session_id": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "page_url": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "page_title": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "page_path": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "device_type": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "browser_name": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "browser_version": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "os_name": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "geo_country": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "geo_region": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "geo_city": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "utm_source": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "utm_medium": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "utm_campaign": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "org_tag",
+                              "event_id",
+                              "timestamp",
+                              "event_type"
+                            ]
+                          }
+                        },
+                        "count": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "events",
+                        "count"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "timestamp": {
+                          "type": "string"
+                        },
+                        "lookback": {
+                          "type": "string"
+                        },
+                        "org_tag": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "timestamp",
+                        "lookback",
+                        "org_tag"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session"
+          },
+          "403": {
+            "description": "No access to this org_tag"
+          },
+          "500": {
+            "description": "Query failed"
+          }
+        }
+      }
+    },
+    "/v1/analytics/conversions": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Get conversion data",
+        "description": "Fetches conversion data from Supabase with intelligent aggregation",
+        "operationId": "get-conversions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Start date (YYYY-MM-DD)"
+            },
+            "required": false,
+            "description": "Start date (YYYY-MM-DD)",
+            "name": "start_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "End date (YYYY-MM-DD)"
+            },
+            "required": false,
+            "description": "End date (YYYY-MM-DD)",
+            "name": "end_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by channel (shopify, stripe, etc.)"
+            },
+            "required": false,
+            "description": "Filter by channel (shopify, stripe, etc.)",
+            "name": "channel",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "channel",
+                "date",
+                "both",
+                "none"
+              ],
+              "description": "Aggregation level (default: none)"
+            },
+            "required": false,
+            "description": "Aggregation level (default: none)",
+            "name": "group_by",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversion data with validated core fields and flexible schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "total_conversions": {
+                          "type": "number"
+                        },
+                        "total_revenue": {
+                          "type": "number"
+                        },
+                        "channel_count": {
+                          "type": "number"
+                        },
+                        "by_channel": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "channel": {
+                                "type": "string"
+                              },
+                              "conversions": {
+                                "type": "number"
+                              },
+                              "revenue": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "channel",
+                              "conversions",
+                              "revenue"
+                            ]
+                          }
+                        },
+                        "by_date": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "date": {
+                                "type": "string"
+                              },
+                              "conversions": {
+                                "type": "number"
+                              },
+                              "revenue": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "date",
+                              "conversions",
+                              "revenue"
+                            ]
+                          }
+                        },
+                        "breakdown": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "date": {
+                                "type": "string"
+                              },
+                              "channel": {
+                                "type": "string"
+                              },
+                              "conversions": {
+                                "type": "number"
+                              },
+                              "revenue": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "date",
+                              "channel",
+                              "conversions",
+                              "revenue"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "total_conversions",
+                        "total_revenue"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "timestamp": {
+                          "type": "string"
+                        },
+                        "date_range": {
+                          "type": "object",
+                          "properties": {
+                            "start_date": {
+                              "type": "string"
+                            },
+                            "end_date": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "start_date",
+                            "end_date"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "timestamp",
+                        "date_range"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "No organization selected"
+          },
+          "500": {
+            "description": "Query failed"
+          }
+        }
+      }
+    },
+    "/v1/analytics/ads/{platform_slug}": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Get ad platform performance data",
+        "description": "Fetches ad performance data from various platforms. Platform availability is dynamic - if the platform's data table exists in Supabase, it will work automatically.",
+        "operationId": "get-ads",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z_]+$",
+              "description": "Platform slug (e.g., facebook, google, tiktok)"
+            },
+            "required": true,
+            "description": "Platform slug (e.g., facebook, google, tiktok)",
+            "name": "platform_slug",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Start date (YYYY-MM-DD)"
+            },
+            "required": false,
+            "description": "Start date (YYYY-MM-DD)",
+            "name": "start_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "End date (YYYY-MM-DD)"
+            },
+            "required": false,
+            "description": "End date (YYYY-MM-DD)",
+            "name": "end_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by campaign ID"
+            },
+            "required": false,
+            "description": "Filter by campaign ID",
+            "name": "campaign_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by ad ID"
+            },
+            "required": false,
+            "description": "Filter by ad ID",
+            "name": "ad_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "campaign",
+                "ad",
+                "date",
+                "campaign_date",
+                "none"
+              ],
+              "description": "Aggregation level (default: none)"
+            },
+            "required": false,
+            "description": "Aggregation level (default: none)",
+            "name": "group_by",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Pagination limit"
+            },
+            "required": false,
+            "description": "Pagination limit",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Pagination offset"
+            },
+            "required": false,
+            "description": "Pagination offset",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "spend",
+                "impressions",
+                "clicks",
+                "conversions"
+              ],
+              "description": "Sort field"
+            },
+            "required": false,
+            "description": "Sort field",
+            "name": "sort_by",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "description": "Sort order"
+            },
+            "required": false,
+            "description": "Sort order",
+            "name": "order",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ad platform data with validated core fields and flexible schema for platform-specific fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "platform": {
+                          "type": "string"
+                        },
+                        "results": {
+                          "anyOf": [
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "campaign_id": {
+                                    "type": "string"
+                                  },
+                                  "campaign_name": {
+                                    "type": "string"
+                                  },
+                                  "metrics": {
+                                    "type": "object",
+                                    "properties": {
+                                      "impressions": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "clicks": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "spend": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "conversions": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "revenue": {
+                                        "type": "number",
+                                        "default": 0
+                                      }
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "campaign_id",
+                                  "campaign_name",
+                                  "metrics"
+                                ]
+                              }
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "org_id": {
+                                    "type": "string"
+                                  },
+                                  "date_reported": {
+                                    "type": "string"
+                                  },
+                                  "campaign_id": {
+                                    "type": "string"
+                                  },
+                                  "campaign_name": {
+                                    "type": "string"
+                                  },
+                                  "ad_id": {
+                                    "type": "string"
+                                  },
+                                  "ad_name": {
+                                    "type": "string"
+                                  },
+                                  "metrics": {
+                                    "type": "object",
+                                    "properties": {
+                                      "impressions": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "clicks": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "spend": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "conversions": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "revenue": {
+                                        "type": "number",
+                                        "default": 0
+                                      }
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "org_id",
+                                  "date_reported",
+                                  "metrics"
+                                ]
+                              }
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "date": {
+                                    "type": "string"
+                                  },
+                                  "metrics": {
+                                    "type": "object",
+                                    "properties": {
+                                      "impressions": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "clicks": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "spend": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "conversions": {
+                                        "type": "number",
+                                        "default": 0
+                                      },
+                                      "revenue": {
+                                        "type": "number",
+                                        "default": 0
+                                      }
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "date",
+                                  "metrics"
+                                ]
+                              }
+                            },
+                            {
+                              "type": "array",
+                              "items": {}
+                            },
+                            {
+                              "type": "null"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "summary": {
+                          "type": "object",
+                          "properties": {
+                            "total_impressions": {
+                              "type": "number",
+                              "default": 0
+                            },
+                            "total_clicks": {
+                              "type": "number",
+                              "default": 0
+                            },
+                            "total_spend": {
+                              "type": "number",
+                              "default": 0
+                            },
+                            "total_conversions": {
+                              "type": "number",
+                              "default": 0
+                            },
+                            "total_revenue": {
+                              "type": "number",
+                              "default": 0
+                            },
+                            "avg_cpc": {
+                              "type": "number"
+                            },
+                            "avg_cpm": {
+                              "type": "number"
+                            },
+                            "ctr": {
+                              "type": "number"
+                            },
+                            "roas": {
+                              "type": "number"
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "platform",
+                        "results",
+                        "summary"
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "timestamp": {
+                          "type": "string"
+                        },
+                        "date_range": {
+                          "type": "object",
+                          "properties": {
+                            "start_date": {
+                              "type": "string"
+                            },
+                            "end_date": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "start_date",
+                            "end_date"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "timestamp",
+                        "date_range"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid platform or parameters"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "No organization selected"
+          },
+          "404": {
+            "description": "Platform not available (table does not exist)"
+          },
+          "500": {
+            "description": "Query failed"
+          }
+        }
+      }
+    },
+    "/v1/analytics/stripe": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Get Stripe revenue analytics",
+        "description": "Retrieve Stripe revenue data with optional metadata filtering and grouping",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetStripeAnalytics",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "date_from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "date_to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "week",
+                "month"
+              ],
+              "default": "day"
+            },
+            "required": false,
+            "name": "group_by",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "metadata_filters",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "group_by_metadata",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "succeeded",
+                "pending",
+                "failed"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 3
+            },
+            "required": false,
+            "name": "currency",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "required": false,
+            "name": "min_amount",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "required": false,
+            "name": "max_amount",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stripe analytics data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "summary": {
+                          "type": "object",
+                          "properties": {
+                            "total_revenue": {
+                              "type": "number"
+                            },
+                            "total_units": {
+                              "type": "number"
+                            },
+                            "transaction_count": {
+                              "type": "number"
+                            },
+                            "unique_customers": {
+                              "type": "number"
+                            },
+                            "average_order_value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "total_revenue",
+                            "total_units",
+                            "transaction_count",
+                            "unique_customers",
+                            "average_order_value"
+                          ]
+                        },
+                        "time_series": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "date": {
+                                "type": "string"
+                              },
+                              "revenue": {
+                                "type": "number"
+                              },
+                              "units": {
+                                "type": "number"
+                              },
+                              "transactions": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "date",
+                              "revenue",
+                              "units",
+                              "transactions"
+                            ]
+                          }
+                        },
+                        "by_product": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "number"
+                          }
+                        },
+                        "by_metadata": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "number"
+                            }
+                          }
+                        },
+                        "metadata_keys_available": {
+                          "type": "object",
+                          "properties": {
+                            "charge": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "product": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "price": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "customer": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "charge",
+                            "product",
+                            "price",
+                            "customer"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "summary",
+                        "time_series"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics/stripe/daily-aggregates": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Get Stripe daily aggregates",
+        "description": "Retrieve pre-computed daily aggregates for Stripe revenue",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetStripeDailyAggregates",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "date_from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": true,
+            "name": "date_to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 3
+            },
+            "required": false,
+            "name": "currency",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Daily aggregate data"
+          }
+        }
+      }
+    },
+    "/v1/onboarding/status": {
+      "get": {
+        "tags": [
+          "Onboarding"
+        ],
+        "summary": "Get onboarding progress",
+        "operationId": "get-onboarding-status",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Onboarding status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "current_step": {
+                          "type": "string"
+                        },
+                        "steps": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "display_name": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "is_completed": {
+                                "type": "boolean"
+                              },
+                              "is_current": {
+                                "type": "boolean"
+                              },
+                              "order": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "display_name",
+                              "description",
+                              "is_completed",
+                              "is_current",
+                              "order"
+                            ]
+                          }
+                        },
+                        "services_connected": {
+                          "type": "number"
+                        },
+                        "first_sync_completed": {
+                          "type": "boolean"
+                        },
+                        "is_complete": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "current_step",
+                        "steps",
+                        "services_connected",
+                        "first_sync_completed",
+                        "is_complete"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/onboarding/start": {
+      "post": {
+        "tags": [
+          "Onboarding"
+        ],
+        "summary": "Start onboarding",
+        "operationId": "start-onboarding",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "organization_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Onboarding started"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/onboarding/complete-step": {
+      "post": {
+        "tags": [
+          "Onboarding"
+        ],
+        "summary": "Complete onboarding step",
+        "operationId": "complete-onboarding-step",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "step_name": {
+                    "type": "string",
+                    "enum": [
+                      "welcome",
+                      "connect_services",
+                      "first_sync"
+                    ]
+                  }
+                },
+                "required": [
+                  "step_name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Step completed"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/onboarding/reset": {
+      "post": {
+        "tags": [
+          "Onboarding"
+        ],
+        "summary": "Reset onboarding progress",
+        "operationId": "reset-onboarding",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Onboarding reset"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/connectors": {
+      "get": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "List available connectors",
+        "operationId": "list-connectors",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Available connectors",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "connectors": {
+                          "type": "array",
+                          "items": {}
+                        }
+                      },
+                      "required": [
+                        "connectors"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/connectors/connected": {
+      "get": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "List connected platforms",
+        "operationId": "list-connected-platforms",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connected platforms"
+          }
+        }
+      }
+    },
+    "/v1/connectors/{provider}/connect": {
+      "post": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Initiate OAuth connection",
+        "operationId": "initiate-oauth-flow",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "google",
+                "facebook",
+                "tiktok",
+                "stripe"
+              ]
+            },
+            "required": true,
+            "name": "provider",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "organization_id": {
+                    "type": "string"
+                  },
+                  "redirect_uri": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "organization_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OAuth authorization URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "authorization_url": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "authorization_url",
+                        "state"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/connectors/{provider}/callback": {
+      "get": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Handle OAuth callback",
+        "operationId": "handle-oauth-callback",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "google",
+                "facebook",
+                "tiktok",
+                "stripe"
+              ]
+            },
+            "required": true,
+            "name": "provider",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "state",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "error",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to app"
+          }
+        }
+      }
+    },
+    "/v1/connectors/{connection_id}": {
+      "delete": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Disconnect platform",
+        "operationId": "disconnect-platform",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Platform disconnected"
+          }
+        }
+      }
+    },
+    "/v1/connectors/{connection_id}/sync-status": {
+      "get": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Get sync status for a connection",
+        "description": "Returns the current sync status and latest sync job information for a platform connection",
+        "operationId": "get_GetSyncStatus",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Connection ID"
+            },
+            "required": true,
+            "description": "Connection ID",
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sync status retrieved successfully",
+            "schema": {
+              "_def": {
+                "unknownKeys": "strip",
+                "catchall": {
+                  "_def": {
+                    "typeName": "ZodNever"
+                  },
+                  "~standard": {
+                    "version": 1,
+                    "vendor": "zod"
+                  }
+                },
+                "typeName": "ZodObject"
+              },
+              "~standard": {
+                "version": 1,
+                "vendor": "zod"
+              },
+              "_cached": null
+            }
+          },
+          "404": {
+            "description": "Connection not found",
+            "schema": {
+              "_def": {
+                "unknownKeys": "strip",
+                "catchall": {
+                  "_def": {
+                    "typeName": "ZodNever"
+                  },
+                  "~standard": {
+                    "version": 1,
+                    "vendor": "zod"
+                  }
+                },
+                "typeName": "ZodObject"
+              },
+              "~standard": {
+                "version": 1,
+                "vendor": "zod"
+              },
+              "_cached": null
+            }
+          }
+        }
+      }
+    },
+    "/v1/connectors/stripe/connect": {
+      "post": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Connect Stripe account",
+        "description": "Connect a Stripe account using a restricted API key",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "post_ConnectStripe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "organization_id": {
+                    "type": "string"
+                  },
+                  "api_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(sk_test_|sk_live_)[a-zA-Z0-9]{24,}$"
+                  },
+                  "sync_mode": {
+                    "type": "string",
+                    "enum": [
+                      "charges",
+                      "payment_intents",
+                      "invoices"
+                    ],
+                    "default": "charges"
+                  },
+                  "lookback_days": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 365,
+                    "default": 30
+                  },
+                  "auto_sync": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "organization_id",
+                  "api_key"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Stripe account connected successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "connection_id": {
+                          "type": "string"
+                        },
+                        "account_info": {
+                          "type": "object",
+                          "properties": {
+                            "stripe_account_id": {
+                              "type": "string"
+                            },
+                            "business_name": {
+                              "type": "string"
+                            },
+                            "country": {
+                              "type": "string"
+                            },
+                            "default_currency": {
+                              "type": "string"
+                            },
+                            "charges_enabled": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "stripe_account_id",
+                            "country",
+                            "default_currency",
+                            "charges_enabled"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "connection_id",
+                        "account_info"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid API key or configuration"
+          },
+          "403": {
+            "description": "No access to organization"
+          }
+        }
+      }
+    },
+    "/v1/connectors/stripe/{connection_id}/config": {
+      "put": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Update Stripe configuration",
+        "description": "Update configuration for a Stripe connection",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "put_UpdateStripeConfig",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sync_mode": {
+                    "type": "string",
+                    "enum": [
+                      "charges",
+                      "payment_intents",
+                      "invoices"
+                    ]
+                  },
+                  "lookback_days": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 365
+                  },
+                  "auto_sync": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Configuration updated"
+          }
+        }
+      }
+    },
+    "/v1/connectors/stripe/{connection_id}/sync": {
+      "post": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Trigger Stripe sync",
+        "description": "Manually trigger a sync for a Stripe connection",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "post_TriggerStripeSync",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sync_type": {
+                    "type": "string",
+                    "enum": [
+                      "full",
+                      "incremental"
+                    ],
+                    "default": "incremental"
+                  },
+                  "date_from": {
+                    "type": "string"
+                  },
+                  "date_to": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Sync job queued"
+          }
+        }
+      }
+    },
+    "/v1/connectors/stripe/{connection_id}/test": {
+      "post": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Test Stripe connection",
+        "description": "Test that a Stripe connection is working",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "post_TestStripeConnection",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection test results"
+          }
+        }
+      }
+    },
+    "/v1/connectors/{connection_id}/filters": {
+      "post": {
+        "tags": [
+          "Filters"
+        ],
+        "summary": "Create filter rule",
+        "description": "Create a new filter rule for a platform connection",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "post_CreateFilterRule",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "rule_type": {
+                    "type": "string",
+                    "enum": [
+                      "include",
+                      "exclude"
+                    ],
+                    "default": "include"
+                  },
+                  "operator": {
+                    "type": "string",
+                    "enum": [
+                      "AND",
+                      "OR"
+                    ],
+                    "default": "AND"
+                  },
+                  "conditions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "standard",
+                            "metadata"
+                          ]
+                        },
+                        "field": {
+                          "type": "string",
+                          "enum": [
+                            "charge_id",
+                            "product_id",
+                            "price_id",
+                            "amount",
+                            "currency",
+                            "status",
+                            "customer_id",
+                            "description",
+                            "created_at"
+                          ]
+                        },
+                        "metadata_source": {
+                          "type": "string",
+                          "enum": [
+                            "charge",
+                            "product",
+                            "price",
+                            "customer"
+                          ]
+                        },
+                        "metadata_key": {
+                          "type": "string"
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": [
+                            "equals",
+                            "not_equals",
+                            "contains",
+                            "not_contains",
+                            "starts_with",
+                            "ends_with",
+                            "gt",
+                            "gte",
+                            "lt",
+                            "lte",
+                            "in",
+                            "not_in",
+                            "exists",
+                            "not_exists",
+                            "regex"
+                          ]
+                        },
+                        "value": {}
+                      },
+                      "required": [
+                        "type",
+                        "operator"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  },
+                  "is_active": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "name",
+                  "conditions"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Filter created successfully"
+          },
+          "400": {
+            "description": "Invalid filter configuration"
+          },
+          "404": {
+            "description": "Connection not found"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Filters"
+        ],
+        "summary": "List filter rules",
+        "description": "Get all filter rules for a platform connection",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_ListFilterRules",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "required": false,
+            "name": "include_inactive",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of filter rules"
+          }
+        }
+      }
+    },
+    "/v1/connectors/{connection_id}/filters/{filter_id}": {
+      "put": {
+        "tags": [
+          "Filters"
+        ],
+        "summary": "Update filter rule",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "put_UpdateFilterRule",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "filter_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "rule_type": {
+                    "type": "string",
+                    "enum": [
+                      "include",
+                      "exclude"
+                    ],
+                    "default": "include"
+                  },
+                  "operator": {
+                    "type": "string",
+                    "enum": [
+                      "AND",
+                      "OR"
+                    ],
+                    "default": "AND"
+                  },
+                  "conditions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "standard",
+                            "metadata"
+                          ]
+                        },
+                        "field": {
+                          "type": "string",
+                          "enum": [
+                            "charge_id",
+                            "product_id",
+                            "price_id",
+                            "amount",
+                            "currency",
+                            "status",
+                            "customer_id",
+                            "description",
+                            "created_at"
+                          ]
+                        },
+                        "metadata_source": {
+                          "type": "string",
+                          "enum": [
+                            "charge",
+                            "product",
+                            "price",
+                            "customer"
+                          ]
+                        },
+                        "metadata_key": {
+                          "type": "string"
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": [
+                            "equals",
+                            "not_equals",
+                            "contains",
+                            "not_contains",
+                            "starts_with",
+                            "ends_with",
+                            "gt",
+                            "gte",
+                            "lt",
+                            "lte",
+                            "in",
+                            "not_in",
+                            "exists",
+                            "not_exists",
+                            "regex"
+                          ]
+                        },
+                        "value": {}
+                      },
+                      "required": [
+                        "type",
+                        "operator"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  },
+                  "is_active": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Filter updated successfully"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Filters"
+        ],
+        "summary": "Delete filter rule",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "delete_DeleteFilterRule",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "filter_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Filter deleted successfully"
+          }
+        }
+      }
+    },
+    "/v1/connectors/{connection_id}/filters/test": {
+      "post": {
+        "tags": [
+          "Filters"
+        ],
+        "summary": "Test filter rule",
+        "description": "Test filter rules against recent data",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "post_TestFilterRule",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "filter_rule": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "rule_type": {
+                        "type": "string",
+                        "enum": [
+                          "include",
+                          "exclude"
+                        ],
+                        "default": "include"
+                      },
+                      "operator": {
+                        "type": "string",
+                        "enum": [
+                          "AND",
+                          "OR"
+                        ],
+                        "default": "AND"
+                      },
+                      "conditions": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "standard",
+                                "metadata"
+                              ]
+                            },
+                            "field": {
+                              "type": "string",
+                              "enum": [
+                                "charge_id",
+                                "product_id",
+                                "price_id",
+                                "amount",
+                                "currency",
+                                "status",
+                                "customer_id",
+                                "description",
+                                "created_at"
+                              ]
+                            },
+                            "metadata_source": {
+                              "type": "string",
+                              "enum": [
+                                "charge",
+                                "product",
+                                "price",
+                                "customer"
+                              ]
+                            },
+                            "metadata_key": {
+                              "type": "string"
+                            },
+                            "operator": {
+                              "type": "string",
+                              "enum": [
+                                "equals",
+                                "not_equals",
+                                "contains",
+                                "not_contains",
+                                "starts_with",
+                                "ends_with",
+                                "gt",
+                                "gte",
+                                "lt",
+                                "lte",
+                                "in",
+                                "not_in",
+                                "exists",
+                                "not_exists",
+                                "regex"
+                              ]
+                            },
+                            "value": {}
+                          },
+                          "required": [
+                            "type",
+                            "operator"
+                          ]
+                        },
+                        "minItems": 1,
+                        "maxItems": 20
+                      },
+                      "is_active": {
+                        "type": "boolean",
+                        "default": true
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "conditions"
+                    ]
+                  },
+                  "sample_size": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 10
+                  }
+                },
+                "required": [
+                  "filter_rule"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Filter test results"
+          }
+        }
+      }
+    },
+    "/v1/connectors/{connection_id}/filters/discover": {
+      "get": {
+        "tags": [
+          "Filters"
+        ],
+        "summary": "Discover metadata keys",
+        "description": "Discover available metadata keys from synced data",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_DiscoverMetadataKeys",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Available metadata keys"
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
 }

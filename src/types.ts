@@ -8,12 +8,18 @@ declare global {
     SUPABASE_URL: string;
     SUPABASE_SECRET_KEY: string;
     SUPABASE_PUBLISHABLE_KEY: string;
+    SUPABASE_SERVICE_ROLE_KEY?: string;
     // R2 SQL Configuration
     CLOUDFLARE_ACCOUNT_ID: string;
     R2_BUCKET_NAME: string;
     R2_SQL_TOKEN: string;
     // Encryption key for field-level encryption (optional)
     ENCRYPTION_KEY?: string;
+    // OAuth credentials for token refresh
+    GOOGLE_CLIENT_ID?: string;
+    GOOGLE_CLIENT_SECRET?: string;
+    FACEBOOK_APP_ID?: string;
+    FACEBOOK_APP_SECRET?: string;
   }
 }
 

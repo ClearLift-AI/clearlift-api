@@ -16,6 +16,8 @@ import {
 import { GetEvents } from "./endpoints/v1/analytics/events";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetAds } from "./endpoints/v1/analytics/ads";
+import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
+import { GetPlatformData, GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
 import {
   GetOnboardingStatus,
   StartOnboarding,
@@ -29,6 +31,27 @@ import {
   HandleOAuthCallback,
   DisconnectPlatform
 } from "./endpoints/v1/connectors";
+import { GetSyncStatus } from "./endpoints/v1/connectors/syncStatus";
+import {
+  ConnectStripe,
+  UpdateStripeConfig,
+  TriggerStripeSync,
+  TestStripeConnection
+} from "./endpoints/v1/connectors/stripe";
+import {
+  CreateFilterRule,
+  ListFilterRules,
+  UpdateFilterRule,
+  DeleteFilterRule,
+  TestFilterRule,
+  DiscoverMetadataKeys
+} from "./endpoints/v1/connectors/filters";
+import {
+  GetWorkersHealth,
+  GetQueueStatus,
+  GetDeadLetterQueue,
+  TriggerSync
+} from "./endpoints/v1/workers";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -89,6 +112,10 @@ openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
 openapi.get("/v1/analytics/events", auth, GetEvents);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/ads/:platform_slug", auth, requireOrg, GetAds);
+openapi.get("/v1/analytics/stripe", auth, GetStripeAnalytics);
+openapi.get("/v1/analytics/stripe/daily-aggregates", auth, GetStripeDailyAggregates);
+openapi.get("/v1/analytics/platforms/unified", auth, GetUnifiedPlatformData);
+openapi.get("/v1/analytics/platforms/:platform", auth, GetPlatformData);
 
 // Onboarding endpoints
 openapi.get("/v1/onboarding/status", auth, GetOnboardingStatus);
@@ -102,6 +129,27 @@ openapi.get("/v1/connectors/connected", auth, ListConnectedPlatforms);
 openapi.post("/v1/connectors/:provider/connect", auth, InitiateOAuthFlow);
 openapi.get("/v1/connectors/:provider/callback", HandleOAuthCallback); // No auth - OAuth callback
 openapi.delete("/v1/connectors/:connection_id", auth, DisconnectPlatform);
+openapi.get("/v1/connectors/:connection_id/sync-status", auth, GetSyncStatus);
+
+// Stripe-specific connector endpoints
+openapi.post("/v1/connectors/stripe/connect", auth, ConnectStripe);
+openapi.put("/v1/connectors/stripe/:connection_id/config", auth, UpdateStripeConfig);
+openapi.post("/v1/connectors/stripe/:connection_id/sync", auth, TriggerStripeSync);
+openapi.post("/v1/connectors/stripe/:connection_id/test", auth, TestStripeConnection);
+
+// Filter management endpoints
+openapi.post("/v1/connectors/:connection_id/filters", auth, CreateFilterRule);
+openapi.get("/v1/connectors/:connection_id/filters", auth, ListFilterRules);
+openapi.put("/v1/connectors/:connection_id/filters/:filter_id", auth, UpdateFilterRule);
+openapi.delete("/v1/connectors/:connection_id/filters/:filter_id", auth, DeleteFilterRule);
+openapi.post("/v1/connectors/:connection_id/filters/test", auth, TestFilterRule);
+openapi.get("/v1/connectors/:connection_id/filters/discover", auth, DiscoverMetadataKeys);
+
+// Worker monitoring endpoints
+openapi.get("/v1/workers/health", auth, GetWorkersHealth);
+openapi.get("/v1/workers/queue/status", auth, GetQueueStatus);
+openapi.get("/v1/workers/dlq", auth, GetDeadLetterQueue);
+openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
 
 // Export the Hono app
 export default app;

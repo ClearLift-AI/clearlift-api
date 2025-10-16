@@ -93,7 +93,7 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe'])
       }),
       body: contentJson(
         z.object({
@@ -155,20 +155,25 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
   }
 
   private getOAuthProvider(provider: string, c: AppContext) {
-    // TODO: Get these from environment variables
     const redirectUri = `https://api.clearlift.ai/v1/connectors/${provider}/callback`;
 
     switch (provider) {
       case 'google':
+        if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
+          throw new Error('Google OAuth credentials not configured');
+        }
         return new GoogleAdsOAuthProvider(
-          'YOUR_GOOGLE_CLIENT_ID', // TODO: Add to env
-          'YOUR_GOOGLE_CLIENT_SECRET', // TODO: Add to secrets
+          c.env.GOOGLE_CLIENT_ID,
+          c.env.GOOGLE_CLIENT_SECRET,
           redirectUri
         );
       case 'facebook':
+        if (!c.env.FACEBOOK_APP_ID || !c.env.FACEBOOK_APP_SECRET) {
+          throw new Error('Facebook OAuth credentials not configured');
+        }
         return new FacebookAdsOAuthProvider(
-          'YOUR_FACEBOOK_APP_ID', // TODO: Add to env
-          'YOUR_FACEBOOK_APP_SECRET', // TODO: Add to secrets
+          c.env.FACEBOOK_APP_ID,
+          c.env.FACEBOOK_APP_SECRET,
           redirectUri
         );
       default:
@@ -187,7 +192,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     operationId: "handle-oauth-callback",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe'])
       }),
       query: z.object({
         code: z.string(),
@@ -260,15 +265,21 @@ export class HandleOAuthCallback extends OpenAPIRoute {
 
     switch (provider) {
       case 'google':
+        if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
+          throw new Error('Google OAuth credentials not configured');
+        }
         return new GoogleAdsOAuthProvider(
-          'YOUR_GOOGLE_CLIENT_ID',
-          'YOUR_GOOGLE_CLIENT_SECRET',
+          c.env.GOOGLE_CLIENT_ID,
+          c.env.GOOGLE_CLIENT_SECRET,
           redirectUri
         );
       case 'facebook':
+        if (!c.env.FACEBOOK_APP_ID || !c.env.FACEBOOK_APP_SECRET) {
+          throw new Error('Facebook OAuth credentials not configured');
+        }
         return new FacebookAdsOAuthProvider(
-          'YOUR_FACEBOOK_APP_ID',
-          'YOUR_FACEBOOK_APP_SECRET',
+          c.env.FACEBOOK_APP_ID,
+          c.env.FACEBOOK_APP_SECRET,
           redirectUri
         );
       default:

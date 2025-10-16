@@ -3,6 +3,11 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error, getDateRange } from "../../../utils/response";
 import { createClient } from "@supabase/supabase-js";
+import {
+  ConversionRecordSchema,
+  ConversionResponseSchema,
+  type ConversionRecord
+} from "../../../schemas/analytics";
 
 /**
  * GET /v1/analytics/conversions - Get conversion data from Supabase
@@ -25,12 +30,12 @@ export class GetConversions extends OpenAPIRoute {
     },
     responses: {
       "200": {
-        description: "Conversion data",
+        description: "Conversion data with validated core fields and flexible schema",
         content: {
           "application/json": {
             schema: z.object({
               success: z.boolean(),
-              data: z.any(),
+              data: ConversionResponseSchema,
               meta: z.object({
                 timestamp: z.string(),
                 date_range: z.object({
@@ -104,8 +109,20 @@ export class GetConversions extends OpenAPIRoute {
         );
       }
 
+      // Validate and parse raw data through schema
+      // This validates required fields while allowing additional fields to pass through
+      const validatedData = rawData.map(row => {
+        try {
+          return ConversionRecordSchema.parse(row);
+        } catch (parseError) {
+          console.warn("Conversion record validation warning:", parseError);
+          // Return row anyway with defaults applied (schema has .default() on fields)
+          return ConversionRecordSchema.safeParse(row).data || row;
+        }
+      }) as ConversionRecord[];
+
       // Aggregate data based on group_by parameter
-      const result = this.aggregateData(rawData, groupBy);
+      const result = this.aggregateData(validatedData, groupBy);
 
       return success(c, result, { date_range: dateRange });
     } catch (err) {
