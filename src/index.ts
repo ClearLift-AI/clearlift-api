@@ -5,6 +5,9 @@ import { Hono } from "hono";
 import { corsMiddleware } from "./middleware/cors";
 import { auth, requireOrg } from "./middleware/auth";
 import { errorHandler } from "./middleware/errorHandler";
+import { auditMiddleware, authAuditMiddleware } from "./middleware/audit";
+import { rateLimitMiddleware, authRateLimit, analyticsRateLimit } from "./middleware/rateLimit";
+import { securityHeaders, validateContentType, sanitizeInput } from "./middleware/security";
 
 // V1 Endpoints
 import { HealthEndpoint } from "./endpoints/v1/health";
@@ -67,8 +70,26 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 // Global error handler
 app.onError(errorHandler);
 
+// Apply security headers to all routes (SOC 2 requirement)
+app.use("*", securityHeaders());
+
 // Apply CORS to all routes
 app.use("*", corsMiddleware);
+
+// Input sanitization for all routes (SOC 2 requirement)
+app.use("*", sanitizeInput());
+
+// Content type validation for routes with body
+app.use("*", validateContentType());
+
+// Global rate limiting (SOC 2 requirement)
+app.use("*", rateLimitMiddleware({
+  windowMs: 60 * 1000, // 1 minute
+  maxRequests: 100 // 100 requests per minute per IP/user
+}));
+
+// Audit logging for all authenticated routes (SOC 2 requirement)
+app.use("*", auditMiddleware);
 
 // Setup OpenAPI registry
 const openapi = fromHono(app, {
