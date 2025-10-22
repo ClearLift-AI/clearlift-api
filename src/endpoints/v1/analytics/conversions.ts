@@ -8,6 +8,7 @@ import {
   ConversionResponseSchema,
   type ConversionRecord
 } from "../../../schemas/analytics";
+import { getSecret } from "../../../utils/secrets";
 
 /**
  * GET /v1/analytics/conversions - Get conversion data from Supabase
@@ -64,13 +65,9 @@ export class GetConversions extends OpenAPIRoute {
     const channel = c.req.query("channel");
     const groupBy = c.req.query("group_by") || "none";
 
-    // Get Supabase secret key
-    let supabaseKey: string;
-    if (typeof c.env.SUPABASE_SECRET_KEY === 'string') {
-      supabaseKey = c.env.SUPABASE_SECRET_KEY;
-    } else if (c.env.SUPABASE_SECRET_KEY && typeof c.env.SUPABASE_SECRET_KEY.get === 'function') {
-      supabaseKey = await c.env.SUPABASE_SECRET_KEY.get();
-    } else {
+    // Get Supabase secret key from Secrets Store
+    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+    if (!supabaseKey) {
       return error(c, "CONFIGURATION_ERROR", "Supabase key not configured", 500);
     }
 

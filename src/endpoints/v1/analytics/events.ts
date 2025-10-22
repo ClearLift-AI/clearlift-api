@@ -4,6 +4,7 @@ import { AppContext } from "../../../types";
 import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
 import { success, error } from "../../../utils/response";
 import { EventResponseSchema } from "../../../schemas/analytics";
+import { getSecret } from "../../../utils/secrets";
 
 /**
  * GET /v1/analytics/events - Get raw events from R2 SQL
@@ -87,19 +88,8 @@ export class GetEvents extends OpenAPIRoute {
 
     const orgTag = orgTagMapping.short_tag;
 
-    // Get R2 SQL token (handle both Secret Store and .dev.vars)
-    let r2SqlToken: string | null = null;
-
-    if (typeof c.env.R2_SQL_TOKEN === 'string') {
-      r2SqlToken = c.env.R2_SQL_TOKEN;
-    } else if (c.env.R2_SQL_TOKEN && typeof c.env.R2_SQL_TOKEN.get === 'function') {
-      try {
-        r2SqlToken = await c.env.R2_SQL_TOKEN.get();
-      } catch (e) {
-        // Secret Store not available locally, this is expected
-        console.log('R2_SQL_TOKEN Secret Store not available, using .dev.vars');
-      }
-    }
+    // Get R2 SQL token from Secrets Store
+    const r2SqlToken = await getSecret(c.env.R2_SQL_TOKEN);
 
     if (!r2SqlToken) {
       return error(c, "CONFIGURATION_ERROR", "R2 SQL token not configured", 500);

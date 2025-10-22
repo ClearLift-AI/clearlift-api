@@ -1,0 +1,86 @@
+[
+  {
+    "results": [
+      {
+        "organization_id": "949606d8-c804-4bc0-a709-de721b43f87d",
+        "user_id": "d0cf0973-1f80-4551-819b-0601e3fbe989",
+        "role": "owner",
+        "joined_at": "2025-09-04 18:29:41",
+        "invited_by": null
+      },
+      {
+        "organization_id": "97db9401-fab9-4a22-b968-4bc19682404f",
+        "user_id": "6c3faac5-e19a-4f8e-b7d6-c88dbcd7684c",
+        "role": "owner",
+        "joined_at": "2025-09-05 16:49:43",
+        "invited_by": null
+      },
+      {
+        "organization_id": "2f944ace-9972-4116-be85-ec5457110085",
+        "user_id": "6c3faac5-e19a-4f8e-b7d6-c88dbcd7684c",
+        "role": "owner",
+        "joined_at": "2025-09-05 16:55:21",
+        "invited_by": null
+      },
+      {
+        "organization_id": "906910c5-7c33-44ab-91d6-954606cbde0f",
+        "user_id": "c4d34554-fc4f-4252-a5d2-ce8ff5ee42e2",
+        "role": "owner",
+        "joined_at": "2025-09-15 17:46:34",
+        "invited_by": null
+      },
+      {
+        "organization_id": "906910c5-7c33-44ab-91d6-954606cbde0f",
+        "user_id": "d0cf0973-1f80-4551-819b-0601e3fbe989",
+        "role": "admin",
+        "joined_at": "2025-09-30 17:03:44",
+        "invited_by": null
+      },
+      {
+        "organization_id": "906910c5-7c33-44ab-91d6-954606cbde0f",
+        "user_id": "6c3faac5-e19a-4f8e-b7d6-c88dbcd7684c",
+        "role": "admin",
+        "joined_at": "2025-09-30 17:03:44",
+        "invited_by": null
+      },
+      {
+        "organization_id": "org_test123",
+        "user_id": "user_test",
+        "role": "owner",
+        "joined_at": "2025-10-10 21:03:09",
+        "invited_by": null
+      },
+      {
+        "organization_id": "cd4295ef-4843-4958-ad33-4f09883269a5",
+        "user_id": "fababde4-f0f2-448e-8f1b-b8f8bf3138fc",
+        "role": "owner",
+        "joined_at": "2025-10-16T22:23:06.570Z",
+        "invited_by": null
+      },
+      {
+        "organization_id": "2ec75927-2151-452e-9b43-c4f7c9a1493e",
+        "user_id": "a18d699b-2c58-477a-a260-6c52d4dbfd0d",
+        "role": "owner",
+        "joined_at": "2025-10-17T17:10:58.388Z",
+        "invited_by": null
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WNAM",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.622
+      },
+      "duration": 0.622,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 749568,
+      "rows_read": 9,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

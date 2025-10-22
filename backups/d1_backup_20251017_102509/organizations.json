@@ -1,0 +1,86 @@
+[
+  {
+    "results": [
+      {
+        "id": "949606d8-c804-4bc0-a709-de721b43f87d",
+        "name": "Unagi-Test",
+        "slug": "testorg",
+        "created_at": "2025-09-04 18:29:41",
+        "updated_at": "2025-09-04 18:29:41",
+        "settings": "{}",
+        "subscription_tier": "free"
+      },
+      {
+        "id": "97db9401-fab9-4a22-b968-4bc19682404f",
+        "name": "Acme Corporation",
+        "slug": "acme-corporation",
+        "created_at": "2025-09-05 16:49:43",
+        "updated_at": "2025-09-05 16:49:43",
+        "settings": "{}",
+        "subscription_tier": "free"
+      },
+      {
+        "id": "2f944ace-9972-4116-be85-ec5457110085",
+        "name": "Acme Corporation",
+        "slug": "acme-corporation-2",
+        "created_at": "2025-09-05 16:55:21",
+        "updated_at": "2025-09-05 16:55:21",
+        "settings": "{}",
+        "subscription_tier": "free"
+      },
+      {
+        "id": "906910c5-7c33-44ab-91d6-954606cbde0f",
+        "name": "clearlift",
+        "slug": "clearlift",
+        "created_at": "2025-09-15 17:46:34",
+        "updated_at": "2025-09-15 17:46:34",
+        "settings": "{}",
+        "subscription_tier": "free"
+      },
+      {
+        "id": "org_test123",
+        "name": "Test Organization",
+        "slug": "test-org",
+        "created_at": "2025-10-10 21:03:09",
+        "updated_at": "2025-10-10 21:03:09",
+        "settings": "{}",
+        "subscription_tier": "free"
+      },
+      {
+        "id": "cd4295ef-4843-4958-ad33-4f09883269a5",
+        "name": "New Organization",
+        "slug": "new-organization",
+        "created_at": "2025-10-16T22:23:06.570Z",
+        "updated_at": "2025-10-16T22:23:06.570Z",
+        "settings": "{}",
+        "subscription_tier": "free"
+      },
+      {
+        "id": "2ec75927-2151-452e-9b43-c4f7c9a1493e",
+        "name": "CORS Test Org",
+        "slug": "cors-test-org",
+        "created_at": "2025-10-17T17:10:58.388Z",
+        "updated_at": "2025-10-17T17:10:58.388Z",
+        "settings": "{}",
+        "subscription_tier": "free"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WNAM",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.7818
+      },
+      "duration": 0.7818,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 749568,
+      "rows_read": 7,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

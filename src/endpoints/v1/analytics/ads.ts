@@ -9,6 +9,7 @@ import {
   DailyMetricsSchema,
   PlatformSummarySchema
 } from "../../../schemas/analytics";
+import { getSecret } from "../../../utils/secrets";
 
 /**
  * GET /v1/analytics/ads/:platform_slug - Get ad platform data
@@ -91,13 +92,9 @@ export class GetAds extends OpenAPIRoute {
     const sortBy = c.req.query("sort_by");
     const order = c.req.query("order") as "asc" | "desc" | undefined;
 
-    // Get Supabase secret key
-    let supabaseKey: string;
-    if (typeof c.env.SUPABASE_SECRET_KEY === 'string') {
-      supabaseKey = c.env.SUPABASE_SECRET_KEY;
-    } else if (c.env.SUPABASE_SECRET_KEY && typeof c.env.SUPABASE_SECRET_KEY.get === 'function') {
-      supabaseKey = await c.env.SUPABASE_SECRET_KEY.get();
-    } else {
+    // Get Supabase secret key from Secrets Store
+    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+    if (!supabaseKey) {
       return error(c, "CONFIGURATION_ERROR", "Supabase key not configured", 500);
     }
 

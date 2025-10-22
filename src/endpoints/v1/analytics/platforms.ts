@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { SupabaseClient } from "../../../services/supabase";
+import { getSecret } from "../../../utils/secrets";
 
 /**
  * Platform data schemas
@@ -79,14 +80,15 @@ export class GetPlatformData extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "No access to this organization", 403);
     }
 
-    // Get Supabase client
-    if (!c.env.SUPABASE_SECRET_KEY) {
+    // Get Supabase secret key from Secrets Store
+    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+    if (!supabaseKey) {
       return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
     }
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: c.env.SUPABASE_SECRET_KEY
+      serviceKey: supabaseKey
     });
 
     try {
@@ -256,14 +258,15 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       });
     }
 
-    // Get Supabase client
-    if (!c.env.SUPABASE_SECRET_KEY) {
+    // Get Supabase secret key from Secrets Store
+    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+    if (!supabaseKey) {
       return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
     }
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: c.env.SUPABASE_SECRET_KEY
+      serviceKey: supabaseKey
     });
 
     try {

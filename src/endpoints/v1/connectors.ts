@@ -6,6 +6,7 @@ import { OnboardingService } from "../../services/onboarding";
 import { GoogleAdsOAuthProvider } from "../../services/oauth/google";
 import { FacebookAdsOAuthProvider } from "../../services/oauth/facebook";
 import { success, error } from "../../utils/response";
+import { getSecret } from "../../utils/secrets";
 
 /**
  * GET /v1/connectors - List available connectors
@@ -136,7 +137,8 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     }
 
     // Create OAuth state
-    const connectorService = new ConnectorService(c.env.DB, c.env.ENCRYPTION_KEY);
+    const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+    const connectorService = new ConnectorService(c.env.DB, encryptionKey);
     const state = await connectorService.createOAuthState(
       session.user_id,
       organization_id,
@@ -145,7 +147,7 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     );
 
     // Get OAuth provider
-    const oauthProvider = this.getOAuthProvider(provider, c);
+    const oauthProvider = await this.getOAuthProvider(provider, c);
     const authorizationUrl = oauthProvider.getAuthorizationUrl(state);
 
     return success(c, {
@@ -154,28 +156,34 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     });
   }
 
-  private getOAuthProvider(provider: string, c: AppContext) {
+  private async getOAuthProvider(provider: string, c: AppContext) {
     const redirectUri = `https://api.clearlift.ai/v1/connectors/${provider}/callback`;
 
     switch (provider) {
-      case 'google':
-        if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
+      case 'google': {
+        const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
           throw new Error('Google OAuth credentials not configured');
         }
         return new GoogleAdsOAuthProvider(
-          c.env.GOOGLE_CLIENT_ID,
-          c.env.GOOGLE_CLIENT_SECRET,
+          clientId,
+          clientSecret,
           redirectUri
         );
-      case 'facebook':
-        if (!c.env.FACEBOOK_APP_ID || !c.env.FACEBOOK_APP_SECRET) {
+      }
+      case 'facebook': {
+        const appId = await getSecret(c.env.FACEBOOK_APP_ID);
+        const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
+        if (!appId || !appSecret) {
           throw new Error('Facebook OAuth credentials not configured');
         }
         return new FacebookAdsOAuthProvider(
-          c.env.FACEBOOK_APP_ID,
-          c.env.FACEBOOK_APP_SECRET,
+          appId,
+          appSecret,
           redirectUri
         );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -227,7 +235,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       }
 
       // Exchange code for token
-      const oauthProvider = this.getOAuthProvider(provider, c);
+      const oauthProvider = await this.getOAuthProvider(provider, c);
       const tokens = await oauthProvider.exchangeCodeForToken(code);
 
       // Get user info from provider
@@ -260,28 +268,34 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     }
   }
 
-  private getOAuthProvider(provider: string, c: AppContext) {
+  private async getOAuthProvider(provider: string, c: AppContext) {
     const redirectUri = `https://api.clearlift.ai/v1/connectors/${provider}/callback`;
 
     switch (provider) {
-      case 'google':
-        if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
+      case 'google': {
+        const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
           throw new Error('Google OAuth credentials not configured');
         }
         return new GoogleAdsOAuthProvider(
-          c.env.GOOGLE_CLIENT_ID,
-          c.env.GOOGLE_CLIENT_SECRET,
+          clientId,
+          clientSecret,
           redirectUri
         );
-      case 'facebook':
-        if (!c.env.FACEBOOK_APP_ID || !c.env.FACEBOOK_APP_SECRET) {
+      }
+      case 'facebook': {
+        const appId = await getSecret(c.env.FACEBOOK_APP_ID);
+        const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
+        if (!appId || !appSecret) {
           throw new Error('Facebook OAuth credentials not configured');
         }
         return new FacebookAdsOAuthProvider(
-          c.env.FACEBOOK_APP_ID,
-          c.env.FACEBOOK_APP_SECRET,
+          appId,
+          appSecret,
           redirectUri
         );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }

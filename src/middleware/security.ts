@@ -318,11 +318,9 @@ export function sanitizeInput() {
           }, 400);
         }
 
-        // Replace request body with sanitized version
-        c.req.raw = new Request(c.req.raw.url, {
-          ...c.req.raw,
-          body: JSON.stringify(sanitizedBody)
-        });
+        // Store sanitized body in context for downstream handlers
+        // This prevents body stream consumption issues
+        (c as any).set("sanitizedBody", sanitizedBody);
       } catch (error) {
         // Invalid JSON is caught elsewhere
       }

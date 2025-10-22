@@ -20,9 +20,11 @@ CREATE TABLE IF NOT EXISTS connector_filter_rules (
 );
 
 -- Add Stripe-specific fields to platform_connections
-ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS stripe_account_id TEXT;
-ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS stripe_livemode BOOLEAN DEFAULT TRUE;
-ALTER TABLE platform_connections ADD COLUMN IF NOT EXISTS filter_rules_count INTEGER DEFAULT 0;
+-- Note: SQLite doesn't support IF NOT EXISTS for ADD COLUMN
+-- These will error if columns already exist, which is expected behavior
+ALTER TABLE platform_connections ADD COLUMN stripe_account_id TEXT;
+ALTER TABLE platform_connections ADD COLUMN stripe_livemode BOOLEAN DEFAULT TRUE;
+ALTER TABLE platform_connections ADD COLUMN filter_rules_count INTEGER DEFAULT 0;
 
 -- Update connector_configs for Stripe if not already present
 INSERT OR REPLACE INTO connector_configs (

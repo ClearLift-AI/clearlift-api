@@ -1,25 +1,38 @@
 import type { Context } from "hono";
 import { Session } from "./middleware/auth";
 
+// Interface for Secrets Store bindings
+interface SecretsStoreBinding {
+  get(): Promise<string>;
+}
+
 // Extend the Env interface with our bindings
 declare global {
   interface Env {
     DB: D1Database;
     SUPABASE_URL: string;
-    SUPABASE_SECRET_KEY: string;
-    SUPABASE_PUBLISHABLE_KEY: string;
-    SUPABASE_SERVICE_ROLE_KEY?: string;
-    // R2 SQL Configuration
+
+    // Secrets Store bindings (async access required)
+    SUPABASE_SECRET_KEY: SecretsStoreBinding;
+    SUPABASE_PUBLISHABLE_KEY: SecretsStoreBinding;
+    R2_SQL_TOKEN: SecretsStoreBinding;
+
+    // OAuth Secrets Store bindings
+    GOOGLE_CLIENT_ID: SecretsStoreBinding;
+    GOOGLE_CLIENT_SECRET: SecretsStoreBinding;
+    GOOGLE_ADS_DEVELOPER_TOKEN: SecretsStoreBinding;
+    FACEBOOK_APP_ID: SecretsStoreBinding;
+    FACEBOOK_APP_SECRET: SecretsStoreBinding;
+
+    // Encryption key for field-level encryption
+    ENCRYPTION_KEY: SecretsStoreBinding;
+
+    // Regular environment variables
     CLOUDFLARE_ACCOUNT_ID: string;
     R2_BUCKET_NAME: string;
-    R2_SQL_TOKEN: string;
-    // Encryption key for field-level encryption (optional)
-    ENCRYPTION_KEY?: string;
-    // OAuth credentials for token refresh
-    GOOGLE_CLIENT_ID?: string;
-    GOOGLE_CLIENT_SECRET?: string;
-    FACEBOOK_APP_ID?: string;
-    FACEBOOK_APP_SECRET?: string;
+
+    // Queue binding
+    SYNC_QUEUE: Queue<any>;
   }
 }
 

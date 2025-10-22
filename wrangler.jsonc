@@ -22,7 +22,66 @@
     }
   ],
 
-  // Secrets are defined as regular worker secrets, not Secrets Store
-  // Use: npx wrangler secret put SECRET_NAME
-  // The bindings are automatically available as env.SECRET_NAME
+  "queues": {
+    "producers": [
+      {
+        "binding": "SYNC_QUEUE",
+        "queue": "sync-jobs"
+      }
+    ]
+  },
+
+  // Secrets Store bindings - using account-level secrets
+  "secrets_store_secrets": [
+    {
+      "binding": "ENCRYPTION_KEY",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "ENCRYPTION_KEY"
+    },
+    {
+      "binding": "SUPABASE_SECRET_KEY",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "SUPABASE_SECRET_KEY"
+    },
+    {
+      "binding": "SUPABASE_PUBLISHABLE_KEY",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "SUPABASE_PUBLISHABLE_KEY"
+    },
+    {
+      "binding": "R2_SQL_TOKEN",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "R2_ADMIN_TOKEN"
+    },
+    {
+      "binding": "GOOGLE_CLIENT_ID",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "GOOGLE_CLIENT_ID"
+    },
+    {
+      "binding": "GOOGLE_CLIENT_SECRET",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "GOOGLE_CLIENT_SECRET"
+    },
+    {
+      "binding": "GOOGLE_ADS_DEVELOPER_TOKEN",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "GOOGLE_ADS_DEVELOPER_TOKEN"
+    },
+    {
+      "binding": "FACEBOOK_APP_ID",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "FB_APP_ID"
+    },
+    {
+      "binding": "FACEBOOK_APP_SECRET",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "FB_API_KEY"
+    },
+    {
+      "binding": "SENDGRID_API_KEY",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "SENDGRID_API_KEY"
+    }
+  ]
 }

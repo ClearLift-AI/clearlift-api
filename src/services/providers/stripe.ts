@@ -89,9 +89,41 @@ export class StripeAPIProvider {
 
   /**
    * Validate API key and get account info
+   * For restricted keys (rk_), uses a simpler validation approach
    */
   async validateAPIKey(apiKey: string): Promise<StripeAccountInfo> {
     try {
+      // For restricted keys, validate differently since they can't access /account
+      const isRestrictedKey = apiKey.startsWith('rk_');
+
+      if (isRestrictedKey) {
+        // Validate by attempting to list charges (restricted keys typically have read access)
+        const testResponse = await fetch(`${this.baseUrl}/charges?limit=1`, {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Stripe-Version': this.apiVersion
+          }
+        });
+
+        if (!testResponse.ok) {
+          throw new Error(`Invalid restricted API key: ${testResponse.statusText}`);
+        }
+
+        // For restricted keys, return minimal account info
+        // We'll get the actual account ID from the first charge or use a placeholder
+        const data = await testResponse.json();
+        const accountId = data.data[0]?.id?.split('_')[0] || 'restricted';
+
+        return {
+          stripe_account_id: accountId,
+          business_profile: { name: 'Stripe Account (Restricted Key)' },
+          charges_enabled: true, // Assume true if charges endpoint is accessible
+          country: 'US', // Default, will be updated from actual data during sync
+          default_currency: 'usd' // Default, will be updated from actual data during sync
+        };
+      }
+
+      // For standard secret keys, use the account endpoint
       const response = await fetch(`${this.baseUrl}/account`, {
         headers: {
           'Authorization': `Bearer ${apiKey}`,

@@ -1,0 +1,78 @@
+[
+  {
+    "results": [
+      {
+        "id": 1,
+        "organization_id": "2f944ace-9972-4116-be85-ec5457110085",
+        "user_id": "6c3faac5-e19a-4f8e-b7d6-c88dbcd7684c",
+        "action": "insight_pause_campaign",
+        "resource_type": "insight",
+        "resource_id": "insight-2f944ace-9972-4116-be85-ec5457110085-41456",
+        "metadata": "{\"insight_id\":\"insight-2f944ace-9972-4116-be85-ec5457110085-41456\",\"action\":\"pause_campaign\",\"parameters\":{},\"timestamp\":\"2025-09-05T16:56:23.406Z\"}",
+        "ip_address": null,
+        "created_at": "2025-09-05T16:56:23.406Z"
+      },
+      {
+        "id": 2,
+        "organization_id": "2f944ace-9972-4116-be85-ec5457110085",
+        "user_id": "6c3faac5-e19a-4f8e-b7d6-c88dbcd7684c",
+        "action": "insight_increase_budget",
+        "resource_type": "insight",
+        "resource_id": "insight-2f944ace-9972-4116-be85-ec5457110085-15035",
+        "metadata": "{\"insight_id\":\"insight-2f944ace-9972-4116-be85-ec5457110085-15035\",\"action\":\"increase_budget\",\"parameters\":{},\"timestamp\":\"2025-09-05T17:01:47.883Z\"}",
+        "ip_address": null,
+        "created_at": "2025-09-05T17:01:47.883Z"
+      },
+      {
+        "id": 3,
+        "organization_id": "2f944ace-9972-4116-be85-ec5457110085",
+        "user_id": "6c3faac5-e19a-4f8e-b7d6-c88dbcd7684c",
+        "action": "insight_redistribute_budget",
+        "resource_type": "insight",
+        "resource_id": "insight-2f944ace-9972-4116-be85-ec5457110085-64146",
+        "metadata": "{\"insight_id\":\"insight-2f944ace-9972-4116-be85-ec5457110085-64146\",\"action\":\"redistribute_budget\",\"parameters\":{},\"timestamp\":\"2025-09-05T17:01:48.857Z\"}",
+        "ip_address": null,
+        "created_at": "2025-09-05T17:01:48.857Z"
+      },
+      {
+        "id": 4,
+        "organization_id": "2f944ace-9972-4116-be85-ec5457110085",
+        "user_id": "6c3faac5-e19a-4f8e-b7d6-c88dbcd7684c",
+        "action": "insight_optimize_keywords",
+        "resource_type": "insight",
+        "resource_id": "insight-2f944ace-9972-4116-be85-ec5457110085-10179",
+        "metadata": "{\"insight_id\":\"insight-2f944ace-9972-4116-be85-ec5457110085-10179\",\"action\":\"optimize_keywords\",\"parameters\":{},\"timestamp\":\"2025-09-05T17:01:49.777Z\"}",
+        "ip_address": null,
+        "created_at": "2025-09-05T17:01:49.777Z"
+      },
+      {
+        "id": 5,
+        "organization_id": "2f944ace-9972-4116-be85-ec5457110085",
+        "user_id": "6c3faac5-e19a-4f8e-b7d6-c88dbcd7684c",
+        "action": "insight_expand_targeting",
+        "resource_type": "insight",
+        "resource_id": "insight-2f944ace-9972-4116-be85-ec5457110085-81189",
+        "metadata": "{\"insight_id\":\"insight-2f944ace-9972-4116-be85-ec5457110085-81189\",\"action\":\"expand_targeting\",\"parameters\":{},\"timestamp\":\"2025-09-05T17:01:52.676Z\"}",
+        "ip_address": null,
+        "created_at": "2025-09-05T17:01:52.676Z"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WNAM",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.4314
+      },
+      "duration": 0.4314,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 749568,
+      "rows_read": 5,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

@@ -3,13 +3,15 @@ import { cors as honoCors } from "hono/cors";
 
 /**
  * CORS configuration for the API
- * Allows requests from dashboard.clearlift.ai and localhost for development
+ * Allows requests from app.clearlift.ai, dashboard.clearlift.ai, clearlift.ai and localhost for development
  */
 export const corsMiddleware = honoCors({
   origin: (origin) => {
     // Allow specific origins
     const allowedOrigins = [
+      "https://app.clearlift.ai",
       "https://dashboard.clearlift.ai",
+      "https://clearlift.ai",
       "http://localhost:3000",
       "http://localhost:5173",
       "http://127.0.0.1:3000",

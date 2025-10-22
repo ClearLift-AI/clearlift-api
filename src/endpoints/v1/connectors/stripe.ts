@@ -9,12 +9,127 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { ConnectorService } from "../../../services/connectors";
+import { getSecret } from "../../../utils/secrets";
 import { StripeAPIProvider } from "../../../services/providers/stripe";
 import { OnboardingService } from "../../../services/onboarding";
 
 /**
  * POST /v1/connectors/stripe/connect
  * Connect Stripe account using API key
+ * Plain handler function (not OpenAPIRoute) to avoid Chanfana validation issues
+ */
+export async function handleStripeConnect(c: AppContext) {
+  console.log("handleStripeConnect called");
+  const session = c.get("session");
+  console.log("Session:", session?.user_id);
+
+  // Get sanitized body from context (set by sanitizeInput middleware)
+  // Fallback to reading from request if not set
+  const sanitizedBody = (c as any).get("sanitizedBody");
+  console.log("Sanitized body from context:", sanitizedBody);
+
+  const body = sanitizedBody || await c.req.json().catch(() => ({}));
+  console.log("Final body:", body);
+
+  // Manual validation
+  if (!body.organization_id || !body.api_key) {
+    return error(c, "INVALID_REQUEST", "organization_id and api_key are required", 400);
+  }
+
+  // Validate API key format
+  if (!body.api_key.match(/^(sk_test_|sk_live_|rk_test_|rk_live_)[a-zA-Z0-9]{24,}$/)) {
+    return error(c, "INVALID_API_KEY", "Invalid Stripe API key format", 400);
+  }
+
+  const {
+    organization_id,
+    api_key,
+    sync_mode = 'charges',
+    lookback_days = 30,
+    auto_sync = true
+  } = body;
+
+  // Verify user has access to org
+  const { D1Adapter } = await import("../../../adapters/d1");
+  const d1 = new D1Adapter(c.env.DB);
+  const hasAccess = await d1.checkOrgAccess(session.user_id, organization_id);
+
+  if (!hasAccess) {
+    return error(c, "FORBIDDEN", "No access to this organization", 403);
+  }
+
+  try {
+    // Validate API key with Stripe
+    const stripeProvider = new StripeAPIProvider({ apiKey: api_key });
+    const accountInfo = await stripeProvider.validateAPIKey(api_key);
+
+    if (!accountInfo.charges_enabled) {
+      return error(c, "INVALID_CONFIG", "This Stripe account cannot accept charges", 400);
+    }
+
+    // Check if this Stripe account is already connected
+    const existing = await c.env.DB.prepare(`
+      SELECT id FROM platform_connections
+      WHERE organization_id = ? AND platform = 'stripe' AND stripe_account_id = ?
+    `).bind(organization_id, accountInfo.stripe_account_id).first();
+
+    if (existing) {
+      return error(c, "ALREADY_EXISTS", "This Stripe account is already connected", 409);
+    }
+
+    // Create connection
+    const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+    const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+
+    // Wait a bit for encryption to initialize (async constructor issue)
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const connectionId = await connectorService.createConnection({
+      organizationId: organization_id,
+      platform: 'stripe',
+      accountId: accountInfo.stripe_account_id,
+      accountName: accountInfo.business_profile?.name || accountInfo.stripe_account_id,
+      connectedBy: session.user_id,
+      accessToken: api_key, // Will be encrypted
+      refreshToken: undefined, // Not needed for API key auth
+      scopes: ['read_only'] // Based on key restrictions
+    });
+
+    // Store Stripe-specific fields
+    const isLiveMode = api_key.startsWith('sk_live_') || api_key.startsWith('rk_live_') ? 1 : 0;
+    await c.env.DB.prepare(`
+      UPDATE platform_connections
+      SET stripe_account_id = ?,
+          stripe_livemode = ?
+      WHERE id = ?
+    `).bind(
+      accountInfo.stripe_account_id,
+      isLiveMode,
+      connectionId
+    ).run();
+
+    // Auto-advance onboarding when user connects first service
+    const onboarding = new OnboardingService(c.env.DB);
+    await onboarding.incrementServicesConnected(session.user_id);
+
+    return success(c, {
+      connection_id: connectionId,
+      account_info: {
+        stripe_account_id: accountInfo.stripe_account_id,
+        business_name: accountInfo.business_profile?.name,
+        country: accountInfo.country,
+        default_currency: accountInfo.default_currency,
+        charges_enabled: accountInfo.charges_enabled
+      }
+    }, 201);
+  } catch (err: any) {
+    console.error("Stripe connection error:", err);
+    return error(c, "INVALID_API_KEY", err.message || "Failed to validate Stripe API key", 400);
+  }
+}
+
+/**
+ * OpenAPIRoute class for documentation only (not used for actual handling)
  */
 export class ConnectStripe extends OpenAPIRoute {
   schema = {
@@ -22,28 +137,8 @@ export class ConnectStripe extends OpenAPIRoute {
     summary: "Connect Stripe account",
     description: "Connect a Stripe account using a restricted API key",
     security: [{ bearerAuth: [] }],
-    request: {
-      body: contentJson(
-        z.object({
-          organization_id: z.string(),
-          api_key: z.string()
-            .min(1)
-            .regex(
-              /^(sk_test_|sk_live_)[a-zA-Z0-9]{24,}$/,
-              "Invalid Stripe API key format"
-            ),
-          sync_mode: z.enum(['charges', 'payment_intents', 'invoices'])
-            .default('charges')
-            .optional(),
-          lookback_days: z.number()
-            .min(1)
-            .max(365)
-            .default(30)
-            .optional(),
-          auto_sync: z.boolean().default(true).optional()
-        })
-      )
-    },
+    // Body validation removed to avoid Chanfana auto-validation issue
+    request: {},
     responses: {
       "201": {
         description: "Stripe account connected successfully",
@@ -75,134 +170,10 @@ export class ConnectStripe extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
-    const { body } = await this.getValidatedData<typeof this.schema>();
-    const { organization_id, api_key, sync_mode, lookback_days, auto_sync } = body;
-
-    // Verify user has access to org
-    const { D1Adapter } = await import("../../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, organization_id);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
-
-    try {
-      // Validate API key with Stripe
-      const stripeProvider = new StripeAPIProvider({ apiKey: api_key });
-      const accountInfo = await stripeProvider.validateAPIKey(api_key);
-
-      if (!accountInfo.charges_enabled) {
-        return error(c, "INVALID_CONFIG", "This Stripe account cannot accept charges", 400);
-      }
-
-      // Check if this Stripe account is already connected
-      const existing = await c.env.DB.prepare(`
-        SELECT id FROM platform_connections
-        WHERE organization_id = ? AND platform = 'stripe' AND stripe_account_id = ?
-      `).bind(organization_id, accountInfo.stripe_account_id).first();
-
-      if (existing) {
-        return error(c, "ALREADY_EXISTS", "This Stripe account is already connected", 409);
-      }
-
-      // Create connection
-      const connectorService = new ConnectorService(c.env.DB, c.env.ENCRYPTION_KEY);
-      const connectionId = await connectorService.createConnection({
-        organizationId: organization_id,
-        platform: 'stripe',
-        accountId: accountInfo.stripe_account_id,
-        accountName: accountInfo.business_profile?.name || accountInfo.stripe_account_id,
-        connectedBy: session.user_id,
-        accessToken: api_key, // Will be encrypted
-        refreshToken: undefined, // Not needed for API key auth
-        scopes: ['read_only'] // Based on key restrictions
-      });
-
-      // Store Stripe-specific fields
-      await c.env.DB.prepare(`
-        UPDATE platform_connections
-        SET stripe_account_id = ?,
-            stripe_livemode = ?
-        WHERE id = ?
-      `).bind(
-        accountInfo.stripe_account_id,
-        api_key.startsWith('sk_live_') ? 1 : 0,
-        connectionId
-      ).run();
-
-      // Store connection config
-      await c.env.DB.prepare(`
-        INSERT INTO stripe_sync_state (
-          connection_id,
-          sync_errors
-        ) VALUES (?, '[]')
-      `).bind(connectionId).run();
-
-      // Update onboarding progress
-      const onboarding = new OnboardingService(c.env.DB);
-      await onboarding.incrementServicesConnected(session.user_id);
-
-      // Queue initial sync if auto_sync is enabled
-      if (auto_sync) {
-        await this.queueInitialSync(connectionId, organization_id, accountInfo.stripe_account_id, {
-          sync_mode,
-          lookback_days
-        });
-      }
-
-      return success(c, {
-        connection_id: connectionId,
-        account_info: {
-          stripe_account_id: accountInfo.stripe_account_id,
-          business_name: accountInfo.business_profile?.name,
-          country: accountInfo.country,
-          default_currency: accountInfo.default_currency,
-          charges_enabled: accountInfo.charges_enabled
-        }
-      }, 201);
-
-    } catch (err: any) {
-      console.error('Stripe connection error:', err);
-
-      if (err.message?.includes('Invalid API key')) {
-        return error(c, "INVALID_API_KEY", "The provided Stripe API key is invalid", 400);
-      }
-
-      return error(c, "CONNECTION_FAILED", err.message || "Failed to connect Stripe account", 500);
-    }
-  }
-
-  private async queueInitialSync(
-    connectionId: string,
-    organizationId: string,
-    accountId: string,
-    config: any
-  ): Promise<void> {
-    // Queue sync job
-    const jobId = crypto.randomUUID();
-
-    await this.env.DB.prepare(`
-      INSERT INTO sync_jobs (
-        id, organization_id, connection_id,
-        status, job_type, metadata
-      ) VALUES (?, ?, ?, 'pending', 'full', ?)
-    `).bind(
-      jobId,
-      organizationId,
-      connectionId,
-      JSON.stringify({
-        platform: 'stripe',
-        account_id: accountId,
-        ...config,
-        retry_count: 0
-      })
-    ).run();
-
-    console.log(`Queued initial Stripe sync job: ${jobId}`);
+    return handleStripeConnect(c);
   }
 }
+
 
 /**
  * PUT /v1/connectors/stripe/{connection_id}/config
@@ -235,8 +206,8 @@ export class UpdateStripeConfig extends OpenAPIRoute {
 
   async handle(c: AppContext) {
     const session = c.get("session");
-    const { params, body } = await this.getValidatedData<typeof this.schema>();
-    const connectionId = params.connection_id;
+    const connectionId = c.req.param('connection_id');
+    const body = await c.req.json();
 
     // Verify connection exists and user has access
     const connection = await c.env.DB.prepare(`
@@ -294,8 +265,8 @@ export class TriggerStripeSync extends OpenAPIRoute {
 
   async handle(c: AppContext) {
     const session = c.get("session");
-    const { params, body } = await this.getValidatedData<typeof this.schema>();
-    const connectionId = params.connection_id;
+    const connectionId = c.req.param('connection_id');
+    const body = await c.req.json();
 
     // Verify connection exists and user has access
     const connection = await c.env.DB.prepare(`
@@ -323,6 +294,17 @@ export class TriggerStripeSync extends OpenAPIRoute {
     // Queue new sync job
     const jobId = crypto.randomUUID();
 
+    const metadata = {
+      platform: 'stripe',
+      account_id: connection.stripe_account_id || connection.account_id,
+      date_from: body.date_from,
+      date_to: body.date_to,
+      lookback_days: body.lookback_days || 7,
+      triggered_by: session.user_id,
+      retry_count: 0
+    };
+
+    // Create job record in database
     await c.env.DB.prepare(`
       INSERT INTO sync_jobs (
         id, organization_id, connection_id,
@@ -332,16 +314,40 @@ export class TriggerStripeSync extends OpenAPIRoute {
       jobId,
       connection.organization_id,
       connectionId,
-      body.sync_type,
-      JSON.stringify({
-        platform: 'stripe',
-        account_id: connection.stripe_account_id || connection.account_id,
-        date_from: body.date_from,
-        date_to: body.date_to,
-        triggered_by: session.user_id,
-        retry_count: 0
-      })
+      body.sync_type || 'incremental',
+      JSON.stringify(metadata)
     ).run();
+
+    // Send job to queue for processing
+    console.log('SYNC_QUEUE exists?', !!c.env.SYNC_QUEUE);
+    if (c.env.SYNC_QUEUE) {
+      try {
+        const queueMessage = {
+          job_id: jobId,
+          connection_id: connectionId,
+          organization_id: connection.organization_id,
+          platform: 'stripe',
+          account_id: connection.stripe_account_id || connection.account_id,
+          job_type: body.sync_type || 'incremental',
+          sync_window: {
+            start: body.date_from || new Date(Date.now() - (body.lookback_days || 7) * 24 * 60 * 60 * 1000).toISOString(),
+            end: body.date_to || new Date().toISOString()
+          },
+          metadata: {
+            retry_count: 0,
+            created_at: new Date().toISOString(),
+            priority: 'normal'
+          }
+        };
+        console.log('Sending to queue:', JSON.stringify(queueMessage));
+        await c.env.SYNC_QUEUE.send(queueMessage);
+        console.log('Successfully sent to queue');
+      } catch (queueError) {
+        console.error('Queue send error:', queueError);
+      }
+    } else {
+      console.error('SYNC_QUEUE binding not available!');
+    }
 
     return success(c, {
       job_id: jobId,
@@ -374,8 +380,7 @@ export class TestStripeConnection extends OpenAPIRoute {
 
   async handle(c: AppContext) {
     const session = c.get("session");
-    const { params } = await this.getValidatedData<typeof this.schema>();
-    const connectionId = params.connection_id;
+    const connectionId = c.req.param('connection_id');
 
     // Verify connection exists and user has access
     const connection = await c.env.DB.prepare(`
@@ -392,7 +397,8 @@ export class TestStripeConnection extends OpenAPIRoute {
 
     try {
       // Get API key
-      const connectorService = new ConnectorService(c.env.DB, c.env.ENCRYPTION_KEY);
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
       const apiKey = await connectorService.getAccessToken(connectionId);
 
       if (!apiKey) {

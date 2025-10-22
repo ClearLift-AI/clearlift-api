@@ -45,36 +45,53 @@ This guide covers the deployment and configuration of the ClearLift API Worker. 
 
 ## Environment Configuration
 
-### Required Secrets (via Wrangler)
+### Secrets Configuration (via Secrets Store)
+
+All secrets are now managed via **Cloudflare Secrets Store** for enhanced security and centralized management.
+
+**Secrets Store ID:** `b97bbcc69dce4f59b1043024f8a68f19`
+
+The following secrets are already configured in Secrets Store and bound in `wrangler.jsonc`:
+
+| Secret Name | Binding | Description |
+|------------|---------|-------------|
+| `ENCRYPTION_KEY` | `ENCRYPTION_KEY` | Master encryption key for field-level encryption |
+| `SUPABASE_SECRET_KEY` | `SUPABASE_SECRET_KEY` | Backend API key for Supabase |
+| `SUPABASE_PUBLISHABLE_KEY` | `SUPABASE_PUBLISHABLE_KEY` | Public API key for Supabase |
+| `R2_ADMIN_TOKEN` | `R2_SQL_TOKEN` | API token for R2 SQL queries |
+| `GOOGLE_CLIENT_ID` | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `GOOGLE_ADS_DEVELOPER_TOKEN` | `GOOGLE_ADS_DEVELOPER_TOKEN` | Google Ads API developer token |
+| `FACEBOOK_APP_ID` | `FACEBOOK_APP_ID` | Facebook app ID for OAuth |
+| `FB_API_KEY` | `FACEBOOK_APP_SECRET` | Facebook app secret |
+
+**To manage secrets:**
 
 ```bash
-# OAuth Credentials
-npx wrangler secret put GOOGLE_CLIENT_ID
-npx wrangler secret put GOOGLE_CLIENT_SECRET
-npx wrangler secret put FACEBOOK_APP_ID
-npx wrangler secret put FACEBOOK_APP_SECRET
+# View secrets in dashboard
+# Go to: Workers & Pages → Secrets Store → Select store
 
-# Encryption for credential storage
-npx wrangler secret put ENCRYPTION_KEY
-# Generate with: openssl rand -hex 32
+# Update a secret via CLI
+npx wrangler secrets-store secret update b97bbcc69dce4f59b1043024f8a68f19 --name SECRET_NAME --remote
 
-# Supabase Access
-npx wrangler secret put SUPABASE_SECRET_KEY
-# Get from: Supabase Dashboard → Settings → API → service_role key
-
-# R2 SQL Access
-npx wrangler secret put R2_SQL_TOKEN
-# Get from: Cloudflare Dashboard → R2 → Data Catalog → API Access
+# Create a new secret via CLI
+npx wrangler secrets-store secret create b97bbcc69dce4f59b1043024f8a68f19 --name NEW_SECRET --remote
 ```
 
 ### Environment Variables (wrangler.jsonc)
 
+The `wrangler.jsonc` file is fully configured with:
+
+1. **Regular environment variables** (public configuration)
+2. **D1 database binding**
+3. **Secrets Store bindings** (sensitive data)
+
 ```json
 {
   "vars": {
-    "SUPABASE_URL": "https://your-project.supabase.co",
-    "CLOUDFLARE_ACCOUNT_ID": "your-account-id",
-    "R2_BUCKET_NAME": "your-r2-bucket"
+    "SUPABASE_URL": "https://jwosqxmfezmnhrbbjlbx.supabase.co",
+    "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
+    "R2_BUCKET_NAME": "clearlift-db"
   },
   "d1_databases": [
     {
@@ -82,6 +99,10 @@ npx wrangler secret put R2_SQL_TOKEN
       "database_name": "ClearLiftDash-D1",
       "database_id": "89bd84be-b517-4c72-ab61-422384319361"
     }
+  ],
+  "secrets_store_secrets": [
+    // All secrets are bound from Secrets Store ID: b97bbcc69dce4f59b1043024f8a68f19
+    // See table above for complete list
   ]
 }
 ```

@@ -1,0 +1,55 @@
+[
+  {
+    "results": [
+      {
+        "id": "84212838be76a393c0d717ba9bc22b4b",
+        "organization_id": "949606d8-c804-4bc0-a709-de721b43f87d",
+        "short_tag": "test-org",
+        "is_active": 1,
+        "created_at": "2025-09-15 22:56:53",
+        "updated_at": "2025-09-15 22:56:53"
+      },
+      {
+        "id": "645db7037ff0d813deacc13b75c095ee",
+        "organization_id": "906910c5-7c33-44ab-91d6-954606cbde0f",
+        "short_tag": "clearlift",
+        "is_active": 1,
+        "created_at": "2025-09-30 17:01:48",
+        "updated_at": "2025-09-30 17:01:48"
+      },
+      {
+        "id": null,
+        "organization_id": "cd4295ef-4843-4958-ad33-4f09883269a5",
+        "short_tag": "58000c",
+        "is_active": 1,
+        "created_at": "2025-10-16T22:23:06.570Z",
+        "updated_at": "2025-10-16 22:23:06"
+      },
+      {
+        "id": null,
+        "organization_id": "2ec75927-2151-452e-9b43-c4f7c9a1493e",
+        "short_tag": "64ca6d",
+        "is_active": 1,
+        "created_at": "2025-10-17T17:10:58.388Z",
+        "updated_at": "2025-10-17 17:10:58"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WNAM",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.76
+      },
+      "duration": 0.76,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 749568,
+      "rows_read": 4,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

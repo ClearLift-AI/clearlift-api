@@ -192,10 +192,18 @@ export class OnboardingService {
 
   /**
    * Check if user has completed onboarding
+   * Simplified: Just needs to have at least 1 service connected
    */
   async isOnboardingComplete(userId: string): Promise<boolean> {
     const progress = await this.getProgress(userId);
-    return progress?.current_step === 'completed';
+    if (!progress) {
+      return false;
+    }
+
+    // User has completed onboarding if they have:
+    // 1. At least one service connected OR
+    // 2. Current step is 'completed'
+    return progress.services_connected > 0 || progress.current_step === 'completed';
   }
 
   /**

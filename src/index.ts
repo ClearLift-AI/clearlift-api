@@ -28,6 +28,22 @@ import {
   ResetOnboarding
 } from "./endpoints/v1/onboarding";
 import {
+  Register,
+  Login,
+  Logout,
+  RefreshSession,
+  RequestPasswordReset,
+  ResetPassword,
+  VerifyEmail,
+  ResendVerification
+} from "./endpoints/v1/auth";
+import {
+  CreateOrganization,
+  InviteToOrganization,
+  JoinOrganization,
+  RemoveMember
+} from "./endpoints/v1/organizations";
+import {
   ListConnectors,
   ListConnectedPlatforms,
   InitiateOAuthFlow,
@@ -91,6 +107,11 @@ app.use("*", rateLimitMiddleware({
 // Audit logging for all authenticated routes (SOC 2 requirement)
 app.use("*", auditMiddleware);
 
+// Add direct Hono route for Stripe connect BEFORE fromHono to bypass Chanfana validation
+// This must be before fromHono() call to avoid Chanfana auto-validation
+import { handleStripeConnect } from "./endpoints/v1/connectors/stripe";
+app.post("/v1/connectors/stripe/connect", auth, handleStripeConnect);
+
 // Setup OpenAPI registry
 const openapi = fromHono(app, {
   docs_url: "/",
@@ -124,10 +145,26 @@ const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
 // Health check (no auth)
 openapi.get("/v1/health", HealthEndpoint);
 
+// Authentication endpoints (no auth required)
+openapi.post("/v1/auth/register", Register);
+openapi.post("/v1/auth/login", Login);
+openapi.post("/v1/auth/logout", auth, Logout);
+openapi.post("/v1/auth/refresh", auth, RefreshSession);
+openapi.post("/v1/auth/password-reset-request", RequestPasswordReset);
+openapi.post("/v1/auth/password-reset", ResetPassword);
+openapi.post("/v1/auth/verify-email", VerifyEmail);
+openapi.post("/v1/auth/resend-verification", ResendVerification);
+
 // User endpoints (session auth only)
 openapi.get("/v1/user/me", auth, GetUserProfile);
 openapi.patch("/v1/user/me", auth, UpdateUserProfile);
 openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
+
+// Organization management endpoints
+openapi.post("/v1/organizations", auth, CreateOrganization);
+openapi.post("/v1/organizations/:org_id/invite", auth, InviteToOrganization);
+openapi.post("/v1/organizations/join", auth, JoinOrganization);
+openapi.delete("/v1/organizations/:org_id/members/:user_id", auth, RemoveMember);
 
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, GetEvents);
@@ -153,7 +190,7 @@ openapi.delete("/v1/connectors/:connection_id", auth, DisconnectPlatform);
 openapi.get("/v1/connectors/:connection_id/sync-status", auth, GetSyncStatus);
 
 // Stripe-specific connector endpoints
-openapi.post("/v1/connectors/stripe/connect", auth, ConnectStripe);
+// Note: /v1/connectors/stripe/connect is registered as direct Hono route at the end to bypass validation
 openapi.put("/v1/connectors/stripe/:connection_id/config", auth, UpdateStripeConfig);
 openapi.post("/v1/connectors/stripe/:connection_id/sync", auth, TriggerStripeSync);
 openapi.post("/v1/connectors/stripe/:connection_id/test", auth, TestStripeConnection);
@@ -171,6 +208,7 @@ openapi.get("/v1/workers/health", auth, GetWorkersHealth);
 openapi.get("/v1/workers/queue/status", auth, GetQueueStatus);
 openapi.get("/v1/workers/dlq", auth, GetDeadLetterQueue);
 openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
+
 
 // Export the Hono app
 export default app;

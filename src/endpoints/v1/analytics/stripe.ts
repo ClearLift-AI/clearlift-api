@@ -9,6 +9,7 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { StripeAdapter, MetadataFilter } from "../../../adapters/platforms/stripe";
+import { getSecret } from "../../../utils/secrets";
 
 /**
  * GET /v1/analytics/stripe
@@ -104,7 +105,7 @@ export class GetStripeAnalytics extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: c.env.SUPABASE_SERVICE_ROLE_KEY || c.env.SUPABASE_SECRET_KEY
+      serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
     });
     const adapter = new StripeSupabaseAdapter(supabase);
 
@@ -381,7 +382,7 @@ export class GetStripeDailyAggregates extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: c.env.SUPABASE_SERVICE_ROLE_KEY || c.env.SUPABASE_SECRET_KEY
+      serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
     });
     const adapter = new StripeSupabaseAdapter(supabase);
 

@@ -2,6 +2,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { success } from "../../utils/response";
+import { getSecret } from "../../utils/secrets";
 
 export class HealthEndpoint extends OpenAPIRoute {
   public schema = {
@@ -68,7 +69,7 @@ export class HealthEndpoint extends OpenAPIRoute {
 
     // Check Supabase connectivity
     const supabaseUrl = c.env.SUPABASE_URL;
-    const supabaseKey = c.env.SUPABASE_SECRET_KEY;
+    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
 
     if (supabaseUrl && supabaseKey) {
       try {
