@@ -48,6 +48,8 @@ import {
   ListConnectedPlatforms,
   InitiateOAuthFlow,
   HandleOAuthCallback,
+  GetOAuthAccounts,
+  FinalizeOAuthConnection,
   DisconnectPlatform
 } from "./endpoints/v1/connectors";
 import { GetSyncStatus } from "./endpoints/v1/connectors/syncStatus";
@@ -186,6 +188,8 @@ openapi.get("/v1/connectors", auth, ListConnectors);
 openapi.get("/v1/connectors/connected", auth, ListConnectedPlatforms);
 openapi.post("/v1/connectors/:provider/connect", auth, InitiateOAuthFlow);
 openapi.get("/v1/connectors/:provider/callback", HandleOAuthCallback); // No auth - OAuth callback
+openapi.get("/v1/connectors/:provider/accounts", GetOAuthAccounts); // No auth - called from callback page
+openapi.post("/v1/connectors/:provider/finalize", FinalizeOAuthConnection); // No auth - called from callback page
 openapi.delete("/v1/connectors/:connection_id", auth, DisconnectPlatform);
 openapi.get("/v1/connectors/:connection_id/sync-status", auth, GetSyncStatus);
 

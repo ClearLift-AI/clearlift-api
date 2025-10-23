@@ -306,10 +306,20 @@ export class ConnectorService {
       ORDER BY connected_at DESC
     `).bind(organizationId).all<PlatformConnection>();
 
-    return (result.results || []).map(conn => ({
-      ...conn,
-      scopes: conn.scopes ? JSON.parse(conn.scopes as any) : []
-    }));
+    return (result.results || []).map(conn => {
+      try {
+        return {
+          ...conn,
+          scopes: conn.scopes ? JSON.parse(conn.scopes as any) : []
+        };
+      } catch (err) {
+        console.error(`Failed to parse scopes for connection ${conn.id}:`, err);
+        return {
+          ...conn,
+          scopes: []
+        };
+      }
+    });
   }
 
   /**
