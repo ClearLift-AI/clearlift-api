@@ -178,8 +178,11 @@ export class StripeSupabaseAdapter {
     filters: MetadataFilter[],
     dateRange?: { start: string; end: string }
   ): Promise<StripeRevenueRecord[]> {
-    // Extract organization_id from connection_id (format: orgid-platform-accountid)
-    const orgId = connectionId.split('-')[0];
+    // Extract organization_id from connection_id (format: {uuid}-platform-accountid)
+    // Connection format: ff013ed0-a4d6-4d64-a21e-bcfc2b0bb757-stripe-ch
+    // Organization ID is the UUID (first 5 parts when split by hyphen)
+    const parts = connectionId.split('-');
+    const orgId = parts.slice(0, 5).join('-');  // Reconstruct UUID from first 5 parts
 
     // Build URL params directly (bypassing buggy select() method that wraps in 'or')
     const params = new URLSearchParams();
