@@ -17,7 +17,9 @@ export class SupabaseClient {
       'Content-Type': 'application/json',
       'apikey': config.serviceKey,
       'Authorization': `Bearer ${config.serviceKey}`,
-      'Prefer': 'return=representation'
+      'Prefer': 'return=representation',
+      'Accept-Profile': 'clearlift',
+      'Content-Profile': 'clearlift'
     };
   }
 

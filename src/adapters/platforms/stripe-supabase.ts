@@ -157,14 +157,14 @@ export class StripeSupabaseAdapter {
     if (records.length === 0) return;
 
     // Batch insert for better performance
-    await this.supabase.batchInsert('stripe_revenue_data', records, 500);
+    await this.supabase.batchInsert('stripe_conversions', records, 500);
   }
 
   /**
    * Store single revenue record
    */
   async storeRevenueRecord(record: StripeRevenueRecord): Promise<void> {
-    await this.supabase.upsert('stripe_revenue_data', record, {
+    await this.supabase.upsert('stripe_conversions', record, {
       onConflict: 'charge_id',
       returning: false
     });
@@ -178,68 +178,68 @@ export class StripeSupabaseAdapter {
     filters: MetadataFilter[],
     dateRange?: { start: string; end: string }
   ): Promise<StripeRevenueRecord[]> {
-    // Build filter string for Supabase
-    const filterParts: string[] = [`connection_id.eq.${connectionId}`];
+    // Extract organization_id from connection_id (format: orgid-platform-accountid)
+    const orgId = connectionId.split('-')[0];
 
-    // Add date range filter
+    // Build URL params directly (bypassing buggy select() method that wraps in 'or')
+    const params = new URLSearchParams();
+    params.append('organization_id', `eq.${orgId}`);
+
+    // Add date range filter using stripe_created_at
     if (dateRange) {
-      filterParts.push(`date.gte.${dateRange.start}`);
-      filterParts.push(`date.lte.${dateRange.end}`);
+      params.append('stripe_created_at', `gte.${dateRange.start}T00:00:00Z`);
+      params.append('stripe_created_at', `lte.${dateRange.end}T23:59:59Z`);
     }
 
-    // Build JSONB filters
-    const jsonbFilters = filters.map(filter => {
-      const column = `${filter.source}_metadata`;
+    params.append('limit', '10000');
 
-      switch (filter.operator) {
-        case 'equals':
-          return {
-            column,
-            operator: 'contains' as const,
-            value: { [filter.key]: filter.value }
-          };
+    // Query stripe_conversions table (schema specified in Supabase client headers)
+    const endpoint = `stripe_conversions?${params.toString()}`;
+    const results = await this.supabase.query<any[]>(endpoint, { method: 'GET' });
 
-        case 'exists':
-          return {
-            column,
-            operator: 'has_key' as const,
-            value: filter.key
-          };
+    // Transform stripe_conversions records to StripeRevenueRecord format
+    const transformedResults: StripeRevenueRecord[] = (results || []).map(row => {
+      // Extract data from raw_data JSONB field
+      const rawData = row.raw_data || {};
+      const metadata = row.metadata || {};
 
-        case 'not_exists':
-          // This requires a workaround - we'll filter client-side
-          return null;
+      return {
+        id: row.id,
+        connection_id: connectionId,
+        organization_id: orgId,
+        date: row.stripe_created_at ? row.stripe_created_at.split('T')[0] : '',
 
-        case 'contains':
-          // For partial string matching, need client-side filtering
-          return null;
+        // Map stripe_id to charge_id (for backwards compatibility)
+        charge_id: row.stripe_id,
+        payment_intent_id: rawData.payment_intent,
+        invoice_id: rawData.invoice,
+        subscription_id: rawData.subscription,
+        product_id: metadata.product_id,
+        price_id: metadata.price_id,
+        customer_id: row.customer_id,
 
-        default:
-          return null;
-      }
-    }).filter(Boolean);
+        // Financial data
+        amount: row.conversion_value || 0,
+        currency: row.conversion_currency || 'usd',
+        status: row.payment_status || 'unknown',
+        description: rawData.description,
 
-    // Query with JSONB filters
-    let results: StripeRevenueRecord[];
+        // Metadata from JSONB
+        charge_metadata: rawData.metadata || {},
+        product_metadata: metadata.product || {},
+        price_metadata: metadata.price || {},
+        customer_metadata: rawData.customer?.metadata || {},
 
-    if (jsonbFilters.length > 0) {
-      results = await this.supabase.queryJsonb<StripeRevenueRecord>(
-        'stripe_revenue_data',
-        jsonbFilters as any,
-        { limit: 10000 }
-      );
-    } else {
-      // Regular query without JSONB filters
-      const query = filterParts.join('&');
-      results = await this.supabase.select<StripeRevenueRecord>(
-        'stripe_revenue_data',
-        query,
-        { limit: 10000 }
-      );
-    }
+        units: metadata.quantity || 1,
+        net_amount: row.conversion_value || 0,
+        fee_amount: rawData.fee_amount,
+
+        stripe_created_at: row.stripe_created_at
+      };
+    });
 
     // Apply client-side filters for unsupported operations
-    return this.applyClientSideFilters(results, filters);
+    return this.applyClientSideFilters(transformedResults, filters);
   }
 
   private applyClientSideFilters(
@@ -307,15 +307,17 @@ export class StripeSupabaseAdapter {
     price: string[];
     customer: string[];
   }> {
-    // Use Supabase RPC function if available, or query samples
-    const samples = await this.supabase.select<any>(
-      'stripe_revenue_data',
-      `connection_id.eq.${connectionId}`,
-      {
-        select: 'charge_metadata,product_metadata,price_metadata,customer_metadata',
-        limit: 1000
-      }
-    );
+    // Extract organization_id from connection_id
+    const orgId = connectionId.split('-')[0];
+
+    // Query samples from stripe_conversions (schema specified in client headers)
+    const params = new URLSearchParams();
+    params.append('organization_id', `eq.${orgId}`);
+    params.append('select', 'raw_data,metadata');
+    params.append('limit', '1000');
+
+    const endpoint = `stripe_conversions?${params.toString()}`;
+    const samples = await this.supabase.query<any[]>(endpoint, { method: 'GET' }) || [];
 
     const keysBySource: Record<string, Set<string>> = {
       charge: new Set(),
@@ -325,11 +327,23 @@ export class StripeSupabaseAdapter {
     };
 
     for (const row of samples) {
-      for (const source of ['charge', 'product', 'price', 'customer']) {
-        const metadata = row[`${source}_metadata`];
-        if (metadata && typeof metadata === 'object') {
-          this.extractKeys(metadata, keysBySource[source]);
-        }
+      const rawData = row.raw_data || {};
+      const metadata = row.metadata || {};
+
+      // Extract keys from raw_data (charge-level metadata)
+      if (rawData.metadata && typeof rawData.metadata === 'object') {
+        this.extractKeys(rawData.metadata, keysBySource.charge);
+      }
+
+      // Extract product/price/customer keys from metadata JSONB
+      if (metadata.product && typeof metadata.product === 'object') {
+        this.extractKeys(metadata.product, keysBySource.product);
+      }
+      if (metadata.price && typeof metadata.price === 'object') {
+        this.extractKeys(metadata.price, keysBySource.price);
+      }
+      if (rawData.customer?.metadata && typeof rawData.customer.metadata === 'object') {
+        this.extractKeys(rawData.customer.metadata, keysBySource.customer);
       }
     }
 

@@ -66,19 +66,20 @@ export class ListConnectedPlatforms extends OpenAPIRoute {
   public async handle(c: AppContext) {
     try {
       const session = c.get("session");
-      const { org_id } = await this.getValidatedData<typeof this.schema>();
+      const data = await this.getValidatedData<typeof this.schema>();
+      const org_id = data.query.org_id;
 
       // Verify user has access to org
       const { D1Adapter } = await import("../../adapters/d1");
       const d1 = new D1Adapter(c.env.DB);
-      const hasAccess = await d1.checkOrgAccess(session.user_id, org_id.query);
+      const hasAccess = await d1.checkOrgAccess(session.user_id, org_id);
 
       if (!hasAccess) {
         return error(c, "FORBIDDEN", "No access to this organization", 403);
       }
 
       const connectorService = new ConnectorService(c.env.DB);
-      const connections = await connectorService.getOrganizationConnections(org_id.query);
+      const connections = await connectorService.getOrganizationConnections(org_id);
 
       return success(c, { connections });
     } catch (err: any) {
