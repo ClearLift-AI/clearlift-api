@@ -338,13 +338,14 @@ function sanitizeString(value: string): string {
   let sanitized = value.replace(/\0/g, "");
 
   // Encode HTML entities to prevent XSS
+  // Note: Forward slashes are NOT encoded as they're safe in JSON/API contexts
+  // and required for URLs (redirect_uri, etc.)
   sanitized = sanitized
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;")
-    .replace(/\//g, "&#x2F;");
+    .replace(/'/g, "&#x27;");
 
   return sanitized;
 }
