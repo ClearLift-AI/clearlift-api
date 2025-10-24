@@ -34,6 +34,20 @@ declare global {
     GOOGLE_CLIENT_ID?: string;
     GOOGLE_CLIENT_SECRET?: string;
     GOOGLE_ADS_DEVELOPER_TOKEN?: string;
+
+    // SendGrid
+    SENDGRID_API_KEY?: string;
+
+    // Facebook/Meta OAuth
+    FACEBOOK_APP_ID?: string;
+    FACEBOOK_APP_SECRET?: string;
+
+    // Supabase
+    SUPABASE_SECRET_KEY?: string;
+    SUPABASE_PUBLISHABLE_KEY?: string;
+
+    // Encryption
+    ENCRYPTION_KEY?: string;
   }
 }
 

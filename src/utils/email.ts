@@ -328,6 +328,76 @@ export class EmailService {
   }
 
   /**
+   * Send waitlist welcome email
+   */
+  async sendWaitlistWelcome(
+    email: string,
+    name?: string
+  ): Promise<SendGridResponse> {
+    const greeting = name ? `Hi ${name}` : 'Hi there';
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%); color: white; padding: 30px; border-radius: 10px 10px 0 0; }
+          .content { background: white; padding: 30px; border: 1px solid #e2e8f0; border-radius: 0 0 10px 10px; }
+          .highlight { background: #f0f9ff; border-left: 4px solid #0ea5e9; padding: 15px; margin: 20px 0; }
+          .footer { text-align: center; margin-top: 30px; color: #718096; font-size: 14px; }
+          .emoji { font-size: 24px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1 style="margin: 0;">Welcome to ClearLift! <span class="emoji">🚀</span></h1>
+          </div>
+          <div class="content">
+            <p>${greeting},</p>
+            <p><strong>Thank you for joining the ClearLift waitlist!</strong> You're now part of an exclusive group who will be the first to experience the future of AI-powered ad performance tracking.</p>
+
+            <div class="highlight">
+              <p style="margin: 0;"><strong>What's Next?</strong></p>
+              <ul style="margin: 10px 0; padding-left: 20px;">
+                <li>We'll notify you as soon as we launch</li>
+                <li>You'll get exclusive early access to the platform</li>
+                <li>Expect updates on our progress and industry insights</li>
+              </ul>
+            </div>
+
+            <p><strong>Why ClearLift?</strong></p>
+            <ul>
+              <li><strong>Unified CAC Tracking:</strong> See the true cost of customer acquisition across all your ad platforms</li>
+              <li><strong>LUNA™ Attribution:</strong> Our AI-powered attribution engine reveals what's really driving conversions</li>
+              <li><strong>Free Forever:</strong> Core dashboard features are completely free, no credit card required</li>
+            </ul>
+
+            <p>Get ready to transform your advertising with analytics that actually work.</p>
+
+            <p style="margin-top: 30px;">Best regards,<br>
+            <strong>The ClearLift Team</strong></p>
+          </div>
+          <div class="footer">
+            <p>© ${new Date().getFullYear()} ClearLift. All rights reserved.</p>
+            <p>Questions? Contact us at support@clearlift.ai</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    return this.sendEmail({
+      to: email,
+      subject: 'Welcome to the ClearLift Waitlist! 🚀',
+      html
+    });
+  }
+
+  /**
    * Convert HTML to plain text (basic implementation)
    */
   private htmlToText(html: string): string {

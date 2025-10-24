@@ -75,6 +75,10 @@ import {
   GetDeadLetterQueue,
   TriggerSync
 } from "./endpoints/v1/workers";
+import {
+  JoinWaitlist,
+  GetWaitlistStats
+} from "./endpoints/v1/waitlist";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -148,6 +152,10 @@ const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // Health check (no auth)
 openapi.get("/v1/health", HealthEndpoint);
+
+// Waitlist endpoints (no auth - public endpoints for marketing site)
+openapi.post("/v1/waitlist", JoinWaitlist);
+openapi.get("/v1/waitlist/stats", GetWaitlistStats);
 
 // Diagnostic endpoint to test Secrets Store access
 app.get("/v1/debug/secrets", async (c) => {
