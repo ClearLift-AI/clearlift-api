@@ -443,3 +443,152 @@ export class RemoveMember extends OpenAPIRoute {
     return success(c, { message: "Member removed successfully" });
   }
 }
+
+/**
+ * GET /v1/organizations/:org_id/members - Get organization members
+ */
+export class GetOrganizationMembers extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Get organization members",
+    operationId: "get-organization-members",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "List of organization members",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                members: z.array(z.object({
+                  id: z.string(),
+                  name: z.string(),
+                  email: z.string(),
+                  role: z.string(),
+                  joined_at: z.string()
+                }))
+              })
+            })
+          }
+        }
+      },
+      "403": {
+        description: "No permission"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const { org_id } = c.req.param();
+
+    // Check if user is a member of the organization
+    const membership = await c.env.DB.prepare(`
+      SELECT role FROM organization_members
+      WHERE organization_id = ? AND user_id = ?
+    `).bind(org_id, session.user_id).first<{ role: string }>();
+
+    if (!membership) {
+      return error(c, "FORBIDDEN", "You don't have access to this organization", 403);
+    }
+
+    // Get all members with user details
+    const membersResult = await c.env.DB.prepare(`
+      SELECT u.id, u.name, u.email, om.role, om.joined_at
+      FROM organization_members om
+      JOIN users u ON om.user_id = u.id
+      WHERE om.organization_id = ?
+      ORDER BY om.joined_at ASC
+    `).bind(org_id).all();
+
+    return success(c, {
+      members: membersResult.results || []
+    });
+  }
+}
+
+/**
+ * GET /v1/organizations/:org_id/invitations - Get pending invitations
+ */
+export class GetPendingInvitations extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Get pending invitations",
+    operationId: "get-pending-invitations",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "List of pending invitations",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                invitations: z.array(z.object({
+                  id: z.string(),
+                  email: z.string(),
+                  role: z.string(),
+                  invited_by_name: z.string().optional(),
+                  invite_code: z.string(),
+                  expires_at: z.string(),
+                  created_at: z.string()
+                }))
+              })
+            })
+          }
+        }
+      },
+      "403": {
+        description: "No permission"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const { org_id } = c.req.param();
+
+    // Check if user has permission (must be admin or owner)
+    const membership = await c.env.DB.prepare(`
+      SELECT role FROM organization_members
+      WHERE organization_id = ? AND user_id = ?
+    `).bind(org_id, session.user_id).first<{ role: string }>();
+
+    if (!membership || (membership.role !== 'admin' && membership.role !== 'owner')) {
+      return error(c, "FORBIDDEN", "You don't have permission to view invitations", 403);
+    }
+
+    // Get pending invitations (not accepted, not expired)
+    const invitationsResult = await c.env.DB.prepare(`
+      SELECT
+        i.id,
+        i.email,
+        i.role,
+        i.token as invite_code,
+        i.expires_at,
+        i.created_at,
+        u.name as invited_by_name
+      FROM invitations i
+      LEFT JOIN users u ON i.invited_by = u.id
+      WHERE i.organization_id = ?
+        AND i.accepted_at IS NULL
+        AND i.expires_at > datetime('now')
+      ORDER BY i.created_at DESC
+    `).bind(org_id).all();
+
+    return success(c, {
+      invitations: invitationsResult.results || []
+    });
+  }
+}

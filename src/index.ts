@@ -41,7 +41,9 @@ import {
   CreateOrganization,
   InviteToOrganization,
   JoinOrganization,
-  RemoveMember
+  RemoveMember,
+  GetOrganizationMembers,
+  GetPendingInvitations
 } from "./endpoints/v1/organizations";
 import {
   ListConnectors,
@@ -166,6 +168,8 @@ openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
 openapi.post("/v1/organizations", auth, CreateOrganization);
 openapi.post("/v1/organizations/:org_id/invite", auth, InviteToOrganization);
 openapi.post("/v1/organizations/join", auth, JoinOrganization);
+openapi.get("/v1/organizations/:org_id/members", auth, GetOrganizationMembers);
+openapi.get("/v1/organizations/:org_id/invitations", auth, GetPendingInvitations);
 openapi.delete("/v1/organizations/:org_id/members/:user_id", auth, RemoveMember);
 
 // Analytics endpoints
