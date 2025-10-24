@@ -285,46 +285,12 @@ export function sanitizeInput() {
       }
     }
 
-    // Sanitize body if JSON
-    if (c.req.header("Content-Type")?.includes("application/json")) {
-      try {
-        const body = await c.req.json();
-        const sanitizedBody = sanitizeObject(body);
-
-        // Check for injection patterns in body
-        if (containsInjectionInObject(sanitizedBody)) {
-          // Log security event
-          const { createAuditLogger } = await import("../services/auditLogger");
-          const auditLogger = createAuditLogger(c);
-
-          await auditLogger.logSecurityEvent({
-            severity: 'critical',
-            event_type: 'injection_attempt',
-            user_id: c.get("session")?.user_id,
-            threat_indicator: 'Injection pattern in request body',
-            threat_source: c.req.header("CF-Connecting-IP") || "unknown",
-            automated_response: 'blocked',
-            ip_address: c.req.header("CF-Connecting-IP") || "unknown",
-            user_agent: c.req.header("User-Agent") || "unknown",
-            request_id: c.req.header("X-Request-Id")
-          });
-
-          return c.json({
-            success: false,
-            error: {
-              code: "INVALID_INPUT",
-              message: "Invalid characters in request body"
-            }
-          }, 400);
-        }
-
-        // Store sanitized body in context for downstream handlers
-        // This prevents body stream consumption issues
-        (c as any).set("sanitizedBody", sanitizedBody);
-      } catch (error) {
-        // Invalid JSON is caught elsewhere
-      }
-    }
+    // NOTE: Body sanitization is disabled to prevent body stream consumption
+    // that interferes with Chanfana/OpenAPIRoute's body parsing.
+    // Chanfana endpoints use Zod schemas for validation, which provides
+    // type safety and prevents injection attacks at the schema level.
+    // For non-Chanfana routes that need body sanitization, implement it
+    // at the route handler level after body parsing.
 
     await next();
   };
