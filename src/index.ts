@@ -156,6 +156,7 @@ app.get("/v1/debug/secrets", async (c) => {
   try {
     const googleClientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
     const googleClientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
+    const googleDevToken = await getSecret(c.env.GOOGLE_ADS_DEVELOPER_TOKEN);
 
     return c.json({
       success: true,
@@ -168,6 +169,11 @@ app.get("/v1/debug/secrets", async (c) => {
         GOOGLE_CLIENT_SECRET: {
           exists: !!googleClientSecret,
           length: googleClientSecret?.length || 0,
+          preview: "***REDACTED***"
+        },
+        GOOGLE_ADS_DEVELOPER_TOKEN: {
+          exists: !!googleDevToken,
+          length: googleDevToken?.length || 0,
           preview: "***REDACTED***"
         }
       }

@@ -82,13 +82,90 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
 
   /**
    * Get Google Ads customer accounts accessible with this token
+   * Uses Google Ads API to fetch accessible customer accounts
    */
   async getAdAccounts(accessToken: string, developerToken: string): Promise<any[]> {
-    // Note: This requires the Google Ads API developer token
-    // and manager account ID to be configured
-    // Implementation would use Google Ads API to list accessible accounts
+    if (!developerToken) {
+      throw new Error('Google Ads Developer Token is required but not configured');
+    }
 
-    // Placeholder for now
-    return [];
+    try {
+      // Get user info first to identify the user
+      const userInfo = await this.getUserInfo(accessToken);
+
+      // Call Google Ads API to list accessible customer accounts
+      // https://developers.google.com/google-ads/api/rest/reference/rest/v18/customers/listAccessibleCustomers
+      const response = await fetch('https://googleads.googleapis.com/v18/customers:listAccessibleCustomers', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'developer-token': developerToken,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Google Ads API error:', response.status, errorText);
+        throw new Error(`Google Ads API returned ${response.status}: ${errorText}`);
+      }
+
+      const data = await response.json();
+
+      // Response format: { "resourceNames": ["customers/123456789", ...] }
+      const customerIds = (data.resourceNames || []).map((resourceName: string) => {
+        // Extract customer ID from "customers/123456789" format
+        return resourceName.split('/')[1];
+      });
+
+      // Fetch details for each customer account
+      const accounts = await Promise.all(
+        customerIds.map(async (customerId: string) => {
+          try {
+            const detailResponse = await fetch(`https://googleads.googleapis.com/v18/customers/${customerId}`, {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'developer-token': developerToken,
+                'Content-Type': 'application/json'
+              }
+            });
+
+            if (detailResponse.ok) {
+              const details = await detailResponse.json();
+              return {
+                id: customerId,
+                name: details.descriptiveName || `Account ${customerId}`,
+                currency: details.currencyCode || 'USD',
+                timezone: details.timeZone || 'America/Los_Angeles',
+                manager: details.manager || false
+              };
+            } else {
+              // If we can't get details, return basic info
+              return {
+                id: customerId,
+                name: `Google Ads Account ${customerId}`,
+                currency: 'USD',
+                timezone: 'America/Los_Angeles'
+              };
+            }
+          } catch (error) {
+            console.error(`Failed to get details for customer ${customerId}:`, error);
+            return {
+              id: customerId,
+              name: `Google Ads Account ${customerId}`,
+              currency: 'USD',
+              timezone: 'America/Los_Angeles'
+            };
+          }
+        })
+      );
+
+      return accounts;
+
+    } catch (error) {
+      console.error('Failed to fetch Google Ads accounts:', error);
+      throw error;
+    }
   }
 }

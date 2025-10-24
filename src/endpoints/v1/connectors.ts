@@ -373,10 +373,20 @@ export class GetOAuthAccounts extends OpenAPIRoute {
           const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
           const clientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
           const redirectUri = `https://api.clearlift.ai/v1/connectors/google/callback`;
-          const googleProvider = new GoogleAdsOAuthProvider(clientId, clientSecret, redirectUri);
 
+          if (!clientId || !clientSecret) {
+            return error(c, "MISSING_CREDENTIALS", "Google OAuth credentials not configured", 500);
+          }
+
+          const googleProvider = new GoogleAdsOAuthProvider(clientId, clientSecret, redirectUri);
           const developerToken = await getSecret(c.env.GOOGLE_ADS_DEVELOPER_TOKEN);
-          accounts = await googleProvider.getAdAccounts(accessToken, developerToken);
+
+          console.log('Fetching Google Ads accounts with token:', {
+            hasAccessToken: !!accessToken,
+            hasDeveloperToken: !!developerToken
+          });
+
+          accounts = await googleProvider.getAdAccounts(accessToken, developerToken || '');
           break;
         }
         case 'facebook': {
