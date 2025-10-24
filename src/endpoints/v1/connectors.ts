@@ -268,7 +268,9 @@ export class HandleOAuthCallback extends OpenAPIRoute {
 
     } catch (err) {
       console.error('OAuth callback error:', err);
-      return c.redirect(`https://app.clearlift.ai/onboarding?error=connection_failed`);
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      const errorDetails = encodeURIComponent(errorMessage);
+      return c.redirect(`https://app.clearlift.ai/onboarding?error=connection_failed&error_description=${errorDetails}`);
     }
   }
 
