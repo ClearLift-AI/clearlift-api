@@ -4,11 +4,12 @@
  * Handles waitlist signups from the marketing site
  */
 
-import { OpenAPIRoute, Query, Str } from 'chanfana';
+import { OpenAPIRoute, contentJson } from 'chanfana';
 import { Context } from 'hono';
 import { z } from 'zod';
 import { createEmailService } from '../../utils/email';
-import { createSuccessResponse, createErrorResponse } from '../../utils/response';
+import { success, error } from '../../utils/response';
+import { AppContext } from '../../types';
 
 // SHA-256 hash utility for IP addresses
 async function sha256(text: string): Promise<string> {
@@ -19,29 +20,22 @@ async function sha256(text: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Request schema
-const WaitlistSchema = z.object({
-  email: z.string().email('Invalid email address'),
-  name: z.string().optional(),
-  phone: z.string().optional(),
-  source: z.string().optional(),
-  utm: z.record(z.string()).optional(),
-  ref: z.string().optional(), // Referrer ID
-});
-
 export class JoinWaitlist extends OpenAPIRoute {
-  schema = {
+  public schema = {
     tags: ['Waitlist'],
     summary: 'Join the waitlist',
     description: 'Add an email to the pre-launch waitlist',
     request: {
-      body: {
-        content: {
-          'application/json': {
-            schema: WaitlistSchema,
-          },
-        },
-      },
+      body: contentJson(
+        z.object({
+          email: z.string().email(),
+          name: z.string().optional(),
+          phone: z.string().optional(),
+          source: z.string().optional(),
+          utm: z.record(z.string()).optional(),
+          ref: z.string().optional(),
+        })
+      )
     },
     responses: {
       '200': {
@@ -84,12 +78,28 @@ export class JoinWaitlist extends OpenAPIRoute {
     },
   };
 
-  async handle(c: Context) {
+  public async handle(c: AppContext) {
+    // Parse body manually
+    let body;
     try {
-      // Parse and validate request body
-      const body = await this.getValidatedData<typeof WaitlistSchema>();
+      body = await c.req.json();
+    } catch (e) {
+      return error(c, 'INVALID_JSON', 'Invalid JSON in request body', 400);
+    }
 
-      const { email, name, phone, source, utm, ref } = body.data;
+    const { email, name, phone, source, utm, ref } = body;
+
+    if (!email) {
+      return error(c, 'MISSING_EMAIL', 'Email is required', 400);
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return error(c, 'INVALID_EMAIL', 'Invalid email address', 400);
+    }
+
+    try {
 
       // Get metadata
       const ip = c.req.header('CF-Connecting-IP');
@@ -148,22 +158,25 @@ export class JoinWaitlist extends OpenAPIRoute {
         // Don't fail the request if email fails
       });
 
-      return createSuccessResponse(
+      return success(
+        c,
         {
           id: result.id,
           email: result.email,
-        },
-        'Successfully joined the waitlist!'
+          message: 'Successfully joined the waitlist!',
+        }
       );
 
-    } catch (error: any) {
-      console.error('Waitlist signup error:', error);
+    } catch (err: any) {
+      console.error('Waitlist signup error:', err);
 
-      if (error.message?.includes('validation')) {
-        return createErrorResponse(error.message, 400);
+      if (err.message?.includes('validation')) {
+        return error(c, 'validation_error', err.message, 400);
       }
 
-      return createErrorResponse(
+      return error(
+        c,
+        'server_error',
         'Failed to join waitlist. Please try again.',
         500
       );
@@ -172,7 +185,7 @@ export class JoinWaitlist extends OpenAPIRoute {
 }
 
 export class GetWaitlistStats extends OpenAPIRoute {
-  schema = {
+  public schema = {
     tags: ['Waitlist'],
     summary: 'Get waitlist statistics',
     description: 'Get basic statistics about the waitlist (public endpoint)',
@@ -194,7 +207,7 @@ export class GetWaitlistStats extends OpenAPIRoute {
     },
   };
 
-  async handle(c: Context) {
+  public async handle(c: AppContext) {
     try {
       // Get total count
       const totalResult = await c.env.DB.prepare(
@@ -207,14 +220,14 @@ export class GetWaitlistStats extends OpenAPIRoute {
         'SELECT COUNT(*) as count FROM waitlist WHERE created_at > ?'
       ).bind(weekAgo).first<{ count: number }>();
 
-      return createSuccessResponse({
+      return success(c, {
         total: totalResult?.count || 0,
         thisWeek: weekResult?.count || 0,
       });
 
-    } catch (error: any) {
-      console.error('Waitlist stats error:', error);
-      return createErrorResponse('Failed to get waitlist stats', 500);
+    } catch (err: any) {
+      console.error('Waitlist stats error:', err);
+      return error(c, 'server_error', 'Failed to get waitlist stats', 500);
     }
   }
 }
