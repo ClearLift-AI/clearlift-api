@@ -149,6 +149,37 @@ const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
 // Health check (no auth)
 openapi.get("/v1/health", HealthEndpoint);
 
+// Diagnostic endpoint to test Secrets Store access
+app.get("/v1/debug/secrets", async (c) => {
+  const { getSecret } = await import("./utils/secrets");
+
+  try {
+    const googleClientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
+    const googleClientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
+
+    return c.json({
+      success: true,
+      secrets: {
+        GOOGLE_CLIENT_ID: {
+          exists: !!googleClientId,
+          length: googleClientId?.length || 0,
+          preview: googleClientId?.substring(0, 10) + "..."
+        },
+        GOOGLE_CLIENT_SECRET: {
+          exists: !!googleClientSecret,
+          length: googleClientSecret?.length || 0,
+          preview: "***REDACTED***"
+        }
+      }
+    });
+  } catch (error) {
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error"
+    }, 500);
+  }
+});
+
 // Authentication endpoints (no auth required)
 openapi.post("/v1/auth/register", Register);
 openapi.post("/v1/auth/login", Login);
