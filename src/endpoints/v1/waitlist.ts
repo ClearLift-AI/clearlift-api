@@ -113,12 +113,12 @@ export class JoinWaitlist extends OpenAPIRoute {
       // Hash IP for privacy
       const ipHash = ip ? await sha256(ip) : null;
 
-      // Prepare database insert
+      // Prepare database insert with attempt tracking
       const stmt = `
         INSERT INTO waitlist
-          (id, email, name, phone, source, utm, referrer_id, ip_hash, user_agent, status, created_at, updated_at)
+          (id, email, name, phone, source, utm, referrer_id, ip_hash, user_agent, status, attempt_count, last_attempt_at, created_at, updated_at)
         VALUES
-          (?1, LOWER(?2), ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?10)
+          (?1, LOWER(?2), ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', 1, ?10, ?10, ?10)
         ON CONFLICT(email) DO UPDATE SET
           name = COALESCE(excluded.name, waitlist.name),
           phone = COALESCE(excluded.phone, waitlist.phone),
@@ -127,8 +127,10 @@ export class JoinWaitlist extends OpenAPIRoute {
           referrer_id = COALESCE(excluded.referrer_id, waitlist.referrer_id),
           ip_hash = COALESCE(excluded.ip_hash, waitlist.ip_hash),
           user_agent = COALESCE(excluded.user_agent, waitlist.user_agent),
+          attempt_count = waitlist.attempt_count + 1,
+          last_attempt_at = excluded.last_attempt_at,
           updated_at = excluded.updated_at
-        RETURNING id, email, created_at
+        RETURNING id, email, attempt_count, created_at
       `;
 
       // Insert into database
@@ -151,19 +153,31 @@ export class JoinWaitlist extends OpenAPIRoute {
         throw new Error('Failed to insert into database');
       }
 
-      // Send welcome email (don't wait for it, fire and forget to improve response time)
-      const emailService = createEmailService(c.env);
-      emailService.sendWaitlistWelcome(email, name).catch(err => {
-        console.error('Failed to send waitlist welcome email:', err);
-        // Don't fail the request if email fails
-      });
+      const attemptCount = (result as any).attempt_count || 1;
+
+      // Log high interest if multiple attempts
+      if (attemptCount > 1) {
+        console.log(`🔥 HIGH INTEREST: ${email} attempted to join ${attemptCount} times!`);
+      }
+
+      // Send welcome email only on first attempt (don't wait for it, fire and forget)
+      if (attemptCount === 1) {
+        const emailService = createEmailService(c.env);
+        emailService.sendWaitlistWelcome(email, name).catch(err => {
+          console.error('Failed to send waitlist welcome email:', err);
+          // Don't fail the request if email fails
+        });
+      }
 
       return success(
         c,
         {
           id: result.id,
           email: result.email,
-          message: 'Successfully joined the waitlist!',
+          message: attemptCount > 1
+            ? `You're already on the waitlist! (${attemptCount} attempts - we see your enthusiasm! 🔥)`
+            : 'Successfully joined the waitlist!',
+          attempt_count: attemptCount,
         }
       );
 
