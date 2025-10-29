@@ -12,6 +12,7 @@ export const corsMiddleware = honoCors({
       "https://app.clearlift.ai",
       "https://dashboard.clearlift.ai",
       "https://clearlift.ai",
+      "https://www.clearlift.ai",
       "http://localhost:3000",
       "http://localhost:5173",
       "http://127.0.0.1:3000",
