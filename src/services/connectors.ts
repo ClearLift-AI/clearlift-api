@@ -163,6 +163,11 @@ export class ConnectorService {
 
   /**
    * Create platform connection with encrypted credentials
+   *
+   * Uses UPSERT logic (INSERT ... ON CONFLICT ... DO UPDATE) to handle reconnections.
+   * If the same org+platform+account combination already exists (even if previously
+   * disconnected), this will reactivate it with new credentials while preserving
+   * the connection_id and all historical data (sync jobs, analytics, etc.).
    */
   async createConnection(params: {
     organizationId: string;
@@ -192,6 +197,8 @@ export class ConnectorService {
       ? new Date(Date.now() + params.expiresIn * 1000).toISOString()
       : null;
 
+    // UPSERT: Create new connection or reactivate existing one
+    // This preserves historical data when reconnecting a previously disconnected platform
     await this.db.prepare(`
       INSERT INTO platform_connections (
         id, organization_id, platform, account_id, account_name,
@@ -341,7 +348,12 @@ export class ConnectorService {
   }
 
   /**
-   * Disconnect platform
+   * Disconnect platform (soft delete to preserve historical data)
+   *
+   * Sets is_active = 0 and clears credentials, but keeps the row intact.
+   * This preserves all related sync_jobs, analytics, and historical data.
+   * When reconnecting the same platform+account, the connection_id is reused,
+   * maintaining data continuity across disconnect/reconnect cycles.
    */
   async disconnectPlatform(connectionId: string): Promise<void> {
     await this.db.prepare(`
