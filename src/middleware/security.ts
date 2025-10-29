@@ -248,6 +248,10 @@ export function validateContentType(allowedTypes: string[] = ["application/json"
  */
 export function sanitizeInput() {
   return async function(c: AppContext, next: Next) {
+    // OAuth-related parameters that should be exempt from SQL injection checks
+    // These contain special characters (0x, slashes, etc.) that trigger false positives
+    const oauthWhitelist = ['code', 'state', 'redirect_uri', 'access_token', 'refresh_token'];
+
     // Sanitize query parameters
     const url = new URL(c.req.url);
     const sanitizedParams = new URLSearchParams();
@@ -255,6 +259,11 @@ export function sanitizeInput() {
     for (const [key, value] of url.searchParams.entries()) {
       const sanitizedValue = sanitizeString(value);
       sanitizedParams.set(key, sanitizedValue);
+
+      // Skip SQL injection checks for OAuth parameters (they contain 0x, slashes, etc.)
+      if (oauthWhitelist.includes(key)) {
+        continue;
+      }
 
       // Check for SQL injection patterns
       if (containsSQLInjectionPattern(sanitizedValue)) {
