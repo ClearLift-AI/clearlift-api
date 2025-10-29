@@ -222,15 +222,7 @@ export class UpdateStripeConfig extends OpenAPIRoute {
       return error(c, "NOT_FOUND", "Stripe connection not found or access denied", 404);
     }
 
-    // Check if connection requires reconfiguration (migration)
-    if (connection.requires_reconfiguration) {
-      return error(
-        c,
-        "REQUIRES_RECONFIGURATION",
-        connection.migration_notice || "This Stripe connection requires reconfiguration due to recent updates. Please reconnect your Stripe account.",
-        409 // Conflict
-      );
-    }
+    // Pre-launch: No reconfiguration checks needed
 
     if (connection.role === 'viewer') {
       return error(c, "FORBIDDEN", "Insufficient permissions to update configuration", 403);
@@ -291,15 +283,7 @@ export class TriggerStripeSync extends OpenAPIRoute {
       return error(c, "NOT_FOUND", "Stripe connection not found or access denied", 404);
     }
 
-    // Check if connection requires reconfiguration (migration)
-    if (connection.requires_reconfiguration) {
-      return error(
-        c,
-        "REQUIRES_RECONFIGURATION",
-        connection.migration_notice || "This Stripe connection requires reconfiguration due to recent updates. Please reconnect your Stripe account.",
-        409 // Conflict
-      );
-    }
+    // Pre-launch: No reconfiguration checks needed
 
     // Check if there's already a pending/running sync
     const activeSync = await c.env.DB.prepare(`
