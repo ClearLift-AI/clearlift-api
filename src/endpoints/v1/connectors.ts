@@ -232,9 +232,10 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     }
 
     try {
-      // Validate state
-      const connectorService = new ConnectorService(c.env.DB, c.env.ENCRYPTION_KEY);
-      const oauthState = await connectorService.validateOAuthState(state);
+      // Get state (don't consume yet - needed for account selection)
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const oauthState = await connectorService.getOAuthState(state);
 
       if (!oauthState) {
         return c.redirect(`https://app.clearlift.ai/onboarding?error=invalid_state`);
@@ -347,9 +348,10 @@ export class GetOAuthAccounts extends OpenAPIRoute {
     const { state } = data.query;
 
     try {
-      // Validate OAuth state
-      const connectorService = new ConnectorService(c.env.DB, c.env.ENCRYPTION_KEY);
-      const oauthState = await connectorService.validateOAuthState(state);
+      // Get OAuth state (don't consume yet - still needed for finalize step)
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const oauthState = await connectorService.getOAuthState(state);
 
       if (!oauthState) {
         return error(c, "INVALID_STATE", "OAuth state is invalid or expired", 400);
@@ -383,16 +385,30 @@ export class GetOAuthAccounts extends OpenAPIRoute {
 
           console.log('Fetching Google Ads accounts with token:', {
             hasAccessToken: !!accessToken,
-            hasDeveloperToken: !!developerToken
+            hasDeveloperToken: !!developerToken,
+            developerTokenLength: developerToken?.length || 0
           });
 
-          accounts = await googleProvider.getAdAccounts(accessToken, developerToken || '');
+          if (!developerToken || developerToken.trim() === '') {
+            console.error('GOOGLE_ADS_DEVELOPER_TOKEN is not configured');
+            return error(c, "DEVELOPER_TOKEN_MISSING",
+              "Google Ads Developer Token is not configured. Please add it to Cloudflare Secrets Store. " +
+              "Get your token at: https://developers.google.com/google-ads/api/docs/get-started/dev-token",
+              500);
+          }
+
+          accounts = await googleProvider.getAdAccounts(accessToken, developerToken);
           break;
         }
         case 'facebook': {
           const appId = await getSecret(c.env.FACEBOOK_APP_ID);
           const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
           const redirectUri = `https://api.clearlift.ai/v1/connectors/facebook/callback`;
+
+          if (!appId || !appSecret) {
+            return error(c, "MISSING_CREDENTIALS", "Facebook OAuth credentials not configured", 500);
+          }
+
           const facebookProvider = new FacebookAdsOAuthProvider(appId, appSecret, redirectUri);
 
           const userInfo = metadata?.user_info;
@@ -459,14 +475,20 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
     const { provider } = data.params;
     const { state, account_id, account_name } = data.body;
 
+    console.log('Finalize OAuth connection request:', { provider, account_id, account_name, state: state.substring(0, 10) + '...' });
+
     try {
       // Validate OAuth state
-      const connectorService = new ConnectorService(c.env.DB, c.env.ENCRYPTION_KEY);
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
       const oauthState = await connectorService.validateOAuthState(state);
 
       if (!oauthState) {
+        console.error('Invalid or expired OAuth state');
         return error(c, "INVALID_STATE", "OAuth state is invalid or expired", 400);
       }
+
+      console.log('OAuth state validated:', { userId: oauthState.user_id, organizationId: oauthState.organization_id });
 
       // Get tokens from state metadata
       const metadata = typeof oauthState.metadata === 'string'
@@ -479,8 +501,11 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const scope = metadata?.scope;
 
       if (!accessToken) {
+        console.error('No access token in OAuth state metadata');
         return error(c, "NO_TOKEN", "No access token found in OAuth state", 400);
       }
+
+      console.log('Creating connection in database...');
 
       // Create connection with selected account
       const connectionId = await connectorService.createConnection({
@@ -494,6 +519,8 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         expiresIn: expiresIn,
         scopes: scope?.split(' ')
       });
+
+      console.log('Connection created:', { connectionId });
 
       // Update onboarding progress
       const onboarding = new OnboardingService(c.env.DB);
@@ -550,7 +577,10 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         DELETE FROM oauth_states WHERE state = ?
       `).bind(state).run();
 
-      return success(c, { connection_id: connectionId });
+      console.log('Sending success response with connection_id:', connectionId);
+      const response = success(c, { connection_id: connectionId });
+      console.log('Response object created, returning to client');
+      return response;
 
     } catch (err: any) {
       console.error('Finalize OAuth connection error:', err);
@@ -585,7 +615,8 @@ export class DisconnectPlatform extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>();
     const { connection_id } = data.params;
 
-    const connectorService = new ConnectorService(c.env.DB, c.env.ENCRYPTION_KEY);
+    const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+    const connectorService = new ConnectorService(c.env.DB, encryptionKey);
     const connection = await connectorService.getConnection(connection_id);
 
     if (!connection) {

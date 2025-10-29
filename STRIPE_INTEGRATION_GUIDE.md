@@ -60,10 +60,11 @@ const headers = {
 
 Create a Stripe connection form with:
 - **API Key Input**: Secure text field for Stripe API key
-- **Sync Mode Selector**: Dropdown with options (charges, payment_intents, invoices)
-- **Lookback Period**: Number input (1-365 days)
-- **Auto-sync Toggle**: Enable/disable automatic syncing
+- **Lookback Period**: Number input (1-365 days) - defaults to 30 days
+- **Auto-sync Toggle**: Enable/disable automatic syncing (15 minute intervals)
 - **Test Mode Indicator**: Show if using test vs live key
+
+**Note**: The connector now exclusively tracks `payment_intents` with `status='succeeded'`. Invoice line items are automatically included when available.
 
 ### 2. Stripe API Key Validation (Frontend)
 
@@ -97,7 +98,7 @@ async function connectStripeAccount(orgId, apiKey, options = {}) {
   const payload = {
     organization_id: orgId,
     api_key: apiKey,
-    sync_mode: options.syncMode || 'charges',
+    // sync_mode removed - always tracks payment_intents
     lookback_days: options.lookbackDays || 30,
     auto_sync: options.autoSync !== false
   };
@@ -190,7 +191,7 @@ async function testStripeConnection(connectionId) {
   const data = await response.json();
 
   if (data.data.success) {
-    showSuccess(`Connection working! Found ${data.data.recent_charges} recent charges`);
+    showSuccess(`Connection working! Found ${data.data.recent_payment_intents} recent payment_intents`);
   } else {
     showError(`Connection test failed: ${data.data.message}`);
   }
@@ -283,7 +284,7 @@ function StripeConnector() {
   const { sessionToken } = useAuth();
   const { currentOrg } = useOrganization();
   const [apiKey, setApiKey] = useState('');
-  const [syncMode, setSyncMode] = useState('charges');
+  // syncMode removed - always tracks payment_intents
   const [lookbackDays, setLookbackDays] = useState(30);
   const [autoSync, setAutoSync] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -334,7 +335,7 @@ function StripeConnector() {
         body: JSON.stringify({
           organization_id: currentOrg.id,
           api_key: apiKey,
-          sync_mode: syncMode,
+          // sync_mode removed - always tracks payment_intents
           lookback_days: lookbackDays,
           auto_sync: autoSync
         })
@@ -397,13 +398,14 @@ function StripeConnector() {
           <label htmlFor="sync-mode">Sync Mode</label>
           <select
             id="sync-mode"
-            value={syncMode}
-            onChange={(e) => setSyncMode(e.target.value)}
+            disabled={true}
           >
-            <option value="charges">Charges</option>
-            <option value="payment_intents">Payment Intents</option>
-            <option value="invoices">Invoices</option>
+            <option value="payment_intents">Payment Intents (succeeded only)</option>
           </select>
+          <p className="text-sm text-gray-500 mt-1">
+            Automatically tracks succeeded payment_intents with invoice line items when available.
+            See <a href="https://docs.clearlift.ai/stripe-migration" className="text-blue-600 underline">migration guide</a> for details.
+          </p>
         </div>
 
         <div className="form-group">

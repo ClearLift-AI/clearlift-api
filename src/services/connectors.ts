@@ -121,7 +121,25 @@ export class ConnectorService {
   }
 
   /**
-   * Validate and consume OAuth state
+   * Get OAuth state without consuming it (for multi-step OAuth flows)
+   */
+  async getOAuthState(state: string): Promise<OAuthState | null> {
+    const result = await this.db.prepare(`
+      SELECT * FROM oauth_states WHERE state = ? AND expires_at > datetime('now')
+    `).bind(state).first<OAuthState>();
+
+    if (!result) {
+      return null;
+    }
+
+    return {
+      ...result,
+      metadata: result.metadata ? JSON.parse(result.metadata as any) : {}
+    };
+  }
+
+  /**
+   * Validate and consume OAuth state (for final step - deletes state)
    */
   async validateOAuthState(state: string): Promise<OAuthState | null> {
     const result = await this.db.prepare(`

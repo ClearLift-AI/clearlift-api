@@ -19,8 +19,8 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
         'email',
         'public_profile'
       ],
-      authorizeUrl: 'https://www.facebook.com/v18.0/dialog/oauth',
-      tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token'
+      authorizeUrl: 'https://www.facebook.com/v24.0/dialog/oauth',
+      tokenUrl: 'https://graph.facebook.com/v24.0/oauth/access_token'
     });
   }
 
@@ -39,14 +39,16 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
    */
   async getUserInfo(accessToken: string): Promise<OAuthUserInfo> {
     const response = await fetch(
-      `https://graph.facebook.com/v18.0/me?fields=id,name,email&access_token=${accessToken}`
+      `https://graph.facebook.com/v24.0/me?fields=id,name,email&access_token=${accessToken}`
     );
 
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Facebook getUserInfo failed:', errorText);
       throw new Error(`Failed to fetch Facebook user info: ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as any;
 
     return {
       id: data.id,
@@ -62,7 +64,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
   async validateToken(accessToken: string): Promise<boolean> {
     try {
       const response = await fetch(
-        `https://graph.facebook.com/v18.0/me?access_token=${accessToken}`
+        `https://graph.facebook.com/v24.0/me?access_token=${accessToken}`
       );
 
       return response.ok;
@@ -76,7 +78,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
    */
   async exchangeForLongLivedToken(shortLivedToken: string): Promise<{ access_token: string; expires_in: number }> {
     const response = await fetch(
-      `https://graph.facebook.com/v18.0/oauth/access_token?` +
+      `https://graph.facebook.com/v24.0/oauth/access_token?` +
       new URLSearchParams({
         grant_type: 'fb_exchange_token',
         client_id: this.config.clientId,
@@ -87,6 +89,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const error = await response.text();
+      console.error('Facebook token exchange failed:', error);
       throw new Error(`Failed to exchange token: ${error}`);
     }
 
@@ -98,7 +101,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
    */
   async getAdAccounts(accessToken: string, userId: string): Promise<any[]> {
     const response = await fetch(
-      `https://graph.facebook.com/v18.0/${userId}/adaccounts?` +
+      `https://graph.facebook.com/v24.0/${userId}/adaccounts?` +
       new URLSearchParams({
         access_token: accessToken,
         fields: 'id,name,account_status,currency,timezone_name'
@@ -106,10 +109,15 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch ad accounts: ${response.statusText}`);
+      const errorText = await response.text();
+      console.error('Facebook getAdAccounts failed:', {
+        status: response.status,
+        error: errorText
+      });
+      throw new Error(`Failed to fetch ad accounts (${response.status}): ${errorText}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as any;
     return data.data || [];
   }
 }

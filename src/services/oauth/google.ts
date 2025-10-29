@@ -85,17 +85,26 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
    * Uses Google Ads API to fetch accessible customer accounts
    */
   async getAdAccounts(accessToken: string, developerToken: string): Promise<any[]> {
-    if (!developerToken) {
-      throw new Error('Google Ads Developer Token is required but not configured');
+    if (!developerToken || developerToken.trim() === '') {
+      console.error('Google Ads Developer Token is missing or empty');
+      throw new Error('DEVELOPER_TOKEN_MISSING: Google Ads Developer Token is required. Get yours at: https://developers.google.com/google-ads/api/docs/get-started/dev-token');
     }
 
     try {
       // Get user info first to identify the user
       const userInfo = await this.getUserInfo(accessToken);
+      console.log('Got user info for Google Ads account fetch:', { userId: userInfo.id, email: userInfo.email });
 
       // Call Google Ads API to list accessible customer accounts
-      // https://developers.google.com/google-ads/api/rest/reference/rest/v18/customers/listAccessibleCustomers
-      const response = await fetch('https://googleads.googleapis.com/v18/customers:listAccessibleCustomers', {
+      // https://developers.google.com/google-ads/api/rest/reference/rest/v21/customers/listAccessibleCustomers
+      const apiUrl = 'https://googleads.googleapis.com/v21/customers:listAccessibleCustomers';
+      console.log('Calling Google Ads API:', {
+        url: apiUrl,
+        hasAccessToken: !!accessToken,
+        developerTokenPrefix: developerToken.substring(0, 10) + '...'
+      });
+
+      const response = await fetch(apiUrl, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -106,11 +115,36 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Google Ads API error:', response.status, errorText);
-        throw new Error(`Google Ads API returned ${response.status}: ${errorText}`);
+        console.error('Google Ads API error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorText
+        });
+
+        // Parse error for better messaging
+        let errorMessage = `Google Ads API returned ${response.status}`;
+        let errorDetails = '';
+        try {
+          const errorData = JSON.parse(errorText);
+          if (errorData.error?.message) {
+            errorMessage = errorData.error.message;
+            errorDetails = errorData.error.status || '';
+
+            // Provide helpful context for common errors
+            if (errorMessage.includes('test accounts')) {
+              errorMessage += ' Your developer token is only approved for test accounts. Apply for Basic or Standard access in the Google Ads API Center.';
+            } else if (errorMessage.includes('developer token')) {
+              errorMessage += ' Check that your developer token is valid in the Google Ads API Center.';
+            }
+          }
+        } catch (e) {
+          errorMessage = errorText;
+        }
+
+        throw new Error(`${errorMessage}${errorDetails ? ' (' + errorDetails + ')' : ''}`);
       }
 
-      const data = await response.json();
+      const data = await response.json() as any;
 
       // Response format: { "resourceNames": ["customers/123456789", ...] }
       const customerIds = (data.resourceNames || []).map((resourceName: string) => {
@@ -118,11 +152,16 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
         return resourceName.split('/')[1];
       });
 
+      if (customerIds.length === 0) {
+        console.log('No Google Ads accounts found for user');
+        return [];
+      }
+
       // Fetch details for each customer account
       const accounts = await Promise.all(
         customerIds.map(async (customerId: string) => {
           try {
-            const detailResponse = await fetch(`https://googleads.googleapis.com/v18/customers/${customerId}`, {
+            const detailResponse = await fetch(`https://googleads.googleapis.com/v21/customers/${customerId}`, {
               method: 'GET',
               headers: {
                 'Authorization': `Bearer ${accessToken}`,
@@ -132,7 +171,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
             });
 
             if (detailResponse.ok) {
-              const details = await detailResponse.json();
+              const details = await detailResponse.json() as any;
               return {
                 id: customerId,
                 name: details.descriptiveName || `Account ${customerId}`,

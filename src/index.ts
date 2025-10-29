@@ -157,6 +157,10 @@ openapi.get("/v1/health", HealthEndpoint);
 openapi.post("/v1/waitlist", JoinWaitlist);
 openapi.get("/v1/waitlist/stats", GetWaitlistStats);
 
+// Debug SendGrid endpoint
+import debugSendgrid from "./endpoints/v1/debug-sendgrid";
+app.route("/", debugSendgrid);
+
 // Diagnostic endpoint to test Secrets Store access
 app.get("/v1/debug/secrets", async (c) => {
   const { getSecret } = await import("./utils/secrets");

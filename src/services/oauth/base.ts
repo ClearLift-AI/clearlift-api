@@ -46,8 +46,6 @@ export abstract class OAuthProvider {
       response_type: 'code',
       scope: this.config.scopes.join(' '),
       state,
-      access_type: 'offline', // Request refresh token
-      prompt: 'consent', // Force consent screen to get refresh token
       ...additionalParams
     });
 
@@ -58,6 +56,14 @@ export abstract class OAuthProvider {
    * Exchange authorization code for access token
    */
   async exchangeCodeForToken(code: string): Promise<OAuthTokens> {
+    console.log('Exchanging code for token', {
+      tokenUrl: this.config.tokenUrl,
+      redirectUri: this.config.redirectUri,
+      hasClientId: !!this.config.clientId,
+      hasClientSecret: !!this.config.clientSecret,
+      hasCode: !!code
+    });
+
     const response = await fetch(this.config.tokenUrl, {
       method: 'POST',
       headers: {
@@ -73,11 +79,37 @@ export abstract class OAuthProvider {
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Token exchange failed: ${error}`);
+      const errorText = await response.text();
+      console.error('Token exchange failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText
+      });
+
+      // Try to parse error response
+      let errorMessage = errorText;
+      try {
+        const errorJson = JSON.parse(errorText);
+        if (errorJson.error) {
+          errorMessage = typeof errorJson.error === 'string'
+            ? errorJson.error
+            : errorJson.error.message || JSON.stringify(errorJson.error);
+        }
+      } catch (e) {
+        // Use raw error text
+      }
+
+      throw new Error(`Token exchange failed (${response.status}): ${errorMessage}`);
     }
 
-    return await response.json();
+    const tokens = await response.json() as OAuthTokens;
+    console.log('Token exchange successful', {
+      hasAccessToken: !!tokens.access_token,
+      hasRefreshToken: !!tokens.refresh_token,
+      expiresIn: tokens.expires_in
+    });
+
+    return tokens;
   }
 
   /**
