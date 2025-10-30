@@ -160,11 +160,13 @@ export class JoinWaitlist extends OpenAPIRoute {
         console.log(`🔥 HIGH INTEREST: ${email} attempted to join ${attemptCount} times!`);
       }
 
-      // Send welcome email only on first attempt (don't wait for it, fire and forget)
+      // Send welcome email only on first attempt
       if (attemptCount === 1) {
         console.log(`[WAITLIST] Attempting to send welcome email to ${email}`);
         const emailService = createEmailService(c.env);
-        emailService.sendWaitlistWelcome(email, name)
+
+        // Use waitUntil to keep worker alive while email sends
+        const emailPromise = emailService.sendWaitlistWelcome(email, name)
           .then(result => {
             if (result.success) {
               console.log(`[WAITLIST] ✅ Welcome email sent successfully to ${email}, messageId: ${result.messageId}`);
@@ -175,6 +177,9 @@ export class JoinWaitlist extends OpenAPIRoute {
           .catch(err => {
             console.error(`[WAITLIST] ❌ Exception sending welcome email to ${email}:`, err);
           });
+
+        // Keep worker alive until email completes
+        c.executionCtx.waitUntil(emailPromise);
       } else {
         console.log(`[WAITLIST] Skipping welcome email for ${email} (attempt #${attemptCount})`);
       }
