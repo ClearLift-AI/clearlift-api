@@ -119,29 +119,37 @@ export class SupabaseClient {
       offset?: number;
     } = {}
   ): Promise<T[]> {
-    const params = new URLSearchParams();
+    // Build query string - the 'query' parameter contains filter conditions
+    // like "organization_id.eq.123&date.gte.2025-01-01"
+    let queryString = query;
 
-    if (query) {
-      params.append('or', query);
-    }
+    const additionalParams = new URLSearchParams();
 
     if (options.select) {
-      params.append('select', options.select);
+      additionalParams.append('select', options.select);
     }
 
     if (options.order) {
-      params.append('order', options.order);
+      additionalParams.append('order', options.order);
     }
 
     if (options.limit) {
-      params.append('limit', String(options.limit));
+      additionalParams.append('limit', String(options.limit));
     }
 
     if (options.offset) {
-      params.append('offset', String(options.offset));
+      additionalParams.append('offset', String(options.offset));
     }
 
-    const endpoint = params.toString() ? `${table}?${params}` : table;
+    // Combine filters and additional params
+    const additionalParamsStr = additionalParams.toString();
+    if (queryString && additionalParamsStr) {
+      queryString += '&' + additionalParamsStr;
+    } else if (additionalParamsStr) {
+      queryString = additionalParamsStr;
+    }
+
+    const endpoint = queryString ? `${table}?${queryString}` : table;
     return await this.query<T[]>(endpoint, { method: 'GET' });
   }
 

@@ -201,6 +201,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
                   total_spend_cents: z.number(),
                   total_impressions: z.number(),
                   total_clicks: z.number(),
+                  total_conversions: z.number(),
                   average_ctr: z.number(),
                   average_cpc_cents: z.number(),
                   platforms_active: z.array(z.string())
@@ -209,6 +210,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
                   spend_cents: z.number(),
                   impressions: z.number(),
                   clicks: z.number(),
+                  conversions: z.number(),
                   campaigns: z.number()
                 }))
               })
@@ -238,10 +240,11 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "No access to this organization", 403);
     }
 
-    // Get active connections for this org
+    // Get active ad platform connections for this org (exclude non-ad platforms like Stripe)
     const connections = await c.env.DB.prepare(`
       SELECT platform FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
+      AND platform IN ('google', 'facebook', 'tiktok')
     `).bind(orgId).all();
 
     if (!connections.results || connections.results.length === 0) {
@@ -271,13 +274,17 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
 
     try {
       const byPlatform: Record<string, any> = {};
+      const timeSeriesByDate: Record<string, any> = {};
       let totalSpendCents = 0;
       let totalImpressions = 0;
       let totalClicks = 0;
+      let totalConversions = 0;
 
       // Fetch data for each connected platform
       for (const conn of connections.results) {
         const platform = conn.platform as string;
+
+        // Fetch aggregated metrics
         const metrics = await this.fetchPlatformMetrics(
           supabase,
           platform,
@@ -291,8 +298,50 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           totalSpendCents += metrics.spend_cents;
           totalImpressions += metrics.impressions;
           totalClicks += metrics.clicks;
+          totalConversions += metrics.conversions || 0;
+        }
+
+        // Fetch daily time series data
+        const timeSeries = await this.fetchPlatformTimeSeries(
+          supabase,
+          platform,
+          orgId,
+          startDate,
+          endDate
+        );
+
+        // Merge time series data by date
+        if (timeSeries) {
+          for (const dayData of timeSeries) {
+            if (!timeSeriesByDate[dayData.date]) {
+              timeSeriesByDate[dayData.date] = {
+                date: dayData.date,
+                total_spend_cents: 0,
+                total_impressions: 0,
+                total_clicks: 0,
+                total_conversions: 0,
+                by_platform: {}
+              };
+            }
+
+            timeSeriesByDate[dayData.date].total_spend_cents += dayData.spend_cents;
+            timeSeriesByDate[dayData.date].total_impressions += dayData.impressions;
+            timeSeriesByDate[dayData.date].total_clicks += dayData.clicks;
+            timeSeriesByDate[dayData.date].total_conversions += dayData.conversions;
+            timeSeriesByDate[dayData.date].by_platform[platform] = {
+              spend_cents: dayData.spend_cents,
+              impressions: dayData.impressions,
+              clicks: dayData.clicks,
+              conversions: dayData.conversions
+            };
+          }
         }
       }
+
+      // Convert time series object to sorted array
+      const timeSeries = Object.values(timeSeriesByDate).sort((a: any, b: any) =>
+        a.date.localeCompare(b.date)
+      );
 
       const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
       const avgCpcCents = totalClicks > 0 ? Math.round(totalSpendCents / totalClicks) : 0;
@@ -302,11 +351,13 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           total_spend_cents: totalSpendCents,
           total_impressions: totalImpressions,
           total_clicks: totalClicks,
+          total_conversions: totalConversions,
           average_ctr: Math.round(avgCtr * 100) / 100,
           average_cpc_cents: avgCpcCents,
           platforms_active: Object.keys(byPlatform)
         },
-        by_platform: byPlatform
+        by_platform: byPlatform,
+        time_series: timeSeries
       });
     } catch (err) {
       console.error("Unified data fetch error:", err);
@@ -322,21 +373,21 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     endDate?: string
   ): Promise<any | null> {
     try {
-      // Build date filter
+      // Build date filter for daily_metrics table
       const filters = [`organization_id.eq.${orgId}`];
       if (startDate && endDate) {
-        filters.push(`date.gte.${startDate}`, `date.lte.${endDate}`);
+        filters.push(`metric_date.gte.${startDate}`, `metric_date.lte.${endDate}`);
       }
       const query = filters.join('&');
 
-      // Fetch campaign data to aggregate metrics
-      const campaigns = await supabase.select(
-        `${platform}_ads_campaigns`,
+      // Fetch daily metrics data (this is where the actual spend/impressions/clicks/conversions are)
+      const metrics = await supabase.select(
+        `${platform}_ads_daily_metrics`,
         query,
-        { limit: 1000 }
+        { limit: 10000 }
       );
 
-      if (!campaigns || campaigns.length === 0) {
+      if (!metrics || metrics.length === 0) {
         return null;
       }
 
@@ -344,21 +395,88 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       let spendCents = 0;
       let impressions = 0;
       let clicks = 0;
+      let conversions = 0;
+      const uniqueCampaigns = new Set();
 
-      for (const campaign of campaigns) {
-        spendCents += campaign.spend_cents || 0;
-        impressions += campaign.impressions || 0;
-        clicks += campaign.clicks || 0;
+      for (const metric of metrics) {
+        spendCents += metric.spend_cents || 0;
+        impressions += metric.impressions || 0;
+        clicks += metric.clicks || 0;
+        conversions += metric.conversions || 0;
+
+        // Track unique campaigns
+        if (metric.campaign_ref) {
+          uniqueCampaigns.add(metric.campaign_ref);
+        }
       }
 
       return {
         spend_cents: spendCents,
         impressions,
         clicks,
-        campaigns: campaigns.length
+        conversions,
+        campaigns: uniqueCampaigns.size
       };
     } catch (err) {
       console.error(`Failed to fetch metrics for ${platform}:`, err);
+      return null;
+    }
+  }
+
+  private async fetchPlatformTimeSeries(
+    supabase: SupabaseClient,
+    platform: string,
+    orgId: string,
+    startDate?: string,
+    endDate?: string
+  ): Promise<any[] | null> {
+    try {
+      // Build date filter for daily_metrics table
+      const filters = [`organization_id.eq.${orgId}`];
+      if (startDate && endDate) {
+        filters.push(`metric_date.gte.${startDate}`, `metric_date.lte.${endDate}`);
+      }
+      const query = filters.join('&');
+
+      // Fetch daily metrics data
+      const metrics = await supabase.select(
+        `${platform}_ads_daily_metrics`,
+        query,
+        { limit: 10000, order: 'metric_date.asc' }
+      );
+
+      if (!metrics || metrics.length === 0) {
+        return null;
+      }
+
+      // Group metrics by date
+      const dailyData: Record<string, any> = {};
+
+      for (const metric of metrics) {
+        const date = metric.metric_date;
+
+        if (!dailyData[date]) {
+          dailyData[date] = {
+            date,
+            spend_cents: 0,
+            impressions: 0,
+            clicks: 0,
+            conversions: 0
+          };
+        }
+
+        dailyData[date].spend_cents += metric.spend_cents || 0;
+        dailyData[date].impressions += metric.impressions || 0;
+        dailyData[date].clicks += metric.clicks || 0;
+        dailyData[date].conversions += metric.conversions || 0;
+      }
+
+      // Convert to array and sort by date
+      return Object.values(dailyData).sort((a: any, b: any) =>
+        a.date.localeCompare(b.date)
+      );
+    } catch (err) {
+      console.error(`Failed to fetch time series for ${platform}:`, err);
       return null;
     }
   }

@@ -173,6 +173,21 @@ export class OnboardingService {
   }
 
   /**
+   * Decrement service connection count (called when user disconnects a platform)
+   */
+  async decrementServicesConnected(userId: string): Promise<void> {
+    await this.db.prepare(`
+      UPDATE onboarding_progress
+      SET services_connected = CASE
+          WHEN services_connected > 0 THEN services_connected - 1
+          ELSE 0
+        END,
+        updated_at = datetime('now')
+      WHERE user_id = ?
+    `).bind(userId).run();
+  }
+
+  /**
    * Mark first sync as completed
    */
   async markFirstSyncCompleted(userId: string): Promise<void> {

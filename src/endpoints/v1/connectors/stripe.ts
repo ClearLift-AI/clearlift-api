@@ -67,10 +67,10 @@ export async function handleStripeConnect(c: AppContext) {
       return error(c, "INVALID_CONFIG", "This Stripe account cannot accept charges", 400);
     }
 
-    // Check if this Stripe account is already connected
+    // Check if this Stripe account is already connected (and active)
     const existing = await c.env.DB.prepare(`
       SELECT id FROM platform_connections
-      WHERE organization_id = ? AND platform = 'stripe' AND stripe_account_id = ?
+      WHERE organization_id = ? AND platform = 'stripe' AND stripe_account_id = ? AND is_active = 1
     `).bind(organization_id, accountInfo.stripe_account_id).first();
 
     if (existing) {

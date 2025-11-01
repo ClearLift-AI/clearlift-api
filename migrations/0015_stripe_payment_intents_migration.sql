@@ -39,9 +39,8 @@ ALTER TABLE platform_connections
 -- Mark all existing Stripe connections for reconfiguration
 UPDATE platform_connections
 SET requires_reconfiguration = TRUE,
-    migration_notice = 'Stripe connector has been updated to track payment_intents with invoice line items. PII has been removed. Please reconfigure your connection. See: https://docs.clearlift.ai/stripe-migration',
-    updated_at = CURRENT_TIMESTAMP
-WHERE provider = 'stripe';
+    migration_notice = 'Stripe connector has been updated to track payment_intents with invoice line items. PII has been removed. Please reconfigure your connection. See: https://docs.clearlift.ai/stripe-migration'
+WHERE platform = 'stripe';
 
 -- Note: This migration affects the connector configuration only.
 -- Actual Stripe conversion data is stored in Supabase (managed by clearlift-cron).

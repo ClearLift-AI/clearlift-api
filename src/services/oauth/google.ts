@@ -96,8 +96,8 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
       console.log('Got user info for Google Ads account fetch:', { userId: userInfo.id, email: userInfo.email });
 
       // Call Google Ads API to list accessible customer accounts
-      // https://developers.google.com/google-ads/api/rest/reference/rest/v21/customers/listAccessibleCustomers
-      const apiUrl = 'https://googleads.googleapis.com/v21/customers:listAccessibleCustomers';
+      // https://developers.google.com/google-ads/api/rest/reference/rest/v22/customers/listAccessibleCustomers
+      const apiUrl = 'https://googleads.googleapis.com/v22/customers:listAccessibleCustomers';
       console.log('Calling Google Ads API:', {
         url: apiUrl,
         hasAccessToken: !!accessToken,
@@ -115,7 +115,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Google Ads API error:', {
+        console.error('Google Ads API listAccessibleCustomers error:', {
           status: response.status,
           statusText: response.statusText,
           error: errorText
@@ -135,6 +135,8 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
               errorMessage += ' Your developer token is only approved for test accounts. Apply for Basic or Standard access in the Google Ads API Center.';
             } else if (errorMessage.includes('developer token')) {
               errorMessage += ' Check that your developer token is valid in the Google Ads API Center.';
+            } else if (errorMessage.includes('PERMISSION_DENIED')) {
+              errorMessage += ' Make sure your Google account has access to Google Ads accounts and the OAuth consent has been granted with the correct scopes.';
             }
           }
         } catch (e) {
@@ -157,39 +159,57 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
         return [];
       }
 
-      // Fetch details for each customer account
+      // Fetch details for each customer account using Google Ads search API
       const accounts = await Promise.all(
         customerIds.map(async (customerId: string) => {
           try {
-            const detailResponse = await fetch(`https://googleads.googleapis.com/v21/customers/${customerId}`, {
-              method: 'GET',
+            // Use the Google Ads search API to get customer details
+            const searchUrl = `https://googleads.googleapis.com/v22/customers/${customerId}/googleAds:search`;
+            const query = `SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.manager FROM customer`;
+
+            const detailResponse = await fetch(searchUrl, {
+              method: 'POST',
               headers: {
                 'Authorization': `Bearer ${accessToken}`,
                 'developer-token': developerToken,
+                'login-customer-id': customerId,
                 'Content-Type': 'application/json'
-              }
+              },
+              body: JSON.stringify({ query })
             });
 
             if (detailResponse.ok) {
-              const details = await detailResponse.json() as any;
-              return {
-                id: customerId,
-                name: details.descriptiveName || `Account ${customerId}`,
-                currency: details.currencyCode || 'USD',
-                timezone: details.timeZone || 'America/Los_Angeles',
-                manager: details.manager || false
-              };
+              const data = await detailResponse.json() as any;
+              const result = data.results?.[0];
+              const customer = result?.customer;
+
+              if (customer) {
+                return {
+                  id: customerId,
+                  name: customer.descriptiveName || `Account ${customerId}`,
+                  currency: customer.currencyCode || 'USD',
+                  timezone: customer.timeZone || 'America/Los_Angeles',
+                  manager: customer.manager || false
+                };
+              }
             } else {
-              // If we can't get details, return basic info
-              return {
-                id: customerId,
-                name: `Google Ads Account ${customerId}`,
-                currency: 'USD',
-                timezone: 'America/Los_Angeles'
-              };
+              // Log the error response
+              const errorText = await detailResponse.text();
+              console.error(`Failed to get customer ${customerId} details:`, {
+                status: detailResponse.status,
+                error: errorText
+              });
             }
+
+            // If we can't get details, return basic info
+            return {
+              id: customerId,
+              name: `Google Ads Account ${customerId}`,
+              currency: 'USD',
+              timezone: 'America/Los_Angeles'
+            };
           } catch (error) {
-            console.error(`Failed to get details for customer ${customerId}:`, error);
+            console.error(`Exception getting details for customer ${customerId}:`, error);
             return {
               id: customerId,
               name: `Google Ads Account ${customerId}`,

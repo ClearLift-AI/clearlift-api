@@ -426,7 +426,7 @@ export class RequestPasswordReset extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const body = await c.req.json();
-    const {email } = data.body;
+    const { email } = body;
 
     // Always return success to prevent user enumeration
     // In production, this would send an email
@@ -492,7 +492,7 @@ export class ResetPassword extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const body = await c.req.json();
-    const {token, new_password } = data.body;
+    const { token, new_password } = body;
 
     // Verify token
     const resetToken = await c.env.DB.prepare(`

@@ -226,9 +226,21 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     const { provider } = data.params;
     const { code, state, error: oauthError } = data.query;
 
+    // Clean up expired OAuth states (older than 1 hour)
+    try {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      await c.env.DB.prepare(`
+        DELETE FROM oauth_states
+        WHERE created_at < ?
+      `).bind(oneHourAgo).run();
+    } catch (cleanupErr) {
+      console.error('OAuth state cleanup error:', cleanupErr);
+      // Don't fail the request if cleanup fails
+    }
+
     // Handle OAuth error
     if (oauthError) {
-      return c.redirect(`https://app.clearlift.ai/onboarding?error=${oauthError}`);
+      return c.redirect(`https://app.clearlift.ai/oauth/callback?error=${oauthError}`);
     }
 
     try {
@@ -238,12 +250,22 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       const oauthState = await connectorService.getOAuthState(state);
 
       if (!oauthState) {
-        return c.redirect(`https://app.clearlift.ai/onboarding?error=invalid_state`);
+        return c.redirect(`https://app.clearlift.ai/oauth/callback?error=invalid_state`);
       }
 
       // Exchange code for token
       const oauthProvider = await this.getOAuthProvider(provider, c);
       const tokens = await oauthProvider.exchangeCodeForToken(code);
+
+      // For Facebook, convert short-lived token to long-lived token (60 days)
+      if (provider === 'facebook') {
+        console.log('Converting Facebook short-lived token to long-lived token');
+        const fbProvider = oauthProvider as FacebookAdsOAuthProvider;
+        const longLivedTokens = await fbProvider.exchangeForLongLivedToken(tokens.access_token);
+        tokens.access_token = longLivedTokens.access_token;
+        tokens.expires_in = longLivedTokens.expires_in;
+        console.log(`Facebook token expires in ${longLivedTokens.expires_in} seconds (~${Math.round(longLivedTokens.expires_in / 86400)} days)`);
+      }
 
       // Get user info from provider
       const userInfo = await oauthProvider.getUserInfo(tokens.access_token);
@@ -271,7 +293,15 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       console.error('OAuth callback error:', err);
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       const errorDetails = encodeURIComponent(errorMessage);
-      return c.redirect(`https://app.clearlift.ai/onboarding?error=connection_failed&error_description=${errorDetails}`);
+
+      // Clean up the failed OAuth state
+      try {
+        await c.env.DB.prepare(`DELETE FROM oauth_states WHERE state = ?`).bind(state).run();
+      } catch (cleanupErr) {
+        console.error('Failed to cleanup oauth state:', cleanupErr);
+      }
+
+      return c.redirect(`https://app.clearlift.ai/oauth/callback?error=connection_failed&error_description=${errorDetails}`);
     }
   }
 
@@ -428,7 +458,19 @@ export class GetOAuthAccounts extends OpenAPIRoute {
 
     } catch (err: any) {
       console.error('Get OAuth accounts error:', err);
-      return error(c, "FETCH_FAILED", err.message || "Failed to fetch ad accounts", 500);
+      console.error('Error stack:', err.stack);
+      const errorMessage = err.message || "Failed to fetch ad accounts";
+      console.error('Returning error to client:', errorMessage);
+
+      // Clean up the OAuth state on failure to prevent accumulation
+      try {
+        await c.env.DB.prepare(`DELETE FROM oauth_states WHERE state = ?`).bind(state).run();
+        console.log('Cleaned up failed OAuth state');
+      } catch (cleanupErr) {
+        console.error('Failed to cleanup oauth state:', cleanupErr);
+      }
+
+      return error(c, "FETCH_FAILED", errorMessage, 500);
     }
   }
 }
@@ -633,6 +675,11 @@ export class DisconnectPlatform extends OpenAPIRoute {
     }
 
     await connectorService.disconnectPlatform(connection_id);
+
+    // Update onboarding progress counter
+    const { OnboardingService } = await import("../../services/onboarding");
+    const onboarding = new OnboardingService(c.env.DB);
+    await onboarding.decrementServicesConnected(session.user_id);
 
     return success(c, { message: "Platform disconnected successfully" });
   }

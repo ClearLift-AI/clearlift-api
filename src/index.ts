@@ -79,6 +79,13 @@ import {
   JoinWaitlist,
   GetWaitlistStats
 } from "./endpoints/v1/waitlist";
+import {
+  GetMatrixSettings,
+  UpdateMatrixSettings,
+  GetAIDecisions,
+  AcceptAIDecision,
+  RejectAIDecision
+} from "./endpoints/v1/settings";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -265,6 +272,15 @@ openapi.get("/v1/workers/health", auth, GetWorkersHealth);
 openapi.get("/v1/workers/queue/status", auth, GetQueueStatus);
 openapi.get("/v1/workers/dlq", auth, GetDeadLetterQueue);
 openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
+
+// Settings endpoints
+openapi.get("/v1/settings/matrix", auth, GetMatrixSettings);
+openapi.post("/v1/settings/matrix", auth, UpdateMatrixSettings);
+
+// AI Decisions endpoints
+openapi.get("/v1/settings/ai-decisions", auth, GetAIDecisions);
+openapi.post("/v1/settings/ai-decisions/:decision_id/accept", auth, AcceptAIDecision);
+openapi.post("/v1/settings/ai-decisions/:decision_id/reject", auth, RejectAIDecision);
 
 
 // Export the Hono app

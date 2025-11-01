@@ -36,11 +36,14 @@
     "hono": "4.8.2",
     "zod": "3.25.67"
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.8.44",
     "@types/node": "24.0.4",
     "tsx": "^4.20.6",
-    "typescript": "5.8.3",
-    "wrangler": "4.21.x"
+    "typescript": "^5.9.2",
+    "wrangler": "^4.45.3"
   }
 }

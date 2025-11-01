@@ -78,7 +78,7 @@ export class CreateFilterRule extends OpenAPIRoute {
       FROM platform_connections pc
       INNER JOIN organization_members om
         ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND om.user_id = ?
+      WHERE pc.id = ? AND om.user_id = ? AND pc.is_active = 1
     `).bind(connectionId, session.user_id).first();
 
     if (!connection) {
@@ -167,7 +167,7 @@ export class ListFilterRules extends OpenAPIRoute {
       SELECT 1 FROM platform_connections pc
       INNER JOIN organization_members om
         ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND om.user_id = ?
+      WHERE pc.id = ? AND om.user_id = ? AND pc.is_active = 1
     `).bind(connectionId, session.user_id).first();
 
     if (!hasAccess) {
@@ -404,7 +404,7 @@ export class TestFilterRule extends OpenAPIRoute {
       SELECT 1 FROM platform_connections pc
       INNER JOIN organization_members om
         ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND om.user_id = ?
+      WHERE pc.id = ? AND om.user_id = ? AND pc.is_active = 1
     `).bind(connectionId, session.user_id).first();
 
     if (!hasAccess) {
@@ -490,7 +490,7 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
       SELECT 1 FROM platform_connections pc
       INNER JOIN organization_members om
         ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND om.user_id = ?
+      WHERE pc.id = ? AND om.user_id = ? AND pc.is_active = 1
     `).bind(connectionId, session.user_id).first();
 
     if (!hasAccess) {
