@@ -9,7 +9,8 @@ const MatrixSettingsSchema = z.object({
   ai_control: z.enum(['copilot', 'autopilot']),
   daily_cap_cents: z.number().int().positive().optional().nullable(),
   monthly_cap_cents: z.number().int().positive().optional().nullable(),
-  pause_threshold_percent: z.number().int().min(0).max(100).optional().nullable()
+  pause_threshold_percent: z.number().int().min(0).max(100).optional().nullable(),
+  conversion_source: z.enum(['ad_platforms', 'tag', 'connectors']).optional()
 });
 
 /**
@@ -70,7 +71,8 @@ export class GetMatrixSettings extends OpenAPIRoute {
         ai_control,
         daily_cap_cents,
         monthly_cap_cents,
-        pause_threshold_percent
+        pause_threshold_percent,
+        conversion_source
       FROM ai_optimization_settings
       WHERE org_id = ?
     `).bind(orgId).first();
@@ -83,7 +85,8 @@ export class GetMatrixSettings extends OpenAPIRoute {
         ai_control: 'copilot',
         daily_cap_cents: null,
         monthly_cap_cents: null,
-        pause_threshold_percent: null
+        pause_threshold_percent: null,
+        conversion_source: 'tag'
       });
     }
 
@@ -93,7 +96,8 @@ export class GetMatrixSettings extends OpenAPIRoute {
       ai_control: settings.ai_control,
       daily_cap_cents: settings.daily_cap_cents,
       monthly_cap_cents: settings.monthly_cap_cents,
-      pause_threshold_percent: settings.pause_threshold_percent
+      pause_threshold_percent: settings.pause_threshold_percent,
+      conversion_source: settings.conversion_source
     });
   }
 }
@@ -164,8 +168,9 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         daily_cap_cents,
         monthly_cap_cents,
         pause_threshold_percent,
+        conversion_source,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(org_id) DO UPDATE SET
         growth_strategy = excluded.growth_strategy,
         budget_optimization = excluded.budget_optimization,
@@ -173,6 +178,7 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         daily_cap_cents = excluded.daily_cap_cents,
         monthly_cap_cents = excluded.monthly_cap_cents,
         pause_threshold_percent = excluded.pause_threshold_percent,
+        conversion_source = excluded.conversion_source,
         updated_at = datetime('now')
     `).bind(
       orgId,
@@ -181,7 +187,8 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
       body.ai_control,
       body.daily_cap_cents || null,
       body.monthly_cap_cents || null,
-      body.pause_threshold_percent || null
+      body.pause_threshold_percent || null,
+      body.conversion_source || 'tag'
     ).run();
 
     return success(c, { message: "Settings updated successfully" });

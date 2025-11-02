@@ -240,6 +240,12 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "No access to this organization", 403);
     }
 
+    // Get conversion source setting
+    const conversionSettings = await c.env.DB.prepare(`
+      SELECT conversion_source FROM ai_optimization_settings WHERE org_id = ?
+    `).bind(orgId).first();
+    const conversionSource = conversionSettings?.conversion_source || 'tag';
+
     // Get active ad platform connections for this org (exclude non-ad platforms like Stripe)
     const connections = await c.env.DB.prepare(`
       SELECT platform FROM platform_connections
@@ -298,7 +304,10 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           totalSpendCents += metrics.spend_cents;
           totalImpressions += metrics.impressions;
           totalClicks += metrics.clicks;
-          totalConversions += metrics.conversions || 0;
+          // Only add ad platform conversions if not using connectors
+          if (conversionSource !== 'connectors') {
+            totalConversions += metrics.conversions || 0;
+          }
         }
 
         // Fetch daily time series data
@@ -327,13 +336,45 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
             timeSeriesByDate[dayData.date].total_spend_cents += dayData.spend_cents;
             timeSeriesByDate[dayData.date].total_impressions += dayData.impressions;
             timeSeriesByDate[dayData.date].total_clicks += dayData.clicks;
-            timeSeriesByDate[dayData.date].total_conversions += dayData.conversions;
+            // Only add ad platform conversions if not using connectors
+            if (conversionSource !== 'connectors') {
+              timeSeriesByDate[dayData.date].total_conversions += dayData.conversions;
+            }
             timeSeriesByDate[dayData.date].by_platform[platform] = {
               spend_cents: dayData.spend_cents,
               impressions: dayData.impressions,
               clicks: dayData.clicks,
               conversions: dayData.conversions
             };
+          }
+        }
+      }
+
+      // If using connectors (Stripe, etc.) for conversions, fetch from stripe_conversions
+      if (conversionSource === 'connectors') {
+        const stripeConversions = await this.fetchStripeConversions(
+          supabase,
+          orgId,
+          startDate,
+          endDate
+        );
+
+        if (stripeConversions) {
+          totalConversions = stripeConversions.total_conversions;
+
+          // Merge Stripe conversions into time series by date
+          for (const dayData of stripeConversions.by_date) {
+            if (!timeSeriesByDate[dayData.date]) {
+              timeSeriesByDate[dayData.date] = {
+                date: dayData.date,
+                total_spend_cents: 0,
+                total_impressions: 0,
+                total_clicks: 0,
+                total_conversions: 0,
+                by_platform: {}
+              };
+            }
+            timeSeriesByDate[dayData.date].total_conversions += dayData.conversions;
           }
         }
       }
@@ -399,7 +440,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       const uniqueCampaigns = new Set();
 
       for (const metric of metrics) {
-        spendCents += metric.spend_cents || 0;
+        spendCents += (metric.spend_cents || metric.cost_cents || 0);
         impressions += metric.impressions || 0;
         clicks += metric.clicks || 0;
         conversions += metric.conversions || 0;
@@ -465,7 +506,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           };
         }
 
-        dailyData[date].spend_cents += metric.spend_cents || 0;
+        dailyData[date].spend_cents += (metric.spend_cents || metric.cost_cents || 0);
         dailyData[date].impressions += metric.impressions || 0;
         dailyData[date].clicks += metric.clicks || 0;
         dailyData[date].conversions += metric.conversions || 0;
@@ -477,6 +518,69 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       );
     } catch (err) {
       console.error(`Failed to fetch time series for ${platform}:`, err);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch conversions from Stripe (stripe_conversions table)
+   */
+  private async fetchStripeConversions(
+    supabase: SupabaseClient,
+    orgId: string,
+    startDate?: string,
+    endDate?: string
+  ): Promise<{ total_conversions: number; by_date: any[] } | null> {
+    try {
+      // Build date filter for stripe_conversions table (uses stripe_created_at timestamp)
+      const filters = [`organization_id.eq.${orgId}`];
+      if (startDate && endDate) {
+        filters.push(`stripe_created_at.gte.${startDate}T00:00:00Z`, `stripe_created_at.lte.${endDate}T23:59:59Z`);
+      }
+      const query = filters.join('&');
+
+      // Fetch Stripe conversion data
+      const conversions = await supabase.select(
+        'stripe_conversions',
+        query,
+        { limit: 10000, order: 'stripe_created_at.asc' }
+      );
+
+      if (!conversions || conversions.length === 0) {
+        return null;
+      }
+
+      // Group conversions by date
+      const dailyData: Record<string, number> = {};
+      let totalConversions = 0;
+
+      for (const conversion of conversions) {
+        // Extract date from stripe_created_at timestamp (YYYY-MM-DD)
+        const timestamp = conversion.stripe_created_at;
+        const date = timestamp ? timestamp.split('T')[0] : null;
+
+        if (!date) continue;
+
+        if (!dailyData[date]) {
+          dailyData[date] = 0;
+        }
+
+        // Each row is a conversion (payment_intent)
+        dailyData[date] += 1;
+        totalConversions += 1;
+      }
+
+      // Convert to array
+      const byDate = Object.entries(dailyData)
+        .map(([date, conversions]) => ({ date, conversions }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      return {
+        total_conversions: totalConversions,
+        by_date: byDate
+      };
+    } catch (err) {
+      console.error('Failed to fetch Stripe conversions:', err);
       return null;
     }
   }
