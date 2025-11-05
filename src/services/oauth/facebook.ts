@@ -25,10 +25,14 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
   }
 
   /**
-   * Get authorization URL with Facebook-specific parameters
+   * Get authorization URL with Facebook-specific parameters and PKCE
+   *
+   * @param state - CSRF token
+   * @param pkce - PKCE challenge from generatePKCEChallenge()
+   * @returns Authorization URL
    */
-  getAuthorizationUrl(state: string): string {
-    return super.getAuthorizationUrl(state, {
+  getAuthorizationUrl(state: string, pkce: import('./base').PKCEChallenge): string {
+    return super.getAuthorizationUrl(state, pkce, {
       display: 'popup',
       auth_type: 'rerequest' // Force reauthorization to get all permissions
     });

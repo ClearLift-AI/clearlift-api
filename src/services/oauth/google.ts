@@ -24,13 +24,17 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
   }
 
   /**
-   * Get authorization URL with Google-specific parameters
+   * Get authorization URL with Google-specific parameters and PKCE
+   *
+   * @param state - CSRF token
+   * @param pkce - PKCE challenge from generatePKCEChallenge()
+   * @returns Authorization URL
    */
-  getAuthorizationUrl(state: string): string {
-    return super.getAuthorizationUrl(state, {
-      access_type: 'offline',
+  getAuthorizationUrl(state: string, pkce: import('./base').PKCEChallenge): string {
+    return super.getAuthorizationUrl(state, pkce, {
+      access_type: 'offline', // Request refresh token
       prompt: 'consent', // Force consent to get refresh token
-      include_granted_scopes: 'true'
+      include_granted_scopes: 'true' // Incremental authorization
     });
   }
 

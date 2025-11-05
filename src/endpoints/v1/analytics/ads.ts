@@ -163,7 +163,7 @@ export class GetAds extends OpenAPIRoute {
         return error(
           c,
           "PLATFORM_NOT_AVAILABLE",
-          `Platform '${platform_slug}' is not available (table '${platform_slug}_ads_performance' does not exist in Supabase)`,
+          `No data available for ${platform_slug}. The connector may not be configured, or the cron worker hasn't synced data yet.`,
           404
         );
       }

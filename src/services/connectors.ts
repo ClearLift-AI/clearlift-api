@@ -102,9 +102,19 @@ export class ConnectorService {
     metadata?: any
   ): Promise<string> {
     const state = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
 
-    await this.db.prepare(`
+    console.log('[createOAuthState] Creating OAuth state:', {
+      state,
+      userId,
+      organizationId,
+      provider,
+      redirectUri,
+      expiresAt: expiresAt.toISOString(),
+      metadata
+    });
+
+    const result = await this.db.prepare(`
       INSERT INTO oauth_states (state, user_id, organization_id, provider, redirect_uri, expires_at, metadata)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).bind(
@@ -117,6 +127,11 @@ export class ConnectorService {
       JSON.stringify(metadata || {})
     ).run();
 
+    console.log('[createOAuthState] INSERT result:', {
+      success: result.success,
+      meta: result.meta
+    });
+
     return state;
   }
 
@@ -124,9 +139,49 @@ export class ConnectorService {
    * Get OAuth state without consuming it (for multi-step OAuth flows)
    */
   async getOAuthState(state: string): Promise<OAuthState | null> {
+    const jsNow = new Date().toISOString();
+    console.log('[getOAuthState] Querying for state:', { state, jsNow });
+
+    // First, try to find the state without expiry check
+    const anyState = await this.db.prepare(`
+      SELECT * FROM oauth_states WHERE state = ?
+    `).bind(state).first<OAuthState>();
+
+    console.log('[getOAuthState] State found (without expiry check):', anyState ? {
+      state: anyState.state,
+      expires_at: anyState.expires_at,
+      created_at: (anyState as any).created_at
+    } : null);
+
+    // Get SQLite's current datetime for comparison
+    const sqliteNow = await this.db.prepare(`SELECT datetime('now') as now`).first<{ now: string }>();
+
+    if (anyState) {
+      const expiresAt = new Date(anyState.expires_at);
+      const jsNowDate = new Date(jsNow);
+      const isExpiredByJS = expiresAt <= jsNowDate;
+      const timeDiffMs = expiresAt.getTime() - jsNowDate.getTime();
+      const timeDiffMin = Math.round(timeDiffMs / 60000);
+
+      console.log('[getOAuthState] Expiry check details:', {
+        expires_at: anyState.expires_at,
+        js_now: jsNow,
+        sqlite_now: sqliteNow?.now,
+        is_expired_by_js: isExpiredByJS,
+        time_diff_minutes: timeDiffMin,
+        state_age_seconds: Math.round((jsNowDate.getTime() - new Date((anyState as any).created_at || 0).getTime()) / 1000)
+      });
+    }
+
+    // Now query with expiry check
     const result = await this.db.prepare(`
       SELECT * FROM oauth_states WHERE state = ? AND expires_at > datetime('now')
     `).bind(state).first<OAuthState>();
+
+    console.log('[getOAuthState] State found (with expiry check):', result ? {
+      state: result.state,
+      expires_at: result.expires_at
+    } : 'EXPIRED OR NOT FOUND');
 
     if (!result) {
       return null;

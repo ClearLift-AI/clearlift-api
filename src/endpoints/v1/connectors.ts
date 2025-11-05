@@ -142,19 +142,23 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "No access to this organization", 403);
     }
 
-    // Create OAuth state
+    // Get OAuth provider and generate PKCE challenge
+    const oauthProvider = await this.getOAuthProvider(provider, c);
+    const pkce = await oauthProvider.generatePKCEChallenge();
+
+    // Create OAuth state with PKCE verifier stored in metadata
     const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
     const connectorService = new ConnectorService(c.env.DB, encryptionKey);
     const state = await connectorService.createOAuthState(
       session.user_id,
       organization_id,
       provider,
-      redirect_uri
+      redirect_uri,
+      { code_verifier: pkce.codeVerifier }  // Store verifier as object property
     );
 
-    // Get OAuth provider
-    const oauthProvider = await this.getOAuthProvider(provider, c);
-    const authorizationUrl = oauthProvider.getAuthorizationUrl(state);
+    // Generate authorization URL with PKCE challenge
+    const authorizationUrl = oauthProvider.getAuthorizationUrl(state, pkce);
 
     return success(c, {
       authorization_url: authorizationUrl,
@@ -226,13 +230,15 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     const { provider } = data.params;
     const { code, state, error: oauthError } = data.query;
 
-    // Clean up expired OAuth states (older than 1 hour)
+    // Clean up expired OAuth states (based on expires_at, not created_at)
     try {
-      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      await c.env.DB.prepare(`
+      const now = new Date().toISOString();
+      console.log('[HandleOAuthCallback] Cleaning up expired states (expires_at < now):', now);
+      const cleanupResult = await c.env.DB.prepare(`
         DELETE FROM oauth_states
-        WHERE created_at < ?
-      `).bind(oneHourAgo).run();
+        WHERE expires_at < datetime('now')
+      `).run();
+      console.log('[HandleOAuthCallback] Cleanup deleted expired rows:', cleanupResult.meta?.changes || 0);
     } catch (cleanupErr) {
       console.error('OAuth state cleanup error:', cleanupErr);
       // Don't fail the request if cleanup fails
@@ -247,15 +253,34 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       // Get state (don't consume yet - needed for account selection)
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
       const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+
+      console.log('[HandleOAuthCallback] Looking up OAuth state:', { state, provider });
       const oauthState = await connectorService.getOAuthState(state);
 
       if (!oauthState) {
+        console.error('[HandleOAuthCallback] OAuth state not found in database:', { state, provider });
         return c.redirect(`https://app.clearlift.ai/oauth/callback?error=invalid_state`);
       }
 
-      // Exchange code for token
+      console.log('[HandleOAuthCallback] OAuth state found:', { userId: oauthState.user_id, organizationId: oauthState.organization_id });
+
+      // Set organization_id in context for audit middleware
+      c.set("org_id" as any, oauthState.organization_id);
+
+      // Get PKCE code verifier from state metadata
+      const stateMetadata = typeof oauthState.metadata === 'string'
+        ? JSON.parse(oauthState.metadata)
+        : oauthState.metadata;
+
+      const codeVerifier = stateMetadata?.code_verifier;
+      if (!codeVerifier || typeof codeVerifier !== 'string') {
+        console.error('PKCE code verifier not found in OAuth state', { hasMetadata: !!stateMetadata, metadataType: typeof stateMetadata });
+        return c.redirect(`https://app.clearlift.ai/oauth/callback?error=invalid_state&error_description=PKCE+verifier+missing`);
+      }
+
+      // Exchange code for token with PKCE verification
       const oauthProvider = await this.getOAuthProvider(provider, c);
-      const tokens = await oauthProvider.exchangeCodeForToken(code);
+      const tokens = await oauthProvider.exchangeCodeForToken(code, codeVerifier);
 
       // For Facebook, convert short-lived token to long-lived token (60 days)
       if (provider === 'facebook') {
@@ -270,8 +295,9 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       // Get user info from provider
       const userInfo = await oauthProvider.getUserInfo(tokens.access_token);
 
-      // Store token and user info in oauth_states metadata for account selection
+      // Store token and user info in oauth_states (keep code_verifier, add tokens)
       const metadata = {
+        code_verifier: codeVerifier,  // Preserve PKCE verifier
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_in: tokens.expires_in,
@@ -386,6 +412,9 @@ export class GetOAuthAccounts extends OpenAPIRoute {
       if (!oauthState) {
         return error(c, "INVALID_STATE", "OAuth state is invalid or expired", 400);
       }
+
+      // Set organization_id in context for audit middleware
+      c.set("org_id" as any, oauthState.organization_id);
 
       // Get access token from state metadata
       const metadata = typeof oauthState.metadata === 'string'
@@ -531,6 +560,9 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       }
 
       console.log('OAuth state validated:', { userId: oauthState.user_id, organizationId: oauthState.organization_id });
+
+      // Set organization_id in context for audit middleware
+      c.set("org_id" as any, oauthState.organization_id);
 
       // Get tokens from state metadata
       const metadata = typeof oauthState.metadata === 'string'
