@@ -52,6 +52,8 @@ import {
   HandleOAuthCallback,
   GetOAuthAccounts,
   FinalizeOAuthConnection,
+  ListGoogleAdsAccounts,
+  UpdateGoogleAdsSettings,
   DisconnectPlatform
 } from "./endpoints/v1/connectors";
 import { GetSyncStatus } from "./endpoints/v1/connectors/syncStatus";
@@ -252,6 +254,10 @@ openapi.get("/v1/connectors/:provider/accounts", GetOAuthAccounts); // No auth -
 openapi.post("/v1/connectors/:provider/finalize", FinalizeOAuthConnection); // No auth - called from callback page
 openapi.delete("/v1/connectors/:connection_id", auth, DisconnectPlatform);
 openapi.get("/v1/connectors/:connection_id/sync-status", auth, GetSyncStatus);
+
+// Google Ads-specific connector endpoints
+openapi.get("/v1/connectors/:connection_id/google-ads/accounts", auth, ListGoogleAdsAccounts);
+openapi.put("/v1/connectors/:connection_id/google-ads/settings", auth, UpdateGoogleAdsSettings);
 
 // Stripe-specific connector endpoints
 // Note: /v1/connectors/stripe/connect is registered as direct Hono route at the end to bypass validation
