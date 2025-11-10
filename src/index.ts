@@ -52,6 +52,9 @@ import {
   HandleOAuthCallback,
   GetOAuthAccounts,
   FinalizeOAuthConnection,
+  GetConnectorSettings,
+  UpdateConnectorSettings,
+  TriggerResync,
   ListGoogleAdsAccounts,
   UpdateGoogleAdsSettings,
   DisconnectPlatform
@@ -255,7 +258,12 @@ openapi.post("/v1/connectors/:provider/finalize", FinalizeOAuthConnection); // N
 openapi.delete("/v1/connectors/:connection_id", auth, DisconnectPlatform);
 openapi.get("/v1/connectors/:connection_id/sync-status", auth, GetSyncStatus);
 
-// Google Ads-specific connector endpoints
+// General connector settings endpoints
+openapi.get("/v1/connectors/:connection_id/settings", auth, GetConnectorSettings);
+openapi.patch("/v1/connectors/:connection_id/settings", auth, UpdateConnectorSettings);
+openapi.post("/v1/connectors/:connection_id/resync", auth, TriggerResync);
+
+// Google Ads-specific connector endpoints (deprecated - use general settings endpoints instead)
 openapi.get("/v1/connectors/:connection_id/google-ads/accounts", auth, ListGoogleAdsAccounts);
 openapi.put("/v1/connectors/:connection_id/google-ads/settings", auth, UpdateGoogleAdsSettings);
 

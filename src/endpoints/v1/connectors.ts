@@ -771,7 +771,198 @@ export class ListGoogleAdsAccounts extends OpenAPIRoute {
 }
 
 /**
+ * GET /v1/connectors/:connection_id/settings - Get connector settings
+ */
+export class GetConnectorSettings extends OpenAPIRoute {
+  public schema = {
+    tags: ["Connectors"],
+    summary: "Get connector settings and configuration",
+    operationId: "get-connector-settings",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        connection_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Connector settings",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                connection_id: z.string(),
+                platform: z.string(),
+                account_id: z.string(),
+                account_name: z.string().optional(),
+                settings: z.any().optional(),
+                metadata: z.object({
+                  isManagerAccount: z.boolean().optional(),
+                  availableAccounts: z.array(z.any()).optional()
+                }).optional()
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    try {
+      const session = c.get("session");
+      const data = await this.getValidatedData<typeof this.schema>();
+      const { connection_id } = data.params;
+
+      // Get connection and verify access
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connection = await connectorService.getConnection(connection_id);
+
+      if (!connection) {
+        return error(c, "NOT_FOUND", "Connection not found", 404);
+      }
+
+      // Verify user has access to org
+      const { D1Adapter } = await import("../../adapters/d1");
+      const d1 = new D1Adapter(c.env.DB);
+      const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id);
+
+      if (!hasAccess) {
+        return error(c, "FORBIDDEN", "No access to this connection", 403);
+      }
+
+      // Parse settings if they exist
+      let settings = null;
+      if (connection.settings) {
+        try {
+          settings = JSON.parse(connection.settings);
+        } catch (e) {
+          console.error('Failed to parse connection settings:', e);
+        }
+      }
+
+      const response: any = {
+        connection_id: connection.id,
+        platform: connection.platform,
+        account_id: connection.account_id,
+        account_name: connection.account_name,
+        settings
+      };
+
+      // Add platform-specific metadata
+      if (connection.platform === 'google') {
+        try {
+          const accessToken = await connectorService.getAccessToken(connection_id);
+          if (accessToken) {
+            const developerToken = await getSecret(c.env.GOOGLE_ADS_DEVELOPER_TOKEN);
+            if (developerToken) {
+              const { GoogleAdsConnector } = await import('../../services/connectors/google-ads');
+              const connector = new GoogleAdsConnector(accessToken, connection.account_id, developerToken);
+
+              const isManager = await connector.isManagerAccount();
+              response.metadata = {
+                isManagerAccount: isManager
+              };
+
+              if (isManager) {
+                const accounts = await connector.listClientAccounts();
+                response.metadata.availableAccounts = accounts;
+              }
+            }
+          }
+        } catch (err) {
+          console.error('Failed to fetch Google Ads metadata:', err);
+          // Don't fail the request, just omit metadata
+        }
+      }
+
+      return success(c, response);
+    } catch (err: any) {
+      console.error("GetConnectorSettings error:", err);
+      return error(c, "INTERNAL_ERROR", `Failed to fetch connector settings: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/connectors/:connection_id/settings - Update connector settings
+ */
+export class UpdateConnectorSettings extends OpenAPIRoute {
+  public schema = {
+    tags: ["Connectors"],
+    summary: "Update connector settings",
+    operationId: "update-connector-settings",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        connection_id: z.string()
+      }),
+      body: contentJson(
+        z.object({
+          settings: z.any()
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Settings updated successfully"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    try {
+      const session = c.get("session");
+      const data = await this.getValidatedData<typeof this.schema>();
+      const { connection_id } = data.params;
+      const { settings } = data.body;
+
+      // Get connection and verify access
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connection = await connectorService.getConnection(connection_id);
+
+      if (!connection) {
+        return error(c, "NOT_FOUND", "Connection not found", 404);
+      }
+
+      // Verify user has access to org
+      const { D1Adapter } = await import("../../adapters/d1");
+      const d1 = new D1Adapter(c.env.DB);
+      const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id);
+
+      if (!hasAccess) {
+        return error(c, "FORBIDDEN", "No access to this connection", 403);
+      }
+
+      // Platform-specific validation
+      if (connection.platform === 'google' && settings.accountSelection) {
+        if (settings.accountSelection.mode === 'selected' &&
+            (!settings.accountSelection.selectedAccounts || settings.accountSelection.selectedAccounts.length === 0)) {
+          return error(c, "INVALID_CONFIG", "When mode is 'selected', at least one account must be selected", 400);
+        }
+      }
+
+      // Update connection settings
+      await c.env.DB.prepare(`
+        UPDATE platform_connections
+        SET settings = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(JSON.stringify(settings), connection_id).run();
+
+      return success(c, { message: "Settings updated successfully", settings });
+    } catch (err: any) {
+      console.error("UpdateConnectorSettings error:", err);
+      return error(c, "INTERNAL_ERROR", `Failed to update settings: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
  * PUT /v1/connectors/:connection_id/google-ads/settings - Update Google Ads account selection settings
+ * @deprecated Use PATCH /v1/connectors/:connection_id/settings instead
  */
 export class UpdateGoogleAdsSettings extends OpenAPIRoute {
   public schema = {
@@ -849,6 +1040,90 @@ export class UpdateGoogleAdsSettings extends OpenAPIRoute {
     } catch (err: any) {
       console.error("UpdateGoogleAdsSettings error:", err);
       return error(c, "INTERNAL_ERROR", `Failed to update settings: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * POST /v1/connectors/:connection_id/resync - Trigger a resync after settings change
+ */
+export class TriggerResync extends OpenAPIRoute {
+  public schema = {
+    tags: ["Connectors"],
+    summary: "Trigger a resync of connector data",
+    operationId: "trigger-resync",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        connection_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Resync triggered successfully"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    try {
+      const session = c.get("session");
+      const data = await this.getValidatedData<typeof this.schema>();
+      const { connection_id } = data.params;
+
+      // Get connection and verify access
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connection = await connectorService.getConnection(connection_id);
+
+      if (!connection) {
+        return error(c, "NOT_FOUND", "Connection not found", 404);
+      }
+
+      // Verify user has access to org
+      const { D1Adapter } = await import("../../adapters/d1");
+      const d1 = new D1Adapter(c.env.DB);
+      const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id);
+
+      if (!hasAccess) {
+        return error(c, "FORBIDDEN", "No access to this connection", 403);
+      }
+
+      // Create sync job
+      const jobId = crypto.randomUUID();
+      const now = new Date().toISOString();
+
+      // Calculate sync window (last 30 days)
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 30);
+
+      await c.env.DB.prepare(`
+        INSERT INTO sync_jobs (
+          id, connection_id, status, created_at, updated_at
+        ) VALUES (?, ?, 'pending', ?, ?)
+      `).bind(jobId, connection_id, now, now).run();
+
+      // Enqueue sync job
+      await c.env.SYNC_QUEUE.send({
+        job_id: jobId,
+        connection_id: connection.id,
+        organization_id: connection.organization_id,
+        platform: connection.platform,
+        account_id: connection.account_id,
+        sync_window: {
+          start: startDate.toISOString(),
+          end: endDate.toISOString()
+        }
+      });
+
+      return success(c, {
+        message: "Resync triggered successfully",
+        job_id: jobId
+      });
+    } catch (err: any) {
+      console.error("TriggerResync error:", err);
+      return error(c, "INTERNAL_ERROR", `Failed to trigger resync: ${err.message}`, 500);
     }
   }
 }
