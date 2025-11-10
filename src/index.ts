@@ -91,6 +91,12 @@ import {
   AcceptAIDecision,
   RejectAIDecision
 } from "./endpoints/v1/settings";
+import {
+  GetTagConfig,
+  GetTrackingConfig,
+  UpdateTrackingConfig,
+  GenerateTrackingSnippet
+} from "./endpoints/v1/tracking-config";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -290,6 +296,12 @@ openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
 // Settings endpoints
 openapi.get("/v1/settings/matrix", auth, GetMatrixSettings);
 openapi.post("/v1/settings/matrix", auth, UpdateMatrixSettings);
+
+// Tracking config endpoints
+openapi.get("/v1/config", GetTagConfig); // Public endpoint for tracking tag
+openapi.get("/v1/tracking-config", auth, GetTrackingConfig);
+openapi.put("/v1/tracking-config", auth, UpdateTrackingConfig);
+openapi.post("/v1/tracking-config/snippet", auth, GenerateTrackingSnippet);
 
 // AI Decisions endpoints
 openapi.get("/v1/settings/ai-decisions", auth, GetAIDecisions);
