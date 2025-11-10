@@ -9,19 +9,19 @@
 -- SQLite doesn't support ALTER COLUMN, so we need to recreate the table
 
 -- 1. Create new table with nullable organization_id and user_id
+-- Match actual structure: no created_at, only timestamp
 CREATE TABLE audit_logs_new (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    organization_id TEXT,  -- Now nullable (was NOT NULL)
-    user_id TEXT,  -- Now nullable (was NOT NULL)
-    action TEXT NOT NULL,
-    resource_type TEXT,
-    resource_id TEXT,
-    metadata TEXT,
-    ip_address TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    id TEXT PRIMARY KEY,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    user_id TEXT,  -- Already nullable
+    organization_id TEXT,  -- Already nullable
     session_token_hash TEXT,
+    action TEXT NOT NULL,
     method TEXT,
     path TEXT,
+    resource_type TEXT,
+    resource_id TEXT,
+    ip_address TEXT,
     user_agent TEXT,
     request_id TEXT,
     success INTEGER DEFAULT 1,
@@ -29,12 +29,17 @@ CREATE TABLE audit_logs_new (
     error_code TEXT,
     error_message TEXT,
     response_time_ms INTEGER,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    metadata TEXT
 );
 
 -- 2. Copy existing data from old table
 INSERT INTO audit_logs_new
-SELECT * FROM audit_logs;
+SELECT
+    id, timestamp, user_id, organization_id, session_token_hash,
+    action, method, path, resource_type, resource_id,
+    ip_address, user_agent, request_id, success, status_code,
+    error_code, error_message, response_time_ms, metadata
+FROM audit_logs;
 
 -- 3. Drop old table
 DROP TABLE audit_logs;
