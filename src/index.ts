@@ -125,10 +125,23 @@ app.use("*", sanitizeInput());
 app.use("*", validateContentType());
 
 // Global rate limiting (SOC 2 requirement)
-app.use("*", rateLimitMiddleware({
-  windowMs: 60 * 1000, // 1 minute
-  maxRequests: 100 // 100 requests per minute per IP/user
-}));
+// Skip rate limiting for status polling endpoints (lightweight reads)
+app.use("*", async (c, next) => {
+  const path = new URL(c.req.url).pathname;
+
+  // Exempt status polling endpoints from global rate limit
+  const isExempt = path.includes('sync-status') || path === '/v1/health';
+
+  if (isExempt) {
+    return next();
+  }
+
+  // Apply standard rate limit to other endpoints
+  return rateLimitMiddleware({
+    windowMs: 60 * 1000, // 1 minute
+    maxRequests: 100 // 100 requests per minute per IP/user
+  })(c, next);
+});
 
 // Audit logging for all authenticated routes (SOC 2 requirement)
 app.use("*", auditMiddleware);
