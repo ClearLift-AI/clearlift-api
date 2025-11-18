@@ -34,6 +34,7 @@ export interface PlatformConnection {
   is_active: boolean;
   expires_at: string | null;
   scopes: string[];
+  settings?: any;
 }
 
 export interface OAuthState {
@@ -259,9 +260,9 @@ export class ConnectorService {
       INSERT INTO platform_connections (
         id, organization_id, platform, account_id, account_name,
         connected_by, credentials_encrypted, refresh_token_encrypted,
-        expires_at, scopes, is_active
+        expires_at, scopes, settings, is_active
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       ON CONFLICT(organization_id, platform, account_id) DO UPDATE SET
         account_name = excluded.account_name,
         connected_by = excluded.connected_by,
@@ -269,6 +270,7 @@ export class ConnectorService {
         refresh_token_encrypted = excluded.refresh_token_encrypted,
         expires_at = excluded.expires_at,
         scopes = excluded.scopes,
+        settings = excluded.settings,
         connected_at = datetime('now'),
         is_active = 1
     `).bind(
@@ -281,7 +283,8 @@ export class ConnectorService {
       encryptedAccessToken,
       encryptedRefreshToken,
       expiresAt,
-      JSON.stringify(params.scopes || [])
+      JSON.stringify(params.scopes || []),
+      JSON.stringify(params.settings || {})
     ).run();
 
     return connectionId;
@@ -295,7 +298,7 @@ export class ConnectorService {
       SELECT
         id, organization_id, platform, account_id, account_name,
         connected_by, connected_at, last_synced_at, sync_status,
-        is_active, expires_at, scopes
+        is_active, expires_at, scopes, settings
       FROM platform_connections
       WHERE id = ?
     `).bind(connectionId).first<PlatformConnection>();
@@ -306,7 +309,8 @@ export class ConnectorService {
 
     return {
       ...result,
-      scopes: result.scopes ? JSON.parse(result.scopes as any) : []
+      scopes: result.scopes ? JSON.parse(result.scopes as any) : [],
+      settings: result.settings ? JSON.parse(result.settings as any) : {}
     };
   }
 

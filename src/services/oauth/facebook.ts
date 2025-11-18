@@ -16,10 +16,12 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
       scopes: [
         'ads_read',
         'ads_management',
+        'read_insights',       // Required for reading ad insights/metrics
+        'business_management', // Required for managing business assets
         'email',
         'public_profile'
       ],
-      authorizeUrl: 'https://www.facebook.com/v24.0/dialog/oauth',
+      authorizeUrl: 'https://www.facebook.com/dialog/oauth', // No version in auth URL
       tokenUrl: 'https://graph.facebook.com/v24.0/oauth/access_token'
     });
   }
@@ -63,15 +65,30 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
   }
 
   /**
-   * Validate Facebook access token
+   * Validate Facebook access token using debug_token endpoint
+   * This provides more detailed validation than the /me endpoint
    */
   async validateToken(accessToken: string): Promise<boolean> {
     try {
+      // Use app access token to validate user token
+      const appAccessToken = `${this.config.clientId}|${this.config.clientSecret}`;
+
       const response = await fetch(
-        `https://graph.facebook.com/v24.0/me?access_token=${accessToken}`
+        `https://graph.facebook.com/v24.0/debug_token?` +
+        new URLSearchParams({
+          input_token: accessToken,
+          access_token: appAccessToken
+        }).toString()
       );
 
-      return response.ok;
+      if (!response.ok) {
+        return false;
+      }
+
+      const data = await response.json() as any;
+
+      // Check if token is valid and not expired
+      return data.data?.is_valid === true;
     } catch (error) {
       return false;
     }
