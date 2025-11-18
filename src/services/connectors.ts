@@ -234,6 +234,7 @@ export class ConnectorService {
     refreshToken?: string;
     expiresIn?: number;
     scopes?: string[];
+    settings?: any;
   }): Promise<string> {
     const connectionId = `${params.organizationId}-${params.platform}-${params.accountId}`;
 

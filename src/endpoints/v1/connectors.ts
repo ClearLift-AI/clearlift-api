@@ -505,6 +505,108 @@ export class GetOAuthAccounts extends OpenAPIRoute {
 }
 
 /**
+ * GET /v1/connectors/:provider/accounts/:account_id/children - Get child accounts for a manager account
+ */
+export class GetChildAccounts extends OpenAPIRoute {
+  public schema = {
+    tags: ["Connectors"],
+    summary: "Get child accounts for Google Ads manager account",
+    operationId: "get-child-accounts",
+    request: {
+      params: z.object({
+        provider: z.enum(['google']),
+        account_id: z.string()
+      }),
+      query: z.object({
+        state: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "List of child accounts under manager account",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                isManagerAccount: z.boolean(),
+                accounts: z.array(z.object({
+                  id: z.string(),
+                  name: z.string(),
+                  currencyCode: z.string().optional(),
+                  timeZone: z.string().optional()
+                }))
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { provider, account_id } = data.params;
+    const { state } = data.query;
+
+    // Only Google Ads supports manager accounts
+    if (provider !== 'google') {
+      return error(c, "NOT_SUPPORTED", "This endpoint only supports Google Ads", 400);
+    }
+
+    try {
+      // Get OAuth state (don't consume yet)
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const oauthState = await connectorService.getOAuthState(state);
+
+      if (!oauthState) {
+        return error(c, "INVALID_STATE", "OAuth state is invalid or expired", 400);
+      }
+
+      // Set organization_id in context for audit middleware
+      c.set("org_id" as any, oauthState.organization_id);
+
+      // Get access token from state metadata
+      const metadata = typeof oauthState.metadata === 'string'
+        ? JSON.parse(oauthState.metadata)
+        : oauthState.metadata;
+
+      const accessToken = metadata?.access_token;
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "No access token found in OAuth state", 400);
+      }
+
+      // Get developer token
+      const developerToken = await getSecret(c.env.GOOGLE_ADS_DEVELOPER_TOKEN);
+      if (!developerToken || developerToken.trim() === '') {
+        return error(c, "DEVELOPER_TOKEN_MISSING",
+          "Google Ads Developer Token is not configured",
+          500);
+      }
+
+      // Use the Google Ads connector to check if manager and get child accounts
+      const { GoogleAdsConnector } = await import('../../services/connectors/google-ads');
+      const connector = new GoogleAdsConnector(accessToken, account_id, developerToken);
+
+      const isManager = await connector.isManagerAccount();
+
+      if (isManager) {
+        const accounts = await connector.listClientAccounts();
+        return success(c, { isManagerAccount: true, accounts });
+      } else {
+        // Not a manager account - return empty list
+        return success(c, { isManagerAccount: false, accounts: [] });
+      }
+
+    } catch (err: any) {
+      console.error('Get child accounts error:', err);
+      return error(c, "FETCH_FAILED", err.message || "Failed to fetch child accounts", 500);
+    }
+  }
+}
+
+/**
  * POST /v1/connectors/:provider/finalize - Finalize OAuth connection with selected account
  */
 export class FinalizeOAuthConnection extends OpenAPIRoute {
@@ -520,7 +622,8 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         z.object({
           state: z.string(),
           account_id: z.string(),
-          account_name: z.string()
+          account_name: z.string(),
+          selectedAccounts: z.array(z.string()).optional() // For Google Ads manager accounts
         })
       )
     },
@@ -544,7 +647,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>();
     const { provider } = data.params;
-    const { state, account_id, account_name } = data.body;
+    const { state, account_id, account_name, selectedAccounts } = data.body;
 
     console.log('Finalize OAuth connection request:', { provider, account_id, account_name, state: state.substring(0, 10) + '...' });
 
@@ -581,7 +684,19 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
 
       console.log('Creating connection in database...');
 
-      // Create connection with selected account
+      // Prepare initial settings for Google Ads if child accounts were selected
+      let initialSettings = undefined;
+      if (provider === 'google' && selectedAccounts && selectedAccounts.length > 0) {
+        initialSettings = {
+          accountSelection: {
+            mode: 'selected' as const,
+            selectedAccounts: selectedAccounts
+          }
+        };
+        console.log('Google Ads manager account - storing selected accounts:', selectedAccounts);
+      }
+
+      // Create connection with selected account and optional settings
       const connectionId = await connectorService.createConnection({
         organizationId: oauthState.organization_id,
         platform: provider,
@@ -591,7 +706,8 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         accessToken: accessToken,
         refreshToken: refreshToken,
         expiresIn: expiresIn,
-        scopes: scope?.split(' ')
+        scopes: scope?.split(' '),
+        settings: initialSettings
       });
 
       console.log('Connection created:', { connectionId });
