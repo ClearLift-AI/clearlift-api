@@ -77,7 +77,7 @@
     {
       "binding": "FACEBOOK_APP_SECRET",
       "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-      "secret_name": "FB_API_KEY"
+      "secret_name": "FB_APP_SECRET"
     },
     {
       "binding": "SENDGRID_API_KEY",

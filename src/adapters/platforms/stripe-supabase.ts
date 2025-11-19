@@ -184,9 +184,10 @@ export class StripeSupabaseAdapter {
     const parts = connectionId.split('-');
     const orgId = parts.slice(0, 5).join('-');  // Reconstruct UUID from first 5 parts
 
-    // Build URL params directly (bypassing buggy select() method that wraps in 'or')
+    // Build URL params directly
     const params = new URLSearchParams();
     params.append('organization_id', `eq.${orgId}`);
+    params.append('payment_status', 'eq.succeeded'); // Only succeeded payments
 
     // Add date range filter using stripe_created_at
     if (dateRange) {
@@ -196,15 +197,15 @@ export class StripeSupabaseAdapter {
 
     params.append('limit', '10000');
 
-    // Query stripe_conversions table (schema specified in Supabase client headers)
-    const endpoint = `stripe_conversions?${params.toString()}`;
-    const results = await this.supabase.query<any[]>(endpoint, { method: 'GET' });
+    // Query stripe.payment_intents table (using stripe schema)
+    const endpoint = `payment_intents?${params.toString()}`;
+    const results = await this.supabase.queryWithSchema<any[]>(endpoint, 'stripe', { method: 'GET' });
 
-    // Transform stripe_conversions records to StripeRevenueRecord format
+    // Transform payment_intents records to StripeRevenueRecord format
     const transformedResults: StripeRevenueRecord[] = (results || []).map(row => {
-      // Extract data from raw_data JSONB field
-      const rawData = row.raw_data || {};
+      // Extract metadata from JSONB field
       const metadata = row.metadata || {};
+      const rawData = row.raw_data || {};
 
       return {
         id: row.id,
@@ -212,29 +213,29 @@ export class StripeSupabaseAdapter {
         organization_id: orgId,
         date: row.stripe_created_at ? row.stripe_created_at.split('T')[0] : '',
 
-        // Map stripe_id to charge_id (for backwards compatibility)
-        charge_id: row.stripe_id,
-        payment_intent_id: rawData.payment_intent,
-        invoice_id: rawData.invoice,
+        // Primary identifiers
+        charge_id: row.payment_intent_id, // Using payment_intent_id as charge_id
+        payment_intent_id: row.payment_intent_id,
+        invoice_id: row.invoice_id,
         subscription_id: rawData.subscription,
         product_id: metadata.product_id,
         price_id: metadata.price_id,
         customer_id: row.customer_id,
 
         // Financial data
-        amount: row.conversion_value || 0,
-        currency: row.conversion_currency || 'usd',
+        amount: row.amount_cents || 0,
+        currency: row.currency || 'usd',
         status: row.payment_status || 'unknown',
         description: rawData.description,
 
         // Metadata from JSONB
-        charge_metadata: rawData.metadata || {},
+        charge_metadata: metadata || {},
         product_metadata: metadata.product || {},
         price_metadata: metadata.price || {},
-        customer_metadata: rawData.customer?.metadata || {},
+        customer_metadata: metadata.customer || {},
 
         units: metadata.quantity || 1,
-        net_amount: row.conversion_value || 0,
+        net_amount: row.amount_cents || 0,
         fee_amount: rawData.fee_amount,
 
         stripe_created_at: row.stripe_created_at
@@ -311,16 +312,17 @@ export class StripeSupabaseAdapter {
     customer: string[];
   }> {
     // Extract organization_id from connection_id
-    const orgId = connectionId.split('-')[0];
+    const parts = connectionId.split('-');
+    const orgId = parts.slice(0, 5).join('-');
 
-    // Query samples from stripe_conversions (schema specified in client headers)
+    // Query samples from stripe.payment_intents
     const params = new URLSearchParams();
     params.append('organization_id', `eq.${orgId}`);
-    params.append('select', 'raw_data,metadata');
+    params.append('select', 'metadata,raw_data');
     params.append('limit', '1000');
 
-    const endpoint = `stripe_conversions?${params.toString()}`;
-    const samples = await this.supabase.query<any[]>(endpoint, { method: 'GET' }) || [];
+    const endpoint = `payment_intents?${params.toString()}`;
+    const samples = await this.supabase.queryWithSchema<any[]>(endpoint, 'stripe', { method: 'GET' }) || [];
 
     const keysBySource: Record<string, Set<string>> = {
       charge: new Set(),
@@ -330,12 +332,12 @@ export class StripeSupabaseAdapter {
     };
 
     for (const row of samples) {
-      const rawData = row.raw_data || {};
       const metadata = row.metadata || {};
+      const rawData = row.raw_data || {};
 
-      // Extract keys from raw_data (charge-level metadata)
-      if (rawData.metadata && typeof rawData.metadata === 'object') {
-        this.extractKeys(rawData.metadata, keysBySource.charge);
+      // Extract keys from metadata (charge-level metadata)
+      if (metadata && typeof metadata === 'object') {
+        this.extractKeys(metadata, keysBySource.charge);
       }
 
       // Extract product/price/customer keys from metadata JSONB
@@ -345,13 +347,10 @@ export class StripeSupabaseAdapter {
       if (metadata.price && typeof metadata.price === 'object') {
         this.extractKeys(metadata.price, keysBySource.price);
       }
-      if (rawData.customer?.metadata && typeof rawData.customer.metadata === 'object') {
-        this.extractKeys(rawData.customer.metadata, keysBySource.customer);
+      if (metadata.customer && typeof metadata.customer === 'object') {
+        this.extractKeys(metadata.customer, keysBySource.customer);
       }
     }
-
-    // Update metadata keys cache
-    await this.updateMetadataKeysCache(connectionId, keysBySource);
 
     return {
       charge: Array.from(keysBySource.charge),
@@ -398,6 +397,87 @@ export class StripeSupabaseAdapter {
         onConflict: 'connection_id,object_type,key_path',
         returning: false
       });
+    }
+  }
+
+  /**
+   * Get daily aggregates for a date range
+   */
+  async getDailyAggregates(
+    connectionId: string,
+    dateRange: { start: string; end: string },
+    currency?: string
+  ): Promise<any[]> {
+    // Extract organization_id from connection_id
+    const parts = connectionId.split('-');
+    const orgId = parts.slice(0, 5).join('-');
+
+    // Query stripe.payment_intents directly and aggregate in-memory
+    const params = new URLSearchParams();
+    params.append('organization_id', `eq.${orgId}`);
+    params.append('stripe_created_at', `gte.${dateRange.start}T00:00:00Z`);
+    params.append('stripe_created_at', `lte.${dateRange.end}T23:59:59Z`);
+    params.append('payment_status', 'eq.succeeded');
+
+    if (currency) {
+      params.append('currency', `eq.${currency}`);
+    }
+
+    params.append('limit', '10000');
+
+    // Query stripe.payment_intents table (using stripe schema)
+    const endpoint = `payment_intents?${params.toString()}`;
+
+    try {
+      // Use the queryWithSchema method to query the stripe schema
+      const records = await this.supabase.queryWithSchema<any[]>(endpoint, 'stripe', {
+        method: 'GET'
+      });
+
+      // Group by date and aggregate
+      const dailyMap = new Map<string, any>();
+
+      records.forEach((row: any) => {
+        const date = row.stripe_created_at.split('T')[0];
+
+        if (!dailyMap.has(date)) {
+          dailyMap.set(date, {
+            date,
+            currency: row.currency,
+            total_revenue: 0,
+            total_units: 0,
+            transaction_count: 0,
+            unique_customers: new Set()
+          });
+        }
+
+        const daily = dailyMap.get(date)!;
+        daily.total_revenue += row.amount_cents || 0;
+        daily.total_units += 1; // Each payment intent is 1 unit
+        daily.transaction_count += 1;
+
+        if (row.customer_id) {
+          daily.unique_customers.add(row.customer_id);
+        }
+      });
+
+      // Convert to array and finalize
+      return Array.from(dailyMap.values())
+        .map(daily => ({
+          date: daily.date,
+          currency: daily.currency,
+          total_revenue: daily.total_revenue,
+          total_units: daily.total_units,
+          transaction_count: daily.transaction_count,
+          unique_customers: daily.unique_customers.size,
+          revenue_by_product: {},
+          revenue_by_status: {},
+          top_metadata_values: {}
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+    } catch (error) {
+      console.error('Failed to get daily aggregates:', error);
+      return [];
     }
   }
 

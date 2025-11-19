@@ -210,15 +210,14 @@ function getWeekNumber(date: Date): number {
 }
 
 /**
- * Generic platform adapter that queries {platform}_ads_daily_metrics and {platform}_ads_campaigns tables
- * This allows adding new platforms without code changes - just create the tables in Supabase clearlift schema
+ * Generic platform adapter that queries the unified_ad_daily_performance view
+ * This allows querying all platforms (Google, Facebook, TikTok) using a single unified schema
  */
 export class GenericPlatformAdapter implements PlatformAdapter {
   private supabaseUrl: string;
   private supabaseKey: string;
   private platform: string;
-  private metricsTable: string;
-  private campaignsTable: string;
+  private unifiedView: string = "unified_ad_daily_performance";
 
   constructor(supabaseUrl: string, supabaseKey: string, tableName: string) {
     this.supabaseUrl = supabaseUrl.replace(/\/$/, "");
@@ -228,9 +227,17 @@ export class GenericPlatformAdapter implements PlatformAdapter {
     // tableName could be "facebook_ads_performance" or just "facebook"
     this.platform = tableName.replace(/_ads_performance$/, "").replace(/_ads$/, "");
 
-    // Map to correct table names in clearlift schema
-    this.metricsTable = `${this.platform}_ads_daily_metrics`;
-    this.campaignsTable = `${this.platform}_ads_campaigns`;
+    // Normalize platform names to match unified view
+    // Map 'meta'/'facebook' to 'facebook_ads', 'google' to 'google_ads', etc.
+    if (this.platform === 'meta' || this.platform === 'facebook') {
+      this.platform = 'facebook_ads';
+    } else if (this.platform === 'google') {
+      this.platform = 'google_ads';
+    } else if (this.platform === 'tiktok') {
+      this.platform = 'tiktok_ads';
+    } else if (!this.platform.endsWith('_ads')) {
+      this.platform = `${this.platform}_ads`;
+    }
   }
 
   /**
@@ -262,7 +269,7 @@ export class GenericPlatformAdapter implements PlatformAdapter {
 
       // Check if it's a table not found error
       if (response.status === 404 || error.includes("not found") || error.includes("does not exist")) {
-        throw new Error(`PLATFORM_NOT_AVAILABLE: Table '${this.metricsTable}' does not exist in clearlift schema`);
+        throw new Error(`PLATFORM_NOT_AVAILABLE: No data available for ${this.platform}. The connector may not be configured, or data hasn't been synced yet.`);
       }
 
       throw new Error(`Supabase request failed: ${response.status} - ${error}`);
@@ -283,33 +290,29 @@ export class GenericPlatformAdapter implements PlatformAdapter {
   ): Promise<Campaign[]> {
     const params = new URLSearchParams();
     params.append("organization_id", `eq.${orgId}`);
+    params.append("platform", `eq.${this.platform}`);
     params.append("metric_date", `gte.${dateRange.start_date}`);
     params.append("metric_date", `lte.${dateRange.end_date}`);
 
-    // Select all relevant fields from daily_metrics table
-    // Handle both Google (cost_cents, avg_cpc_cents) and Facebook (spend_cents, cpc_cents)
-    const data = await this.supabaseRequest(this.metricsTable, params);
+    // Query the unified view
+    const data = await this.supabaseRequest(this.unifiedView, params);
 
     if (!data || data.length === 0) {
       return [];
     }
 
-    // Get campaign names from campaigns table
-    const campaignRefs = [...new Set(data.map((row: any) => row.campaign_ref))].filter(Boolean);
-    const campaignNames = await this.getCampaignNames(campaignRefs);
-
-    // Aggregate by campaign_ref
+    // Aggregate by campaign_id
     const campaignMap = new Map<string, any>();
 
     data.forEach((row: any) => {
-      const key = row.campaign_ref;
+      const key = row.campaign_id;
       if (!key) return;
 
       if (!campaignMap.has(key)) {
         campaignMap.set(key, {
           campaign_id: key,
-          campaign_name: campaignNames.get(key) || 'Unknown Campaign',
-          status: 'ACTIVE', // We don't have status in metrics table
+          campaign_name: row.campaign_name || 'Unknown Campaign',
+          status: row.campaign_status || 'ACTIVE',
           metrics: {
             impressions: 0,
             clicks: 0,
@@ -327,9 +330,7 @@ export class GenericPlatformAdapter implements PlatformAdapter {
       const campaign = campaignMap.get(key)!;
       campaign.metrics.impressions += row.impressions || 0;
       campaign.metrics.clicks += row.clicks || 0;
-
-      // Handle different column names (Google uses cost_cents, Facebook uses spend_cents)
-      campaign.metrics.spend += (row.spend_cents || row.cost_cents || 0) / 100; // Convert cents to dollars
+      campaign.metrics.spend += (row.spend_cents || 0) / 100; // Convert cents to dollars
       campaign.metrics.conversions += row.conversions || 0;
       campaign.metrics.revenue += (row.conversion_value_cents || 0) / 100;
     });
@@ -351,7 +352,14 @@ export class GenericPlatformAdapter implements PlatformAdapter {
     });
 
     // Sort by spend (descending) by default
-    campaigns.sort((a, b) => b.metrics.spend - a.metrics.spend);
+    const sortField = options?.sort_by || 'spend';
+    const sortOrder = options?.order || 'desc';
+
+    campaigns.sort((a, b) => {
+      const aVal = a.metrics[sortField as keyof CampaignMetrics] || 0;
+      const bVal = b.metrics[sortField as keyof CampaignMetrics] || 0;
+      return sortOrder === 'asc' ? Number(aVal) - Number(bVal) : Number(bVal) - Number(aVal);
+    });
 
     // Apply limit/offset if specified
     let result = campaigns;
@@ -365,46 +373,19 @@ export class GenericPlatformAdapter implements PlatformAdapter {
     return result;
   }
 
-  /**
-   * Helper to fetch campaign names from campaigns table
-   */
-  private async getCampaignNames(campaignRefs: string[]): Promise<Map<string, string>> {
-    if (campaignRefs.length === 0) {
-      return new Map();
-    }
-
-    try {
-      const params = new URLSearchParams();
-      params.append("id", `in.(${campaignRefs.map(id => `"${id}"`).join(",")})`);
-      params.append("select", "id,campaign_name");
-
-      const campaigns = await this.supabaseRequest(this.campaignsTable, params);
-
-      const nameMap = new Map<string, string>();
-      campaigns.forEach((c: any) => {
-        nameMap.set(c.id, c.campaign_name);
-      });
-
-      return nameMap;
-    } catch (error) {
-      console.error('Failed to fetch campaign names:', error);
-      return new Map();
-    }
-  }
-
   async getCampaign(
     orgId: string,
     campaignId: string,
     dateRange: DateRange
   ): Promise<Campaign | null> {
     const params = new URLSearchParams();
-    params.append("org_id", `eq.${orgId}`);
+    params.append("organization_id", `eq.${orgId}`);
+    params.append("platform", `eq.${this.platform}`);
     params.append("campaign_id", `eq.${campaignId}`);
-    params.append("date_reported", `gte.${dateRange.start_date}`);
-    params.append("date_reported", `lte.${dateRange.end_date}`);
-    params.append("select", "*");
+    params.append("metric_date", `gte.${dateRange.start_date}`);
+    params.append("metric_date", `lte.${dateRange.end_date}`);
 
-    const data = await this.supabaseRequest(this.tableName, params);
+    const data = await this.supabaseRequest(this.unifiedView, params);
 
     if (!data || data.length === 0) {
       return null;
@@ -415,8 +396,6 @@ export class GenericPlatformAdapter implements PlatformAdapter {
       campaign_id: data[0].campaign_id,
       campaign_name: data[0].campaign_name,
       status: data[0].campaign_status,
-      objective: data[0].campaign_objective,
-      budget: data[0].budget,
       metrics: {
         impressions: 0,
         clicks: 0,
@@ -432,10 +411,10 @@ export class GenericPlatformAdapter implements PlatformAdapter {
 
     data.forEach((row: any) => {
       campaign.metrics.impressions += row.impressions || 0;
-      campaign.metrics.clicks += row.total_clicks || 0;
-      campaign.metrics.spend += row.spend || 0;
-      campaign.metrics.conversions = (campaign.metrics.conversions || 0) + (row.purchases || 0);
-      campaign.metrics.revenue = (campaign.metrics.revenue || 0) + ((row.purchases || 0) * (row.cost_per_purchase || 0));
+      campaign.metrics.clicks += row.clicks || 0;
+      campaign.metrics.spend += (row.spend_cents || 0) / 100;
+      campaign.metrics.conversions += row.conversions || 0;
+      campaign.metrics.revenue += (row.conversion_value_cents || 0) / 100;
     });
 
     // Calculate averages
@@ -447,7 +426,7 @@ export class GenericPlatformAdapter implements PlatformAdapter {
     if (m.clicks > 0) {
       m.cpc = m.spend / m.clicks;
     }
-    if (m.spend > 0 && m.revenue) {
+    if (m.spend > 0 && m.revenue && m.revenue > 0) {
       m.roas = m.revenue / m.spend;
     }
 
@@ -463,16 +442,18 @@ export class GenericPlatformAdapter implements PlatformAdapter {
       offset?: number;
     }
   ): Promise<AdPerformance[]> {
+    // Note: The unified view is campaign-level only.
+    // Ad-level data would require querying platform-specific schemas.
+    // For now, return campaign-level data as ad performance.
     const params = new URLSearchParams();
-    params.append("org_id", `eq.${orgId}`);
-    params.append("date_reported", `gte.${dateRange.start_date}`);
-    params.append("date_reported", `lte.${dateRange.end_date}`);
+    params.append("organization_id", `eq.${orgId}`);
+    params.append("platform", `eq.${this.platform}`);
+    params.append("metric_date", `gte.${dateRange.start_date}`);
+    params.append("metric_date", `lte.${dateRange.end_date}`);
 
     if (options?.campaign_id) {
       params.append("campaign_id", `eq.${options.campaign_id}`);
     }
-
-    params.append("select", "ad_id,ad_name,campaign_id,campaign_name,adset_name,ad_status,date_reported,impressions,spend,total_clicks,purchases,cpc,cpm,ctr_pct,cost_per_purchase");
 
     if (options?.limit) {
       params.append("limit", options.limit.toString());
@@ -481,28 +462,27 @@ export class GenericPlatformAdapter implements PlatformAdapter {
       params.append("offset", options.offset.toString());
     }
 
-    params.append("order", "spend.desc");
+    params.append("order", "spend_cents.desc");
 
-    const data = await this.supabaseRequest(this.tableName, params);
+    const data = await this.supabaseRequest(this.unifiedView, params);
 
     return data.map((row: any) => ({
-      ad_id: row.ad_id,
-      ad_name: row.ad_name,
+      ad_id: row.campaign_id, // Using campaign_id as ad_id fallback
+      ad_name: row.campaign_name,
       campaign_id: row.campaign_id,
       campaign_name: row.campaign_name,
-      adset_name: row.adset_name,
-      status: row.ad_status,
-      date_reported: row.date_reported,
+      status: row.campaign_status,
+      date_reported: row.metric_date,
       metrics: {
         impressions: row.impressions || 0,
-        clicks: row.total_clicks || 0,
-        spend: row.spend || 0,
-        conversions: row.purchases || 0,
-        revenue: (row.purchases || 0) * (row.cost_per_purchase || 0),
-        ctr: row.ctr_pct || 0,
-        cpc: row.cpc || 0,
-        cpm: row.cpm || 0,
-        roas: row.spend > 0 ? ((row.purchases || 0) * (row.cost_per_purchase || 0)) / row.spend : 0
+        clicks: row.clicks || 0,
+        spend: (row.spend_cents || 0) / 100,
+        conversions: row.conversions || 0,
+        revenue: (row.conversion_value_cents || 0) / 100,
+        ctr: row.ctr || 0,
+        cpc: (row.cpc_cents || 0) / 100,
+        cpm: (row.cpm_cents || 0) / 100,
+        roas: row.roas || 0
       }
     }));
   }
@@ -510,10 +490,11 @@ export class GenericPlatformAdapter implements PlatformAdapter {
   async getSummary(orgId: string, dateRange: DateRange): Promise<PlatformSummary> {
     const params = new URLSearchParams();
     params.append("organization_id", `eq.${orgId}`);
+    params.append("platform", `eq.${this.platform}`);
     params.append("metric_date", `gte.${dateRange.start_date}`);
     params.append("metric_date", `lte.${dateRange.end_date}`);
 
-    const data = await this.supabaseRequest(this.metricsTable, params);
+    const data = await this.supabaseRequest(this.unifiedView, params);
 
     if (!data || data.length === 0) {
       return {
@@ -543,12 +524,12 @@ export class GenericPlatformAdapter implements PlatformAdapter {
     data.forEach((row: any) => {
       totalImpressions += row.impressions || 0;
       totalClicks += row.clicks || 0;
-      totalSpend += (row.spend_cents || row.cost_cents || 0) / 100;
+      totalSpend += (row.spend_cents || 0) / 100;
       totalConversions += row.conversions || 0;
       totalRevenue += (row.conversion_value_cents || 0) / 100;
 
-      if (row.campaign_ref) {
-        uniqueCampaigns.add(row.campaign_ref);
+      if (row.campaign_id) {
+        uniqueCampaigns.add(row.campaign_id);
       }
     });
 
@@ -563,7 +544,7 @@ export class GenericPlatformAdapter implements PlatformAdapter {
       avg_cpm: totalImpressions > 0 ? (totalSpend / totalImpressions) * 1000 : 0,
       avg_roas: totalSpend > 0 ? totalRevenue / totalSpend : 0,
       campaigns_count: uniqueCampaigns.size,
-      ads_count: 0 // We don't have ad-level data in daily_metrics
+      ads_count: 0 // Ad-level data not available in unified view
     };
   }
 
@@ -577,16 +558,17 @@ export class GenericPlatformAdapter implements PlatformAdapter {
   ): Promise<any[]> {
     const params = new URLSearchParams();
     params.append("organization_id", `eq.${orgId}`);
+    params.append("platform", `eq.${this.platform}`);
     params.append("metric_date", `gte.${dateRange.start_date}`);
     params.append("metric_date", `lte.${dateRange.end_date}`);
 
     if (options?.campaign_id) {
-      params.append("campaign_ref", `eq.${options.campaign_id}`);
+      params.append("campaign_id", `eq.${options.campaign_id}`);
     }
 
     params.append("order", "metric_date.asc");
 
-    const data = await this.supabaseRequest(this.metricsTable, params);
+    const data = await this.supabaseRequest(this.unifiedView, params);
 
     if (!data || data.length === 0) {
       return [];
@@ -615,7 +597,7 @@ export class GenericPlatformAdapter implements PlatformAdapter {
 
         rows.forEach((row: any) => {
           aggregated.impressions += row.impressions || 0;
-          aggregated.spend += (row.spend_cents || row.cost_cents || 0) / 100;
+          aggregated.spend += (row.spend_cents || 0) / 100;
           aggregated.clicks += row.clicks || 0;
           aggregated.conversions += row.conversions || 0;
           aggregated.revenue += (row.conversion_value_cents || 0) / 100;
@@ -627,25 +609,35 @@ export class GenericPlatformAdapter implements PlatformAdapter {
       return result;
     }
 
-    // Return daily data
-    return data.map((row: any) => {
-      const spend = (row.spend_cents || row.cost_cents || 0) / 100;
-      const impressions = row.impressions || 0;
-      const clicks = row.clicks || 0;
-      const conversions = row.conversions || 0;
-      const revenue = (row.conversion_value_cents || 0) / 100;
+    // Return daily data, aggregated by date (multiple campaigns may have same date)
+    const dailyMap = new Map<string, any>();
 
-      return {
-        date: row.metric_date,
-        impressions,
-        spend,
-        clicks,
-        conversions,
-        revenue,
-        ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
-        cpc: clicks > 0 ? spend / clicks : 0,
-        cpm: impressions > 0 ? (spend / impressions) * 1000 : 0
-      };
+    data.forEach((row: any) => {
+      const date = row.metric_date;
+      if (!dailyMap.has(date)) {
+        dailyMap.set(date, {
+          date,
+          impressions: 0,
+          spend: 0,
+          clicks: 0,
+          conversions: 0,
+          revenue: 0
+        });
+      }
+
+      const daily = dailyMap.get(date)!;
+      daily.impressions += row.impressions || 0;
+      daily.spend += (row.spend_cents || 0) / 100;
+      daily.clicks += row.clicks || 0;
+      daily.conversions += row.conversions || 0;
+      daily.revenue += (row.conversion_value_cents || 0) / 100;
     });
+
+    return Array.from(dailyMap.values()).map((daily) => ({
+      ...daily,
+      ctr: daily.impressions > 0 ? (daily.clicks / daily.impressions) * 100 : 0,
+      cpc: daily.clicks > 0 ? daily.spend / daily.clicks : 0,
+      cpm: daily.impressions > 0 ? (daily.spend / daily.impressions) * 1000 : 0
+    }));
   }
 }

@@ -54,6 +54,42 @@ export class SupabaseClient {
   }
 
   /**
+   * Query with a custom schema (e.g., 'stripe', 'google_ads')
+   */
+  async queryWithSchema<T = any>(
+    endpoint: string,
+    schema: string,
+    options: RequestInit = {}
+  ): Promise<T> {
+    const url = `${this.config.url}/rest/v1/${endpoint}`;
+
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': this.config.serviceKey,
+        'Authorization': `Bearer ${this.config.serviceKey}`,
+        'Prefer': 'return=representation',
+        'Accept-Profile': schema,
+        'Content-Profile': schema,
+        ...options.headers
+      }
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Supabase query failed: ${response.status} - ${error}`);
+    }
+
+    const contentType = response.headers.get('content-type');
+    if (contentType?.includes('application/json')) {
+      return await response.json();
+    }
+
+    return await response.text() as T;
+  }
+
+  /**
    * Insert records into a table
    */
   async insert<T = any>(
