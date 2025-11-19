@@ -79,6 +79,7 @@ import {
   GetWorkersHealth,
   GetQueueStatus,
   GetDeadLetterQueue,
+  TestConnectionToken,
   TriggerSync
 } from "./endpoints/v1/workers";
 import {
@@ -306,6 +307,7 @@ openapi.get("/v1/connectors/:connection_id/filters/discover", auth, DiscoverMeta
 openapi.get("/v1/workers/health", auth, GetWorkersHealth);
 openapi.get("/v1/workers/queue/status", auth, GetQueueStatus);
 openapi.get("/v1/workers/dlq", auth, GetDeadLetterQueue);
+openapi.get("/v1/workers/test-token/:connection_id", auth, TestConnectionToken);
 openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
 
 // Settings endpoints

@@ -286,13 +286,171 @@ export class GetDeadLetterQueue extends OpenAPIRoute {
 }
 
 /**
+ * GET /v1/workers/test-token/:connection_id - Test connection token permissions
+ */
+export class TestConnectionToken extends OpenAPIRoute {
+  public schema = {
+    tags: ["Workers"],
+    summary: "Test connection token",
+    description: "Tests if the access token for a connection has the correct permissions and can fetch data",
+    operationId: "test-connection-token",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        connection_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Token test results",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                connection_id: z.string(),
+                platform: z.string(),
+                token_valid: z.boolean(),
+                permissions: z.array(z.string()).optional(),
+                can_fetch_data: z.boolean(),
+                test_results: z.any(),
+                error: z.string().optional()
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const data = await this.getValidatedData<typeof this.schema>();
+    const connection_id = data.params.connection_id;
+
+    try {
+      // Verify user has access
+      const connection = await c.env.DB.prepare(`
+        SELECT pc.*, om.role
+        FROM platform_connections pc
+        JOIN organization_members om ON pc.organization_id = om.organization_id
+        WHERE pc.id = ? AND om.user_id = ?
+      `).bind(connection_id, session.user_id).first();
+
+      if (!connection) {
+        return error(c, "NOT_FOUND", "Connection not found or access denied", 404);
+      }
+
+      // Get decrypted access token
+      const encryptionKey = await c.env.ENCRYPTION_KEY.get();
+      const { ConnectorService } = await import('../../services/connectors');
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+
+      // Wait for encryption to initialize
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const accessToken = await connectorService.getAccessToken(connection_id);
+
+      if (!accessToken) {
+        return success(c, {
+          connection_id,
+          platform: connection.platform,
+          token_valid: false,
+          can_fetch_data: false,
+          error: "No access token found"
+        });
+      }
+
+      // Test based on platform
+      if (connection.platform === 'facebook') {
+        // Test Facebook token
+        const debugResponse = await fetch(
+          `https://graph.facebook.com/v24.0/debug_token?input_token=${accessToken}&access_token=${accessToken}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+
+        if (!debugResponse.ok) {
+          return success(c, {
+            connection_id,
+            platform: 'facebook',
+            token_valid: false,
+            can_fetch_data: false,
+            error: `Token debug failed: ${debugResponse.status}`
+          });
+        }
+
+        const debugData = await debugResponse.json() as any;
+        const permissions = debugData.data?.scopes || [];
+        const hasReadInsights = permissions.includes('read_insights');
+        const hasAdsRead = permissions.includes('ads_read');
+
+        // Try to fetch a test campaign
+        let canFetchData = false;
+        let testResults: any = {};
+
+        try {
+          const campaignsResponse = await fetch(
+            `https://graph.facebook.com/v24.0/${connection.account_id}/campaigns?fields=id,name&limit=1&access_token=${accessToken}`,
+            { signal: AbortSignal.timeout(5000) }
+          );
+
+          if (campaignsResponse.ok) {
+            const campaignsData = await campaignsResponse.json() as any;
+            testResults.campaigns = campaignsData;
+            canFetchData = true;
+
+            // Try to fetch insights for the first campaign
+            if (campaignsData.data && Array.isArray(campaignsData.data) && campaignsData.data.length > 0) {
+              const campaignId = campaignsData.data[0].id;
+              const insightsResponse = await fetch(
+                `https://graph.facebook.com/v24.0/${campaignId}/insights?fields=impressions,clicks,spend&time_range={"since":"2025-11-18","until":"2025-11-19"}&access_token=${accessToken}`,
+                { signal: AbortSignal.timeout(5000) }
+              );
+
+              if (insightsResponse.ok) {
+                const insightsData = await insightsResponse.json();
+                testResults.insights = insightsData;
+              } else {
+                testResults.insights_error = `Status ${insightsResponse.status}`;
+              }
+            }
+          }
+        } catch (e) {
+          testResults.fetch_error = e instanceof Error ? e.message : 'Unknown error';
+        }
+
+        return success(c, {
+          connection_id,
+          platform: 'facebook',
+          token_valid: debugData.data?.is_valid || false,
+          permissions,
+          can_fetch_data: canFetchData && hasReadInsights && hasAdsRead,
+          test_results: testResults
+        });
+      }
+
+      return success(c, {
+        connection_id,
+        platform: connection.platform,
+        token_valid: true,
+        can_fetch_data: false,
+        error: "Token testing not implemented for this platform yet"
+      });
+    } catch (err) {
+      console.error("Test token error:", err);
+      return error(c, "TEST_ERROR", err instanceof Error ? err.message : "Failed to test token", 500);
+    }
+  }
+}
+
+/**
  * POST /v1/workers/sync/trigger - Manually trigger a sync job
  */
 export class TriggerSync extends OpenAPIRoute {
   public schema = {
     tags: ["Workers"],
     summary: "Manually trigger sync",
-    description: "Manually triggers a sync job for a specific connection",
+    description: "Manually triggers a sync job for a specific connection. For full syncs, specify sync_window with start and end dates.",
     operationId: "trigger-sync",
     security: [{ bearerAuth: [] }],
     request: {
@@ -301,7 +459,11 @@ export class TriggerSync extends OpenAPIRoute {
           "application/json": {
             schema: z.object({
               connection_id: z.string(),
-              job_type: z.enum(['full', 'incremental']).optional().default('incremental')
+              job_type: z.enum(['full', 'incremental']).optional().default('incremental'),
+              sync_window: z.object({
+                start: z.string().describe("Start date (YYYY-MM-DD)"),
+                end: z.string().describe("End date (YYYY-MM-DD)")
+              }).optional().describe("Custom sync window for full syncs")
             })
           }
         }
@@ -309,7 +471,7 @@ export class TriggerSync extends OpenAPIRoute {
     },
     responses: {
       "200": {
-        description: "Sync job created",
+        description: "Sync job queued and processing",
         content: {
           "application/json": {
             schema: z.object({
@@ -329,7 +491,7 @@ export class TriggerSync extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
-    const { connection_id, job_type } = data.body;
+    const { connection_id, job_type, sync_window } = data.body;
 
     try {
       // Verify user has access to this connection
@@ -348,7 +510,25 @@ export class TriggerSync extends OpenAPIRoute {
         return error(c, "INACTIVE_CONNECTION", "Connection is not active", 400);
       }
 
-      // Create a new sync job
+      // Determine sync window
+      let syncStart: string;
+      let syncEnd: string;
+
+      if (sync_window) {
+        // Use provided sync window
+        syncStart = sync_window.start;
+        syncEnd = sync_window.end;
+      } else {
+        // Default: incremental sync (last 24 hours)
+        const now = new Date();
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+
+        syncStart = yesterday.toISOString();
+        syncEnd = now.toISOString();
+      }
+
+      // Create sync job in D1
       const jobId = crypto.randomUUID();
       const now = new Date().toISOString();
 
@@ -370,18 +550,44 @@ export class TriggerSync extends OpenAPIRoute {
         now,
         JSON.stringify({
           triggered_by: session.user_id,
-          manual: true
+          manual: true,
+          sync_window: {
+            start: syncStart,
+            end: syncEnd
+          }
         })
       ).run();
 
+      // Send job to queue immediately
+      const queueMessage = {
+        job_id: jobId,
+        organization_id: connection.organization_id,
+        connection_id: connection_id,
+        platform: connection.platform,
+        account_id: connection.account_id,
+        job_type: job_type || 'incremental',
+        sync_window: {
+          start: syncStart,
+          end: syncEnd,
+          type: job_type || 'incremental'
+        },
+        metadata: {
+          triggered_by: session.user_id,
+          manual: true,
+          created_at: now
+        }
+      };
+
+      await c.env.SYNC_QUEUE.send(queueMessage);
+
       return success(c, {
         job_id: jobId,
-        status: 'pending',
-        message: `Sync job created. The cron worker will pick it up in the next run (max 15 minutes).`
+        status: 'queued',
+        message: `Sync job queued and processing. ${job_type === 'full' ? `Syncing ${syncStart.split('T')[0]} to ${syncEnd.split('T')[0]}.` : 'Incremental sync in progress.'}`
       });
     } catch (err) {
       console.error("Trigger sync error:", err);
-      return error(c, "DATABASE_ERROR", "Failed to create sync job", 500);
+      return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue sync job", 500);
     }
   }
 }
