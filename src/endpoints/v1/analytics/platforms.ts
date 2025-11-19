@@ -414,19 +414,27 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     endDate?: string
   ): Promise<any | null> {
     try {
-      // Build date filter for daily_metrics table
-      const filters = [`organization_id.eq.${orgId}`];
+      // Build filters for unified view
+      const platformValue = `${platform}_ads`;
+      const filters = [
+        `organization_id.eq.${orgId}`,
+        `platform.eq.${platformValue}`
+      ];
       if (startDate && endDate) {
         filters.push(`metric_date.gte.${startDate}`, `metric_date.lte.${endDate}`);
       }
       const query = filters.join('&');
 
-      // Fetch daily metrics data (this is where the actual spend/impressions/clicks/conversions are)
+      console.log(`[fetchPlatformMetrics] Platform: ${platform}, Filter: platform.eq.${platformValue}, Full query: ${query}`);
+
+      // Fetch from unified view (clearlift.unified_ad_daily_performance)
       const metrics = await supabase.select(
-        `${platform}_ads_daily_metrics`,
+        `unified_ad_daily_performance`,
         query,
         { limit: 10000 }
       );
+
+      console.log(`[fetchPlatformMetrics] Returned ${metrics?.length || 0} rows for platform ${platform}`);
 
       if (!metrics || metrics.length === 0) {
         return null;
@@ -440,14 +448,14 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       const uniqueCampaigns = new Set();
 
       for (const metric of metrics) {
-        spendCents += (metric.spend_cents || metric.cost_cents || 0);
+        spendCents += (metric.spend_cents || 0);
         impressions += metric.impressions || 0;
         clicks += metric.clicks || 0;
         conversions += metric.conversions || 0;
 
         // Track unique campaigns
-        if (metric.campaign_ref) {
-          uniqueCampaigns.add(metric.campaign_ref);
+        if (metric.campaign_ref_id) {
+          uniqueCampaigns.add(metric.campaign_ref_id);
         }
       }
 
@@ -472,16 +480,19 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     endDate?: string
   ): Promise<any[] | null> {
     try {
-      // Build date filter for daily_metrics table
-      const filters = [`organization_id.eq.${orgId}`];
+      // Build filters for unified view
+      const filters = [
+        `organization_id.eq.${orgId}`,
+        `platform.eq.${platform}_ads`
+      ];
       if (startDate && endDate) {
         filters.push(`metric_date.gte.${startDate}`, `metric_date.lte.${endDate}`);
       }
       const query = filters.join('&');
 
-      // Fetch daily metrics data
+      // Fetch from unified view (clearlift.unified_ad_daily_performance)
       const metrics = await supabase.select(
-        `${platform}_ads_daily_metrics`,
+        `unified_ad_daily_performance`,
         query,
         { limit: 10000, order: 'metric_date.asc' }
       );
@@ -506,7 +517,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           };
         }
 
-        dailyData[date].spend_cents += (metric.spend_cents || metric.cost_cents || 0);
+        dailyData[date].spend_cents += (metric.spend_cents || 0);
         dailyData[date].impressions += metric.impressions || 0;
         dailyData[date].clicks += metric.clicks || 0;
         dailyData[date].conversions += metric.conversions || 0;
