@@ -440,6 +440,19 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         return null;
       }
 
+      // Defensive: Filter metrics to only include rows that actually match the requested platform
+      // This prevents data leakage if the query filter doesn't work as expected
+      const validMetrics = metrics.filter(m => m.platform === platformValue);
+
+      if (validMetrics.length === 0) {
+        console.log(`[fetchPlatformMetrics] No metrics matched platform ${platformValue} after filtering. Returning null.`);
+        return null;
+      }
+
+      if (validMetrics.length !== metrics.length) {
+        console.warn(`[fetchPlatformMetrics] WARNING: ${metrics.length - validMetrics.length} rows filtered out - query filter may not be working correctly`);
+      }
+
       // Aggregate metrics
       let spendCents = 0;
       let impressions = 0;
@@ -447,7 +460,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       let conversions = 0;
       const uniqueCampaigns = new Set();
 
-      for (const metric of metrics) {
+      for (const metric of validMetrics) {
         spendCents += (metric.spend_cents || 0);
         impressions += metric.impressions || 0;
         clicks += metric.clicks || 0;
@@ -501,10 +514,18 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         return null;
       }
 
+      // Defensive: Filter metrics to only include rows that actually match the requested platform
+      const platformValue = `${platform}_ads`;
+      const validMetrics = metrics.filter(m => m.platform === platformValue);
+
+      if (validMetrics.length === 0) {
+        return null;
+      }
+
       // Group metrics by date
       const dailyData: Record<string, any> = {};
 
-      for (const metric of metrics) {
+      for (const metric of validMetrics) {
         const date = metric.metric_date;
 
         if (!dailyData[date]) {
