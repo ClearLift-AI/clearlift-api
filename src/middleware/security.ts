@@ -58,8 +58,10 @@ function applySecurityHeaders(c: Context, config: SecurityHeadersConfig) {
   if (config.contentSecurityPolicy) {
     const csp = typeof config.contentSecurityPolicy === 'string'
       ? config.contentSecurityPolicy
-      : defaultConfig.contentSecurityPolicy!;
-    c.header("Content-Security-Policy", csp);
+      : defaultConfig.contentSecurityPolicy;
+    if (typeof csp === 'string') {
+      c.header("Content-Security-Policy", csp);
+    }
   }
 
   // Cross-Origin-Embedder-Policy

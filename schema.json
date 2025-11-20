@@ -147,6 +147,660 @@
         }
       }
     },
+    "/v1/waitlist": {
+      "post": {
+        "tags": [
+          "Waitlist"
+        ],
+        "summary": "Join the waitlist",
+        "description": "Add an email to the pre-launch waitlist",
+        "operationId": "post_JoinWaitlist",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "utm": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  },
+                  "ref": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully joined waitlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "email"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "message",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/waitlist/stats": {
+      "get": {
+        "tags": [
+          "Waitlist"
+        ],
+        "summary": "Get waitlist statistics",
+        "description": "Get basic statistics about the waitlist (public endpoint)",
+        "operationId": "get_GetWaitlistStats",
+        "responses": {
+          "200": {
+            "description": "Waitlist statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "number"
+                        },
+                        "thisWeek": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "thisWeek"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/register": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Register a new user",
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 128
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "organization_name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 100
+                  }
+                },
+                "required": [
+                  "email",
+                  "password",
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User registered successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "email",
+                            "name"
+                          ]
+                        },
+                        "session": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "type": "string"
+                            },
+                            "expires_at": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "token",
+                            "expires_at"
+                          ]
+                        },
+                        "organization": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "slug": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "slug"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "user",
+                        "session"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "409": {
+            "description": "User already exists"
+          }
+        }
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Login user",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "user": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "email",
+                            "name"
+                          ]
+                        },
+                        "session": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "type": "string"
+                            },
+                            "expires_at": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "token",
+                            "expires_at"
+                          ]
+                        },
+                        "organizations": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "slug": {
+                                "type": "string"
+                              },
+                              "role": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "slug",
+                              "role"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "user",
+                        "session",
+                        "organizations"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials"
+          }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Logout user",
+        "operationId": "logout",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Logged out successfully"
+          }
+        }
+      }
+    },
+    "/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Refresh session",
+        "operationId": "refresh-session",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session refreshed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "session": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "type": "string"
+                            },
+                            "expires_at": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "token",
+                            "expires_at"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "session"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/password-reset-request": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Request password reset",
+        "operationId": "request-password-reset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password reset email sent (if user exists)"
+          }
+        }
+      }
+    },
+    "/v1/auth/password-reset": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Reset password",
+        "operationId": "reset-password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "new_password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "token",
+                  "new_password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password reset successfully"
+          },
+          "400": {
+            "description": "Invalid or expired token"
+          }
+        }
+      }
+    },
+    "/v1/auth/verify-email": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Verify email address",
+        "operationId": "verify-email",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Email verified successfully"
+          },
+          "400": {
+            "description": "Invalid or expired token"
+          }
+        }
+      }
+    },
+    "/v1/auth/resend-verification": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Resend verification email",
+        "operationId": "resend-verification",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification email sent (if account exists)"
+          }
+        }
+      }
+    },
     "/v1/user/me": {
       "get": {
         "tags": [
@@ -425,6 +1079,537 @@
         }
       }
     },
+    "/v1/organizations": {
+      "post": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "Create a new organization",
+        "operationId": "create-organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 100
+                  },
+                  "slug": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 50,
+                    "pattern": "^[a-z0-9-]+$"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Organization created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "organization": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "slug": {
+                              "type": "string"
+                            },
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "subscription_tier": {
+                              "type": "string"
+                            },
+                            "org_tag": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "slug",
+                            "created_at",
+                            "subscription_tier",
+                            "org_tag"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "organization"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "409": {
+            "description": "Slug already exists"
+          }
+        }
+      }
+    },
+    "/v1/organizations/{org_id}/invite": {
+      "post": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "Invite user to organization",
+        "operationId": "invite-to-organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "org_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "viewer",
+                      "admin",
+                      "owner"
+                    ],
+                    "default": "viewer"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Invitation sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "invitation": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "role": {
+                              "type": "string"
+                            },
+                            "invite_code": {
+                              "type": "string"
+                            },
+                            "expires_at": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "email",
+                            "role",
+                            "invite_code",
+                            "expires_at"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "invitation"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No permission to invite"
+          },
+          "409": {
+            "description": "User already member or invited"
+          }
+        }
+      }
+    },
+    "/v1/organizations/join": {
+      "post": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "Join organization with invite code",
+        "operationId": "join-organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "invite_code": {
+                    "type": "string",
+                    "minLength": 6,
+                    "maxLength": 10
+                  }
+                },
+                "required": [
+                  "invite_code"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Joined organization successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "organization": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "slug": {
+                              "type": "string"
+                            },
+                            "role": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "slug",
+                            "role"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "organization"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or expired invite code"
+          },
+          "409": {
+            "description": "Already a member"
+          }
+        }
+      }
+    },
+    "/v1/organizations/{org_id}/members": {
+      "get": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "Get organization members",
+        "operationId": "get-organization-members",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "org_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of organization members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "members": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "email": {
+                                "type": "string"
+                              },
+                              "role": {
+                                "type": "string"
+                              },
+                              "joined_at": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name",
+                              "email",
+                              "role",
+                              "joined_at"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "members"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No permission"
+          }
+        }
+      }
+    },
+    "/v1/organizations/{org_id}/invitations": {
+      "get": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "Get pending invitations",
+        "operationId": "get-pending-invitations",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "org_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of pending invitations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "invitations": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "email": {
+                                "type": "string"
+                              },
+                              "role": {
+                                "type": "string"
+                              },
+                              "invited_by_name": {
+                                "type": "string"
+                              },
+                              "invite_code": {
+                                "type": "string"
+                              },
+                              "expires_at": {
+                                "type": "string"
+                              },
+                              "created_at": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "email",
+                              "role",
+                              "invite_code",
+                              "expires_at",
+                              "created_at"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "invitations"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No permission"
+          }
+        }
+      }
+    },
+    "/v1/organizations/{org_id}/members/{user_id}": {
+      "delete": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "Remove member from organization",
+        "operationId": "remove-member",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "org_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "user_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Member removed"
+          },
+          "403": {
+            "description": "No permission"
+          },
+          "404": {
+            "description": "Member not found"
+          }
+        }
+      }
+    },
     "/v1/analytics/events": {
       "get": {
         "tags": [
@@ -442,11 +1627,11 @@
           {
             "schema": {
               "type": "string",
-              "description": "Organization tag for data partitioning"
+              "description": "Organization ID"
             },
             "required": true,
-            "description": "Organization tag for data partitioning",
-            "name": "org_tag",
+            "description": "Organization ID",
+            "name": "org_id",
             "in": "query"
           },
           {
@@ -1621,6 +2806,299 @@
         }
       }
     },
+    "/v1/analytics/platforms/unified": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Get unified cross-platform data",
+        "description": "Fetches and merges data from multiple advertising platforms",
+        "operationId": "get-unified-platform-data",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Start date (YYYY-MM-DD)"
+            },
+            "required": false,
+            "description": "Start date (YYYY-MM-DD)",
+            "name": "start_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "End date (YYYY-MM-DD)"
+            },
+            "required": false,
+            "description": "End date (YYYY-MM-DD)",
+            "name": "end_date",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unified platform data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "summary": {
+                          "type": "object",
+                          "properties": {
+                            "total_spend_cents": {
+                              "type": "number"
+                            },
+                            "total_impressions": {
+                              "type": "number"
+                            },
+                            "total_clicks": {
+                              "type": "number"
+                            },
+                            "total_conversions": {
+                              "type": "number"
+                            },
+                            "average_ctr": {
+                              "type": "number"
+                            },
+                            "average_cpc_cents": {
+                              "type": "number"
+                            },
+                            "platforms_active": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "total_spend_cents",
+                            "total_impressions",
+                            "total_clicks",
+                            "total_conversions",
+                            "average_ctr",
+                            "average_cpc_cents",
+                            "platforms_active"
+                          ]
+                        },
+                        "by_platform": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "spend_cents": {
+                                "type": "number"
+                              },
+                              "impressions": {
+                                "type": "number"
+                              },
+                              "clicks": {
+                                "type": "number"
+                              },
+                              "conversions": {
+                                "type": "number"
+                              },
+                              "campaigns": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "spend_cents",
+                              "impressions",
+                              "clicks",
+                              "conversions",
+                              "campaigns"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "summary",
+                        "by_platform"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics/platforms/{platform}": {
+      "get": {
+        "tags": [
+          "Analytics"
+        ],
+        "summary": "Get platform-specific advertising data",
+        "description": "Fetches campaign, ad group, and ad data from Supabase for a specific platform",
+        "operationId": "get-platform-data",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "google",
+                "facebook",
+                "tiktok"
+              ],
+              "description": "Advertising platform"
+            },
+            "required": true,
+            "description": "Advertising platform",
+            "name": "platform",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Start date (YYYY-MM-DD)"
+            },
+            "required": false,
+            "description": "Start date (YYYY-MM-DD)",
+            "name": "start_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "End date (YYYY-MM-DD)"
+            },
+            "required": false,
+            "description": "End date (YYYY-MM-DD)",
+            "name": "end_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "campaigns",
+                "ad_groups",
+                "ads",
+                "all"
+              ],
+              "description": "Entity type to fetch (default: all)"
+            },
+            "required": false,
+            "description": "Entity type to fetch (default: all)",
+            "name": "entity",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Platform data from Supabase",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "campaigns": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "ad_groups": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "ads": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "metrics": {
+                          "type": "array",
+                          "items": {}
+                        }
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "platform": {
+                          "type": "string"
+                        },
+                        "organization_id": {
+                          "type": "string"
+                        },
+                        "date_range": {
+                          "type": "object",
+                          "properties": {
+                            "start_date": {
+                              "type": "string"
+                            },
+                            "end_date": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "platform",
+                        "organization_id",
+                        "date_range"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/onboarding/status": {
       "get": {
         "tags": [
@@ -2035,6 +3513,253 @@
         }
       }
     },
+    "/v1/connectors/{provider}/accounts": {
+      "get": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Get OAuth ad accounts",
+        "operationId": "get-oauth-accounts",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "google",
+                "facebook",
+                "tiktok"
+              ]
+            },
+            "required": true,
+            "name": "provider",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "state",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of available ad accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "accounts": {
+                          "type": "array",
+                          "items": {}
+                        }
+                      },
+                      "required": [
+                        "accounts"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/connectors/{provider}/accounts/{account_id}/children": {
+      "get": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Get child accounts for Google Ads manager account",
+        "operationId": "get-child-accounts",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "google"
+              ]
+            },
+            "required": true,
+            "name": "provider",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "account_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "state",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of child accounts under manager account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "isManagerAccount": {
+                          "type": "boolean"
+                        },
+                        "accounts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "currencyCode": {
+                                "type": "string"
+                              },
+                              "timeZone": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "isManagerAccount",
+                        "accounts"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/connectors/{provider}/finalize": {
+      "post": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Finalize OAuth connection",
+        "operationId": "finalize-oauth-connection",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "google",
+                "facebook",
+                "tiktok"
+              ]
+            },
+            "required": true,
+            "name": "provider",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  },
+                  "account_id": {
+                    "type": "string"
+                  },
+                  "account_name": {
+                    "type": "string"
+                  },
+                  "selectedAccounts": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "state",
+                  "account_id",
+                  "account_name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Connection finalized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "connection_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "connection_id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/connectors/{connection_id}": {
       "delete": {
         "tags": [
@@ -2134,64 +3859,31 @@
         }
       }
     },
-    "/v1/connectors/stripe/connect": {
-      "post": {
+    "/v1/connectors/{connection_id}/settings": {
+      "get": {
         "tags": [
           "Connectors"
         ],
-        "summary": "Connect Stripe account",
-        "description": "Connect a Stripe account using a restricted API key",
+        "summary": "Get connector settings and configuration",
+        "operationId": "get-connector-settings",
         "security": [
           {
             "bearerAuth": []
           }
         ],
-        "operationId": "post_ConnectStripe",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "organization_id": {
-                    "type": "string"
-                  },
-                  "api_key": {
-                    "type": "string",
-                    "minLength": 1,
-                    "pattern": "^(sk_test_|sk_live_)[a-zA-Z0-9]{24,}$"
-                  },
-                  "sync_mode": {
-                    "type": "string",
-                    "enum": [
-                      "charges",
-                      "payment_intents",
-                      "invoices"
-                    ],
-                    "default": "charges"
-                  },
-                  "lookback_days": {
-                    "type": "number",
-                    "minimum": 1,
-                    "maximum": 365,
-                    "default": 30
-                  },
-                  "auto_sync": {
-                    "type": "boolean",
-                    "default": true
-                  }
-                },
-                "required": [
-                  "organization_id",
-                  "api_key"
-                ]
-              }
-            }
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
           }
-        },
+        ],
         "responses": {
-          "201": {
-            "description": "Stripe account connected successfully",
+          "200": {
+            "description": "Connector settings",
             "content": {
               "application/json": {
                 "schema": {
@@ -2206,36 +3898,33 @@
                         "connection_id": {
                           "type": "string"
                         },
-                        "account_info": {
+                        "platform": {
+                          "type": "string"
+                        },
+                        "account_id": {
+                          "type": "string"
+                        },
+                        "account_name": {
+                          "type": "string"
+                        },
+                        "settings": {},
+                        "metadata": {
                           "type": "object",
                           "properties": {
-                            "stripe_account_id": {
-                              "type": "string"
-                            },
-                            "business_name": {
-                              "type": "string"
-                            },
-                            "country": {
-                              "type": "string"
-                            },
-                            "default_currency": {
-                              "type": "string"
-                            },
-                            "charges_enabled": {
+                            "isManagerAccount": {
                               "type": "boolean"
+                            },
+                            "availableAccounts": {
+                              "type": "array",
+                              "items": {}
                             }
-                          },
-                          "required": [
-                            "stripe_account_id",
-                            "country",
-                            "default_currency",
-                            "charges_enabled"
-                          ]
+                          }
                         }
                       },
                       "required": [
                         "connection_id",
-                        "account_info"
+                        "platform",
+                        "account_id"
                       ]
                     }
                   },
@@ -2246,12 +3935,219 @@
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid API key or configuration"
-          },
-          "403": {
-            "description": "No access to organization"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Update connector settings",
+        "operationId": "update-connector-settings",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "settings": {}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settings updated successfully"
+          }
+        }
+      }
+    },
+    "/v1/connectors/{connection_id}/resync": {
+      "post": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Trigger a resync of connector data",
+        "operationId": "trigger-resync",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resync triggered successfully"
+          }
+        }
+      }
+    },
+    "/v1/connectors/{connection_id}/google-ads/accounts": {
+      "get": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "List Google Ads client accounts",
+        "operationId": "list-google-ads-accounts",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of Google Ads client accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "isManagerAccount": {
+                          "type": "boolean"
+                        },
+                        "accounts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "currencyCode": {
+                                "type": "string"
+                              },
+                              "timeZone": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "name"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "isManagerAccount",
+                        "accounts"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/connectors/{connection_id}/google-ads/settings": {
+      "put": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Update Google Ads account selection settings",
+        "operationId": "update-google-ads-settings",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "accountSelection": {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "all",
+                          "selected"
+                        ]
+                      },
+                      "selectedAccounts": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "mode"
+                    ]
+                  }
+                },
+                "required": [
+                  "accountSelection"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settings updated successfully"
           }
         }
       }
@@ -2944,6 +4840,1399 @@
         "responses": {
           "200": {
             "description": "Available metadata keys"
+          }
+        }
+      }
+    },
+    "/v1/workers/health": {
+      "get": {
+        "tags": [
+          "Workers"
+        ],
+        "summary": "Get workers health status",
+        "description": "Checks the health status of cron and queue consumer workers",
+        "operationId": "get-workers-health",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workers health status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "cron": {
+                          "type": "object",
+                          "properties": {
+                            "worker": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "healthy",
+                                "degraded",
+                                "unhealthy"
+                              ]
+                            },
+                            "lastCheck": {
+                              "type": "string"
+                            },
+                            "message": {
+                              "type": "string"
+                            },
+                            "metadata": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": [
+                            "worker",
+                            "status",
+                            "lastCheck"
+                          ]
+                        },
+                        "queue": {
+                          "type": "object",
+                          "properties": {
+                            "worker": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "healthy",
+                                "degraded",
+                                "unhealthy"
+                              ]
+                            },
+                            "lastCheck": {
+                              "type": "string"
+                            },
+                            "message": {
+                              "type": "string"
+                            },
+                            "metadata": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": [
+                            "worker",
+                            "status",
+                            "lastCheck"
+                          ]
+                        },
+                        "overall": {
+                          "type": "string",
+                          "enum": [
+                            "healthy",
+                            "degraded",
+                            "unhealthy"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "cron",
+                        "queue",
+                        "overall"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workers/queue/status": {
+      "get": {
+        "tags": [
+          "Workers"
+        ],
+        "summary": "Get queue processing status",
+        "description": "Returns recent job processing statistics from the queue consumer",
+        "operationId": "get-queue-status",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Queue status and recent jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "recentJobs": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "stats": {
+                          "type": "object",
+                          "properties": {
+                            "totalJobs": {
+                              "type": "number"
+                            },
+                            "successfulJobs": {
+                              "type": "number"
+                            },
+                            "failedJobs": {
+                              "type": "number"
+                            },
+                            "averageProcessingTime": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "totalJobs",
+                            "successfulJobs",
+                            "failedJobs"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "recentJobs"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workers/dlq": {
+      "get": {
+        "tags": [
+          "Workers"
+        ],
+        "summary": "Get dead letter queue items",
+        "description": "Returns failed jobs that ended up in the dead letter queue",
+        "operationId": "get-dlq",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Number of items to return (default: 10)"
+            },
+            "required": false,
+            "description": "Number of items to return (default: 10)",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dead letter queue items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "connection_id": {
+                                "type": "string"
+                              },
+                              "platform": {
+                                "type": "string"
+                              },
+                              "error_message": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "failed_at": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "retry_count": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "connection_id",
+                              "error_message",
+                              "failed_at"
+                            ]
+                          }
+                        },
+                        "total": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "items"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workers/test-token/{connection_id}": {
+      "get": {
+        "tags": [
+          "Workers"
+        ],
+        "summary": "Test connection token",
+        "description": "Tests if the access token for a connection has the correct permissions and can fetch data",
+        "operationId": "test-connection-token",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "connection_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token test results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "connection_id": {
+                          "type": "string"
+                        },
+                        "platform": {
+                          "type": "string"
+                        },
+                        "token_valid": {
+                          "type": "boolean"
+                        },
+                        "permissions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "can_fetch_data": {
+                          "type": "boolean"
+                        },
+                        "test_results": {},
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "connection_id",
+                        "platform",
+                        "token_valid",
+                        "can_fetch_data"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workers/sync/trigger": {
+      "post": {
+        "tags": [
+          "Workers"
+        ],
+        "summary": "Manually trigger sync",
+        "description": "Manually triggers a sync job for a specific connection. For full syncs, specify sync_window with start and end dates.",
+        "operationId": "trigger-sync",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "connection_id": {
+                    "type": "string"
+                  },
+                  "job_type": {
+                    "type": "string",
+                    "enum": [
+                      "full",
+                      "incremental"
+                    ],
+                    "default": "incremental"
+                  },
+                  "sync_window": {
+                    "type": "object",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "description": "Start date (YYYY-MM-DD)"
+                      },
+                      "end": {
+                        "type": "string",
+                        "description": "End date (YYYY-MM-DD)"
+                      }
+                    },
+                    "required": [
+                      "start",
+                      "end"
+                    ],
+                    "description": "Custom sync window for full syncs"
+                  }
+                },
+                "required": [
+                  "connection_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sync job queued and processing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "job_id": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "job_id",
+                        "status",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/settings/matrix": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get optimization matrix settings",
+        "operationId": "get-matrix-settings",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matrix settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "growth_strategy": {
+                          "type": "string",
+                          "enum": [
+                            "lean",
+                            "balanced",
+                            "bold"
+                          ]
+                        },
+                        "budget_optimization": {
+                          "type": "string",
+                          "enum": [
+                            "conservative",
+                            "moderate",
+                            "aggressive"
+                          ]
+                        },
+                        "ai_control": {
+                          "type": "string",
+                          "enum": [
+                            "copilot",
+                            "autopilot"
+                          ]
+                        },
+                        "daily_cap_cents": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "exclusiveMinimum": 0
+                        },
+                        "monthly_cap_cents": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "exclusiveMinimum": 0
+                        },
+                        "pause_threshold_percent": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        "conversion_source": {
+                          "type": "string",
+                          "enum": [
+                            "ad_platforms",
+                            "tag",
+                            "connectors"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "growth_strategy",
+                        "budget_optimization",
+                        "ai_control"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No organization selected"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Update optimization matrix settings",
+        "operationId": "update-matrix-settings",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "growth_strategy": {
+                    "type": "string",
+                    "enum": [
+                      "lean",
+                      "balanced",
+                      "bold"
+                    ]
+                  },
+                  "budget_optimization": {
+                    "type": "string",
+                    "enum": [
+                      "conservative",
+                      "moderate",
+                      "aggressive"
+                    ]
+                  },
+                  "ai_control": {
+                    "type": "string",
+                    "enum": [
+                      "copilot",
+                      "autopilot"
+                    ]
+                  },
+                  "daily_cap_cents": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "exclusiveMinimum": 0
+                  },
+                  "monthly_cap_cents": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "exclusiveMinimum": 0
+                  },
+                  "pause_threshold_percent": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "conversion_source": {
+                    "type": "string",
+                    "enum": [
+                      "ad_platforms",
+                      "tag",
+                      "connectors"
+                    ]
+                  }
+                },
+                "required": [
+                  "growth_strategy",
+                  "budget_optimization",
+                  "ai_control"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settings updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No organization selected or access denied"
+          }
+        }
+      }
+    },
+    "/v1/config": {
+      "get": {
+        "tags": [
+          "Tracking Config"
+        ],
+        "summary": "Get tracking configuration by org tag (public)",
+        "operationId": "get-tag-config",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "org_tag",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tracking configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "goals": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "trigger": {
+                                "type": "string",
+                                "enum": [
+                                  "pageview",
+                                  "click",
+                                  "event"
+                                ]
+                              },
+                              "match": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "number"
+                              },
+                              "currency": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "trigger"
+                            ]
+                          }
+                        },
+                        "enable_fingerprinting": {
+                          "type": "boolean"
+                        },
+                        "enable_cross_domain_tracking": {
+                          "type": "boolean"
+                        },
+                        "enable_performance_tracking": {
+                          "type": "boolean"
+                        },
+                        "session_timeout": {
+                          "type": "number"
+                        },
+                        "batch_size": {
+                          "type": "number"
+                        },
+                        "batch_timeout": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Organization not found"
+          }
+        }
+      }
+    },
+    "/v1/tracking-config": {
+      "get": {
+        "tags": [
+          "Tracking Config"
+        ],
+        "summary": "Get tracking configuration (authenticated)",
+        "operationId": "get-tracking-config",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tracking configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "goals": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "trigger": {
+                                "type": "string",
+                                "enum": [
+                                  "pageview",
+                                  "click",
+                                  "event"
+                                ]
+                              },
+                              "match": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "number"
+                              },
+                              "currency": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "trigger"
+                            ]
+                          }
+                        },
+                        "enable_fingerprinting": {
+                          "type": "boolean"
+                        },
+                        "enable_cross_domain_tracking": {
+                          "type": "boolean"
+                        },
+                        "enable_performance_tracking": {
+                          "type": "boolean"
+                        },
+                        "session_timeout": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "batch_size": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "batch_timeout": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No organization selected or access denied"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Tracking Config"
+        ],
+        "summary": "Update tracking configuration",
+        "operationId": "update-tracking-config",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "goals": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "trigger": {
+                          "type": "string",
+                          "enum": [
+                            "pageview",
+                            "click",
+                            "event"
+                          ]
+                        },
+                        "match": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "number"
+                        },
+                        "currency": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "trigger"
+                      ]
+                    }
+                  },
+                  "enable_fingerprinting": {
+                    "type": "boolean"
+                  },
+                  "enable_cross_domain_tracking": {
+                    "type": "boolean"
+                  },
+                  "enable_performance_tracking": {
+                    "type": "boolean"
+                  },
+                  "session_timeout": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "batch_size": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "batch_timeout": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Configuration updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No organization selected or access denied"
+          }
+        }
+      }
+    },
+    "/v1/tracking-config/snippet": {
+      "post": {
+        "tags": [
+          "Tracking Config"
+        ],
+        "summary": "Generate tracking snippet for embedding",
+        "operationId": "generate-tracking-snippet",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "complexity": {
+                    "type": "string",
+                    "enum": [
+                      "simple",
+                      "advanced"
+                    ],
+                    "default": "simple"
+                  },
+                  "goals": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "trigger": {
+                          "type": "string",
+                          "enum": [
+                            "pageview",
+                            "click",
+                            "event"
+                          ]
+                        },
+                        "match": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "number"
+                        },
+                        "currency": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "trigger"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tracking snippet generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "snippet": {
+                          "type": "string"
+                        },
+                        "org_tag": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "snippet",
+                        "org_tag"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No organization selected or access denied"
+          }
+        }
+      }
+    },
+    "/v1/settings/ai-decisions": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get AI recommendations",
+        "operationId": "get-ai-decisions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "accepted",
+                "rejected",
+                "expired"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "required": false,
+            "name": "min_confidence",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "AI decisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "decision_id": {
+                            "type": "string"
+                          },
+                          "org_id": {
+                            "type": "string"
+                          },
+                          "recommended_action": {
+                            "type": "string"
+                          },
+                          "parameters": {},
+                          "reason": {
+                            "type": "string"
+                          },
+                          "impact": {
+                            "type": "number"
+                          },
+                          "confidence": {
+                            "type": "string",
+                            "enum": [
+                              "low",
+                              "medium",
+                              "high"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "accepted",
+                              "rejected",
+                              "expired"
+                            ]
+                          },
+                          "expires_at": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "string"
+                          },
+                          "reviewed_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "applied_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "decision_id",
+                          "org_id",
+                          "recommended_action",
+                          "reason",
+                          "impact",
+                          "confidence",
+                          "status",
+                          "expires_at",
+                          "created_at",
+                          "reviewed_at",
+                          "applied_at"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/settings/ai-decisions/{decision_id}/accept": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Accept an AI recommendation",
+        "operationId": "accept-ai-decision",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "decision_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Decision accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/settings/ai-decisions/{decision_id}/reject": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Reject an AI recommendation",
+        "operationId": "reject-ai-decision",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "decision_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Decision rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
           }
         }
       }
