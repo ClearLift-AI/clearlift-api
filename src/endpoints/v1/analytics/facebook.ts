@@ -12,6 +12,7 @@ import { success, error } from "../../../utils/response";
 import { FacebookSupabaseAdapter, DateRange } from "../../../adapters/platforms/facebook-supabase";
 import { SupabaseClient } from "../../../services/supabase";
 import { getSecret } from "../../../utils/secrets";
+import { AGE_LIMITS, BUDGET_LIMITS } from "../../../constants/facebook";
 
 /**
  * GET /v1/analytics/facebook/campaigns
@@ -672,8 +673,9 @@ export class UpdateFacebookCampaignBudget extends OpenAPIRoute {
       }),
       body: contentJson(
         z.object({
-          daily_budget: z.number().min(0).optional().describe("Daily budget in cents (e.g., 5000 = $50.00)"),
-          lifetime_budget: z.number().min(0).optional().describe("Lifetime budget in cents")
+          daily_budget: z.number().min(BUDGET_LIMITS.DAILY_MIN_CENTS).optional().describe(`Daily budget in cents (minimum: $${BUDGET_LIMITS.DAILY_MIN_CENTS / 100})`),
+          lifetime_budget: z.number().min(BUDGET_LIMITS.LIFETIME_MIN_CENTS).optional().describe(`Lifetime budget in cents (minimum: $${BUDGET_LIMITS.LIFETIME_MIN_CENTS / 100})`),
+          budget_type: z.enum(['campaign', 'adset']).optional().describe("v24.0: Campaign Budget Optimization type")
         }).refine(
           data => (data.daily_budget !== undefined) !== (data.lifetime_budget !== undefined),
           { message: "Must provide either daily_budget or lifetime_budget, not both" }
@@ -760,8 +762,8 @@ export class UpdateFacebookAdSetBudget extends OpenAPIRoute {
       }),
       body: contentJson(
         z.object({
-          daily_budget: z.number().min(0).optional().describe("Daily budget in cents (e.g., 2000 = $20.00)"),
-          lifetime_budget: z.number().min(0).optional().describe("Lifetime budget in cents")
+          daily_budget: z.number().min(BUDGET_LIMITS.DAILY_MIN_CENTS).optional().describe(`Daily budget in cents (minimum: $${BUDGET_LIMITS.DAILY_MIN_CENTS / 100})`),
+          lifetime_budget: z.number().min(BUDGET_LIMITS.LIFETIME_MIN_CENTS).optional().describe(`Lifetime budget in cents (minimum: $${BUDGET_LIMITS.LIFETIME_MIN_CENTS / 100})`)
         }).refine(
           data => (data.daily_budget !== undefined) !== (data.lifetime_budget !== undefined),
           { message: "Must provide either daily_budget or lifetime_budget, not both" }
@@ -848,28 +850,20 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
       }),
       body: contentJson(
         z.object({
-          geo_locations: z.object({
-            countries: z.array(z.string()).optional().describe("ISO country codes, e.g., ['US', 'CA']"),
-            regions: z.array(z.object({ key: z.string() })).optional().describe("Region IDs"),
-            cities: z.array(z.object({
-              key: z.string(),
-              radius: z.number().optional(),
-              distance_unit: z.enum(['mile', 'kilometer']).optional()
-            })).optional(),
-            location_types: z.array(z.enum(['home', 'recent'])).optional()
-          }).optional(),
-          age_min: z.number().min(13).max(65).optional(),
-          age_max: z.number().min(13).max(65).optional(),
-          genders: z.array(z.union([z.literal(1), z.literal(2)])).optional().describe("1 = male, 2 = female"),
-          interests: z.array(z.object({
-            id: z.string(),
-            name: z.string().optional()
-          })).optional(),
-          behaviors: z.array(z.object({
-            id: z.string(),
-            name: z.string().optional()
-          })).optional(),
-          flexible_spec: z.array(z.object({
+          targeting: z.object({
+            geo_locations: z.object({
+              countries: z.array(z.string()).optional().describe("ISO country codes, e.g., ['US', 'CA']"),
+              regions: z.array(z.object({ key: z.string() })).optional().describe("Region IDs"),
+              cities: z.array(z.object({
+                key: z.string(),
+                radius: z.number().optional(),
+                distance_unit: z.enum(['mile', 'kilometer']).optional()
+              })).optional(),
+              location_types: z.array(z.enum(['home', 'recent'])).optional()
+            }).optional(),
+            age_min: z.number().min(AGE_LIMITS.MIN).max(AGE_LIMITS.MAX).optional().describe(`Minimum age for targeting (${AGE_LIMITS.MIN}-${AGE_LIMITS.MAX})`),
+            age_max: z.number().min(AGE_LIMITS.MIN).max(AGE_LIMITS.MAX).optional().describe(`Maximum age for targeting (${AGE_LIMITS.MIN}-${AGE_LIMITS.MAX})`),
+            genders: z.array(z.union([z.literal(1), z.literal(2)])).optional().describe("1 = male, 2 = female"),
             interests: z.array(z.object({
               id: z.string(),
               name: z.string().optional()
@@ -877,22 +871,33 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
             behaviors: z.array(z.object({
               id: z.string(),
               name: z.string().optional()
-            })).optional()
-          })).optional(),
-          exclusions: z.object({
-            interests: z.array(z.object({
-              id: z.string(),
-              name: z.string().optional()
             })).optional(),
-            behaviors: z.array(z.object({
-              id: z.string(),
-              name: z.string().optional()
-            })).optional()
-          }).optional(),
-          device_platforms: z.array(z.enum(['mobile', 'desktop'])).optional(),
-          publisher_platforms: z.array(z.enum(['facebook', 'instagram', 'audience_network', 'messenger'])).optional(),
-          facebook_positions: z.array(z.enum(['feed', 'right_hand_column', 'instant_article', 'instream_video', 'marketplace', 'story', 'search'])).optional(),
-          instagram_positions: z.array(z.enum(['stream', 'story', 'explore'])).optional()
+            flexible_spec: z.array(z.object({
+              interests: z.array(z.object({
+                id: z.string(),
+                name: z.string().optional()
+              })).optional(),
+              behaviors: z.array(z.object({
+                id: z.string(),
+                name: z.string().optional()
+              })).optional()
+            })).optional(),
+            exclusions: z.object({
+              interests: z.array(z.object({
+                id: z.string(),
+                name: z.string().optional()
+              })).optional(),
+              behaviors: z.array(z.object({
+                id: z.string(),
+                name: z.string().optional()
+              })).optional()
+            }).optional(),
+            device_platforms: z.array(z.enum(['mobile', 'desktop'])).optional(),
+            publisher_platforms: z.array(z.enum(['facebook', 'instagram', 'audience_network', 'messenger'])).optional(),
+            facebook_positions: z.array(z.enum(['feed', 'right_hand_column', 'instant_article', 'instream_video', 'marketplace', 'story', 'search'])).optional(),
+            instagram_positions: z.array(z.enum(['stream', 'story', 'explore'])).optional()
+          }),
+          placement_soft_opt_out: z.boolean().optional().describe("v24.0: Allow up to 5% spend on excluded placements for better performance")
         })
       )
     },
@@ -908,7 +913,7 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
     const orgId = c.get("org_id" as any) as string;
     const data = await this.getValidatedData<typeof this.schema>();
     const { ad_set_id } = data.params;
-    const targeting = data.body;
+    const { targeting, placement_soft_opt_out } = data.body;
 
     // Authorization check handled by requireOrgAdmin middleware
 
@@ -944,7 +949,12 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
         ''
       );
 
-      await fbProvider.updateAdSetTargeting(accessToken, ad_set_id, targeting);
+      await fbProvider.updateAdSetTargeting(
+        accessToken,
+        ad_set_id,
+        targeting,
+        placement_soft_opt_out !== undefined ? { placement_soft_opt_out } : undefined
+      );
 
       return success(c, {
         ad_set_id,
