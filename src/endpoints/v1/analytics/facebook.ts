@@ -401,3 +401,255 @@ export class GetFacebookMetrics extends OpenAPIRoute {
     }
   }
 }
+
+/**
+ * PATCH /v1/analytics/facebook/campaigns/:campaign_id/status
+ */
+export class UpdateFacebookCampaignStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["Facebook Ads"],
+    summary: "Update Facebook campaign status",
+    description: "Pause or resume a Facebook campaign",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        campaign_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          status: z.enum(['ACTIVE', 'PAUSED']).describe("New status for the campaign")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Campaign status updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const session = c.get("session");
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { campaign_id } = data.params;
+    const { status } = data.body;
+
+    // Authorization check handled by requireOrgAdmin middleware
+
+    try {
+      // Get Facebook connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update campaign status via Facebook API
+      const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
+      const fbProvider = new FacebookAdsOAuthProvider(
+        await getSecret(c.env.FACEBOOK_APP_ID),
+        await getSecret(c.env.FACEBOOK_APP_SECRET),
+        ''
+      );
+
+      await fbProvider.updateCampaignStatus(accessToken, campaign_id, status);
+
+      return success(c, {
+        campaign_id,
+        status,
+        message: `Campaign ${status === 'ACTIVE' ? 'resumed' : 'paused'} successfully`
+      });
+    } catch (err: any) {
+      console.error("Update campaign status error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update campaign status: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/facebook/ad-sets/:ad_set_id/status
+ */
+export class UpdateFacebookAdSetStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["Facebook Ads"],
+    summary: "Update Facebook ad set status",
+    description: "Pause or resume a Facebook ad set",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        ad_set_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          status: z.enum(['ACTIVE', 'PAUSED']).describe("New status for the ad set")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Ad set status updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const session = c.get("session");
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { ad_set_id } = data.params;
+    const { status } = data.body;
+
+    // Authorization check handled by requireOrgAdmin middleware
+
+    try {
+      // Get Facebook connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update ad set status via Facebook API
+      const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
+      const fbProvider = new FacebookAdsOAuthProvider(
+        await getSecret(c.env.FACEBOOK_APP_ID),
+        await getSecret(c.env.FACEBOOK_APP_SECRET),
+        ''
+      );
+
+      await fbProvider.updateAdSetStatus(accessToken, ad_set_id, status);
+
+      return success(c, {
+        ad_set_id,
+        status,
+        message: `Ad set ${status === 'ACTIVE' ? 'resumed' : 'paused'} successfully`
+      });
+    } catch (err: any) {
+      console.error("Update ad set status error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update ad set status: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/facebook/ads/:ad_id/status
+ */
+export class UpdateFacebookAdStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["Facebook Ads"],
+    summary: "Update Facebook ad status",
+    description: "Pause or resume a Facebook ad",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        ad_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          status: z.enum(['ACTIVE', 'PAUSED']).describe("New status for the ad")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Ad status updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const session = c.get("session");
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { ad_id } = data.params;
+    const { status } = data.body;
+
+    // Authorization check handled by requireOrgAdmin middleware
+
+    try {
+      // Get Facebook connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update ad status via Facebook API
+      const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
+      const fbProvider = new FacebookAdsOAuthProvider(
+        await getSecret(c.env.FACEBOOK_APP_ID),
+        await getSecret(c.env.FACEBOOK_APP_SECRET),
+        ''
+      );
+
+      await fbProvider.updateAdStatus(accessToken, ad_id, status);
+
+      return success(c, {
+        ad_id,
+        status,
+        message: `Ad ${status === 'ACTIVE' ? 'resumed' : 'paused'} successfully`
+      });
+    } catch (err: any) {
+      console.error("Update ad status error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update ad status: ${err.message}`, 500);
+    }
+  }
+}

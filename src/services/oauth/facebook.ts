@@ -141,4 +141,112 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
     const data = await response.json() as any;
     return data.data || [];
   }
+
+  /**
+   * Update campaign status (ACTIVE, PAUSED)
+   */
+  async updateCampaignStatus(
+    accessToken: string,
+    campaignId: string,
+    status: 'ACTIVE' | 'PAUSED'
+  ): Promise<{ success: boolean }> {
+    const response = await fetch(
+      `https://graph.facebook.com/v24.0/${campaignId}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          status,
+          access_token: accessToken
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Facebook updateCampaignStatus failed:', {
+        campaignId,
+        status,
+        error: errorText
+      });
+      throw new Error(`Failed to update campaign status: ${errorText}`);
+    }
+
+    const data = await response.json() as any;
+    return { success: data.success === true };
+  }
+
+  /**
+   * Update ad set status (ACTIVE, PAUSED)
+   */
+  async updateAdSetStatus(
+    accessToken: string,
+    adSetId: string,
+    status: 'ACTIVE' | 'PAUSED'
+  ): Promise<{ success: boolean }> {
+    const response = await fetch(
+      `https://graph.facebook.com/v24.0/${adSetId}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          status,
+          access_token: accessToken
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Facebook updateAdSetStatus failed:', {
+        adSetId,
+        status,
+        error: errorText
+      });
+      throw new Error(`Failed to update ad set status: ${errorText}`);
+    }
+
+    const data = await response.json() as any;
+    return { success: data.success === true };
+  }
+
+  /**
+   * Update ad status (ACTIVE, PAUSED)
+   */
+  async updateAdStatus(
+    accessToken: string,
+    adId: string,
+    status: 'ACTIVE' | 'PAUSED'
+  ): Promise<{ success: boolean }> {
+    const response = await fetch(
+      `https://graph.facebook.com/v24.0/${adId}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          status,
+          access_token: accessToken
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Facebook updateAdStatus failed:', {
+        adId,
+        status,
+        error: errorText
+      });
+      throw new Error(`Failed to update ad status: ${errorText}`);
+    }
+
+    const data = await response.json() as any;
+    return { success: data.success === true };
+  }
 }
