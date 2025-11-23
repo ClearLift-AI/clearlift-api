@@ -10,6 +10,34 @@ export interface Session {
 }
 
 /**
+ * Role hierarchy: owner > admin > viewer
+ * Used for permission checks with inheritance
+ */
+const ROLE_HIERARCHY: Record<string, number> = {
+  owner: 3,
+  admin: 2,
+  viewer: 1
+};
+
+/**
+ * Check if a user's role satisfies the required role(s)
+ * Supports role hierarchy: owner can do anything admin/viewer can do
+ */
+export function hasRole(userRole: string, requiredRoles: string[]): boolean {
+  const userLevel = ROLE_HIERARCHY[userRole];
+
+  if (userLevel === undefined) {
+    return false; // Unknown role
+  }
+
+  // Check if user's role level meets or exceeds any of the required roles
+  return requiredRoles.some(requiredRole => {
+    const requiredLevel = ROLE_HIERARCHY[requiredRole];
+    return requiredLevel !== undefined && userLevel >= requiredLevel;
+  });
+}
+
+/**
  * Extracts Bearer token from Authorization header
  */
 function extractToken(request: Request): string | null {
@@ -131,8 +159,13 @@ export async function requireOrg(c: AppContext, next: Next) {
 }
 
 /**
- * Optional middleware to check specific role
- * Must be used after requireOrg
+ * Role-based access control middleware with hierarchy support
+ * Must be used after requireOrg middleware
+ *
+ * Supports role hierarchy: owner can do anything admin/viewer can do
+ * Example: requireRole(['admin']) allows both 'admin' and 'owner' roles
+ *
+ * @param roles - Array of allowed roles (viewer, admin, owner)
  */
 export function requireRole(roles: string[]) {
   return async (c: AppContext, next: Next) => {
@@ -144,27 +177,92 @@ export function requireRole(roles: string[]) {
         success: false,
         error: {
           code: "FORBIDDEN",
-          message: "Insufficient context"
+          message: "Insufficient context for role check"
         }
       }, 403);
     }
 
-    // Get user's role in the organization
-    const role = await c.env.DB.prepare(`
-      SELECT role FROM organization_members
-      WHERE user_id = ? AND organization_id = ?
-    `).bind(session.user_id, orgId).first<{role: string}>();
+    try {
+      // Get user's role in the organization
+      const member = await c.env.DB.prepare(`
+        SELECT role FROM organization_members
+        WHERE user_id = ? AND organization_id = ?
+      `).bind(session.user_id, orgId).first<{role: string}>();
 
-    if (!role || !roles.includes(role.role)) {
+      if (!member) {
+        // User is not a member of the organization
+        return c.json({
+          success: false,
+          error: {
+            code: "FORBIDDEN",
+            message: "No access to this organization"
+          }
+        }, 403);
+      }
+
+      // Check role with hierarchy support
+      if (!hasRole(member.role, roles)) {
+        // Log authorization failure for audit trail
+        const { createAuditLogger } = await import("../services/auditLogger");
+        const auditLogger = createAuditLogger(c);
+
+        await auditLogger.logSecurityEvent({
+          severity: 'warning',
+          event_type: "authorization_denied",
+          user_id: session.user_id,
+          organization_id: orgId,
+          ip_address: c.req.header("CF-Connecting-IP") || "unknown",
+          user_agent: c.req.header("User-Agent") || "unknown",
+          metadata: {
+            required_roles: roles,
+            user_role: member.role,
+            method: c.req.method,
+            path: c.req.path,
+            resource_type: "endpoint"
+          }
+        });
+
+        return c.json({
+          success: false,
+          error: {
+            code: "INSUFFICIENT_PERMISSIONS",
+            message: `This action requires one of the following roles: ${roles.join(", ")}. You have: ${member.role}`
+          }
+        }, 403);
+      }
+
+      await next();
+    } catch (error) {
+      console.error("Role check error:", error);
       return c.json({
         success: false,
         error: {
-          code: "FORBIDDEN",
-          message: `Requires one of: ${roles.join(", ")}`
+          code: "INTERNAL_ERROR",
+          message: "Failed to verify permissions"
         }
-      }, 403);
+      }, 500);
     }
-
-    await next();
   };
 }
+
+/**
+ * Convenience middleware: Requires organization admin or owner role
+ * Combines requireOrg + requireRole(['admin', 'owner'])
+ *
+ * Use this for sensitive operations like:
+ * - Inviting/removing members
+ * - Updating organization settings
+ * - Managing connectors
+ */
+export const requireOrgAdmin = requireRole(['admin', 'owner']);
+
+/**
+ * Convenience middleware: Requires organization owner role only
+ * Combines requireOrg + requireRole(['owner'])
+ *
+ * Use this for critical operations like:
+ * - Deleting the organization
+ * - Transferring ownership
+ * - Billing changes
+ */
+export const requireOrgOwner = requireRole(['owner']);

@@ -79,28 +79,10 @@ export class JoinWaitlist extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    // Parse body manually
-    let body;
-    try {
-      body = await c.req.json();
-    } catch (e) {
-      return error(c, 'INVALID_JSON', 'Invalid JSON in request body', 400);
-    }
-
-    const { email, name, phone, source, utm, ref } = body;
-
-    if (!email) {
-      return error(c, 'MISSING_EMAIL', 'Email is required', 400);
-    }
-
-    // Basic email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return error(c, 'INVALID_EMAIL', 'Invalid email address', 400);
-    }
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { email, name, phone, source, utm, ref } = data.body;
 
     try {
-
       // Get metadata
       const ip = c.req.header('CF-Connecting-IP');
       const userAgent = c.req.header('User-Agent') || '';

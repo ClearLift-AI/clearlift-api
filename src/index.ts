@@ -3,7 +3,7 @@ import { Hono } from "hono";
 
 // Middleware
 import { corsMiddleware } from "./middleware/cors";
-import { auth, requireOrg } from "./middleware/auth";
+import { auth, requireOrg, requireOrgAdmin, requireOrgOwner } from "./middleware/auth";
 import { errorHandler } from "./middleware/errorHandler";
 import { auditMiddleware, authAuditMiddleware } from "./middleware/audit";
 import { rateLimitMiddleware, authRateLimit, analyticsRateLimit } from "./middleware/rateLimit";
@@ -168,9 +168,7 @@ app.use("*", async (c, next) => {
 app.use("*", auditMiddleware);
 
 // Add direct Hono route for Stripe connect BEFORE fromHono to bypass Chanfana validation
-// This must be before fromHono() call to avoid Chanfana auto-validation
-import { handleStripeConnect } from "./endpoints/v1/connectors/stripe";
-app.post("/v1/connectors/stripe/connect", auth, handleStripeConnect);
+// Stripe connect endpoint now uses proper OpenAPI validation (registered below with other routes)
 
 // Setup OpenAPI registry
 const openapi = fromHono(app, {
@@ -209,9 +207,7 @@ openapi.get("/v1/health", HealthEndpoint);
 openapi.post("/v1/waitlist", JoinWaitlist);
 openapi.get("/v1/waitlist/stats", GetWaitlistStats);
 
-// Debug SendGrid endpoint
-import debugSendgrid from "./endpoints/v1/debug-sendgrid";
-app.route("/", debugSendgrid);
+// Debug SendGrid endpoint removed for production security
 
 // Diagnostic endpoint to test Secrets Store access
 app.get("/v1/debug/secrets", async (c) => {
@@ -267,12 +263,12 @@ openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
 
 // Organization management endpoints
 openapi.post("/v1/organizations", auth, CreateOrganization);
-openapi.patch("/v1/organizations/:org_id", auth, UpdateOrganization);
-openapi.post("/v1/organizations/:org_id/invite", auth, InviteToOrganization);
+openapi.patch("/v1/organizations/:org_id", auth, requireOrg, requireOrgAdmin, UpdateOrganization);
+openapi.post("/v1/organizations/:org_id/invite", auth, requireOrg, requireOrgAdmin, InviteToOrganization);
 openapi.post("/v1/organizations/join", auth, JoinOrganization);
-openapi.get("/v1/organizations/:org_id/members", auth, GetOrganizationMembers);
-openapi.get("/v1/organizations/:org_id/invitations", auth, GetPendingInvitations);
-openapi.delete("/v1/organizations/:org_id/members/:user_id", auth, RemoveMember);
+openapi.get("/v1/organizations/:org_id/members", auth, requireOrg, GetOrganizationMembers);
+openapi.get("/v1/organizations/:org_id/invitations", auth, requireOrg, requireOrgAdmin, GetPendingInvitations);
+openapi.delete("/v1/organizations/:org_id/members/:user_id", auth, requireOrg, requireOrgOwner, RemoveMember);
 
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, GetEvents);
@@ -327,7 +323,7 @@ openapi.get("/v1/connectors/:connection_id/google-ads/accounts", auth, ListGoogl
 openapi.put("/v1/connectors/:connection_id/google-ads/settings", auth, UpdateGoogleAdsSettings);
 
 // Stripe-specific connector endpoints
-// Note: /v1/connectors/stripe/connect is registered as direct Hono route at the end to bypass validation
+openapi.post("/v1/connectors/stripe/connect", auth, ConnectStripe);
 openapi.put("/v1/connectors/stripe/:connection_id/config", auth, UpdateStripeConfig);
 openapi.post("/v1/connectors/stripe/:connection_id/sync", auth, TriggerStripeSync);
 openapi.post("/v1/connectors/stripe/:connection_id/test", auth, TestStripeConnection);
@@ -348,8 +344,8 @@ openapi.get("/v1/workers/test-token/:connection_id", auth, TestConnectionToken);
 openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
 
 // Settings endpoints
-openapi.get("/v1/settings/matrix", auth, GetMatrixSettings);
-openapi.post("/v1/settings/matrix", auth, UpdateMatrixSettings);
+openapi.get("/v1/settings/matrix", auth, requireOrg, GetMatrixSettings);
+openapi.post("/v1/settings/matrix", auth, requireOrg, requireOrgAdmin, UpdateMatrixSettings);
 
 // Tracking config endpoints
 openapi.get("/v1/config", GetTagConfig); // Public endpoint for tracking tag
@@ -358,9 +354,9 @@ openapi.put("/v1/tracking-config", auth, UpdateTrackingConfig);
 openapi.post("/v1/tracking-config/snippet", auth, GenerateTrackingSnippet);
 
 // AI Decisions endpoints
-openapi.get("/v1/settings/ai-decisions", auth, GetAIDecisions);
-openapi.post("/v1/settings/ai-decisions/:decision_id/accept", auth, AcceptAIDecision);
-openapi.post("/v1/settings/ai-decisions/:decision_id/reject", auth, RejectAIDecision);
+openapi.get("/v1/settings/ai-decisions", auth, requireOrg, GetAIDecisions);
+openapi.post("/v1/settings/ai-decisions/:decision_id/accept", auth, requireOrg, requireOrgAdmin, AcceptAIDecision);
+openapi.post("/v1/settings/ai-decisions/:decision_id/reject", auth, requireOrg, requireOrgAdmin, RejectAIDecision);
 
 
 // Export the Hono app

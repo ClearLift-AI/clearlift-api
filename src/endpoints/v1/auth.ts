@@ -67,24 +67,8 @@ export class Register extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    // Parse body manually for debugging
-    let body;
-    try {
-      body = await c.req.json();
-    } catch (e) {
-      return error(c, "INVALID_JSON", "Invalid JSON in request body", 400);
-    }
-
-    // Validate manually for now
-    const { email, password, name, organization_name } = body;
-
-    if (!email || !password || !name) {
-      return error(c, "MISSING_FIELDS", "Email, password, and name are required", 400);
-    }
-
-    if (password.length < 8) {
-      return error(c, "WEAK_PASSWORD", "Password must be at least 8 characters", 400);
-    }
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { email, password, name, organization_name } = data.body;
 
     // Check if user already exists
     const existingUser = await c.env.DB.prepare(
@@ -245,19 +229,8 @@ export class Login extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    // Parse body manually
-    let body;
-    try {
-      body = await c.req.json();
-    } catch (e) {
-      return error(c, "INVALID_JSON", "Invalid JSON in request body", 400);
-    }
-
-    const { email, password } = body;
-
-    if (!email || !password) {
-      return error(c, "MISSING_FIELDS", "Email and password are required", 400);
-    }
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { email, password } = data.body;
 
     // Get user
     const user = await c.env.DB.prepare(`
@@ -425,8 +398,8 @@ export class RequestPasswordReset extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const body = await c.req.json();
-    const { email } = body;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { email } = data.body;
 
     // Always return success to prevent user enumeration
     // In production, this would send an email
@@ -491,8 +464,8 @@ export class ResetPassword extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const body = await c.req.json();
-    const { token, new_password } = body;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { token, new_password } = data.body;
 
     // Verify token
     const resetToken = await c.env.DB.prepare(`
@@ -650,8 +623,8 @@ export class ResendVerification extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const body = await c.req.json();
-    const { email } = body;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { email } = data.body;
 
     // Always return success to prevent user enumeration
     const user = await c.env.DB.prepare(`
