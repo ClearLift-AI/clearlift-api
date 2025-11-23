@@ -28,7 +28,10 @@ import {
   GetFacebookMetrics,
   UpdateFacebookCampaignStatus,
   UpdateFacebookAdSetStatus,
-  UpdateFacebookAdStatus
+  UpdateFacebookAdStatus,
+  UpdateFacebookCampaignBudget,
+  UpdateFacebookAdSetBudget,
+  UpdateFacebookAdSetTargeting
 } from "./endpoints/v1/analytics/facebook";
 import {
   GetGoogleCampaigns,
@@ -289,6 +292,9 @@ openapi.get("/v1/analytics/facebook/metrics/daily", auth, requireOrg, GetFaceboo
 openapi.patch("/v1/analytics/facebook/campaigns/:campaign_id/status", auth, requireOrg, requireOrgAdmin, UpdateFacebookCampaignStatus);
 openapi.patch("/v1/analytics/facebook/ad-sets/:ad_set_id/status", auth, requireOrg, requireOrgAdmin, UpdateFacebookAdSetStatus);
 openapi.patch("/v1/analytics/facebook/ads/:ad_id/status", auth, requireOrg, requireOrgAdmin, UpdateFacebookAdStatus);
+openapi.patch("/v1/analytics/facebook/campaigns/:campaign_id/budget", auth, requireOrg, requireOrgAdmin, UpdateFacebookCampaignBudget);
+openapi.patch("/v1/analytics/facebook/ad-sets/:ad_set_id/budget", auth, requireOrg, requireOrgAdmin, UpdateFacebookAdSetBudget);
+openapi.patch("/v1/analytics/facebook/ad-sets/:ad_set_id/targeting", auth, requireOrg, requireOrgAdmin, UpdateFacebookAdSetTargeting);
 
 // Google Ads endpoints
 openapi.get("/v1/analytics/google/campaigns", auth, requireOrg, GetGoogleCampaigns);

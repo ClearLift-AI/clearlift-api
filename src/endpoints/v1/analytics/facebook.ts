@@ -5,7 +5,7 @@
  * All endpoints use auth + requireOrg middleware for access control
  */
 
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
@@ -650,6 +650,309 @@ export class UpdateFacebookAdStatus extends OpenAPIRoute {
     } catch (err: any) {
       console.error("Update ad status error:", err);
       return error(c, "UPDATE_FAILED", `Failed to update ad status: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/facebook/campaigns/:campaign_id/budget
+ */
+export class UpdateFacebookCampaignBudget extends OpenAPIRoute {
+  schema = {
+    tags: ["Facebook Ads"],
+    summary: "Update Facebook campaign budget",
+    description: "Update daily or lifetime budget for a Facebook campaign. Must specify either daily_budget or lifetime_budget, not both.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        campaign_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          daily_budget: z.number().min(0).optional().describe("Daily budget in cents (e.g., 5000 = $50.00)"),
+          lifetime_budget: z.number().min(0).optional().describe("Lifetime budget in cents")
+        }).refine(
+          data => (data.daily_budget !== undefined) !== (data.lifetime_budget !== undefined),
+          { message: "Must provide either daily_budget or lifetime_budget, not both" }
+        )
+      )
+    },
+    responses: {
+      "200": {
+        description: "Campaign budget updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const session = c.get("session");
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { campaign_id } = data.params;
+    const budget = data.body;
+
+    // Authorization check handled by requireOrgAdmin middleware
+
+    try {
+      // Get Facebook connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update campaign budget via Facebook API
+      const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
+      const fbProvider = new FacebookAdsOAuthProvider(
+        await getSecret(c.env.FACEBOOK_APP_ID),
+        await getSecret(c.env.FACEBOOK_APP_SECRET),
+        ''
+      );
+
+      await fbProvider.updateCampaignBudget(accessToken, campaign_id, budget);
+
+      return success(c, {
+        campaign_id,
+        budget,
+        message: `Campaign budget updated successfully`
+      });
+    } catch (err: any) {
+      console.error("Update campaign budget error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update campaign budget: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/facebook/ad-sets/:ad_set_id/budget
+ */
+export class UpdateFacebookAdSetBudget extends OpenAPIRoute {
+  schema = {
+    tags: ["Facebook Ads"],
+    summary: "Update Facebook ad set budget",
+    description: "Update daily or lifetime budget for a Facebook ad set. Must specify either daily_budget or lifetime_budget, not both.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        ad_set_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          daily_budget: z.number().min(0).optional().describe("Daily budget in cents (e.g., 2000 = $20.00)"),
+          lifetime_budget: z.number().min(0).optional().describe("Lifetime budget in cents")
+        }).refine(
+          data => (data.daily_budget !== undefined) !== (data.lifetime_budget !== undefined),
+          { message: "Must provide either daily_budget or lifetime_budget, not both" }
+        )
+      )
+    },
+    responses: {
+      "200": {
+        description: "Ad set budget updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const session = c.get("session");
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { ad_set_id } = data.params;
+    const budget = data.body;
+
+    // Authorization check handled by requireOrgAdmin middleware
+
+    try {
+      // Get Facebook connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update ad set budget via Facebook API
+      const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
+      const fbProvider = new FacebookAdsOAuthProvider(
+        await getSecret(c.env.FACEBOOK_APP_ID),
+        await getSecret(c.env.FACEBOOK_APP_SECRET),
+        ''
+      );
+
+      await fbProvider.updateAdSetBudget(accessToken, ad_set_id, budget);
+
+      return success(c, {
+        ad_set_id,
+        budget,
+        message: `Ad set budget updated successfully`
+      });
+    } catch (err: any) {
+      console.error("Update ad set budget error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update ad set budget: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/facebook/ad-sets/:ad_set_id/targeting
+ */
+export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
+  schema = {
+    tags: ["Facebook Ads"],
+    summary: "Update Facebook ad set targeting",
+    description: "Update targeting parameters for a Facebook ad set (demographics, interests, locations, etc.)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        ad_set_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          geo_locations: z.object({
+            countries: z.array(z.string()).optional().describe("ISO country codes, e.g., ['US', 'CA']"),
+            regions: z.array(z.object({ key: z.string() })).optional().describe("Region IDs"),
+            cities: z.array(z.object({
+              key: z.string(),
+              radius: z.number().optional(),
+              distance_unit: z.enum(['mile', 'kilometer']).optional()
+            })).optional(),
+            location_types: z.array(z.enum(['home', 'recent'])).optional()
+          }).optional(),
+          age_min: z.number().min(13).max(65).optional(),
+          age_max: z.number().min(13).max(65).optional(),
+          genders: z.array(z.union([z.literal(1), z.literal(2)])).optional().describe("1 = male, 2 = female"),
+          interests: z.array(z.object({
+            id: z.string(),
+            name: z.string().optional()
+          })).optional(),
+          behaviors: z.array(z.object({
+            id: z.string(),
+            name: z.string().optional()
+          })).optional(),
+          flexible_spec: z.array(z.object({
+            interests: z.array(z.object({
+              id: z.string(),
+              name: z.string().optional()
+            })).optional(),
+            behaviors: z.array(z.object({
+              id: z.string(),
+              name: z.string().optional()
+            })).optional()
+          })).optional(),
+          exclusions: z.object({
+            interests: z.array(z.object({
+              id: z.string(),
+              name: z.string().optional()
+            })).optional(),
+            behaviors: z.array(z.object({
+              id: z.string(),
+              name: z.string().optional()
+            })).optional()
+          }).optional(),
+          device_platforms: z.array(z.enum(['mobile', 'desktop'])).optional(),
+          publisher_platforms: z.array(z.enum(['facebook', 'instagram', 'audience_network', 'messenger'])).optional(),
+          facebook_positions: z.array(z.enum(['feed', 'right_hand_column', 'instant_article', 'instream_video', 'marketplace', 'story', 'search'])).optional(),
+          instagram_positions: z.array(z.enum(['stream', 'story', 'explore'])).optional()
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Ad set targeting updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const session = c.get("session");
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { ad_set_id } = data.params;
+    const targeting = data.body;
+
+    // Authorization check handled by requireOrgAdmin middleware
+
+    try {
+      // Get Facebook connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update ad set targeting via Facebook API
+      const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
+      const fbProvider = new FacebookAdsOAuthProvider(
+        await getSecret(c.env.FACEBOOK_APP_ID),
+        await getSecret(c.env.FACEBOOK_APP_SECRET),
+        ''
+      );
+
+      await fbProvider.updateAdSetTargeting(accessToken, ad_set_id, targeting);
+
+      return success(c, {
+        ad_set_id,
+        message: `Ad set targeting updated successfully`
+      });
+    } catch (err: any) {
+      console.error("Update ad set targeting error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update ad set targeting: ${err.message}`, 500);
     }
   }
 }

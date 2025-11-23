@@ -249,4 +249,162 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
     const data = await response.json() as any;
     return { success: data.success === true };
   }
+
+  /**
+   * Update campaign budget
+   * Note: Campaign can have EITHER daily_budget OR lifetime_budget, not both
+   */
+  async updateCampaignBudget(
+    accessToken: string,
+    campaignId: string,
+    budget: {
+      daily_budget?: number;  // In cents (e.g., 5000 = $50.00)
+      lifetime_budget?: number;  // In cents
+    }
+  ): Promise<{ success: boolean }> {
+    // Validate that only one budget type is provided
+    if (budget.daily_budget && budget.lifetime_budget) {
+      throw new Error('Campaign can have either daily_budget or lifetime_budget, not both');
+    }
+
+    if (!budget.daily_budget && !budget.lifetime_budget) {
+      throw new Error('Must provide either daily_budget or lifetime_budget');
+    }
+
+    const response = await fetch(
+      `https://graph.facebook.com/v24.0/${campaignId}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          ...budget,
+          access_token: accessToken
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Facebook updateCampaignBudget failed:', {
+        campaignId,
+        budget,
+        error: errorText
+      });
+      throw new Error(`Failed to update campaign budget: ${errorText}`);
+    }
+
+    const data = await response.json() as any;
+    return { success: data.success === true };
+  }
+
+  /**
+   * Update ad set budget
+   * Note: Ad set can have EITHER daily_budget OR lifetime_budget, not both
+   */
+  async updateAdSetBudget(
+    accessToken: string,
+    adSetId: string,
+    budget: {
+      daily_budget?: number;  // In cents (e.g., 2000 = $20.00)
+      lifetime_budget?: number;  // In cents
+    }
+  ): Promise<{ success: boolean }> {
+    // Validate that only one budget type is provided
+    if (budget.daily_budget && budget.lifetime_budget) {
+      throw new Error('Ad set can have either daily_budget or lifetime_budget, not both');
+    }
+
+    if (!budget.daily_budget && !budget.lifetime_budget) {
+      throw new Error('Must provide either daily_budget or lifetime_budget');
+    }
+
+    const response = await fetch(
+      `https://graph.facebook.com/v24.0/${adSetId}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          ...budget,
+          access_token: accessToken
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Facebook updateAdSetBudget failed:', {
+        adSetId,
+        budget,
+        error: errorText
+      });
+      throw new Error(`Failed to update ad set budget: ${errorText}`);
+    }
+
+    const data = await response.json() as any;
+    return { success: data.success === true };
+  }
+
+  /**
+   * Update ad set targeting
+   * Targeting spec follows Facebook Marketing API v24.0 format
+   */
+  async updateAdSetTargeting(
+    accessToken: string,
+    adSetId: string,
+    targeting: {
+      geo_locations?: {
+        countries?: string[];  // ISO country codes, e.g., ['US', 'CA']
+        regions?: Array<{ key: string }>;  // Region IDs
+        cities?: Array<{ key: string; radius?: number; distance_unit?: 'mile' | 'kilometer' }>;
+        location_types?: Array<'home' | 'recent'>;
+      };
+      age_min?: number;  // 13-65
+      age_max?: number;  // 13-65
+      genders?: Array<1 | 2>;  // 1 = male, 2 = female
+      interests?: Array<{ id: string; name?: string }>;
+      behaviors?: Array<{ id: string; name?: string }>;
+      flexible_spec?: Array<{
+        interests?: Array<{ id: string; name?: string }>;
+        behaviors?: Array<{ id: string; name?: string }>;
+      }>;
+      exclusions?: {
+        interests?: Array<{ id: string; name?: string }>;
+        behaviors?: Array<{ id: string; name?: string }>;
+      };
+      device_platforms?: Array<'mobile' | 'desktop'>;
+      publisher_platforms?: Array<'facebook' | 'instagram' | 'audience_network' | 'messenger'>;
+      facebook_positions?: Array<'feed' | 'right_hand_column' | 'instant_article' | 'instream_video' | 'marketplace' | 'story' | 'search'>;
+      instagram_positions?: Array<'stream' | 'story' | 'explore'>;
+    }
+  ): Promise<{ success: boolean }> {
+    const response = await fetch(
+      `https://graph.facebook.com/v24.0/${adSetId}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          targeting,
+          access_token: accessToken
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Facebook updateAdSetTargeting failed:', {
+        adSetId,
+        error: errorText
+      });
+      throw new Error(`Failed to update ad set targeting: ${errorText}`);
+    }
+
+    const data = await response.json() as any;
+    return { success: data.success === true };
+  }
 }
