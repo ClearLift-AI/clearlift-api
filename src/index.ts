@@ -18,9 +18,15 @@ import {
 } from "./endpoints/v1/user";
 import { GetEvents } from "./endpoints/v1/analytics/events";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
-import { GetAds } from "./endpoints/v1/analytics/ads";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
-import { GetPlatformData, GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
+import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
+import {
+  GetFacebookCampaigns,
+  GetFacebookAdSets,
+  GetFacebookCreatives,
+  GetFacebookAds,
+  GetFacebookMetrics
+} from "./endpoints/v1/analytics/facebook";
 import {
   GetOnboardingStatus,
   StartOnboarding,
@@ -39,6 +45,7 @@ import {
 } from "./endpoints/v1/auth";
 import {
   CreateOrganization,
+  UpdateOrganization,
   InviteToOrganization,
   JoinOrganization,
   RemoveMember,
@@ -248,6 +255,7 @@ openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
 
 // Organization management endpoints
 openapi.post("/v1/organizations", auth, CreateOrganization);
+openapi.patch("/v1/organizations/:org_id", auth, UpdateOrganization);
 openapi.post("/v1/organizations/:org_id/invite", auth, InviteToOrganization);
 openapi.post("/v1/organizations/join", auth, JoinOrganization);
 openapi.get("/v1/organizations/:org_id/members", auth, GetOrganizationMembers);
@@ -257,11 +265,16 @@ openapi.delete("/v1/organizations/:org_id/members/:user_id", auth, RemoveMember)
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, GetEvents);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
-openapi.get("/v1/analytics/ads/:platform_slug", auth, requireOrg, GetAds);
 openapi.get("/v1/analytics/stripe", auth, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, GetStripeDailyAggregates);
 openapi.get("/v1/analytics/platforms/unified", auth, GetUnifiedPlatformData);
-openapi.get("/v1/analytics/platforms/:platform", auth, GetPlatformData);
+
+// Facebook Ads endpoints
+openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);
+openapi.get("/v1/analytics/facebook/ad-sets", auth, requireOrg, GetFacebookAdSets);
+openapi.get("/v1/analytics/facebook/creatives", auth, requireOrg, GetFacebookCreatives);
+openapi.get("/v1/analytics/facebook/ads", auth, requireOrg, GetFacebookAds);
+openapi.get("/v1/analytics/facebook/metrics/daily", auth, requireOrg, GetFacebookMetrics);
 
 // Onboarding endpoints
 openapi.get("/v1/onboarding/status", auth, GetOnboardingStatus);

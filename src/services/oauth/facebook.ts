@@ -5,7 +5,7 @@
  * Scopes: ads_read, ads_management
  */
 
-import { OAuthProvider, OAuthUserInfo, OAuthConfig } from './base';
+import { OAuthProvider, OAuthUserInfo} from './base';
 
 export class FacebookAdsOAuthProvider extends OAuthProvider {
   constructor(clientId: string, clientSecret: string, redirectUri: string) {

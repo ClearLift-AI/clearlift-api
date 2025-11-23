@@ -122,6 +122,89 @@ export class CreateOrganization extends OpenAPIRoute {
 }
 
 /**
+ * PATCH /v1/organizations/:org_id - Update organization details
+ */
+export class UpdateOrganization extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Update organization details",
+    operationId: "update-organization",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      }),
+      body: contentJson(
+        z.object({
+          name: z.string().min(2).max(100).optional()
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Organization updated",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                organization: z.object({
+                  id: z.string(),
+                  name: z.string(),
+                  updated_at: z.string()
+                })
+              })
+            })
+          }
+        }
+      },
+      "400": {
+        description: "Invalid request"
+      },
+      "403": {
+        description: "No permission to update"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const { org_id } = c.req.param();
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { name } = data.body;
+
+    // Check if user has permission (must be admin or owner)
+    const membership = await c.env.DB.prepare(`
+      SELECT role FROM organization_members
+      WHERE organization_id = ? AND user_id = ?
+    `).bind(org_id, session.user_id).first<{ role: string }>();
+
+    if (!membership || (membership.role !== 'admin' && membership.role !== 'owner')) {
+      return error(c, "FORBIDDEN", "You don't have permission to update this organization", 403);
+    }
+
+    const now = new Date().toISOString();
+
+    // Update organization
+    if (name) {
+      await c.env.DB.prepare(`
+        UPDATE organizations
+        SET name = ?, updated_at = ?
+        WHERE id = ?
+      `).bind(name, now, org_id).run();
+    }
+
+    return success(c, {
+      organization: {
+        id: org_id,
+        name: name!,
+        updated_at: now
+      }
+    });
+  }
+}
+
+/**
  * POST /v1/organizations/:org_id/invite - Invite a user to organization
  */
 export class InviteToOrganization extends OpenAPIRoute {

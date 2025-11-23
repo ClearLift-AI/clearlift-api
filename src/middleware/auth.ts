@@ -59,7 +59,7 @@ export async function auth(c: AppContext, next: Next) {
       }, 401);
     }
 
-    // Add token to session for downstream use (e.g., DuckDB queries)
+    // Add token to session for downstream use.
     session.token = token;
 
     // Store session in context
