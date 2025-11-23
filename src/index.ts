@@ -28,6 +28,18 @@ import {
   GetFacebookMetrics
 } from "./endpoints/v1/analytics/facebook";
 import {
+  GetGoogleCampaigns,
+  GetGoogleAdGroups,
+  GetGoogleAds,
+  GetGoogleMetrics
+} from "./endpoints/v1/analytics/google";
+import {
+  GetTikTokCampaigns,
+  GetTikTokAdGroups,
+  GetTikTokAds,
+  GetTikTokMetrics
+} from "./endpoints/v1/analytics/tiktok";
+import {
   GetOnboardingStatus,
   StartOnboarding,
   CompleteOnboardingStep,
@@ -275,6 +287,18 @@ openapi.get("/v1/analytics/facebook/ad-sets", auth, requireOrg, GetFacebookAdSet
 openapi.get("/v1/analytics/facebook/creatives", auth, requireOrg, GetFacebookCreatives);
 openapi.get("/v1/analytics/facebook/ads", auth, requireOrg, GetFacebookAds);
 openapi.get("/v1/analytics/facebook/metrics/daily", auth, requireOrg, GetFacebookMetrics);
+
+// Google Ads endpoints
+openapi.get("/v1/analytics/google/campaigns", auth, requireOrg, GetGoogleCampaigns);
+openapi.get("/v1/analytics/google/ad-groups", auth, requireOrg, GetGoogleAdGroups);
+openapi.get("/v1/analytics/google/ads", auth, requireOrg, GetGoogleAds);
+openapi.get("/v1/analytics/google/metrics/daily", auth, requireOrg, GetGoogleMetrics);
+
+// TikTok Ads endpoints
+openapi.get("/v1/analytics/tiktok/campaigns", auth, requireOrg, GetTikTokCampaigns);
+openapi.get("/v1/analytics/tiktok/ad-groups", auth, requireOrg, GetTikTokAdGroups);
+openapi.get("/v1/analytics/tiktok/ads", auth, requireOrg, GetTikTokAds);
+openapi.get("/v1/analytics/tiktok/metrics/daily", auth, requireOrg, GetTikTokMetrics);
 
 // Onboarding endpoints
 openapi.get("/v1/onboarding/status", auth, GetOnboardingStatus);
