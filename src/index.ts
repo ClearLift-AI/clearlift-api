@@ -20,6 +20,7 @@ import { GetEvents } from "./endpoints/v1/analytics/events";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
 import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
+import { GetAttribution } from "./endpoints/v1/analytics/attribution";
 import {
   GetFacebookCampaigns,
   GetFacebookAdSets,
@@ -68,7 +69,8 @@ import {
   JoinOrganization,
   RemoveMember,
   GetOrganizationMembers,
-  GetPendingInvitations
+  GetPendingInvitations,
+  GetOrganizationTag
 } from "./endpoints/v1/organizations";
 import {
   ListConnectors,
@@ -274,11 +276,13 @@ openapi.post("/v1/organizations/:org_id/invite", auth, requireOrg, requireOrgAdm
 openapi.post("/v1/organizations/join", auth, JoinOrganization);
 openapi.get("/v1/organizations/:org_id/members", auth, requireOrg, GetOrganizationMembers);
 openapi.get("/v1/organizations/:org_id/invitations", auth, requireOrg, requireOrgAdmin, GetPendingInvitations);
+openapi.get("/v1/organizations/:org_id/tag", auth, requireOrg, GetOrganizationTag);
 openapi.delete("/v1/organizations/:org_id/members/:user_id", auth, requireOrg, requireOrgOwner, RemoveMember);
 
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, GetEvents);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
+openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/stripe", auth, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, GetStripeDailyAggregates);
 openapi.get("/v1/analytics/platforms/unified", auth, GetUnifiedPlatformData);

@@ -564,6 +564,75 @@ export class GetOrganizationMembers extends OpenAPIRoute {
 }
 
 /**
+ * GET /v1/organizations/:org_id/tag - Get organization tracking tag
+ */
+export class GetOrganizationTag extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Get organization tracking tag",
+    description: "Returns the organization's unique tracking tag for JavaScript pixel integration",
+    operationId: "get-organization-tag",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Organization tracking tag",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                org_tag: z.string()
+              })
+            })
+          }
+        }
+      },
+      "403": {
+        description: "No permission"
+      },
+      "404": {
+        description: "Organization or tag not found"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const { org_id } = c.req.param();
+
+    // Verify org access
+    const { D1Adapter } = await import("../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, org_id);
+
+    if (!hasAccess) {
+      return error(c, "FORBIDDEN", "No access to this organization", 403);
+    }
+
+    // Get org tag from org_tag_mappings
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag
+      FROM org_tag_mappings
+      WHERE organization_id = ? AND is_active = 1
+      LIMIT 1
+    `).bind(org_id).first<{ short_tag: string }>();
+
+    if (!tagMapping) {
+      return error(c, "TAG_NOT_FOUND", "Organization tracking tag not found", 404);
+    }
+
+    return success(c, {
+      org_tag: tagMapping.short_tag
+    });
+  }
+}
+
+/**
  * GET /v1/organizations/:org_id/invitations - Get pending invitations
  */
 export class GetPendingInvitations extends OpenAPIRoute {
