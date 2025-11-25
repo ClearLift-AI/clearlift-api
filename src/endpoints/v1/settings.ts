@@ -340,6 +340,16 @@ export class AcceptAIDecision extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
+    // Verify user has access to this organization
+    const memberCheck = await c.env.DB.prepare(`
+      SELECT 1 FROM organization_members
+      WHERE organization_id = ? AND user_id = ?
+    `).bind(orgId, session.user_id).first();
+
+    if (!memberCheck) {
+      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
+    }
+
     // Get decision from AI_DB
     const decision = await c.env.AI_DB.prepare(`
       SELECT * FROM ai_decisions WHERE id = ? AND organization_id = ?
@@ -441,6 +451,41 @@ export class AcceptAIDecision extends OpenAPIRoute {
       }
     }
 
+    if (platform === 'google') {
+      const { GoogleAdsOAuthProvider } = await import("../../services/oauth/google");
+      const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
+      const clientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
+      const developerToken = await getSecret(c.env.GOOGLE_ADS_DEVELOPER_TOKEN);
+      if (!clientId || !clientSecret) throw new Error("Google credentials not configured");
+      if (!developerToken) throw new Error("Google Ads developer token not configured");
+
+      // Get customer ID from connection
+      const connectionDetails = await c.env.DB.prepare(`
+        SELECT account_id FROM platform_connections WHERE id = ?
+      `).bind(connection.id).first<{ account_id: string }>();
+
+      if (!connectionDetails?.account_id) throw new Error("No Google Ads customer ID found");
+      const customerId = connectionDetails.account_id;
+
+      const google = new GoogleAdsOAuthProvider(clientId, clientSecret, '');
+
+      if (tool === 'set_status') {
+        // Map status to Google Ads format (ENABLED, PAUSED, REMOVED)
+        const googleStatus = params.status === 'ACTIVE' ? 'ENABLED' : params.status;
+        if (entity_type === 'campaign') return google.updateCampaignStatus(accessToken, developerToken, customerId, entity_id, googleStatus);
+        if (entity_type === 'ad_group') return google.updateAdGroupStatus(accessToken, developerToken, customerId, entity_id, googleStatus);
+      }
+      if (tool === 'set_budget') {
+        // Google Ads uses micros (1 dollar = 1,000,000 micros), convert from cents
+        const budgetMicros = params.amount_cents * 10000;
+        if (entity_type === 'campaign') return google.updateCampaignBudget(accessToken, developerToken, customerId, entity_id, budgetMicros);
+      }
+    }
+
+    if (platform === 'tiktok') {
+      throw new Error(`TikTok Ads execution not yet implemented for ${tool}`);
+    }
+
     throw new Error(`Unsupported: ${tool} on ${platform}/${entity_type}`);
   }
 }
@@ -476,6 +521,16 @@ export class RejectAIDecision extends OpenAPIRoute {
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    }
+
+    // Verify user has access to this organization
+    const memberCheck = await c.env.DB.prepare(`
+      SELECT 1 FROM organization_members
+      WHERE organization_id = ? AND user_id = ?
+    `).bind(orgId, session.user_id).first();
+
+    if (!memberCheck) {
+      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
     const decision = await c.env.AI_DB.prepare(`
