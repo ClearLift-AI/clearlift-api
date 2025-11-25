@@ -82,9 +82,30 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
         offset: query.query.offset
       });
 
+      // Transform to frontend expected format
+      const results = campaigns.map(c => ({
+        campaign_id: c.campaign_id,
+        campaign_name: c.campaign_name,
+        status: c.campaign_status,
+        metrics: {
+          impressions: 0,
+          clicks: 0,
+          spend: 0,
+          conversions: 0,
+          revenue: 0
+        }
+      }));
+
       return success(c, {
-        campaigns,
-        total: campaigns.length
+        platform: 'facebook',
+        results,
+        summary: {
+          total_impressions: 0,
+          total_clicks: 0,
+          total_spend: 0,
+          total_conversions: 0,
+          average_ctr: 0
+        }
       });
     } catch (err: any) {
       console.error("Get Facebook campaigns error:", err);

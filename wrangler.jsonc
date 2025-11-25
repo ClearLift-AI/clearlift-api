@@ -20,6 +20,12 @@
       "database_name": "ClearLiftDash-D1",
       "database_id": "89bd84be-b517-4c72-ab61-422384319361",
       "migrations_dir": "migrations"
+    },
+    {
+      "binding": "AI_DB",
+      "database_name": "clearlift-ai",
+      "database_id": "0a8898ef-9ce9-458f-90b9-a89db12c1078",
+      "migrations_dir": "migrations-ai"
     }
   ],
 

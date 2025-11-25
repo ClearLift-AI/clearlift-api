@@ -119,7 +119,8 @@ export class TikTokAdsSupabaseAdapter {
       {
         limit: options.limit || 1000,
         offset: options.offset || 0,
-        order: 'created_at.desc'
+        order: 'created_at.desc',
+        schema: 'tiktok_ads'
       }
     );
 
@@ -160,7 +161,8 @@ export class TikTokAdsSupabaseAdapter {
       {
         limit: options.limit || 1000,
         offset: options.offset || 0,
-        order: 'created_at.desc'
+        order: 'created_at.desc',
+        schema: 'tiktok_ads'
       }
     );
 
@@ -206,7 +208,8 @@ export class TikTokAdsSupabaseAdapter {
       {
         limit: options.limit || 1000,
         offset: options.offset || 0,
-        order: 'created_at.desc'
+        order: 'created_at.desc',
+        schema: 'tiktok_ads'
       }
     );
 
@@ -243,7 +246,8 @@ export class TikTokAdsSupabaseAdapter {
       {
         limit: options.limit || 10000,
         offset: options.offset || 0,
-        order: 'metric_date.desc'
+        order: 'metric_date.desc',
+        schema: 'tiktok_ads'
       }
     );
 
@@ -280,7 +284,8 @@ export class TikTokAdsSupabaseAdapter {
       {
         limit: options.limit || 10000,
         offset: options.offset || 0,
-        order: 'metric_date.desc'
+        order: 'metric_date.desc',
+        schema: 'tiktok_ads'
       }
     );
 
@@ -317,7 +322,8 @@ export class TikTokAdsSupabaseAdapter {
       {
         limit: options.limit || 10000,
         offset: options.offset || 0,
-        order: 'metric_date.desc'
+        order: 'metric_date.desc',
+        schema: 'tiktok_ads'
       }
     );
 
@@ -359,7 +365,7 @@ export class TikTokAdsSupabaseAdapter {
     const metrics = await this.supabase.select<TikTokDailyMetrics>(
       tableName,
       query,
-      { limit: 10000 }
+      { limit: 10000, schema: 'tiktok_ads' }
     );
 
     // Aggregate client-side (Supabase PostgREST doesn't support aggregation)

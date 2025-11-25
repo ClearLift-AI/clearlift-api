@@ -207,7 +207,7 @@ export class GetAIDecisions extends OpenAPIRoute {
     request: {
       query: z.object({
         org_id: z.string().optional(),
-        status: z.enum(['pending', 'accepted', 'rejected', 'expired']).optional(),
+        status: z.enum(['pending', 'approved', 'rejected', 'executed', 'failed', 'expired']).optional(),
         min_confidence: z.enum(['low', 'medium', 'high']).optional()
       })
     },
@@ -219,18 +219,24 @@ export class GetAIDecisions extends OpenAPIRoute {
             schema: z.object({
               success: z.boolean(),
               data: z.array(z.object({
-                decision_id: z.string(),
-                org_id: z.string(),
-                recommended_action: z.string(),
+                id: z.string(),
+                organization_id: z.string(),
+                tool: z.string(),
+                platform: z.string(),
+                entity_type: z.string(),
+                entity_id: z.string(),
+                entity_name: z.string(),
                 parameters: z.any(),
+                current_state: z.any(),
                 reason: z.string(),
-                impact: z.number(), // 7-day CaC impact percentage
+                predicted_impact: z.number().nullable(),
                 confidence: z.enum(['low', 'medium', 'high']),
-                status: z.enum(['pending', 'accepted', 'rejected', 'expired']),
+                supporting_data: z.any(),
+                status: z.string(),
                 expires_at: z.string(),
                 created_at: z.string(),
                 reviewed_at: z.string().nullable(),
-                applied_at: z.string().nullable()
+                executed_at: z.string().nullable()
               }))
             })
           }
@@ -258,24 +264,7 @@ export class GetAIDecisions extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
-    let query = `
-      SELECT
-        decision_id,
-        org_id,
-        recommended_action,
-        parameters,
-        reason,
-        impact,
-        confidence,
-        status,
-        expires_at,
-        created_at,
-        reviewed_at,
-        applied_at
-      FROM ai_decisions
-      WHERE org_id = ?
-    `;
-
+    let query = `SELECT * FROM ai_decisions WHERE organization_id = ?`;
     const bindings: any[] = [orgId];
 
     // Filter by status if provided
@@ -296,23 +285,22 @@ export class GetAIDecisions extends OpenAPIRoute {
       bindings.push(...allowedConfidences);
     }
 
-    // Sort by confidence (high first) then created date
+    // Sort by confidence (high first) then predicted impact
     query += ` ORDER BY
-      CASE confidence
-        WHEN 'high' THEN 3
-        WHEN 'medium' THEN 2
-        WHEN 'low' THEN 1
-      END DESC,
+      CASE confidence WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+      predicted_impact ASC,
       created_at DESC
+      LIMIT 50
     `;
 
-    const stmt = c.env.DB.prepare(query);
-    const result = await stmt.bind(...bindings).all();
+    const result = await c.env.AI_DB.prepare(query).bind(...bindings).all();
 
-    // Parse JSON parameters
+    // Parse JSON fields
     const decisions = (result.results || []).map((row: any) => ({
       ...row,
-      parameters: JSON.parse(row.parameters)
+      parameters: JSON.parse(row.parameters || '{}'),
+      current_state: JSON.parse(row.current_state || '{}'),
+      supporting_data: JSON.parse(row.supporting_data || '{}')
     }));
 
     return success(c, decisions);
@@ -320,12 +308,12 @@ export class GetAIDecisions extends OpenAPIRoute {
 }
 
 /**
- * POST /v1/settings/ai-decisions/:decision_id/accept - Accept a recommendation
+ * POST /v1/settings/ai-decisions/:decision_id/accept - Accept and execute a recommendation
  */
 export class AcceptAIDecision extends OpenAPIRoute {
   public schema = {
     tags: ["Settings"],
-    summary: "Accept an AI recommendation",
+    summary: "Accept and execute an AI recommendation",
     operationId: "accept-ai-decision",
     security: [{ bearerAuth: [] }],
     request: {
@@ -338,17 +326,7 @@ export class AcceptAIDecision extends OpenAPIRoute {
     },
     responses: {
       "200": {
-        description: "Decision accepted",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                message: z.string()
-              })
-            })
-          }
-        }
+        description: "Decision accepted and executed"
       }
     }
   };
@@ -362,29 +340,108 @@ export class AcceptAIDecision extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify decision exists and belongs to org
-    const decision = await c.env.DB.prepare(`
-      SELECT status FROM ai_decisions
-      WHERE decision_id = ? AND org_id = ?
-    `).bind(data.params.decision_id, orgId).first();
+    // Get decision from AI_DB
+    const decision = await c.env.AI_DB.prepare(`
+      SELECT * FROM ai_decisions WHERE id = ? AND organization_id = ?
+    `).bind(data.params.decision_id, orgId).first<any>();
 
     if (!decision) {
       return error(c, "NOT_FOUND", "Decision not found", 404);
     }
 
     if (decision.status !== 'pending') {
-      return error(c, "INVALID_STATUS", "Decision has already been reviewed", 400);
+      return error(c, "INVALID_STATUS", `Decision is ${decision.status}, not pending`, 400);
     }
 
-    // Update status
-    await c.env.DB.prepare(`
-      UPDATE ai_decisions
-      SET status = 'accepted',
-          reviewed_at = datetime('now')
-      WHERE decision_id = ?
-    `).bind(data.params.decision_id).run();
+    if (new Date(decision.expires_at) < new Date()) {
+      await c.env.AI_DB.prepare(`UPDATE ai_decisions SET status = 'expired' WHERE id = ?`).bind(decision.id).run();
+      return error(c, "EXPIRED", "Decision has expired", 400);
+    }
 
-    return success(c, { message: "Decision accepted successfully" });
+    // Mark as approved
+    await c.env.AI_DB.prepare(`
+      UPDATE ai_decisions
+      SET status = 'approved', reviewed_at = datetime('now'), reviewed_by = ?
+      WHERE id = ?
+    `).bind(session.user_id, decision.id).run();
+
+    // Execute the action
+    try {
+      const result = await this.executeDecision(c, decision, orgId);
+
+      await c.env.AI_DB.prepare(`
+        UPDATE ai_decisions
+        SET status = 'executed', executed_at = datetime('now'), execution_result = ?
+        WHERE id = ?
+      `).bind(JSON.stringify(result), decision.id).run();
+
+      return success(c, { id: decision.id, status: "executed", result });
+    } catch (err: any) {
+      await c.env.AI_DB.prepare(`
+        UPDATE ai_decisions SET status = 'failed', error_message = ? WHERE id = ?
+      `).bind(err.message, decision.id).run();
+
+      return error(c, "EXECUTION_FAILED", err.message, 500);
+    }
+  }
+
+  private async executeDecision(c: AppContext, decision: any, orgId: string): Promise<any> {
+    const { tool, platform, entity_type, entity_id } = decision;
+    const params = JSON.parse(decision.parameters || '{}');
+
+    // Get platform connection
+    const connection = await c.env.DB.prepare(`
+      SELECT id FROM platform_connections
+      WHERE organization_id = ? AND platform = ? AND is_active = 1
+      LIMIT 1
+    `).bind(orgId, platform).first<{ id: string }>();
+
+    if (!connection) {
+      throw new Error(`No active ${platform} connection`);
+    }
+
+    // Get access token
+    const { getSecret } = await import("../../utils/secrets");
+    const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+    if (!encryptionKey) throw new Error("Encryption key not configured");
+
+    const { ConnectorService } = await import("../../services/connectors");
+    const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+    const accessToken = await connectorService.getAccessToken(connection.id);
+
+    if (!accessToken) throw new Error("Failed to retrieve access token");
+
+    // Execute based on platform
+    if (platform === 'facebook') {
+      const { FacebookAdsOAuthProvider } = await import("../../services/oauth/facebook");
+      const appId = await getSecret(c.env.FACEBOOK_APP_ID);
+      const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
+      if (!appId || !appSecret) throw new Error("Facebook credentials not configured");
+
+      const fb = new FacebookAdsOAuthProvider(appId, appSecret, '');
+
+      if (tool === 'set_status') {
+        if (entity_type === 'campaign') return fb.updateCampaignStatus(accessToken, entity_id, params.status);
+        if (entity_type === 'ad_set') return fb.updateAdSetStatus(accessToken, entity_id, params.status);
+        if (entity_type === 'ad') return fb.updateAdStatus(accessToken, entity_id, params.status);
+      }
+      if (tool === 'set_budget') {
+        const budget = {
+          daily_budget: params.budget_type === 'daily' ? params.amount_cents : undefined,
+          lifetime_budget: params.budget_type === 'lifetime' ? params.amount_cents : undefined
+        };
+        if (entity_type === 'campaign') return fb.updateCampaignBudget(accessToken, entity_id, budget);
+        if (entity_type === 'ad_set') return fb.updateAdSetBudget(accessToken, entity_id, budget);
+      }
+      if (tool === 'set_age_range') {
+        return fb.updateAdSetTargeting(accessToken, entity_id, {
+          age_min: params.min_age,
+          age_max: params.max_age
+        });
+      }
+    }
+
+    throw new Error(`Unsupported: ${tool} on ${platform}/${entity_type}`);
   }
 }
 
@@ -407,17 +464,7 @@ export class RejectAIDecision extends OpenAPIRoute {
     },
     responses: {
       "200": {
-        description: "Decision rejected",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                message: z.string()
-              })
-            })
-          }
-        }
+        description: "Decision rejected"
       }
     }
   };
@@ -431,28 +478,24 @@ export class RejectAIDecision extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify decision exists and belongs to org
-    const decision = await c.env.DB.prepare(`
-      SELECT status FROM ai_decisions
-      WHERE decision_id = ? AND org_id = ?
+    const decision = await c.env.AI_DB.prepare(`
+      SELECT status FROM ai_decisions WHERE id = ? AND organization_id = ?
     `).bind(data.params.decision_id, orgId).first();
 
     if (!decision) {
       return error(c, "NOT_FOUND", "Decision not found", 404);
     }
 
-    if (decision.status !== 'pending') {
+    if ((decision as any).status !== 'pending') {
       return error(c, "INVALID_STATUS", "Decision has already been reviewed", 400);
     }
 
-    // Update status
-    await c.env.DB.prepare(`
+    await c.env.AI_DB.prepare(`
       UPDATE ai_decisions
-      SET status = 'rejected',
-          reviewed_at = datetime('now')
-      WHERE decision_id = ?
-    `).bind(data.params.decision_id).run();
+      SET status = 'rejected', reviewed_at = datetime('now'), reviewed_by = ?
+      WHERE id = ?
+    `).bind(session.user_id, data.params.decision_id).run();
 
-    return success(c, { message: "Decision rejected successfully" });
+    return success(c, { id: data.params.decision_id, status: "rejected" });
   }
 }

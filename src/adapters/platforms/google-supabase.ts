@@ -123,7 +123,8 @@ export class GoogleAdsSupabaseAdapter {
       {
         limit: options.limit || 1000,
         offset: options.offset || 0,
-        order: 'created_at.desc'
+        order: 'created_at.desc',
+        schema: 'google_ads'
       }
     );
 
@@ -164,7 +165,8 @@ export class GoogleAdsSupabaseAdapter {
       {
         limit: options.limit || 1000,
         offset: options.offset || 0,
-        order: 'created_at.desc'
+        order: 'created_at.desc',
+        schema: 'google_ads'
       }
     );
 
@@ -210,7 +212,8 @@ export class GoogleAdsSupabaseAdapter {
       {
         limit: options.limit || 1000,
         offset: options.offset || 0,
-        order: 'created_at.desc'
+        order: 'created_at.desc',
+        schema: 'google_ads'
       }
     );
 
@@ -247,7 +250,8 @@ export class GoogleAdsSupabaseAdapter {
       {
         limit: options.limit || 10000,
         offset: options.offset || 0,
-        order: 'metric_date.desc'
+        order: 'metric_date.desc',
+        schema: 'google_ads'
       }
     );
 
@@ -284,7 +288,8 @@ export class GoogleAdsSupabaseAdapter {
       {
         limit: options.limit || 10000,
         offset: options.offset || 0,
-        order: 'metric_date.desc'
+        order: 'metric_date.desc',
+        schema: 'google_ads'
       }
     );
 
@@ -321,7 +326,8 @@ export class GoogleAdsSupabaseAdapter {
       {
         limit: options.limit || 10000,
         offset: options.offset || 0,
-        order: 'metric_date.desc'
+        order: 'metric_date.desc',
+        schema: 'google_ads'
       }
     );
 
@@ -362,7 +368,7 @@ export class GoogleAdsSupabaseAdapter {
     const metrics = await this.supabase.select<GoogleDailyMetrics>(
       tableName,
       query,
-      { limit: 10000 }
+      { limit: 10000, schema: 'google_ads' }
     );
 
     // Aggregate client-side (Supabase PostgREST doesn't support aggregation)

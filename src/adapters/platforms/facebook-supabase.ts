@@ -138,20 +138,17 @@ export class FacebookSupabaseAdapter {
 
     const query = filters.join('&');
 
-    // Query Supabase using standard select method
-    // Note: queryWithSchema is available but select works for our use case
     const result = await this.supabase.select<FacebookCampaign>(
       'campaigns',
       query,
       {
         limit: options.limit || 1000,
         offset: options.offset || 0,
-        order: 'created_at.desc'
+        order: 'created_at.desc',
+        schema: 'facebook_ads'
       }
     );
 
-    // Note: Need to use schema-specific query
-    // For now, using select() but should switch to proper schema handling
     return result || [];
   }
 
@@ -189,7 +186,8 @@ export class FacebookSupabaseAdapter {
       {
         limit: options.limit || 1000,
         offset: options.offset || 0,
-        order: 'created_at.desc'
+        order: 'created_at.desc',
+        schema: 'facebook_ads'
       }
     );
 
@@ -220,7 +218,8 @@ export class FacebookSupabaseAdapter {
       {
         limit: options.limit || 1000,
         offset: options.offset || 0,
-        order: 'created_at.desc'
+        order: 'created_at.desc',
+        schema: 'facebook_ads'
       }
     );
 
@@ -266,7 +265,8 @@ export class FacebookSupabaseAdapter {
       {
         limit: options.limit || 1000,
         offset: options.offset || 0,
-        order: 'created_at.desc'
+        order: 'created_at.desc',
+        schema: 'facebook_ads'
       }
     );
 
@@ -303,7 +303,8 @@ export class FacebookSupabaseAdapter {
       {
         limit: options.limit || 10000,
         offset: options.offset || 0,
-        order: 'metric_date.desc'
+        order: 'metric_date.desc',
+        schema: 'facebook_ads'
       }
     );
 
@@ -340,7 +341,8 @@ export class FacebookSupabaseAdapter {
       {
         limit: options.limit || 10000,
         offset: options.offset || 0,
-        order: 'metric_date.desc'
+        order: 'metric_date.desc',
+        schema: 'facebook_ads'
       }
     );
 
@@ -377,7 +379,8 @@ export class FacebookSupabaseAdapter {
       {
         limit: options.limit || 10000,
         offset: options.offset || 0,
-        order: 'metric_date.desc'
+        order: 'metric_date.desc',
+        schema: 'facebook_ads'
       }
     );
 
@@ -418,7 +421,7 @@ export class FacebookSupabaseAdapter {
     const metrics = await this.supabase.select<FacebookDailyMetrics>(
       tableName,
       query,
-      { limit: 10000 }
+      { limit: 10000, schema: 'facebook_ads' }
     );
 
     // Aggregate client-side (Supabase PostgREST doesn't support aggregation)

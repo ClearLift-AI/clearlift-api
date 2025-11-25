@@ -113,12 +113,12 @@ export class GetAttribution extends OpenAPIRoute {
       // - revenue (for conversion events)
       // - org_tag
 
-      const params = new URLSearchParams({
-        org_tag: `eq.${tagMapping.short_tag}`,
-        event_timestamp: `gte.${query.query.date_from}T00:00:00Z`,
-        'event_timestamp': `lte.${query.query.date_to}T23:59:59Z`,
-        limit: '10000'
-      });
+      // Build query params - use separate append for duplicate keys
+      const params = new URLSearchParams();
+      params.append('org_tag', `eq.${tagMapping.short_tag}`);
+      params.append('event_timestamp', `gte.${query.query.date_from}T00:00:00Z`);
+      params.append('event_timestamp', `lte.${query.query.date_to}T23:59:59Z`);
+      params.append('limit', '10000');
 
       // Get all events (sessions + conversions)
       const endpoint = `events?${params.toString()}`;

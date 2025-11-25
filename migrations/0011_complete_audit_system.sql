@@ -1,7 +1,21 @@
--- Migration 0012: Complete Audit System
+-- Migration 0011: Complete Audit System
 -- Fix audit_logs table and create missing audit tables for SOC 2 compliance
 
--- 1. Add missing columns to existing audit_logs table
+-- 0. Ensure audit_logs table exists (may have been created by deleted migration)
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT,
+    organization_id TEXT,
+    action TEXT NOT NULL,
+    resource_type TEXT,
+    resource_id TEXT,
+    ip_address TEXT,
+    details TEXT DEFAULT '{}',
+    metadata TEXT DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 1. Add missing columns to existing audit_logs table (ignore errors if columns exist)
 ALTER TABLE audit_logs ADD COLUMN session_token_hash TEXT;
 ALTER TABLE audit_logs ADD COLUMN method TEXT;
 ALTER TABLE audit_logs ADD COLUMN path TEXT;

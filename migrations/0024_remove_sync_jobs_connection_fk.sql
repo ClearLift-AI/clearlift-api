@@ -26,8 +26,8 @@ CREATE TABLE sync_jobs_new (
     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
 
--- 2. Copy existing data
-INSERT INTO sync_jobs_new
+-- 2. Copy existing data (sync_jobs didn't have updated_at column originally)
+INSERT INTO sync_jobs_new (id, organization_id, connection_id, status, job_type, started_at, completed_at, error_message, records_synced, created_at, metadata, updated_at)
 SELECT
     id,
     organization_id,
@@ -40,7 +40,7 @@ SELECT
     records_synced,
     created_at,
     metadata,
-    updated_at
+    NULL
 FROM sync_jobs;
 
 -- 3. Drop old table
