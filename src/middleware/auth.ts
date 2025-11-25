@@ -124,23 +124,23 @@ export async function requireOrg(c: AppContext, next: Next) {
     }, 401);
   }
 
-  // Get org_id from query parameter
-  const orgId = c.req.query("org_id");
+  // Get org_id from path parameter first, then query parameter
+  const orgIdOrSlug = c.req.param("org_id") || c.req.query("org_id");
 
-  if (!orgId) {
+  if (!orgIdOrSlug) {
     return c.json({
       success: false,
       error: {
         code: "MISSING_ORG_ID",
-        message: "org_id query parameter is required"
+        message: "org_id parameter is required (path or query)"
       }
     }, 400);
   }
 
-  // Verify user has access to the organization
+  // Verify user has access to the organization (supports both ID and slug)
   const { D1Adapter } = await import("../adapters/d1");
   const d1 = new D1Adapter(c.env.DB);
-  const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
+  const hasAccess = await d1.checkOrgAccess(session.user_id, orgIdOrSlug);
 
   if (!hasAccess) {
     return c.json({
@@ -152,8 +152,20 @@ export async function requireOrg(c: AppContext, next: Next) {
     }, 403);
   }
 
-  // Store org_id in context for downstream use
-  c.set("org_id" as any, orgId);
+  // Resolve slug to UUID for downstream use
+  const resolvedOrgId = await d1.resolveOrgId(orgIdOrSlug);
+  if (!resolvedOrgId) {
+    return c.json({
+      success: false,
+      error: {
+        code: "NOT_FOUND",
+        message: "Organization not found"
+      }
+    }, 404);
+  }
+
+  // Store resolved org_id (UUID) in context for downstream use
+  c.set("org_id" as any, resolvedOrgId);
 
   await next();
 }

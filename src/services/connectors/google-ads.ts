@@ -84,7 +84,7 @@ export class GoogleAdsConnector {
         customer_client.manager,
         customer_client.status
       FROM customer_client
-      WHERE customer_client.status = 'ENABLED'
+      WHERE customer_client.status IN ('ENABLED', 'CLOSED')
         AND customer_client.manager = false
     `.trim();
 
