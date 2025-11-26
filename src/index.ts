@@ -20,7 +20,9 @@ import { GetEvents } from "./endpoints/v1/analytics/events";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
 import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
-import { GetAttribution } from "./endpoints/v1/analytics/attribution";
+import { GetAttribution, GetAttributionComparison } from "./endpoints/v1/analytics/attribution";
+import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
+import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
 import {
   GetFacebookCampaigns,
   GetFacebookAdSets,
@@ -179,6 +181,9 @@ app.use("*", auditMiddleware);
 // Stripe connect endpoint now uses proper OpenAPI validation (registered below with other routes)
 
 // Setup OpenAPI registry
+// Note: Using 'any' type cast to work around chanfana type incompatibility with middleware
+// See: https://github.com/cloudflare/chanfana/issues/70
+// The routes work correctly at runtime - this is purely a TypeScript type issue
 const openapi = fromHono(app, {
   docs_url: "/",
   schema: {
@@ -203,7 +208,7 @@ const openapi = fromHono(app, {
       }
     ]
   }
-});
+}) as any;
 
 // Create V1 router
 const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -283,9 +288,19 @@ openapi.delete("/v1/organizations/:org_id/members/:user_id", auth, requireOrg, r
 openapi.get("/v1/analytics/events", auth, GetEvents);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
+openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributionComparison);
 openapi.get("/v1/analytics/stripe", auth, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, GetStripeDailyAggregates);
 openapi.get("/v1/analytics/platforms/unified", auth, GetUnifiedPlatformData);
+
+// Identity resolution endpoints
+openapi.post("/v1/analytics/identify", PostIdentify); // Internal - uses service binding or API key auth
+openapi.post("/v1/analytics/identify/merge", PostIdentityMerge); // Internal
+openapi.get("/v1/analytics/identity/:anonymousId", auth, requireOrg, GetIdentityByAnonymousId);
+
+// User journey endpoints
+openapi.get("/v1/analytics/users/:userId/journey", auth, requireOrg, GetUserJourney);
+openapi.get("/v1/analytics/journeys/overview", auth, requireOrg, GetJourneysOverview);
 
 // Facebook Ads endpoints
 openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);

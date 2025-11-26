@@ -10,7 +10,8 @@ import {
   FilterCondition,
   FilterOperator,
   FilterValidationResult,
-  MetadataKeyInfo
+  MetadataKeyInfo,
+  MetadataSource
 } from './types';
 
 export class StripeQueryBuilder {

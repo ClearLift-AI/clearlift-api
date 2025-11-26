@@ -1,6 +1,7 @@
 import { Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 
-type StatusCode = number;
+type StatusCode = ContentfulStatusCode;
 
 /**
  * Standard API response utilities

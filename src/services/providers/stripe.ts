@@ -107,7 +107,13 @@ export class StripeAPIProvider {
         throw new Error(`Invalid API key (${response.status}): ${errorText}`);
       }
 
-      const account = await response.json();
+      const account = await response.json() as {
+        id: string;
+        business_profile: any;
+        charges_enabled: boolean;
+        country: string;
+        default_currency: string;
+      };
 
       return {
         stripe_account_id: account.id,
@@ -117,7 +123,7 @@ export class StripeAPIProvider {
         default_currency: account.default_currency
       };
     } catch (error) {
-      throw new Error(`Failed to validate Stripe API key: ${error}`);
+      throw new Error(`Failed to validate Stripe API key: ${error instanceof Error ? error.message : error}`);
     }
   }
 
@@ -154,11 +160,11 @@ export class StripeAPIProvider {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`Stripe search failed: ${error.error?.message || response.statusText}`);
+      const errorData = await response.json() as { error?: { message?: string } };
+      throw new Error(`Stripe search failed: ${errorData.error?.message || response.statusText}`);
     }
 
-    const result = await response.json();
+    const result = await response.json() as { data: StripeCharge[] };
     return result.data;
   }
 
@@ -207,7 +213,7 @@ export class StripeAPIProvider {
       throw new Error(`Failed to list charges: ${response.statusText}`);
     }
 
-    const result = await response.json();
+    const result = await response.json() as { data: StripeCharge[] };
     return result.data;
   }
 

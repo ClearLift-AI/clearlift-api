@@ -54,9 +54,9 @@ export class FieldEncryption {
       { name: 'AES-GCM', length: 256 },
       true, // extractable (only for initial generation)
       ['encrypt', 'decrypt']
-    );
+    ) as CryptoKey;
 
-    const exported = await crypto.subtle.exportKey('raw', key);
+    const exported = await crypto.subtle.exportKey('raw', key) as ArrayBuffer;
     const keyArray = Array.from(new Uint8Array(exported));
     return btoa(String.fromCharCode(...keyArray));
   }

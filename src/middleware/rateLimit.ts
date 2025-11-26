@@ -323,12 +323,8 @@ export const authRateLimit = rateLimitMiddleware({
                c.req.header("X-Forwarded-For")?.split(",")[0].trim() ||
                "unknown";
 
-    // Also track by email if provided
-    const body = c.req.body;
-    if (body && typeof body === 'object' && 'email' in body) {
-      return `auth:${(body as any).email}:${ip}`;
-    }
-
+    // Note: Can't access request body synchronously in Hono
+    // IP-based rate limiting is sufficient for auth endpoints
     return `auth:${ip}`;
   }
 });

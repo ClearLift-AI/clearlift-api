@@ -52,7 +52,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
       throw new Error(`Failed to fetch Google user info: ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as { id: string; email: string; name: string };
 
     return {
       id: data.id,
@@ -75,10 +75,10 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
         return false;
       }
 
-      const data = await response.json();
+      const data = await response.json() as { scope?: string };
 
       // Check if token has required scope
-      return data.scope && data.scope.includes('adwords');
+      return data.scope ? data.scope.includes('adwords') : false;
     } catch (error) {
       return false;
     }

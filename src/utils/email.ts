@@ -32,7 +32,7 @@ export class EmailService {
    */
   private async init(): Promise<void> {
     if (!this.apiKey) {
-      this.apiKey = await getSecret(this.env.SENDGRID_API_KEY);
+      this.apiKey = await getSecret(this.env.SENDGRID_API_KEY) ?? null;
     }
   }
 

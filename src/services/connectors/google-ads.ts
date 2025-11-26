@@ -64,7 +64,7 @@ export class GoogleAdsConnector {
       }
 
       const data = await response.json() as GoogleAdsCustomerResponse;
-      return data.resourceName && data.customer?.manager === true;
+      return Boolean(data.resourceName) && data.customer?.manager === true;
     } catch (error) {
       console.error('Error checking if account is manager:', error);
       return false;

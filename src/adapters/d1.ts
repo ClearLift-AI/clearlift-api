@@ -39,6 +39,37 @@ export interface OrgTagMapping {
   updated_at: string;
 }
 
+export interface IdentityMapping {
+  id: string;
+  organization_id: string;
+  anonymous_id: string;
+  user_id: string;
+  canonical_user_id: string | null;
+  identified_at: string;
+  first_seen_at: string | null;
+  source: 'identify' | 'login' | 'merge' | 'manual';
+  confidence: number;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IdentityMerge {
+  id: string;
+  organization_id: string;
+  source_user_id: string;
+  target_user_id: string;
+  merged_at: string;
+  merged_by: string | null;
+  reason: string | null;
+}
+
+export interface OrganizationWithAttribution extends Organization {
+  attribution_window_days: number;
+  default_attribution_model: string;
+  time_decay_half_life_days: number;
+}
+
 export class D1Adapter {
   constructor(private db: D1Database) {}
 
@@ -265,5 +296,204 @@ export class D1Adapter {
       .run();
 
     return result.success;
+  }
+
+  // ===== Identity Resolution Methods =====
+
+  /**
+   * Create or update an identity mapping (anonymous_id → user_id link)
+   */
+  async upsertIdentityMapping(
+    orgId: string,
+    anonymousId: string,
+    userId: string,
+    identifiedAt: string,
+    options: {
+      firstSeenAt?: string;
+      source?: 'identify' | 'login' | 'merge' | 'manual';
+      confidence?: number;
+      metadata?: Record<string, any>;
+    } = {}
+  ): Promise<{ id: string; isNew: boolean }> {
+    const id = crypto.randomUUID();
+    const source = options.source || 'identify';
+    const confidence = options.confidence ?? 1.0;
+    const metadata = options.metadata ? JSON.stringify(options.metadata) : null;
+
+    // Check if mapping already exists
+    const existing = await this.db
+      .prepare(`
+        SELECT id FROM identity_mappings
+        WHERE organization_id = ? AND anonymous_id = ? AND user_id = ?
+      `)
+      .bind(orgId, anonymousId, userId)
+      .first<{ id: string }>();
+
+    if (existing) {
+      // Update existing mapping
+      await this.db
+        .prepare(`
+          UPDATE identity_mappings
+          SET identified_at = ?, source = ?, confidence = ?, metadata = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `)
+        .bind(identifiedAt, source, confidence, metadata, existing.id)
+        .run();
+      return { id: existing.id, isNew: false };
+    }
+
+    // Insert new mapping
+    await this.db
+      .prepare(`
+        INSERT INTO identity_mappings (
+          id, organization_id, anonymous_id, user_id, identified_at,
+          first_seen_at, source, confidence, metadata, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      `)
+      .bind(id, orgId, anonymousId, userId, identifiedAt, options.firstSeenAt || null, source, confidence, metadata)
+      .run();
+
+    return { id, isNew: true };
+  }
+
+  /**
+   * Get all anonymous_ids linked to a user_id (including canonical lookups)
+   */
+  async getAnonymousIdsByUserId(orgId: string, userId: string): Promise<string[]> {
+    // First check if this user_id has been merged into a canonical
+    const canonical = await this.db
+      .prepare(`
+        SELECT target_user_id FROM identity_merges
+        WHERE organization_id = ? AND source_user_id = ?
+        ORDER BY merged_at DESC LIMIT 1
+      `)
+      .bind(orgId, userId)
+      .first<{ target_user_id: string }>();
+
+    const effectiveUserId = canonical?.target_user_id || userId;
+
+    // Get all anonymous_ids for this user_id (and any merged user_ids)
+    const result = await this.db
+      .prepare(`
+        SELECT DISTINCT anonymous_id FROM identity_mappings
+        WHERE organization_id = ? AND (
+          user_id = ?
+          OR canonical_user_id = ?
+          OR user_id IN (
+            SELECT source_user_id FROM identity_merges
+            WHERE organization_id = ? AND target_user_id = ?
+          )
+        )
+      `)
+      .bind(orgId, effectiveUserId, effectiveUserId, orgId, effectiveUserId)
+      .all<{ anonymous_id: string }>();
+
+    return result.results?.map(r => r.anonymous_id) || [];
+  }
+
+  /**
+   * Get the user_id (or canonical user_id) for an anonymous_id
+   */
+  async getUserIdByAnonymousId(orgId: string, anonymousId: string): Promise<string | null> {
+    const result = await this.db
+      .prepare(`
+        SELECT user_id, canonical_user_id FROM identity_mappings
+        WHERE organization_id = ? AND anonymous_id = ?
+        ORDER BY identified_at DESC LIMIT 1
+      `)
+      .bind(orgId, anonymousId)
+      .first<{ user_id: string; canonical_user_id: string | null }>();
+
+    if (!result) return null;
+    return result.canonical_user_id || result.user_id;
+  }
+
+  /**
+   * Get all identity mappings for a user (full identity graph)
+   */
+  async getIdentityGraph(orgId: string, userId: string): Promise<IdentityMapping[]> {
+    const anonymousIds = await this.getAnonymousIdsByUserId(orgId, userId);
+
+    if (anonymousIds.length === 0) return [];
+
+    const placeholders = anonymousIds.map(() => '?').join(',');
+    const result = await this.db
+      .prepare(`
+        SELECT * FROM identity_mappings
+        WHERE organization_id = ? AND anonymous_id IN (${placeholders})
+        ORDER BY identified_at ASC
+      `)
+      .bind(orgId, ...anonymousIds)
+      .all<IdentityMapping>();
+
+    return result.results || [];
+  }
+
+  /**
+   * Merge two user identities (make one canonical)
+   */
+  async mergeIdentities(
+    orgId: string,
+    sourceUserId: string,
+    targetUserId: string,
+    mergedBy?: string,
+    reason?: string
+  ): Promise<boolean> {
+    const id = crypto.randomUUID();
+
+    // Create merge record
+    await this.db
+      .prepare(`
+        INSERT INTO identity_merges (id, organization_id, source_user_id, target_user_id, merged_by, reason)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .bind(id, orgId, sourceUserId, targetUserId, mergedBy || 'system', reason || 'manual')
+      .run();
+
+    // Update all identity mappings for source_user_id to point to target
+    await this.db
+      .prepare(`
+        UPDATE identity_mappings
+        SET canonical_user_id = ?, updated_at = datetime('now')
+        WHERE organization_id = ? AND user_id = ? AND canonical_user_id IS NULL
+      `)
+      .bind(targetUserId, orgId, sourceUserId)
+      .run();
+
+    return true;
+  }
+
+  /**
+   * Get organization with attribution settings
+   */
+  async getOrganizationWithAttribution(orgId: string): Promise<OrganizationWithAttribution | null> {
+    const result = await this.db
+      .prepare(`
+        SELECT
+          id, name, slug, created_at, updated_at, settings, subscription_tier,
+          COALESCE(attribution_window_days, 30) as attribution_window_days,
+          COALESCE(default_attribution_model, 'last_touch') as default_attribution_model,
+          COALESCE(time_decay_half_life_days, 7) as time_decay_half_life_days
+        FROM organizations WHERE id = ?
+      `)
+      .bind(orgId)
+      .first<OrganizationWithAttribution>();
+
+    return result;
+  }
+
+  /**
+   * Get count of linked anonymous_ids for a user
+   */
+  async getLinkedIdentityCount(orgId: string, userId: string): Promise<number> {
+    const result = await this.db
+      .prepare(`
+        SELECT COUNT(DISTINCT anonymous_id) as count FROM identity_mappings
+        WHERE organization_id = ? AND (user_id = ? OR canonical_user_id = ?)
+      `)
+      .bind(orgId, userId, userId)
+      .first<{ count: number }>();
+
+    return result?.count || 0;
   }
 }

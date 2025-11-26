@@ -2,6 +2,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { success, error } from "../../utils/response";
+import { getSecret } from "../../utils/secrets";
 
 /**
  * Worker health status schema
@@ -82,7 +83,7 @@ export class GetWorkersHealth extends OpenAPIRoute {
       });
 
       if (response.ok) {
-        const data = await response.json();
+        const data = await response.json() as { message?: string; [key: string]: any };
         return {
           worker: workerName,
           status: 'healthy',
@@ -154,14 +155,14 @@ export class GetQueueStatus extends OpenAPIRoute {
         return error(c, "WORKER_ERROR", `Queue worker returned status ${response.status}`, 503);
       }
 
-      const data = await response.json();
+      const data = await response.json() as { recentJobs?: Array<{ status: string; [key: string]: any }> };
 
       // Calculate stats from recent jobs if available
       let stats;
       if (data.recentJobs && Array.isArray(data.recentJobs)) {
         const totalJobs = data.recentJobs.length;
-        const successfulJobs = data.recentJobs.filter((j: any) => j.status === 'completed').length;
-        const failedJobs = data.recentJobs.filter((j: any) => j.status === 'failed').length;
+        const successfulJobs = data.recentJobs.filter((j) => j.status === 'completed').length;
+        const failedJobs = data.recentJobs.filter((j) => j.status === 'failed').length;
 
         stats = {
           totalJobs,
@@ -342,7 +343,7 @@ export class TestConnectionToken extends OpenAPIRoute {
       }
 
       // Get decrypted access token
-      const encryptionKey = await c.env.ENCRYPTION_KEY.get();
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
       const { ConnectorService } = await import('../../services/connectors');
       const connectorService = new ConnectorService(c.env.DB, encryptionKey);
 

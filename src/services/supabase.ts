@@ -97,7 +97,7 @@ export class SupabaseClient {
     records: any | any[],
     options: { onConflict?: string; returning?: boolean } = {}
   ): Promise<T> {
-    const headers: HeadersInit = { ...this.headers };
+    const headers: Record<string, string> = { ...this.headers };
 
     if (options.onConflict) {
       headers['Prefer'] = `resolution=merge-duplicates,return=${options.returning ? 'representation' : 'minimal'}`;

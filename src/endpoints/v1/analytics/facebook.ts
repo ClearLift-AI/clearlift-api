@@ -469,7 +469,7 @@ export class UpdateFacebookCampaignStatus extends OpenAPIRoute {
         FROM platform_connections
         WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
         LIMIT 1
-      `).bind(orgId).first();
+      `).bind(orgId).first<{ id: string; account_id: string }>();
 
       if (!connection) {
         return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
@@ -477,6 +477,9 @@ export class UpdateFacebookCampaignStatus extends OpenAPIRoute {
 
       // Get access token
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
       const { ConnectorService } = await import('../../../services/connectors');
       const connectorService = new ConnectorService(c.env.DB, encryptionKey);
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -488,11 +491,12 @@ export class UpdateFacebookCampaignStatus extends OpenAPIRoute {
 
       // Update campaign status via Facebook API
       const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
-      const fbProvider = new FacebookAdsOAuthProvider(
-        await getSecret(c.env.FACEBOOK_APP_ID),
-        await getSecret(c.env.FACEBOOK_APP_SECRET),
-        ''
-      );
+      const appId = await getSecret(c.env.FACEBOOK_APP_ID);
+      const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "Facebook credentials not configured", 500);
+      }
+      const fbProvider = new FacebookAdsOAuthProvider(appId, appSecret, '');
 
       await fbProvider.updateCampaignStatus(accessToken, campaign_id, status);
 
@@ -553,7 +557,7 @@ export class UpdateFacebookAdSetStatus extends OpenAPIRoute {
         FROM platform_connections
         WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
         LIMIT 1
-      `).bind(orgId).first();
+      `).bind(orgId).first<{ id: string; account_id: string }>();
 
       if (!connection) {
         return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
@@ -561,6 +565,9 @@ export class UpdateFacebookAdSetStatus extends OpenAPIRoute {
 
       // Get access token
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
       const { ConnectorService } = await import('../../../services/connectors');
       const connectorService = new ConnectorService(c.env.DB, encryptionKey);
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -572,11 +579,12 @@ export class UpdateFacebookAdSetStatus extends OpenAPIRoute {
 
       // Update ad set status via Facebook API
       const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
-      const fbProvider = new FacebookAdsOAuthProvider(
-        await getSecret(c.env.FACEBOOK_APP_ID),
-        await getSecret(c.env.FACEBOOK_APP_SECRET),
-        ''
-      );
+      const appId = await getSecret(c.env.FACEBOOK_APP_ID);
+      const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "Facebook credentials not configured", 500);
+      }
+      const fbProvider = new FacebookAdsOAuthProvider(appId, appSecret, '');
 
       await fbProvider.updateAdSetStatus(accessToken, ad_set_id, status);
 
@@ -637,7 +645,7 @@ export class UpdateFacebookAdStatus extends OpenAPIRoute {
         FROM platform_connections
         WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
         LIMIT 1
-      `).bind(orgId).first();
+      `).bind(orgId).first<{ id: string; account_id: string }>();
 
       if (!connection) {
         return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
@@ -645,6 +653,9 @@ export class UpdateFacebookAdStatus extends OpenAPIRoute {
 
       // Get access token
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
       const { ConnectorService } = await import('../../../services/connectors');
       const connectorService = new ConnectorService(c.env.DB, encryptionKey);
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -656,11 +667,12 @@ export class UpdateFacebookAdStatus extends OpenAPIRoute {
 
       // Update ad status via Facebook API
       const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
-      const fbProvider = new FacebookAdsOAuthProvider(
-        await getSecret(c.env.FACEBOOK_APP_ID),
-        await getSecret(c.env.FACEBOOK_APP_SECRET),
-        ''
-      );
+      const appId = await getSecret(c.env.FACEBOOK_APP_ID);
+      const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "Facebook credentials not configured", 500);
+      }
+      const fbProvider = new FacebookAdsOAuthProvider(appId, appSecret, '');
 
       await fbProvider.updateAdStatus(accessToken, ad_id, status);
 
@@ -726,7 +738,7 @@ export class UpdateFacebookCampaignBudget extends OpenAPIRoute {
         FROM platform_connections
         WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
         LIMIT 1
-      `).bind(orgId).first();
+      `).bind(orgId).first<{ id: string; account_id: string }>();
 
       if (!connection) {
         return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
@@ -734,6 +746,9 @@ export class UpdateFacebookCampaignBudget extends OpenAPIRoute {
 
       // Get access token
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
       const { ConnectorService } = await import('../../../services/connectors');
       const connectorService = new ConnectorService(c.env.DB, encryptionKey);
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -745,11 +760,12 @@ export class UpdateFacebookCampaignBudget extends OpenAPIRoute {
 
       // Update campaign budget via Facebook API
       const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
-      const fbProvider = new FacebookAdsOAuthProvider(
-        await getSecret(c.env.FACEBOOK_APP_ID),
-        await getSecret(c.env.FACEBOOK_APP_SECRET),
-        ''
-      );
+      const appId = await getSecret(c.env.FACEBOOK_APP_ID);
+      const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "Facebook credentials not configured", 500);
+      }
+      const fbProvider = new FacebookAdsOAuthProvider(appId, appSecret, '');
 
       await fbProvider.updateCampaignBudget(accessToken, campaign_id, budget);
 
@@ -814,7 +830,7 @@ export class UpdateFacebookAdSetBudget extends OpenAPIRoute {
         FROM platform_connections
         WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
         LIMIT 1
-      `).bind(orgId).first();
+      `).bind(orgId).first<{ id: string; account_id: string }>();
 
       if (!connection) {
         return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
@@ -822,6 +838,9 @@ export class UpdateFacebookAdSetBudget extends OpenAPIRoute {
 
       // Get access token
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
       const { ConnectorService } = await import('../../../services/connectors');
       const connectorService = new ConnectorService(c.env.DB, encryptionKey);
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -833,11 +852,12 @@ export class UpdateFacebookAdSetBudget extends OpenAPIRoute {
 
       // Update ad set budget via Facebook API
       const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
-      const fbProvider = new FacebookAdsOAuthProvider(
-        await getSecret(c.env.FACEBOOK_APP_ID),
-        await getSecret(c.env.FACEBOOK_APP_SECRET),
-        ''
-      );
+      const appId = await getSecret(c.env.FACEBOOK_APP_ID);
+      const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "Facebook credentials not configured", 500);
+      }
+      const fbProvider = new FacebookAdsOAuthProvider(appId, appSecret, '');
 
       await fbProvider.updateAdSetBudget(accessToken, ad_set_id, budget);
 
@@ -945,7 +965,7 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
         FROM platform_connections
         WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
         LIMIT 1
-      `).bind(orgId).first();
+      `).bind(orgId).first<{ id: string; account_id: string }>();
 
       if (!connection) {
         return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
@@ -953,6 +973,9 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
 
       // Get access token
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
       const { ConnectorService } = await import('../../../services/connectors');
       const connectorService = new ConnectorService(c.env.DB, encryptionKey);
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -964,11 +987,12 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
 
       // Update ad set targeting via Facebook API
       const { FacebookAdsOAuthProvider } = await import('../../../services/oauth/facebook');
-      const fbProvider = new FacebookAdsOAuthProvider(
-        await getSecret(c.env.FACEBOOK_APP_ID),
-        await getSecret(c.env.FACEBOOK_APP_SECRET),
-        ''
-      );
+      const appId = await getSecret(c.env.FACEBOOK_APP_ID);
+      const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "Facebook credentials not configured", 500);
+      }
+      const fbProvider = new FacebookAdsOAuthProvider(appId, appSecret, '');
 
       await fbProvider.updateAdSetTargeting(
         accessToken,
