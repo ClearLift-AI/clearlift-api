@@ -23,6 +23,8 @@ declare global {
     GOOGLE_ADS_DEVELOPER_TOKEN: SecretsStoreBinding;
     FACEBOOK_APP_ID: SecretsStoreBinding;
     FACEBOOK_APP_SECRET: SecretsStoreBinding;
+    SHOPIFY_CLIENT_ID: SecretsStoreBinding;
+    SHOPIFY_CLIENT_SECRET: SecretsStoreBinding;
 
     // Encryption key for field-level encryption
     ENCRYPTION_KEY: SecretsStoreBinding;

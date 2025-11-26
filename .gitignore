@@ -1,0 +1,103 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+
+# Build / output
+dist/
+build/
+out/
+lib/
+*.tsbuildinfo
+
+# Coverage & test
+coverage/
+.vitest/
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment / secrets
+.env
+.env.*.local
+
+# Cloudflare Wrangler
+.wrangler/
+.wrangler-state/
+.wrangler/*
+
+# Databases / runtime files
+*.sqlite
+*.db
+*.db-journal
+
+# VS Code / IDEs
+.vscode/
+.vscode-test/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Misc
+.cache/
+*.tgz
+```// filepath: c:\Users\User\Documents\Github\clearlift-api\.gitignore
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+
+# Build / output
+dist/
+build/
+out/
+lib/
+*.tsbuildinfo
+
+# Coverage & test
+coverage/
+.vitest/
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment / secrets
+.env
+.env.*.local
+
+# Cloudflare Wrangler
+.wrangler/
+.wrangler-state/
+.wrangler/*
+
+# Databases / runtime files
+*.sqlite
+*.db
+*.db-journal
+
+# VS Code / IDEs
+.vscode/
+.vscode-test/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+#

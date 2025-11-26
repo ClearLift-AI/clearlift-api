@@ -5,6 +5,7 @@ import { ConnectorService } from "../../services/connectors";
 import { OnboardingService } from "../../services/onboarding";
 import { GoogleAdsOAuthProvider } from "../../services/oauth/google";
 import { FacebookAdsOAuthProvider } from "../../services/oauth/facebook";
+import { ShopifyOAuthProvider } from "../../services/oauth/shopify";
 import { success, error } from "../../utils/response";
 import { getSecret } from "../../utils/secrets";
 
@@ -100,12 +101,13 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify'])
       }),
       body: contentJson(
         z.object({
           organization_id: z.string(),
-          redirect_uri: z.string().optional()
+          redirect_uri: z.string().optional(),
+          shop_domain: z.string().optional() // Required for Shopify
         })
       )
     },
@@ -131,7 +133,7 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
     const { provider } = data.params;
-    const { organization_id, redirect_uri } = data.body;
+    const { organization_id, redirect_uri, shop_domain } = data.body;
 
     // Verify user has access to org
     const { D1Adapter } = await import("../../adapters/d1");
@@ -142,19 +144,39 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "No access to this organization", 403);
     }
 
+    // Shopify requires shop_domain
+    if (provider === 'shopify' && !shop_domain) {
+      return error(c, "MISSING_PARAMETER", "shop_domain is required for Shopify", 400);
+    }
+
+    // Validate and normalize shop domain for Shopify
+    let normalizedShopDomain = shop_domain;
+    if (provider === 'shopify' && shop_domain) {
+      // Normalize shop domain (remove https://, add .myshopify.com if needed)
+      normalizedShopDomain = shop_domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      if (!normalizedShopDomain.includes('.')) {
+        normalizedShopDomain = `${normalizedShopDomain}.myshopify.com`;
+      }
+    }
+
     // Get OAuth provider and generate PKCE challenge
-    const oauthProvider = await this.getOAuthProvider(provider, c);
+    const oauthProvider = await this.getOAuthProvider(provider, c, normalizedShopDomain);
     const pkce = await oauthProvider.generatePKCEChallenge();
 
-    // Create OAuth state with PKCE verifier stored in metadata
+    // Create OAuth state with PKCE verifier and shop_domain (for Shopify) stored in metadata
     const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
     const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+    const stateMetadata: any = { code_verifier: pkce.codeVerifier };
+    if (provider === 'shopify' && normalizedShopDomain) {
+      stateMetadata.shop_domain = normalizedShopDomain;
+    }
+
     const state = await connectorService.createOAuthState(
       session.user_id,
       organization_id,
       provider,
       redirect_uri,
-      { code_verifier: pkce.codeVerifier }  // Store verifier as object property
+      stateMetadata
     );
 
     // Generate authorization URL with PKCE challenge
@@ -166,9 +188,8 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     });
   }
 
-  private async getOAuthProvider(provider: string, c: AppContext) {
-    const redirectUri = `https://api.clearlift.ai/v1/connectors/${provider}/callback`;
-
+  private async getOAuthProvider(provider: string, c: AppContext, shopDomain?: string) {
+    const redirectUri = `http://localhost:8787/v1/connectors/${provider}/callback`;
     switch (provider) {
       case 'google': {
         const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
@@ -194,6 +215,24 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
           redirectUri
         );
       }
+      case 'shopify': {
+        if (!shopDomain) {
+          throw new Error('Shop domain is required for Shopify');
+        }
+        // Try to get from env var (local) first, then binding (prod)
+        const clientId: any = c.env.SHOPIFY_CLIENT_ID || await getSecret(c.env.SHOPIFY_CLIENT_ID_BINDING);
+        const clientSecret: any = c.env.SHOPIFY_CLIENT_SECRET || await getSecret(c.env.SHOPIFY_CLIENT_SECRET_BINDING);
+
+        if (!clientId || !clientSecret) {
+          throw new Error('Shopify OAuth credentials not configured');
+        }
+        return new ShopifyOAuthProvider(
+          clientId,
+          clientSecret,
+          redirectUri,
+          shopDomain
+        );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -210,7 +249,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     operationId: "handle-oauth-callback",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify'])
       }),
       query: z.object({
         code: z.string(),
@@ -267,19 +306,25 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       // Set organization_id in context for audit middleware
       c.set("org_id" as any, oauthState.organization_id);
 
-      // Get PKCE code verifier from state metadata
+      // Get PKCE code verifier and shop_domain (for Shopify) from state metadata
       const stateMetadata = typeof oauthState.metadata === 'string'
         ? JSON.parse(oauthState.metadata)
         : oauthState.metadata;
 
       const codeVerifier = stateMetadata?.code_verifier;
+      const shopDomain = stateMetadata?.shop_domain;
+
       if (!codeVerifier || typeof codeVerifier !== 'string') {
         console.error('PKCE code verifier not found in OAuth state', { hasMetadata: !!stateMetadata, metadataType: typeof stateMetadata });
         return c.redirect(`https://app.clearlift.ai/oauth/callback?error=invalid_state&error_description=PKCE+verifier+missing`);
       }
 
       // Exchange code for token with PKCE verification
-      const oauthProvider = await this.getOAuthProvider(provider, c);
+      // Use the redirect_uri that was stored in the state (same as used in InitiateOAuthFlow)
+      const redirectUriToUse = oauthState.redirect_uri || undefined;
+      console.log('[HandleOAuthCallback] Using redirect_uri for token exchange:', redirectUriToUse);
+
+      const oauthProvider = await this.getOAuthProvider(provider, c, shopDomain);
       const tokens = await oauthProvider.exchangeCodeForToken(code, codeVerifier);
 
       // For Facebook, convert short-lived token to long-lived token (60 days)
@@ -305,15 +350,28 @@ export class HandleOAuthCallback extends OpenAPIRoute {
         user_info: userInfo
       };
 
+      // Preserve shop_domain for Shopify
+      if (shopDomain) {
+        metadata.shop_domain = shopDomain;
+      }
+
       await c.env.DB.prepare(`
         UPDATE oauth_states
         SET metadata = ?
         WHERE state = ?
       `).bind(JSON.stringify(metadata), state).run();
 
-      // Redirect to callback page with state for account selection
-      const redirectUri = oauthState.redirect_uri || 'https://app.clearlift.ai/oauth/callback';
-      return c.redirect(`${redirectUri}?code=${code}&state=${state}&step=select_account&provider=${provider}`);
+      // For Shopify, skip account selection and go directly to finalize
+      // For ad platforms, redirect to account selection
+      const redirectUri = 'https://app.clearlift.ai/oauth/callback';
+      if (provider === 'shopify') {
+        // Shopify doesn't need account selection - redirect directly to finalize step
+        return c.redirect('http://localhost:3000');
+        return c.redirect(`${redirectUri}?code=${code}&state=${state}&step=finalize&provider=${provider}`);
+      } else {
+        // Redirect to callback page with state for account selection
+        return c.redirect(`${redirectUri}?code=${code}&state=${state}&step=select_account&provider=${provider}`);
+      }
 
     } catch (err) {
       console.error('OAuth callback error:', err);
@@ -331,13 +389,14 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     }
   }
 
-  private async getOAuthProvider(provider: string, c: AppContext) {
-    const redirectUri = `https://api.clearlift.ai/v1/connectors/${provider}/callback`;
+  private async getOAuthProvider(provider: string, c: AppContext, shopDomain?: string) {
+    const redirectUri = `http://localhost:8787/v1/connectors/${provider}/callback`;
 
     switch (provider) {
       case 'google': {
         const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
         const clientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
+        console.log(clientId, clientSecret, "test")
         if (!clientId || !clientSecret) {
           throw new Error('Google OAuth credentials not configured');
         }
@@ -357,6 +416,22 @@ export class HandleOAuthCallback extends OpenAPIRoute {
           appId,
           appSecret,
           redirectUri
+        );
+      }
+      case 'shopify': {
+        if (!shopDomain) {
+          throw new Error('Shop domain is required for Shopify');
+        }
+        const clientId = await getSecret(c.env.SHOPIFY_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
+          throw new Error('Shopify OAuth credentials not configured');
+        }
+        return new ShopifyOAuthProvider(
+          clientId,
+          clientSecret,
+          redirectUri,
+          shopDomain
         );
       }
       default:
@@ -616,13 +691,13 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
     operationId: "finalize-oauth-connection",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify'])
       }),
       body: contentJson(
         z.object({
           state: z.string(),
-          account_id: z.string(),
-          account_name: z.string(),
+          account_id: z.string(), // For Shopify, this is the shop domain
+          account_name: z.string(), // For Shopify, this is the shop name
           selectedAccounts: z.array(z.string()).optional() // For Google Ads manager accounts
         })
       )
@@ -676,10 +751,26 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const refreshToken = metadata?.refresh_token;
       const expiresIn = metadata?.expires_in;
       const scope = metadata?.scope;
+      const shopDomain = metadata?.shop_domain; // For Shopify
 
       if (!accessToken) {
         console.error('No access token in OAuth state metadata');
         return error(c, "NO_TOKEN", "No access token found in OAuth state", 400);
+      }
+
+      // For Shopify, validate shop_domain matches
+      if (provider === 'shopify') {
+        if (!shopDomain) {
+          console.error('Shop domain not found in OAuth state metadata');
+          return error(c, "MISSING_SHOP_DOMAIN", "Shop domain not found in OAuth state", 400);
+        }
+        // Ensure account_id matches shop_domain (normalize both)
+        const normalizedShopDomain = shopDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const normalizedAccountId = account_id.replace(/^https?:\/\//, '').replace(/\/$/, '');
+        if (normalizedShopDomain !== normalizedAccountId) {
+          console.error('Shop domain mismatch', { shopDomain, account_id });
+          return error(c, "SHOP_DOMAIN_MISMATCH", "Shop domain does not match OAuth state", 400);
+        }
       }
 
       console.log('Creating connection in database...');
@@ -1056,7 +1147,7 @@ export class UpdateConnectorSettings extends OpenAPIRoute {
       // Platform-specific validation
       if (connection.platform === 'google' && settings.accountSelection) {
         if (settings.accountSelection.mode === 'selected' &&
-            (!settings.accountSelection.selectedAccounts || settings.accountSelection.selectedAccounts.length === 0)) {
+          (!settings.accountSelection.selectedAccounts || settings.accountSelection.selectedAccounts.length === 0)) {
           return error(c, "INVALID_CONFIG", "When mode is 'selected', at least one account must be selected", 400);
         }
       }
