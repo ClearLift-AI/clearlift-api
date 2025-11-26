@@ -8,7 +8,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
-import { StripeAdapter, MetadataFilter } from "../../../adapters/platforms/stripe";
+import { MetadataFilter } from "../../../adapters/platforms/stripe-supabase";
 import { getSecret } from "../../../utils/secrets";
 
 /**

@@ -1184,6 +1184,100 @@
         }
       }
     },
+    "/v1/organizations/{org_id}": {
+      "patch": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "Update organization details",
+        "operationId": "update-organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "org_id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 100
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Organization updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "organization": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "updated_at": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "name",
+                            "updated_at"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "organization"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "No permission to update"
+          }
+        }
+      }
+    },
     "/v1/organizations/{org_id}/invite": {
       "post": {
         "tags": [
@@ -1563,6 +1657,69 @@
           },
           "403": {
             "description": "No permission"
+          }
+        }
+      }
+    },
+    "/v1/organizations/{org_id}/tag": {
+      "get": {
+        "tags": [
+          "Organizations"
+        ],
+        "summary": "Get organization tracking tag",
+        "description": "Returns the organization's unique tracking tag for JavaScript pixel integration",
+        "operationId": "get-organization-tag",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "org_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Organization tracking tag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "org_tag": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "org_tag"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No permission"
+          },
+          "404": {
+            "description": "Organization or tag not found"
           }
         }
       }
@@ -2060,31 +2217,20 @@
         }
       }
     },
-    "/v1/analytics/ads/{platform_slug}": {
+    "/v1/analytics/attribution": {
       "get": {
         "tags": [
           "Analytics"
         ],
-        "summary": "Get ad platform performance data",
-        "description": "Fetches ad performance data from various platforms. Platform availability is dynamic - if the platform's data table exists in Supabase, it will work automatically.",
-        "operationId": "get-ads",
+        "summary": "Get marketing attribution data",
+        "description": "Analyze which marketing channels (UTM parameters) are driving conversions",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "get_GetAttribution",
         "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^[a-z_]+$",
-              "description": "Platform slug (e.g., facebook, google, tiktok)"
-            },
-            "required": true,
-            "description": "Platform slug (e.g., facebook, google, tiktok)",
-            "name": "platform_slug",
-            "in": "path"
-          },
           {
             "schema": {
               "type": "string",
@@ -2098,114 +2244,45 @@
           {
             "schema": {
               "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
               "description": "Start date (YYYY-MM-DD)"
             },
-            "required": false,
+            "required": true,
             "description": "Start date (YYYY-MM-DD)",
-            "name": "start_date",
+            "name": "date_from",
             "in": "query"
           },
           {
             "schema": {
               "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
               "description": "End date (YYYY-MM-DD)"
             },
-            "required": false,
+            "required": true,
             "description": "End date (YYYY-MM-DD)",
-            "name": "end_date",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Filter by campaign ID"
-            },
-            "required": false,
-            "description": "Filter by campaign ID",
-            "name": "campaign_id",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Filter by ad ID"
-            },
-            "required": false,
-            "description": "Filter by ad ID",
-            "name": "ad_id",
+            "name": "date_to",
             "in": "query"
           },
           {
             "schema": {
               "type": "string",
               "enum": [
-                "campaign",
-                "ad",
-                "date",
-                "campaign_date",
-                "none"
+                "first_touch",
+                "last_touch",
+                "linear"
               ],
-              "description": "Aggregation level (default: none)"
+              "default": "last_touch",
+              "description": "Attribution model"
             },
             "required": false,
-            "description": "Aggregation level (default: none)",
-            "name": "group_by",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Pagination limit"
-            },
-            "required": false,
-            "description": "Pagination limit",
-            "name": "limit",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Pagination offset"
-            },
-            "required": false,
-            "description": "Pagination offset",
-            "name": "offset",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "enum": [
-                "spend",
-                "impressions",
-                "clicks",
-                "conversions"
-              ],
-              "description": "Sort field"
-            },
-            "required": false,
-            "description": "Sort field",
-            "name": "sort_by",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "enum": [
-                "asc",
-                "desc"
-              ],
-              "description": "Sort order"
-            },
-            "required": false,
-            "description": "Sort order",
-            "name": "order",
+            "description": "Attribution model",
+            "name": "model",
             "in": "query"
           }
         ],
         "responses": {
           "200": {
-            "description": "Ad platform data with validated core fields and flexible schema for platform-specific fields",
+            "description": "Attribution data",
             "content": {
               "application/json": {
                 "schema": {
@@ -2217,258 +2294,94 @@
                     "data": {
                       "type": "object",
                       "properties": {
-                        "platform": {
-                          "type": "string"
-                        },
-                        "results": {
-                          "anyOf": [
-                            {
-                              "type": "array",
-                              "items": {
-                                "type": "object",
-                                "properties": {
-                                  "campaign_id": {
-                                    "type": "string"
-                                  },
-                                  "campaign_name": {
-                                    "type": "string"
-                                  },
-                                  "metrics": {
-                                    "type": "object",
-                                    "properties": {
-                                      "impressions": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "clicks": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "spend": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "conversions": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "revenue": {
-                                        "type": "number",
-                                        "default": 0
-                                      }
-                                    }
-                                  }
-                                },
-                                "required": [
-                                  "campaign_id",
-                                  "campaign_name",
-                                  "metrics"
+                        "attributions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "utm_source": {
+                                "type": "string"
+                              },
+                              "utm_medium": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "utm_campaign": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "sessions": {
+                                "type": "number"
+                              },
+                              "conversions": {
+                                "type": "number"
+                              },
+                              "revenue": {
+                                "type": "number"
+                              },
+                              "conversion_rate": {
+                                "type": "number"
+                              },
+                              "cost_per_conversion": {
+                                "type": [
+                                  "number",
+                                  "null"
                                 ]
                               }
                             },
-                            {
-                              "type": "array",
-                              "items": {
-                                "type": "object",
-                                "properties": {
-                                  "org_id": {
-                                    "type": "string"
-                                  },
-                                  "date_reported": {
-                                    "type": "string"
-                                  },
-                                  "campaign_id": {
-                                    "type": "string"
-                                  },
-                                  "campaign_name": {
-                                    "type": "string"
-                                  },
-                                  "ad_id": {
-                                    "type": "string"
-                                  },
-                                  "ad_name": {
-                                    "type": "string"
-                                  },
-                                  "metrics": {
-                                    "type": "object",
-                                    "properties": {
-                                      "impressions": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "clicks": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "spend": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "conversions": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "revenue": {
-                                        "type": "number",
-                                        "default": 0
-                                      }
-                                    }
-                                  }
-                                },
-                                "required": [
-                                  "org_id",
-                                  "date_reported",
-                                  "metrics"
-                                ]
-                              }
-                            },
-                            {
-                              "type": "array",
-                              "items": {
-                                "type": "object",
-                                "properties": {
-                                  "date": {
-                                    "type": "string"
-                                  },
-                                  "metrics": {
-                                    "type": "object",
-                                    "properties": {
-                                      "impressions": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "clicks": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "spend": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "conversions": {
-                                        "type": "number",
-                                        "default": 0
-                                      },
-                                      "revenue": {
-                                        "type": "number",
-                                        "default": 0
-                                      }
-                                    }
-                                  }
-                                },
-                                "required": [
-                                  "date",
-                                  "metrics"
-                                ]
-                              }
-                            },
-                            {
-                              "type": "array",
-                              "items": {}
-                            },
-                            {
-                              "type": "null"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                            "required": [
+                              "utm_source",
+                              "utm_medium",
+                              "utm_campaign",
+                              "sessions",
+                              "conversions",
+                              "revenue",
+                              "conversion_rate",
+                              "cost_per_conversion"
+                            ]
+                          }
                         },
                         "summary": {
                           "type": "object",
                           "properties": {
-                            "total_impressions": {
-                              "type": "number",
-                              "default": 0
-                            },
-                            "total_clicks": {
-                              "type": "number",
-                              "default": 0
-                            },
-                            "total_spend": {
-                              "type": "number",
-                              "default": 0
+                            "total_sessions": {
+                              "type": "number"
                             },
                             "total_conversions": {
-                              "type": "number",
-                              "default": 0
+                              "type": "number"
                             },
                             "total_revenue": {
-                              "type": "number",
-                              "default": 0
-                            },
-                            "avg_cpc": {
                               "type": "number"
                             },
-                            "avg_cpm": {
+                            "overall_conversion_rate": {
                               "type": "number"
-                            },
-                            "ctr": {
-                              "type": "number"
-                            },
-                            "roas": {
-                              "type": "number"
-                            }
-                          }
-                        }
-                      },
-                      "required": [
-                        "platform",
-                        "results",
-                        "summary"
-                      ]
-                    },
-                    "meta": {
-                      "type": "object",
-                      "properties": {
-                        "timestamp": {
-                          "type": "string"
-                        },
-                        "date_range": {
-                          "type": "object",
-                          "properties": {
-                            "start_date": {
-                              "type": "string"
-                            },
-                            "end_date": {
-                              "type": "string"
                             }
                           },
                           "required": [
-                            "start_date",
-                            "end_date"
+                            "total_sessions",
+                            "total_conversions",
+                            "total_revenue",
+                            "overall_conversion_rate"
                           ]
                         }
                       },
                       "required": [
-                        "timestamp",
-                        "date_range"
+                        "attributions",
+                        "summary"
                       ]
                     }
                   },
                   "required": [
                     "success",
-                    "data",
-                    "meta"
+                    "data"
                   ]
                 }
               }
             }
-          },
-          "400": {
-            "description": "Invalid platform or parameters"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "No organization selected"
-          },
-          "404": {
-            "description": "Platform not available (table does not exist)"
-          },
-          "500": {
-            "description": "Query failed"
           }
         }
       }
@@ -2951,35 +2864,20 @@
         }
       }
     },
-    "/v1/analytics/platforms/{platform}": {
+    "/v1/analytics/facebook/campaigns": {
       "get": {
         "tags": [
-          "Analytics"
+          "Facebook Ads"
         ],
-        "summary": "Get platform-specific advertising data",
-        "description": "Fetches campaign, ad group, and ad data from Supabase for a specific platform",
-        "operationId": "get-platform-data",
+        "summary": "Get Facebook campaigns",
+        "description": "Retrieve Facebook Ads campaigns for an organization",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "get_GetFacebookCampaigns",
         "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "enum": [
-                "google",
-                "facebook",
-                "tiktok"
-              ],
-              "description": "Advertising platform"
-            },
-            "required": true,
-            "description": "Advertising platform",
-            "name": "platform",
-            "in": "path"
-          },
           {
             "schema": {
               "type": "string",
@@ -2993,43 +2891,45 @@
           {
             "schema": {
               "type": "string",
-              "description": "Start date (YYYY-MM-DD)"
-            },
-            "required": false,
-            "description": "Start date (YYYY-MM-DD)",
-            "name": "start_date",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "End date (YYYY-MM-DD)"
-            },
-            "required": false,
-            "description": "End date (YYYY-MM-DD)",
-            "name": "end_date",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "string",
               "enum": [
-                "campaigns",
-                "ad_groups",
-                "ads",
-                "all"
-              ],
-              "description": "Entity type to fetch (default: all)"
+                "ACTIVE",
+                "PAUSED",
+                "DELETED",
+                "ARCHIVED"
+              ]
             },
             "required": false,
-            "description": "Entity type to fetch (default: all)",
-            "name": "entity",
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
             "in": "query"
           }
         ],
         "responses": {
           "200": {
-            "description": "Platform data from Supabase",
+            "description": "Facebook campaigns data",
             "content": {
               "application/json": {
                 "schema": {
@@ -3045,56 +2945,1794 @@
                           "type": "array",
                           "items": {}
                         },
-                        "ad_groups": {
-                          "type": "array",
-                          "items": {}
-                        },
-                        "ads": {
-                          "type": "array",
-                          "items": {}
-                        },
-                        "metrics": {
-                          "type": "array",
-                          "items": {}
-                        }
-                      }
-                    },
-                    "meta": {
-                      "type": "object",
-                      "properties": {
-                        "platform": {
-                          "type": "string"
-                        },
-                        "organization_id": {
-                          "type": "string"
-                        },
-                        "date_range": {
-                          "type": "object",
-                          "properties": {
-                            "start_date": {
-                              "type": "string"
-                            },
-                            "end_date": {
-                              "type": "string"
-                            }
-                          }
+                        "total": {
+                          "type": "number"
                         }
                       },
                       "required": [
-                        "platform",
-                        "organization_id",
-                        "date_range"
+                        "campaigns",
+                        "total"
                       ]
                     }
                   },
                   "required": [
                     "success",
-                    "data",
-                    "meta"
+                    "data"
                   ]
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/v1/analytics/facebook/ad-sets": {
+      "get": {
+        "tags": [
+          "Facebook Ads"
+        ],
+        "summary": "Get Facebook ad sets",
+        "description": "Retrieve Facebook Ads ad sets for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetFacebookAdSets",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by campaign ID"
+            },
+            "required": false,
+            "description": "Filter by campaign ID",
+            "name": "campaign_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "PAUSED",
+                "DELETED",
+                "ARCHIVED"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Facebook ad sets data"
+          }
+        }
+      }
+    },
+    "/v1/analytics/facebook/creatives": {
+      "get": {
+        "tags": [
+          "Facebook Ads"
+        ],
+        "summary": "Get Facebook creatives",
+        "description": "Retrieve Facebook Ads creatives for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetFacebookCreatives",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Facebook creatives data"
+          }
+        }
+      }
+    },
+    "/v1/analytics/facebook/ads": {
+      "get": {
+        "tags": [
+          "Facebook Ads"
+        ],
+        "summary": "Get Facebook ads",
+        "description": "Retrieve Facebook Ads ads for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetFacebookAds",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by campaign ID"
+            },
+            "required": false,
+            "description": "Filter by campaign ID",
+            "name": "campaign_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by ad set ID"
+            },
+            "required": false,
+            "description": "Filter by ad set ID",
+            "name": "ad_set_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "PAUSED",
+                "DELETED",
+                "ARCHIVED"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Facebook ads data"
+          }
+        }
+      }
+    },
+    "/v1/analytics/facebook/metrics/daily": {
+      "get": {
+        "tags": [
+          "Facebook Ads"
+        ],
+        "summary": "Get Facebook daily metrics",
+        "description": "Retrieve Facebook Ads daily metrics for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetFacebookMetrics",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "Start date (YYYY-MM-DD)"
+            },
+            "required": true,
+            "description": "Start date (YYYY-MM-DD)",
+            "name": "start_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "End date (YYYY-MM-DD)"
+            },
+            "required": true,
+            "description": "End date (YYYY-MM-DD)",
+            "name": "end_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "campaign",
+                "ad_set",
+                "ad"
+              ],
+              "default": "campaign",
+              "description": "Metrics level"
+            },
+            "required": false,
+            "description": "Metrics level",
+            "name": "level",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by campaign ID (for ad_set/ad level)"
+            },
+            "required": false,
+            "description": "Filter by campaign ID (for ad_set/ad level)",
+            "name": "campaign_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by ad set ID (for ad level)"
+            },
+            "required": false,
+            "description": "Filter by ad set ID (for ad level)",
+            "name": "ad_set_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by ad ID"
+            },
+            "required": false,
+            "description": "Filter by ad ID",
+            "name": "ad_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 1000
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Facebook daily metrics"
+          }
+        }
+      }
+    },
+    "/v1/analytics/facebook/campaigns/{campaign_id}/status": {
+      "patch": {
+        "tags": [
+          "Facebook Ads"
+        ],
+        "summary": "Update Facebook campaign status",
+        "description": "Pause or resume a Facebook campaign",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "patch_UpdateFacebookCampaignStatus",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "campaign_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ACTIVE",
+                      "PAUSED"
+                    ],
+                    "description": "New status for the campaign"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Campaign status updated successfully"
+          }
+        }
+      }
+    },
+    "/v1/analytics/facebook/ad-sets/{ad_set_id}/status": {
+      "patch": {
+        "tags": [
+          "Facebook Ads"
+        ],
+        "summary": "Update Facebook ad set status",
+        "description": "Pause or resume a Facebook ad set",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "patch_UpdateFacebookAdSetStatus",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "ad_set_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ACTIVE",
+                      "PAUSED"
+                    ],
+                    "description": "New status for the ad set"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ad set status updated successfully"
+          }
+        }
+      }
+    },
+    "/v1/analytics/facebook/ads/{ad_id}/status": {
+      "patch": {
+        "tags": [
+          "Facebook Ads"
+        ],
+        "summary": "Update Facebook ad status",
+        "description": "Pause or resume a Facebook ad",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "patch_UpdateFacebookAdStatus",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "ad_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "ACTIVE",
+                      "PAUSED"
+                    ],
+                    "description": "New status for the ad"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ad status updated successfully"
+          }
+        }
+      }
+    },
+    "/v1/analytics/facebook/campaigns/{campaign_id}/budget": {
+      "patch": {
+        "tags": [
+          "Facebook Ads"
+        ],
+        "summary": "Update Facebook campaign budget",
+        "description": "Update daily or lifetime budget for a Facebook campaign. Must specify either daily_budget or lifetime_budget, not both.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "patch_UpdateFacebookCampaignBudget",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "campaign_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "daily_budget": {
+                    "type": "number",
+                    "minimum": 100,
+                    "description": "Daily budget in cents (minimum: $1)"
+                  },
+                  "lifetime_budget": {
+                    "type": "number",
+                    "minimum": 100,
+                    "description": "Lifetime budget in cents (minimum: $1)"
+                  },
+                  "budget_type": {
+                    "type": "string",
+                    "enum": [
+                      "campaign",
+                      "adset"
+                    ],
+                    "description": "v24.0: Campaign Budget Optimization type"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Campaign budget updated successfully"
+          }
+        }
+      }
+    },
+    "/v1/analytics/facebook/ad-sets/{ad_set_id}/budget": {
+      "patch": {
+        "tags": [
+          "Facebook Ads"
+        ],
+        "summary": "Update Facebook ad set budget",
+        "description": "Update daily or lifetime budget for a Facebook ad set. Must specify either daily_budget or lifetime_budget, not both.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "patch_UpdateFacebookAdSetBudget",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "ad_set_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "daily_budget": {
+                    "type": "number",
+                    "minimum": 100,
+                    "description": "Daily budget in cents (minimum: $1)"
+                  },
+                  "lifetime_budget": {
+                    "type": "number",
+                    "minimum": 100,
+                    "description": "Lifetime budget in cents (minimum: $1)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ad set budget updated successfully"
+          }
+        }
+      }
+    },
+    "/v1/analytics/facebook/ad-sets/{ad_set_id}/targeting": {
+      "patch": {
+        "tags": [
+          "Facebook Ads"
+        ],
+        "summary": "Update Facebook ad set targeting",
+        "description": "Update targeting parameters for a Facebook ad set (demographics, interests, locations, etc.)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "patch_UpdateFacebookAdSetTargeting",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "ad_set_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "targeting": {
+                    "type": "object",
+                    "properties": {
+                      "geo_locations": {
+                        "type": "object",
+                        "properties": {
+                          "countries": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "ISO country codes, e.g., ['US', 'CA']"
+                          },
+                          "regions": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "key"
+                              ]
+                            },
+                            "description": "Region IDs"
+                          },
+                          "cities": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": {
+                                  "type": "string"
+                                },
+                                "radius": {
+                                  "type": "number"
+                                },
+                                "distance_unit": {
+                                  "type": "string",
+                                  "enum": [
+                                    "mile",
+                                    "kilometer"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "key"
+                              ]
+                            }
+                          },
+                          "location_types": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "home",
+                                "recent"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "age_min": {
+                        "type": "number",
+                        "minimum": 18,
+                        "maximum": 65,
+                        "description": "Minimum age for targeting (18-65)"
+                      },
+                      "age_max": {
+                        "type": "number",
+                        "minimum": 18,
+                        "maximum": 65,
+                        "description": "Maximum age for targeting (18-65)"
+                      },
+                      "genders": {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "enum": [
+                                1
+                              ]
+                            },
+                            {
+                              "type": "number",
+                              "enum": [
+                                2
+                              ]
+                            }
+                          ]
+                        },
+                        "description": "1 = male, 2 = female"
+                      },
+                      "interests": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id"
+                          ]
+                        }
+                      },
+                      "behaviors": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id"
+                          ]
+                        }
+                      },
+                      "flexible_spec": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "interests": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id"
+                                ]
+                              }
+                            },
+                            "behaviors": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id"
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "exclusions": {
+                        "type": "object",
+                        "properties": {
+                          "interests": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id"
+                              ]
+                            }
+                          },
+                          "behaviors": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "device_platforms": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "mobile",
+                            "desktop"
+                          ]
+                        }
+                      },
+                      "publisher_platforms": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "facebook",
+                            "instagram",
+                            "audience_network",
+                            "messenger"
+                          ]
+                        }
+                      },
+                      "facebook_positions": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "feed",
+                            "right_hand_column",
+                            "instant_article",
+                            "instream_video",
+                            "marketplace",
+                            "story",
+                            "search"
+                          ]
+                        }
+                      },
+                      "instagram_positions": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "stream",
+                            "story",
+                            "explore"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "placement_soft_opt_out": {
+                    "type": "boolean",
+                    "description": "v24.0: Allow up to 5% spend on excluded placements for better performance"
+                  }
+                },
+                "required": [
+                  "targeting"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ad set targeting updated successfully"
+          }
+        }
+      }
+    },
+    "/v1/analytics/google/campaigns": {
+      "get": {
+        "tags": [
+          "Google Ads"
+        ],
+        "summary": "Get Google Ads campaigns",
+        "description": "Retrieve Google Ads campaigns for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetGoogleCampaigns",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ENABLED",
+                "PAUSED",
+                "REMOVED"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Google Ads campaigns data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "campaigns": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "total": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "campaigns",
+                        "total"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics/google/ad-groups": {
+      "get": {
+        "tags": [
+          "Google Ads"
+        ],
+        "summary": "Get Google Ads ad groups",
+        "description": "Retrieve Google Ads ad groups for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetGoogleAdGroups",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by campaign ID"
+            },
+            "required": false,
+            "description": "Filter by campaign ID",
+            "name": "campaign_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ENABLED",
+                "PAUSED",
+                "REMOVED"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Google Ads ad groups data"
+          }
+        }
+      }
+    },
+    "/v1/analytics/google/ads": {
+      "get": {
+        "tags": [
+          "Google Ads"
+        ],
+        "summary": "Get Google Ads ads",
+        "description": "Retrieve Google Ads ads for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetGoogleAds",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by campaign ID"
+            },
+            "required": false,
+            "description": "Filter by campaign ID",
+            "name": "campaign_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by ad group ID"
+            },
+            "required": false,
+            "description": "Filter by ad group ID",
+            "name": "ad_group_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ENABLED",
+                "PAUSED",
+                "REMOVED"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Google Ads ads data"
+          }
+        }
+      }
+    },
+    "/v1/analytics/google/metrics/daily": {
+      "get": {
+        "tags": [
+          "Google Ads"
+        ],
+        "summary": "Get Google Ads daily metrics",
+        "description": "Retrieve Google Ads daily metrics for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetGoogleMetrics",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "Start date (YYYY-MM-DD)"
+            },
+            "required": true,
+            "description": "Start date (YYYY-MM-DD)",
+            "name": "start_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "End date (YYYY-MM-DD)"
+            },
+            "required": true,
+            "description": "End date (YYYY-MM-DD)",
+            "name": "end_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "campaign",
+                "ad_group",
+                "ad"
+              ],
+              "default": "campaign",
+              "description": "Metrics level"
+            },
+            "required": false,
+            "description": "Metrics level",
+            "name": "level",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by campaign ID (for ad_group/ad level)"
+            },
+            "required": false,
+            "description": "Filter by campaign ID (for ad_group/ad level)",
+            "name": "campaign_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by ad group ID (for ad level)"
+            },
+            "required": false,
+            "description": "Filter by ad group ID (for ad level)",
+            "name": "ad_group_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by ad ID"
+            },
+            "required": false,
+            "description": "Filter by ad ID",
+            "name": "ad_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 1000
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Google Ads daily metrics"
+          }
+        }
+      }
+    },
+    "/v1/analytics/tiktok/campaigns": {
+      "get": {
+        "tags": [
+          "TikTok Ads"
+        ],
+        "summary": "Get TikTok Ads campaigns",
+        "description": "Retrieve TikTok Ads campaigns for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetTikTokCampaigns",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "PAUSED",
+                "DELETED"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TikTok Ads campaigns data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "campaigns": {
+                          "type": "array",
+                          "items": {}
+                        },
+                        "total": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "campaigns",
+                        "total"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/analytics/tiktok/ad-groups": {
+      "get": {
+        "tags": [
+          "TikTok Ads"
+        ],
+        "summary": "Get TikTok Ads ad groups",
+        "description": "Retrieve TikTok Ads ad groups for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetTikTokAdGroups",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by campaign ID"
+            },
+            "required": false,
+            "description": "Filter by campaign ID",
+            "name": "campaign_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "PAUSED",
+                "DELETED"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TikTok Ads ad groups data"
+          }
+        }
+      }
+    },
+    "/v1/analytics/tiktok/ads": {
+      "get": {
+        "tags": [
+          "TikTok Ads"
+        ],
+        "summary": "Get TikTok Ads ads",
+        "description": "Retrieve TikTok Ads ads for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetTikTokAds",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by campaign ID"
+            },
+            "required": false,
+            "description": "Filter by campaign ID",
+            "name": "campaign_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by ad group ID"
+            },
+            "required": false,
+            "description": "Filter by ad group ID",
+            "name": "ad_group_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "PAUSED",
+                "DELETED"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TikTok Ads ads data"
+          }
+        }
+      }
+    },
+    "/v1/analytics/tiktok/metrics/daily": {
+      "get": {
+        "tags": [
+          "TikTok Ads"
+        ],
+        "summary": "Get TikTok Ads daily metrics",
+        "description": "Retrieve TikTok Ads daily metrics for an organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "get_GetTikTokMetrics",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Organization ID"
+            },
+            "required": true,
+            "description": "Organization ID",
+            "name": "org_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "Start date (YYYY-MM-DD)"
+            },
+            "required": true,
+            "description": "Start date (YYYY-MM-DD)",
+            "name": "start_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "End date (YYYY-MM-DD)"
+            },
+            "required": true,
+            "description": "End date (YYYY-MM-DD)",
+            "name": "end_date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "campaign",
+                "ad_group",
+                "ad"
+              ],
+              "default": "campaign",
+              "description": "Metrics level"
+            },
+            "required": false,
+            "description": "Metrics level",
+            "name": "level",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by campaign ID (for ad_group/ad level)"
+            },
+            "required": false,
+            "description": "Filter by campaign ID (for ad_group/ad level)",
+            "name": "campaign_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by ad group ID (for ad level)"
+            },
+            "required": false,
+            "description": "Filter by ad group ID (for ad level)",
+            "name": "ad_group_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter by ad ID"
+            },
+            "required": false,
+            "description": "Filter by ad ID",
+            "name": "ad_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 1000
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TikTok Ads daily metrics"
           }
         }
       }
@@ -4148,6 +5786,131 @@
         "responses": {
           "200": {
             "description": "Settings updated successfully"
+          }
+        }
+      }
+    },
+    "/v1/connectors/stripe/connect": {
+      "post": {
+        "tags": [
+          "Connectors"
+        ],
+        "summary": "Connect Stripe account",
+        "description": "Connect a Stripe account using a restricted API key",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "post_ConnectStripe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "organization_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "api_key": {
+                    "type": "string",
+                    "pattern": "^(sk_test_|sk_live_|rk_test_|rk_live_)[a-zA-Z0-9]{24,}$"
+                  },
+                  "sync_mode": {
+                    "type": "string",
+                    "enum": [
+                      "charges",
+                      "payment_intents",
+                      "invoices"
+                    ],
+                    "default": "charges"
+                  },
+                  "lookback_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 365,
+                    "default": 30
+                  },
+                  "auto_sync": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "organization_id",
+                  "api_key"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Stripe account connected successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "connection_id": {
+                          "type": "string"
+                        },
+                        "account_info": {
+                          "type": "object",
+                          "properties": {
+                            "stripe_account_id": {
+                              "type": "string"
+                            },
+                            "business_name": {
+                              "type": "string"
+                            },
+                            "country": {
+                              "type": "string"
+                            },
+                            "default_currency": {
+                              "type": "string"
+                            },
+                            "charges_enabled": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "stripe_account_id",
+                            "country",
+                            "default_currency",
+                            "charges_enabled"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "connection_id",
+                        "account_info"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid API key or configuration"
+          },
+          "403": {
+            "description": "No access to organization"
+          },
+          "409": {
+            "description": "Stripe account already connected"
           }
         }
       }

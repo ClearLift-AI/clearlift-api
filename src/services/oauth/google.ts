@@ -231,4 +231,153 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
       throw error;
     }
   }
+
+  // ============================================================================
+  // Google Ads Mutation Methods (for AI decision execution)
+  // ============================================================================
+
+  /**
+   * Update campaign status (ENABLED, PAUSED, REMOVED)
+   */
+  async updateCampaignStatus(
+    accessToken: string,
+    developerToken: string,
+    customerId: string,
+    campaignId: string,
+    status: 'ENABLED' | 'PAUSED' | 'REMOVED'
+  ): Promise<any> {
+    const url = `https://googleads.googleapis.com/v22/customers/${customerId}/campaigns:mutate`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'developer-token': developerToken,
+        'login-customer-id': customerId,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        operations: [{
+          update: {
+            resourceName: `customers/${customerId}/campaigns/${campaignId}`,
+            status
+          },
+          updateMask: 'status'
+        }]
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to update Google campaign status: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Update campaign budget (daily budget in micros)
+   */
+  async updateCampaignBudget(
+    accessToken: string,
+    developerToken: string,
+    customerId: string,
+    campaignId: string,
+    budgetAmountMicros: number
+  ): Promise<any> {
+    // First, get the campaign's budget resource name
+    const searchUrl = `https://googleads.googleapis.com/v22/customers/${customerId}/googleAds:search`;
+    const query = `SELECT campaign.campaign_budget FROM campaign WHERE campaign.id = ${campaignId}`;
+
+    const searchResponse = await fetch(searchUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'developer-token': developerToken,
+        'login-customer-id': customerId,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ query })
+    });
+
+    if (!searchResponse.ok) {
+      const error = await searchResponse.text();
+      throw new Error(`Failed to get campaign budget: ${error}`);
+    }
+
+    const searchData = await searchResponse.json() as any;
+    const budgetResourceName = searchData.results?.[0]?.campaign?.campaignBudget;
+
+    if (!budgetResourceName) {
+      throw new Error('Campaign has no budget resource');
+    }
+
+    // Update the budget
+    const mutateUrl = `https://googleads.googleapis.com/v22/${budgetResourceName}:mutate`;
+
+    const response = await fetch(mutateUrl.replace('/campaignBudgets/', '/customers/' + customerId + '/campaignBudgets:mutate'), {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'developer-token': developerToken,
+        'login-customer-id': customerId,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        operations: [{
+          update: {
+            resourceName: budgetResourceName,
+            amountMicros: budgetAmountMicros.toString()
+          },
+          updateMask: 'amount_micros'
+        }]
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to update Google campaign budget: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Update ad group status
+   */
+  async updateAdGroupStatus(
+    accessToken: string,
+    developerToken: string,
+    customerId: string,
+    adGroupId: string,
+    status: 'ENABLED' | 'PAUSED' | 'REMOVED'
+  ): Promise<any> {
+    const url = `https://googleads.googleapis.com/v22/customers/${customerId}/adGroups:mutate`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'developer-token': developerToken,
+        'login-customer-id': customerId,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        operations: [{
+          update: {
+            resourceName: `customers/${customerId}/adGroups/${adGroupId}`,
+            status
+          },
+          updateMask: 'status'
+        }]
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to update Google ad group status: ${error}`);
+    }
+
+    return response.json();
+  }
 }

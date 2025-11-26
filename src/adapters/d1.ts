@@ -117,16 +117,57 @@ export class D1Adapter {
 
   /**
    * Check if user has access to organization
+   * Supports both organization ID (UUID) and slug
    */
-  async checkOrgAccess(userId: string, orgId: string): Promise<boolean> {
+  async checkOrgAccess(userId: string, orgIdOrSlug: string): Promise<boolean> {
+    // Check if input looks like a UUID
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgIdOrSlug);
+
+    if (isUUID) {
+      const result = await this.db
+        .prepare(
+          "SELECT 1 FROM organization_members WHERE user_id = ? AND organization_id = ?"
+        )
+        .bind(userId, orgIdOrSlug)
+        .first();
+      return result !== null;
+    }
+
+    // Treat as slug - join with organizations table
     const result = await this.db
-      .prepare(
-        "SELECT 1 FROM organization_members WHERE user_id = ? AND organization_id = ?"
-      )
-      .bind(userId, orgId)
+      .prepare(`
+        SELECT 1 FROM organization_members om
+        JOIN organizations o ON om.organization_id = o.id
+        WHERE om.user_id = ? AND o.slug = ?
+      `)
+      .bind(userId, orgIdOrSlug)
       .first();
 
     return result !== null;
+  }
+
+  /**
+   * Resolve org slug to ID, or return ID if already a UUID
+   */
+  async resolveOrgId(orgIdOrSlug: string): Promise<string | null> {
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgIdOrSlug);
+
+    if (isUUID) {
+      // Verify it exists
+      const exists = await this.db
+        .prepare("SELECT id FROM organizations WHERE id = ?")
+        .bind(orgIdOrSlug)
+        .first<{ id: string }>();
+      return exists?.id || null;
+    }
+
+    // Lookup by slug
+    const result = await this.db
+      .prepare("SELECT id FROM organizations WHERE slug = ?")
+      .bind(orgIdOrSlug)
+      .first<{ id: string }>();
+
+    return result?.id || null;
   }
 
   /**

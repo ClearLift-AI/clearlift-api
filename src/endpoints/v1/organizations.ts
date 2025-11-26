@@ -122,6 +122,80 @@ export class CreateOrganization extends OpenAPIRoute {
 }
 
 /**
+ * PATCH /v1/organizations/:org_id - Update organization details
+ */
+export class UpdateOrganization extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Update organization details",
+    operationId: "update-organization",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      }),
+      body: contentJson(
+        z.object({
+          name: z.string().min(2).max(100).optional()
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Organization updated",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                organization: z.object({
+                  id: z.string(),
+                  name: z.string(),
+                  updated_at: z.string()
+                })
+              })
+            })
+          }
+        }
+      },
+      "400": {
+        description: "Invalid request"
+      },
+      "403": {
+        description: "No permission to update"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const orgId = c.get("org_id" as any) as string; // Set by requireOrg middleware
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { name } = data.body;
+
+    // Authorization check handled by requireOrgAdmin middleware
+    const now = new Date().toISOString();
+
+    // Update organization
+    if (name) {
+      await c.env.DB.prepare(`
+        UPDATE organizations
+        SET name = ?, updated_at = ?
+        WHERE id = ?
+      `).bind(name, now, orgId).run();
+    }
+
+    return success(c, {
+      organization: {
+        id: orgId,
+        name: name!,
+        updated_at: now
+      }
+    });
+  }
+}
+
+/**
  * POST /v1/organizations/:org_id/invite - Invite a user to organization
  */
 export class InviteToOrganization extends OpenAPIRoute {
@@ -172,26 +246,18 @@ export class InviteToOrganization extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const session = c.get("session");
-    const { org_id } = c.req.param();
+    const orgId = c.get("org_id" as any) as string; // Set by requireOrg middleware
     const data = await this.getValidatedData<typeof this.schema>();
     const { email, role } = data.body;
 
-    // Check if user has permission (must be admin or owner)
-    const membership = await c.env.DB.prepare(`
-      SELECT role FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(org_id, session.user_id).first<{ role: string }>();
-
-    if (!membership || (membership.role !== 'admin' && membership.role !== 'owner')) {
-      return error(c, "FORBIDDEN", "You don't have permission to invite users", 403);
-    }
+    // Authorization check handled by requireOrgAdmin middleware
 
     // Check if user is already a member
     const existingUser = await c.env.DB.prepare(`
       SELECT u.id FROM users u
       JOIN organization_members om ON u.id = om.user_id
       WHERE u.email = ? AND om.organization_id = ?
-    `).bind(email, org_id).first();
+    `).bind(email, orgId).first();
 
     if (existingUser) {
       return error(c, "USER_EXISTS", "User is already a member of this organization", 409);
@@ -201,7 +267,7 @@ export class InviteToOrganization extends OpenAPIRoute {
     const existingInvite = await c.env.DB.prepare(`
       SELECT id FROM invitations
       WHERE email = ? AND organization_id = ? AND expires_at > datetime('now')
-    `).bind(email, org_id).first();
+    `).bind(email, orgId).first();
 
     if (existingInvite) {
       return error(c, "INVITE_EXISTS", "An invitation has already been sent to this email", 409);
@@ -219,7 +285,7 @@ export class InviteToOrganization extends OpenAPIRoute {
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      inviteId, org_id, email, role, session.user_id,
+      inviteId, orgId, email, role, session.user_id,
       inviteCode, expiresAt.toISOString(), new Date().toISOString()
     ).run();
 
@@ -229,7 +295,7 @@ export class InviteToOrganization extends OpenAPIRoute {
       FROM users u
       JOIN organizations o ON o.id = ?
       WHERE u.id = ?
-    `).bind(org_id, session.user_id).first<{
+    `).bind(orgId, session.user_id).first<{
       inviter_name: string;
       org_name: string;
     }>();
@@ -400,17 +466,10 @@ export class RemoveMember extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const session = c.get("session");
-    const { org_id, user_id } = c.req.param();
+    const orgId = c.get("org_id" as any) as string; // Set by requireOrg middleware
+    const { user_id } = c.req.param();
 
-    // Check if requester has permission (must be owner)
-    const requesterRole = await c.env.DB.prepare(`
-      SELECT role FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(org_id, session.user_id).first<{ role: string }>();
-
-    if (!requesterRole || requesterRole.role !== 'owner') {
-      return error(c, "FORBIDDEN", "Only owners can remove members", 403);
-    }
+    // Authorization check handled by requireOrgOwner middleware
 
     // Can't remove yourself
     if (user_id === session.user_id) {
@@ -421,7 +480,7 @@ export class RemoveMember extends OpenAPIRoute {
     const member = await c.env.DB.prepare(`
       SELECT id FROM organization_members
       WHERE organization_id = ? AND user_id = ?
-    `).bind(org_id, user_id).first();
+    `).bind(orgId, user_id).first();
 
     if (!member) {
       return error(c, "MEMBER_NOT_FOUND", "Member not found in organization", 404);
@@ -431,14 +490,14 @@ export class RemoveMember extends OpenAPIRoute {
     await c.env.DB.prepare(`
       DELETE FROM organization_members
       WHERE organization_id = ? AND user_id = ?
-    `).bind(org_id, user_id).run();
+    `).bind(orgId, user_id).run();
 
     // Update seats used
     await c.env.DB.prepare(`
       UPDATE organizations
       SET seats_used = seats_used - 1, updated_at = ?
       WHERE id = ?
-    `).bind(new Date().toISOString(), org_id).run();
+    `).bind(new Date().toISOString(), orgId).run();
 
     return success(c, { message: "Member removed successfully" });
   }
@@ -485,18 +544,9 @@ export class GetOrganizationMembers extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
-    const { org_id } = c.req.param();
+    const orgId = c.get("org_id" as any) as string; // Set by requireOrg middleware
 
-    // Check if user is a member of the organization
-    const membership = await c.env.DB.prepare(`
-      SELECT role FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(org_id, session.user_id).first<{ role: string }>();
-
-    if (!membership) {
-      return error(c, "FORBIDDEN", "You don't have access to this organization", 403);
-    }
+    // Access check handled by requireOrg middleware
 
     // Get all members with user details
     const membersResult = await c.env.DB.prepare(`
@@ -505,10 +555,79 @@ export class GetOrganizationMembers extends OpenAPIRoute {
       JOIN users u ON om.user_id = u.id
       WHERE om.organization_id = ?
       ORDER BY om.joined_at ASC
-    `).bind(org_id).all();
+    `).bind(orgId).all();
 
     return success(c, {
       members: membersResult.results || []
+    });
+  }
+}
+
+/**
+ * GET /v1/organizations/:org_id/tag - Get organization tracking tag
+ */
+export class GetOrganizationTag extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Get organization tracking tag",
+    description: "Returns the organization's unique tracking tag for JavaScript pixel integration",
+    operationId: "get-organization-tag",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Organization tracking tag",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                org_tag: z.string()
+              })
+            })
+          }
+        }
+      },
+      "403": {
+        description: "No permission"
+      },
+      "404": {
+        description: "Organization or tag not found"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const { org_id } = c.req.param();
+
+    // Verify org access
+    const { D1Adapter } = await import("../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, org_id);
+
+    if (!hasAccess) {
+      return error(c, "FORBIDDEN", "No access to this organization", 403);
+    }
+
+    // Get org tag from org_tag_mappings
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag
+      FROM org_tag_mappings
+      WHERE organization_id = ? AND is_active = 1
+      LIMIT 1
+    `).bind(org_id).first<{ short_tag: string }>();
+
+    if (!tagMapping) {
+      return error(c, "TAG_NOT_FOUND", "Organization tracking tag not found", 404);
+    }
+
+    return success(c, {
+      org_tag: tagMapping.short_tag
     });
   }
 }
@@ -556,18 +675,9 @@ export class GetPendingInvitations extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
-    const { org_id } = c.req.param();
+    const orgId = c.get("org_id" as any) as string; // Set by requireOrg middleware
 
-    // Check if user has permission (must be admin or owner)
-    const membership = await c.env.DB.prepare(`
-      SELECT role FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(org_id, session.user_id).first<{ role: string }>();
-
-    if (!membership || (membership.role !== 'admin' && membership.role !== 'owner')) {
-      return error(c, "FORBIDDEN", "You don't have permission to view invitations", 403);
-    }
+    // Authorization check handled by requireOrgAdmin middleware
 
     // Get pending invitations (not accepted, not expired)
     const invitationsResult = await c.env.DB.prepare(`
@@ -585,7 +695,7 @@ export class GetPendingInvitations extends OpenAPIRoute {
         AND i.accepted_at IS NULL
         AND i.expires_at > datetime('now')
       ORDER BY i.created_at DESC
-    `).bind(org_id).all();
+    `).bind(orgId).all();
 
     return success(c, {
       invitations: invitationsResult.results || []

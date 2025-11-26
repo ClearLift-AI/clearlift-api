@@ -153,6 +153,7 @@ export class SupabaseClient {
       order?: string;
       limit?: number;
       offset?: number;
+      schema?: string;  // Optional schema override (e.g., 'google_ads', 'facebook_ads')
     } = {}
   ): Promise<T[]> {
     // Build query string - the 'query' parameter contains filter conditions
@@ -186,6 +187,12 @@ export class SupabaseClient {
     }
 
     const endpoint = queryString ? `${table}?${queryString}` : table;
+
+    // Use schema-specific query if schema is provided
+    if (options.schema) {
+      return await this.queryWithSchema<T[]>(endpoint, options.schema, { method: 'GET' });
+    }
+
     return await this.query<T[]>(endpoint, { method: 'GET' });
   }
 

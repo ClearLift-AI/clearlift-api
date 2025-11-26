@@ -16,120 +16,6 @@ import { OnboardingService } from "../../../services/onboarding";
 /**
  * POST /v1/connectors/stripe/connect
  * Connect Stripe account using API key
- * Plain handler function (not OpenAPIRoute) to avoid Chanfana validation issues
- */
-export async function handleStripeConnect(c: AppContext) {
-  console.log("handleStripeConnect called");
-  const session = c.get("session");
-  console.log("Session:", session?.user_id);
-
-  // Get sanitized body from context (set by sanitizeInput middleware)
-  // Fallback to reading from request if not set
-  const sanitizedBody = (c as any).get("sanitizedBody");
-  console.log("Sanitized body from context:", sanitizedBody);
-
-  const body = sanitizedBody || await c.req.json().catch(() => ({}));
-  console.log("Final body:", body);
-
-  // Manual validation
-  if (!body.organization_id || !body.api_key) {
-    return error(c, "INVALID_REQUEST", "organization_id and api_key are required", 400);
-  }
-
-  // Validate API key format
-  if (!body.api_key.match(/^(sk_test_|sk_live_|rk_test_|rk_live_)[a-zA-Z0-9]{24,}$/)) {
-    return error(c, "INVALID_API_KEY", "Invalid Stripe API key format", 400);
-  }
-
-  const {
-    organization_id,
-    api_key,
-    sync_mode = 'charges',
-    lookback_days = 30,
-    auto_sync = true
-  } = body;
-
-  // Verify user has access to org
-  const { D1Adapter } = await import("../../../adapters/d1");
-  const d1 = new D1Adapter(c.env.DB);
-  const hasAccess = await d1.checkOrgAccess(session.user_id, organization_id);
-
-  if (!hasAccess) {
-    return error(c, "FORBIDDEN", "No access to this organization", 403);
-  }
-
-  try {
-    // Validate API key with Stripe
-    const stripeProvider = new StripeAPIProvider({ apiKey: api_key });
-    const accountInfo = await stripeProvider.validateAPIKey(api_key);
-
-    if (!accountInfo.charges_enabled) {
-      return error(c, "INVALID_CONFIG", "This Stripe account cannot accept charges", 400);
-    }
-
-    // Check if this Stripe account is already connected (and active)
-    const existing = await c.env.DB.prepare(`
-      SELECT id FROM platform_connections
-      WHERE organization_id = ? AND platform = 'stripe' AND stripe_account_id = ? AND is_active = 1
-    `).bind(organization_id, accountInfo.stripe_account_id).first();
-
-    if (existing) {
-      return error(c, "ALREADY_EXISTS", "This Stripe account is already connected", 409);
-    }
-
-    // Create connection
-    const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-    const connectorService = new ConnectorService(c.env.DB, encryptionKey);
-
-    // Wait a bit for encryption to initialize (async constructor issue)
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    const connectionId = await connectorService.createConnection({
-      organizationId: organization_id,
-      platform: 'stripe',
-      accountId: accountInfo.stripe_account_id,
-      accountName: accountInfo.business_profile?.name || accountInfo.stripe_account_id,
-      connectedBy: session.user_id,
-      accessToken: api_key, // Will be encrypted
-      refreshToken: undefined, // Not needed for API key auth
-      scopes: ['read_only'] // Based on key restrictions
-    });
-
-    // Store Stripe-specific fields
-    const isLiveMode = api_key.startsWith('sk_live_') || api_key.startsWith('rk_live_') ? 1 : 0;
-    await c.env.DB.prepare(`
-      UPDATE platform_connections
-      SET stripe_account_id = ?,
-          stripe_livemode = ?
-      WHERE id = ?
-    `).bind(
-      accountInfo.stripe_account_id,
-      isLiveMode,
-      connectionId
-    ).run();
-
-    // Auto-advance onboarding when user connects first service
-    const onboarding = new OnboardingService(c.env.DB);
-    await onboarding.incrementServicesConnected(session.user_id);
-
-    return success(c, {
-      connection_id: connectionId,
-      account_info: {
-        stripe_account_id: accountInfo.stripe_account_id,
-        business_name: accountInfo.business_profile?.name,
-        country: accountInfo.country,
-        default_currency: accountInfo.default_currency,
-        charges_enabled: accountInfo.charges_enabled
-      }
-    }, 201);
-  } catch (err: any) {
-    console.error("Stripe connection error:", err);
-    return error(c, "INVALID_API_KEY", err.message || "Failed to validate Stripe API key", 400);
-  }
-}
-
-/**
- * OpenAPIRoute class for documentation only (not used for actual handling)
  */
 export class ConnectStripe extends OpenAPIRoute {
   schema = {
@@ -137,8 +23,20 @@ export class ConnectStripe extends OpenAPIRoute {
     summary: "Connect Stripe account",
     description: "Connect a Stripe account using a restricted API key",
     security: [{ bearerAuth: [] }],
-    // Body validation removed to avoid Chanfana auto-validation issue
-    request: {},
+    request: {
+      body: contentJson(
+        z.object({
+          organization_id: z.string().min(1),
+          api_key: z.string().regex(
+            /^(sk_test_|sk_live_|rk_test_|rk_live_)[a-zA-Z0-9]{24,}$/,
+            "Invalid Stripe API key format. Must start with sk_test_, sk_live_, rk_test_, or rk_live_ followed by at least 24 alphanumeric characters"
+          ),
+          sync_mode: z.enum(['charges', 'payment_intents', 'invoices']).optional().default('charges'),
+          lookback_days: z.number().int().min(1).max(365).optional().default(30),
+          auto_sync: z.boolean().optional().default(true)
+        })
+      )
+    },
     responses: {
       "201": {
         description: "Stripe account connected successfully",
@@ -165,12 +63,97 @@ export class ConnectStripe extends OpenAPIRoute {
       },
       "403": {
         description: "No access to organization"
+      },
+      "409": {
+        description: "Stripe account already connected"
       }
     }
   };
 
   async handle(c: AppContext) {
-    return handleStripeConnect(c);
+    const session = c.get("session");
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { organization_id, api_key } = data.body;
+    // Note: sync_mode, lookback_days, auto_sync are validated but not yet used
+    // These will be implemented when sync configuration is added
+
+    // Verify user has access to org
+    const { D1Adapter } = await import("../../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, organization_id);
+
+    if (!hasAccess) {
+      return error(c, "FORBIDDEN", "No access to this organization", 403);
+    }
+
+    try {
+      // Validate API key with Stripe
+      const stripeProvider = new StripeAPIProvider({ apiKey: api_key });
+      const accountInfo = await stripeProvider.validateAPIKey(api_key);
+
+      if (!accountInfo.charges_enabled) {
+        return error(c, "INVALID_CONFIG", "This Stripe account cannot accept charges", 400);
+      }
+
+      // Check if this Stripe account is already connected (and active)
+      const existing = await c.env.DB.prepare(`
+        SELECT id FROM platform_connections
+        WHERE organization_id = ? AND platform = 'stripe' AND stripe_account_id = ? AND is_active = 1
+      `).bind(organization_id, accountInfo.stripe_account_id).first();
+
+      if (existing) {
+        return error(c, "ALREADY_EXISTS", "This Stripe account is already connected", 409);
+      }
+
+      // Create connection
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+
+      // Wait for encryption to initialize (async constructor issue)
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const connectionId = await connectorService.createConnection({
+        organizationId: organization_id,
+        platform: 'stripe',
+        accountId: accountInfo.stripe_account_id,
+        accountName: accountInfo.business_profile?.name || accountInfo.stripe_account_id,
+        connectedBy: session.user_id,
+        accessToken: api_key, // Will be encrypted
+        refreshToken: undefined, // Not needed for API key auth
+        scopes: ['read_only'] // Based on key restrictions
+      });
+
+      // Store Stripe-specific fields
+      const isLiveMode = api_key.startsWith('sk_live_') || api_key.startsWith('rk_live_') ? 1 : 0;
+      await c.env.DB.prepare(`
+        UPDATE platform_connections
+        SET stripe_account_id = ?,
+            stripe_livemode = ?
+        WHERE id = ?
+      `).bind(
+        accountInfo.stripe_account_id,
+        isLiveMode,
+        connectionId
+      ).run();
+
+      // Auto-advance onboarding when user connects first service
+      const onboarding = new OnboardingService(c.env.DB);
+      await onboarding.incrementServicesConnected(session.user_id);
+
+      return success(c, {
+        connection_id: connectionId,
+        account_info: {
+          stripe_account_id: accountInfo.stripe_account_id,
+          business_name: accountInfo.business_profile?.name,
+          country: accountInfo.country,
+          default_currency: accountInfo.default_currency,
+          charges_enabled: accountInfo.charges_enabled
+        }
+      }, undefined, 201);
+    } catch (err: any) {
+      console.error("Stripe connection error:", err);
+      return error(c, "INVALID_API_KEY", err.message || "Failed to validate Stripe API key", 400);
+    }
   }
 }
 
@@ -207,7 +190,8 @@ export class UpdateStripeConfig extends OpenAPIRoute {
   async handle(c: AppContext) {
     const session = c.get("session");
     const connectionId = c.req.param('connection_id');
-    const body = await c.req.json();
+    const data = await this.getValidatedData<typeof this.schema>();
+    // Config parameters validated but not yet implemented
 
     // Verify connection exists and user has access
     const connection = await c.env.DB.prepare(`
@@ -356,7 +340,7 @@ export class TriggerStripeSync extends OpenAPIRoute {
     return success(c, {
       job_id: jobId,
       message: "Sync job queued successfully"
-    }, 202);
+    }, undefined, 202);
   }
 }
 

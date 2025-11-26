@@ -10,7 +10,9 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { StripeQueryBuilder } from "../../../services/filters/stripeQueryBuilder";
-import { StripeAdapter } from "../../../adapters/platforms/stripe";
+import { StripeSupabaseAdapter } from "../../../adapters/platforms/stripe-supabase";
+import { SupabaseClient } from "../../../services/supabase";
+import { getSecret } from "../../../utils/secrets";
 
 // Zod schemas for validation
 const FilterConditionSchema = z.object({
@@ -128,7 +130,7 @@ export class CreateFilterRule extends OpenAPIRoute {
     return success(c, {
       filter_id: filterId,
       validation_warnings: validation.warnings
-    }, 201);
+    }, undefined, 201);
   }
 }
 
@@ -242,8 +244,8 @@ export class UpdateFilterRule extends OpenAPIRoute {
     if (body.conditions) {
       const queryBuilder = new StripeQueryBuilder();
       const validation = queryBuilder.validateFilter({
-        name: body.name || filter.name,
-        operator: body.operator || filter.operator,
+        name: (body.name as string) || (filter.name as string),
+        operator: (body.operator as 'AND' | 'OR') || (filter.operator as 'AND' | 'OR'),
         conditions: body.conditions
       });
 
@@ -498,7 +500,15 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
     }
 
     // Get metadata keys
-    const adapter = new StripeAdapter(c.env.DB);
+    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+    if (!supabaseKey) {
+      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    }
+    const supabase = new SupabaseClient({
+      url: c.env.SUPABASE_URL,
+      serviceKey: supabaseKey
+    });
+    const adapter = new StripeSupabaseAdapter(supabase);
     const keys = await adapter.getMetadataKeys(connectionId);
 
     // Get cached metadata key info

@@ -3,7 +3,7 @@ import { Hono } from "hono";
 
 // Middleware
 import { corsMiddleware } from "./middleware/cors";
-import { auth, requireOrg } from "./middleware/auth";
+import { auth, requireOrg, requireOrgAdmin, requireOrgOwner } from "./middleware/auth";
 import { errorHandler } from "./middleware/errorHandler";
 import { auditMiddleware, authAuditMiddleware } from "./middleware/audit";
 import { rateLimitMiddleware, authRateLimit, analyticsRateLimit } from "./middleware/rateLimit";
@@ -18,9 +18,34 @@ import {
 } from "./endpoints/v1/user";
 import { GetEvents } from "./endpoints/v1/analytics/events";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
-import { GetAds } from "./endpoints/v1/analytics/ads";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
-import { GetPlatformData, GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
+import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
+import { GetAttribution } from "./endpoints/v1/analytics/attribution";
+import {
+  GetFacebookCampaigns,
+  GetFacebookAdSets,
+  GetFacebookCreatives,
+  GetFacebookAds,
+  GetFacebookMetrics,
+  UpdateFacebookCampaignStatus,
+  UpdateFacebookAdSetStatus,
+  UpdateFacebookAdStatus,
+  UpdateFacebookCampaignBudget,
+  UpdateFacebookAdSetBudget,
+  UpdateFacebookAdSetTargeting
+} from "./endpoints/v1/analytics/facebook";
+import {
+  GetGoogleCampaigns,
+  GetGoogleAdGroups,
+  GetGoogleAds,
+  GetGoogleMetrics
+} from "./endpoints/v1/analytics/google";
+import {
+  GetTikTokCampaigns,
+  GetTikTokAdGroups,
+  GetTikTokAds,
+  GetTikTokMetrics
+} from "./endpoints/v1/analytics/tiktok";
 import {
   GetOnboardingStatus,
   StartOnboarding,
@@ -39,11 +64,13 @@ import {
 } from "./endpoints/v1/auth";
 import {
   CreateOrganization,
+  UpdateOrganization,
   InviteToOrganization,
   JoinOrganization,
   RemoveMember,
   GetOrganizationMembers,
-  GetPendingInvitations
+  GetPendingInvitations,
+  GetOrganizationTag
 } from "./endpoints/v1/organizations";
 import {
   ListConnectors,
@@ -149,9 +176,7 @@ app.use("*", async (c, next) => {
 app.use("*", auditMiddleware);
 
 // Add direct Hono route for Stripe connect BEFORE fromHono to bypass Chanfana validation
-// This must be before fromHono() call to avoid Chanfana auto-validation
-import { handleStripeConnect } from "./endpoints/v1/connectors/stripe";
-app.post("/v1/connectors/stripe/connect", auth, handleStripeConnect);
+// Stripe connect endpoint now uses proper OpenAPI validation (registered below with other routes)
 
 // Setup OpenAPI registry
 const openapi = fromHono(app, {
@@ -190,9 +215,7 @@ openapi.get("/v1/health", HealthEndpoint);
 openapi.post("/v1/waitlist", JoinWaitlist);
 openapi.get("/v1/waitlist/stats", GetWaitlistStats);
 
-// Debug SendGrid endpoint
-import debugSendgrid from "./endpoints/v1/debug-sendgrid";
-app.route("/", debugSendgrid);
+// Debug SendGrid endpoint removed for production security
 
 // Diagnostic endpoint to test Secrets Store access
 app.get("/v1/debug/secrets", async (c) => {
@@ -248,20 +271,46 @@ openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
 
 // Organization management endpoints
 openapi.post("/v1/organizations", auth, CreateOrganization);
-openapi.post("/v1/organizations/:org_id/invite", auth, InviteToOrganization);
+openapi.patch("/v1/organizations/:org_id", auth, requireOrg, requireOrgAdmin, UpdateOrganization);
+openapi.post("/v1/organizations/:org_id/invite", auth, requireOrg, requireOrgAdmin, InviteToOrganization);
 openapi.post("/v1/organizations/join", auth, JoinOrganization);
-openapi.get("/v1/organizations/:org_id/members", auth, GetOrganizationMembers);
-openapi.get("/v1/organizations/:org_id/invitations", auth, GetPendingInvitations);
-openapi.delete("/v1/organizations/:org_id/members/:user_id", auth, RemoveMember);
+openapi.get("/v1/organizations/:org_id/members", auth, requireOrg, GetOrganizationMembers);
+openapi.get("/v1/organizations/:org_id/invitations", auth, requireOrg, requireOrgAdmin, GetPendingInvitations);
+openapi.get("/v1/organizations/:org_id/tag", auth, requireOrg, GetOrganizationTag);
+openapi.delete("/v1/organizations/:org_id/members/:user_id", auth, requireOrg, requireOrgOwner, RemoveMember);
 
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, GetEvents);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
-openapi.get("/v1/analytics/ads/:platform_slug", auth, requireOrg, GetAds);
+openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/stripe", auth, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, GetStripeDailyAggregates);
 openapi.get("/v1/analytics/platforms/unified", auth, GetUnifiedPlatformData);
-openapi.get("/v1/analytics/platforms/:platform", auth, GetPlatformData);
+
+// Facebook Ads endpoints
+openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);
+openapi.get("/v1/analytics/facebook/ad-sets", auth, requireOrg, GetFacebookAdSets);
+openapi.get("/v1/analytics/facebook/creatives", auth, requireOrg, GetFacebookCreatives);
+openapi.get("/v1/analytics/facebook/ads", auth, requireOrg, GetFacebookAds);
+openapi.get("/v1/analytics/facebook/metrics/daily", auth, requireOrg, GetFacebookMetrics);
+openapi.patch("/v1/analytics/facebook/campaigns/:campaign_id/status", auth, requireOrg, requireOrgAdmin, UpdateFacebookCampaignStatus);
+openapi.patch("/v1/analytics/facebook/ad-sets/:ad_set_id/status", auth, requireOrg, requireOrgAdmin, UpdateFacebookAdSetStatus);
+openapi.patch("/v1/analytics/facebook/ads/:ad_id/status", auth, requireOrg, requireOrgAdmin, UpdateFacebookAdStatus);
+openapi.patch("/v1/analytics/facebook/campaigns/:campaign_id/budget", auth, requireOrg, requireOrgAdmin, UpdateFacebookCampaignBudget);
+openapi.patch("/v1/analytics/facebook/ad-sets/:ad_set_id/budget", auth, requireOrg, requireOrgAdmin, UpdateFacebookAdSetBudget);
+openapi.patch("/v1/analytics/facebook/ad-sets/:ad_set_id/targeting", auth, requireOrg, requireOrgAdmin, UpdateFacebookAdSetTargeting);
+
+// Google Ads endpoints
+openapi.get("/v1/analytics/google/campaigns", auth, requireOrg, GetGoogleCampaigns);
+openapi.get("/v1/analytics/google/ad-groups", auth, requireOrg, GetGoogleAdGroups);
+openapi.get("/v1/analytics/google/ads", auth, requireOrg, GetGoogleAds);
+openapi.get("/v1/analytics/google/metrics/daily", auth, requireOrg, GetGoogleMetrics);
+
+// TikTok Ads endpoints
+openapi.get("/v1/analytics/tiktok/campaigns", auth, requireOrg, GetTikTokCampaigns);
+openapi.get("/v1/analytics/tiktok/ad-groups", auth, requireOrg, GetTikTokAdGroups);
+openapi.get("/v1/analytics/tiktok/ads", auth, requireOrg, GetTikTokAds);
+openapi.get("/v1/analytics/tiktok/metrics/daily", auth, requireOrg, GetTikTokMetrics);
 
 // Onboarding endpoints
 openapi.get("/v1/onboarding/status", auth, GetOnboardingStatus);
@@ -290,7 +339,7 @@ openapi.get("/v1/connectors/:connection_id/google-ads/accounts", auth, ListGoogl
 openapi.put("/v1/connectors/:connection_id/google-ads/settings", auth, UpdateGoogleAdsSettings);
 
 // Stripe-specific connector endpoints
-// Note: /v1/connectors/stripe/connect is registered as direct Hono route at the end to bypass validation
+openapi.post("/v1/connectors/stripe/connect", auth, ConnectStripe);
 openapi.put("/v1/connectors/stripe/:connection_id/config", auth, UpdateStripeConfig);
 openapi.post("/v1/connectors/stripe/:connection_id/sync", auth, TriggerStripeSync);
 openapi.post("/v1/connectors/stripe/:connection_id/test", auth, TestStripeConnection);
@@ -311,8 +360,8 @@ openapi.get("/v1/workers/test-token/:connection_id", auth, TestConnectionToken);
 openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
 
 // Settings endpoints
-openapi.get("/v1/settings/matrix", auth, GetMatrixSettings);
-openapi.post("/v1/settings/matrix", auth, UpdateMatrixSettings);
+openapi.get("/v1/settings/matrix", auth, requireOrg, GetMatrixSettings);
+openapi.post("/v1/settings/matrix", auth, requireOrg, requireOrgAdmin, UpdateMatrixSettings);
 
 // Tracking config endpoints
 openapi.get("/v1/config", GetTagConfig); // Public endpoint for tracking tag
@@ -321,9 +370,9 @@ openapi.put("/v1/tracking-config", auth, UpdateTrackingConfig);
 openapi.post("/v1/tracking-config/snippet", auth, GenerateTrackingSnippet);
 
 // AI Decisions endpoints
-openapi.get("/v1/settings/ai-decisions", auth, GetAIDecisions);
-openapi.post("/v1/settings/ai-decisions/:decision_id/accept", auth, AcceptAIDecision);
-openapi.post("/v1/settings/ai-decisions/:decision_id/reject", auth, RejectAIDecision);
+openapi.get("/v1/settings/ai-decisions", auth, requireOrg, GetAIDecisions);
+openapi.post("/v1/settings/ai-decisions/:decision_id/accept", auth, requireOrg, requireOrgAdmin, AcceptAIDecision);
+openapi.post("/v1/settings/ai-decisions/:decision_id/reject", auth, requireOrg, requireOrgAdmin, RejectAIDecision);
 
 
 // Export the Hono app
