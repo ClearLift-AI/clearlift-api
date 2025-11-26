@@ -27,6 +27,9 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "schema": "npx chanfana",
     "test": "wrangler deploy --dry-run && npx vitest run --config tests/vitest.config.mts",
+    "test:local": "npx vitest run --config tests/vitest.config.mts tests/api.test.ts",
+    "test:prod": "npx vitest run tests/api-production.test.ts",
+    "test:all": "npm run test:local && npm run test:prod",
     "test:db": "./test-database-access.sh"
   },
   "dependencies": {
