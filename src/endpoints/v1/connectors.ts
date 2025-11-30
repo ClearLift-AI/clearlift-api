@@ -220,8 +220,8 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
           throw new Error('Shop domain is required for Shopify');
         }
         // Try to get from env var (local) first, then binding (prod)
-        const clientId: any = c.env.SHOPIFY_CLIENT_ID || await getSecret(c.env.SHOPIFY_CLIENT_ID_BINDING);
-        const clientSecret: any = c.env.SHOPIFY_CLIENT_SECRET || await getSecret(c.env.SHOPIFY_CLIENT_SECRET_BINDING);
+        const clientId: any = c.env.SHOPIFY_CLIENT_ID
+        const clientSecret: any = c.env.SHOPIFY_CLIENT_SECRET
 
         if (!clientId || !clientSecret) {
           throw new Error('Shopify OAuth credentials not configured');
@@ -341,7 +341,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       const userInfo = await oauthProvider.getUserInfo(tokens.access_token);
 
       // Store token and user info in oauth_states (keep code_verifier, add tokens)
-      const metadata = {
+      const metadata: any = {
         code_verifier: codeVerifier,  // Preserve PKCE verifier
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
@@ -355,19 +355,19 @@ export class HandleOAuthCallback extends OpenAPIRoute {
         metadata.shop_domain = shopDomain;
       }
 
+      const isShopify = provider === 'shopify';
       await c.env.DB.prepare(`
         UPDATE oauth_states
         SET metadata = ?
-        WHERE state = ?
-      `).bind(JSON.stringify(metadata), state).run();
+        WHERE ${isShopify ? 'provider' : 'state'} = ?
+      `).bind(JSON.stringify(metadata), isShopify ? 'shopify' : state).run();
 
       // For Shopify, skip account selection and go directly to finalize
       // For ad platforms, redirect to account selection
-      const redirectUri = 'https://app.clearlift.ai/oauth/callback';
+      const redirectUri = 'http://localhost:3000/oauth/callback';
       if (provider === 'shopify') {
-        // Shopify doesn't need account selection - redirect directly to finalize step
+        return c.redirect(`${redirectUri}?code=${code}&state=${state}&provider=${provider}`);
         return c.redirect('http://localhost:3000');
-        return c.redirect(`${redirectUri}?code=${code}&state=${state}&step=finalize&provider=${provider}`);
       } else {
         // Redirect to callback page with state for account selection
         return c.redirect(`${redirectUri}?code=${code}&state=${state}&step=select_account&provider=${provider}`);
@@ -424,6 +424,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
         }
         const clientId = await getSecret(c.env.SHOPIFY_CLIENT_ID);
         const clientSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+        console.log(clientId, clientSecret, "shopifytest")
         if (!clientId || !clientSecret) {
           throw new Error('Shopify OAuth credentials not configured');
         }
@@ -696,8 +697,8 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       body: contentJson(
         z.object({
           state: z.string(),
-          account_id: z.string(), // For Shopify, this is the shop domain
-          account_name: z.string(), // For Shopify, this is the shop name
+          account_id: z.string().optional(), // For Shopify, this is the shop domain
+          account_name: z.string().optional(), // For Shopify, this is the shop name
           selectedAccounts: z.array(z.string()).optional() // For Google Ads manager accounts
         })
       )
@@ -722,7 +723,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>();
     const { provider } = data.params;
-    const { state, account_id, account_name, selectedAccounts } = data.body;
+    let { state, account_id, account_name, selectedAccounts } = data.body;
 
     console.log('Finalize OAuth connection request:', { provider, account_id, account_name, state: state.substring(0, 10) + '...' });
 
@@ -764,13 +765,9 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
           console.error('Shop domain not found in OAuth state metadata');
           return error(c, "MISSING_SHOP_DOMAIN", "Shop domain not found in OAuth state", 400);
         }
-        // Ensure account_id matches shop_domain (normalize both)
-        const normalizedShopDomain = shopDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
-        const normalizedAccountId = account_id.replace(/^https?:\/\//, '').replace(/\/$/, '');
-        if (normalizedShopDomain !== normalizedAccountId) {
-          console.error('Shop domain mismatch', { shopDomain, account_id });
-          return error(c, "SHOP_DOMAIN_MISMATCH", "Shop domain does not match OAuth state", 400);
-        }
+
+        account_id = oauthState.metadata.user_info?.id;
+        account_name = oauthState.metadata.user_info?.name;
       }
 
       console.log('Creating connection in database...');
@@ -791,8 +788,8 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const connectionId = await connectorService.createConnection({
         organizationId: oauthState.organization_id,
         platform: provider,
-        accountId: account_id,
-        accountName: account_name,
+        accountId: account_id!,
+        accountName: account_name!,
         connectedBy: oauthState.user_id,
         accessToken: accessToken,
         refreshToken: refreshToken,
