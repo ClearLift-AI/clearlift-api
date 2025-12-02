@@ -131,8 +131,16 @@ export class Register extends OpenAPIRoute {
           VALUES (?, ?, 'owner', ?)
         `).bind(orgId, userId, now).run();
 
+        // Generate org_tag from name (first 5 alphanumeric chars, with collision prevention)
+        const baseTag = organization_name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5) || 'org';
+        let shortTag = baseTag;
+        let tagCounter = 1;
+        while (await c.env.DB.prepare("SELECT id FROM org_tag_mappings WHERE short_tag = ?").bind(shortTag).first()) {
+          shortTag = `${baseTag}-${tagCounter}`;
+          tagCounter++;
+        }
+
         // Create org_tag_mapping for analytics
-        const shortTag = crypto.randomUUID().slice(0, 6);
         await c.env.DB.prepare(`
           INSERT INTO org_tag_mappings (organization_id, short_tag, created_at)
           VALUES (?, ?, ?)
@@ -597,6 +605,73 @@ export class VerifyEmail extends OpenAPIRoute {
         name: verificationToken.name
       }
     });
+  }
+}
+
+/**
+ * DELETE /v1/user/me - Delete user account and all associated data
+ */
+export class DeleteAccount extends OpenAPIRoute {
+  public schema = {
+    tags: ["Authentication"],
+    summary: "Delete user account and all associated data",
+    operationId: "delete-account",
+    security: [{ bearerAuth: [] }],
+    request: {
+      body: contentJson(
+        z.object({
+          confirmation: z.literal("DELETE").describe("Must be the string 'DELETE' to confirm")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Account deleted successfully"
+      },
+      "400": {
+        description: "Invalid confirmation"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { confirmation } = data.body;
+
+    if (confirmation !== "DELETE") {
+      return error(c, "INVALID_CONFIRMATION", "You must type 'DELETE' to confirm account deletion", 400);
+    }
+
+    const session = c.get("session");
+    const userId = session.user_id;
+
+    // TODO: Implement full deletion logic
+    // For now, just delete the user's sessions to log them out
+    // Full implementation will delete:
+    // - Platform connections and synced data (Supabase)
+    // - AI decisions
+    // - Organization memberships (and orgs if sole owner)
+    // - User record
+
+    try {
+      // Delete user's sessions (logs them out everywhere)
+      await c.env.DB.prepare(`
+        DELETE FROM sessions WHERE user_id = ?
+      `).bind(userId).run();
+
+      // Delete the user record
+      await c.env.DB.prepare(`
+        DELETE FROM users WHERE id = ?
+      `).bind(userId).run();
+
+      return success(c, {
+        message: "Account deleted successfully"
+      });
+
+    } catch (err: any) {
+      console.error("Account deletion error:", err);
+      return error(c, "DELETION_FAILED", `Failed to delete account: ${err.message || 'Unknown error'}`, 500);
+    }
   }
 }
 

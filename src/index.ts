@@ -62,7 +62,8 @@ import {
   RequestPasswordReset,
   ResetPassword,
   VerifyEmail,
-  ResendVerification
+  ResendVerification,
+  DeleteAccount
 } from "./endpoints/v1/auth";
 import {
   CreateOrganization,
@@ -72,7 +73,11 @@ import {
   RemoveMember,
   GetOrganizationMembers,
   GetPendingInvitations,
-  GetOrganizationTag
+  GetOrganizationTag,
+  CreateShareableInviteLink,
+  GetShareableInviteLink,
+  RevokeShareableInviteLink,
+  LookupOrganization
 } from "./endpoints/v1/organizations";
 import {
   ListConnectors,
@@ -272,6 +277,7 @@ openapi.post("/v1/auth/resend-verification", ResendVerification);
 // User endpoints (session auth only)
 openapi.get("/v1/user/me", auth, GetUserProfile);
 openapi.patch("/v1/user/me", auth, UpdateUserProfile);
+openapi.delete("/v1/user/me", auth, DeleteAccount);
 openapi.get("/v1/user/organizations", auth, GetUserOrganizations);
 
 // Organization management endpoints
@@ -283,6 +289,12 @@ openapi.get("/v1/organizations/:org_id/members", auth, requireOrg, GetOrganizati
 openapi.get("/v1/organizations/:org_id/invitations", auth, requireOrg, requireOrgAdmin, GetPendingInvitations);
 openapi.get("/v1/organizations/:org_id/tag", auth, requireOrg, GetOrganizationTag);
 openapi.delete("/v1/organizations/:org_id/members/:user_id", auth, requireOrg, requireOrgOwner, RemoveMember);
+
+// Shareable invite link endpoints
+openapi.post("/v1/organizations/:org_id/invite-link", auth, requireOrg, requireOrgAdmin, CreateShareableInviteLink);
+openapi.get("/v1/organizations/:org_id/invite-link", auth, requireOrg, GetShareableInviteLink);
+openapi.delete("/v1/organizations/:org_id/invite-link", auth, requireOrg, requireOrgAdmin, RevokeShareableInviteLink);
+openapi.get("/v1/organizations/lookup", auth, LookupOrganization);
 
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, GetEvents);
