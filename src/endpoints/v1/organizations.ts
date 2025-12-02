@@ -75,8 +75,16 @@ export class CreateOrganization extends OpenAPIRoute {
     }
 
     const orgId = crypto.randomUUID();
-    const shortTag = crypto.randomUUID().slice(0, 6);
     const now = new Date().toISOString();
+
+    // Generate org_tag from name (first 5 alphanumeric chars, with collision prevention)
+    const baseTag = name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5) || 'org';
+    let shortTag = baseTag;
+    let tagCounter = 1;
+    while (await c.env.DB.prepare("SELECT id FROM org_tag_mappings WHERE short_tag = ?").bind(shortTag).first()) {
+      shortTag = `${baseTag}-${tagCounter}`;
+      tagCounter++;
+    }
 
     try {
       // Create organization
@@ -374,21 +382,29 @@ export class JoinOrganization extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>();
     const { invite_code } = data.body;
 
-    // Find invitation
+    // Find invitation - handle both regular and shareable invites
     const invitation = await c.env.DB.prepare(`
       SELECT i.*, o.name, o.slug
       FROM invitations i
       JOIN organizations o ON i.organization_id = o.id
       WHERE i.invite_code = ?
         AND i.expires_at > datetime('now')
-        AND i.accepted_at IS NULL
-        AND (i.email = ? OR i.email IS NULL)
+        AND (
+          -- Regular invite: not accepted, email matches
+          (i.is_shareable = 0 AND i.accepted_at IS NULL AND i.email = ?)
+          OR
+          -- Shareable invite: within usage limit
+          (i.is_shareable = 1 AND (i.max_uses IS NULL OR i.use_count < i.max_uses))
+        )
     `).bind(invite_code, session.email).first<{
       id: string;
       organization_id: string;
       role: string;
       name: string;
       slug: string;
+      is_shareable: number;
+      max_uses: number | null;
+      use_count: number;
     }>();
 
     if (!invitation) {
@@ -413,10 +429,18 @@ export class JoinOrganization extends OpenAPIRoute {
       VALUES (?, ?, ?, ?)
     `).bind(invitation.organization_id, session.user_id, invitation.role, now).run();
 
-    // Mark invitation as accepted
-    await c.env.DB.prepare(`
-      UPDATE invitations SET accepted_at = ? WHERE id = ?
-    `).bind(now, invitation.id).run();
+    // Handle invitation tracking based on type
+    if (invitation.is_shareable) {
+      // Shareable invite: increment use count
+      await c.env.DB.prepare(`
+        UPDATE invitations SET use_count = use_count + 1 WHERE id = ?
+      `).bind(invitation.id).run();
+    } else {
+      // Regular invite: mark as accepted
+      await c.env.DB.prepare(`
+        UPDATE invitations SET accepted_at = ? WHERE id = ?
+      `).bind(now, invitation.id).run();
+    }
 
     // Update seats used
     await c.env.DB.prepare(`
@@ -685,9 +709,12 @@ export class GetPendingInvitations extends OpenAPIRoute {
         i.id,
         i.email,
         i.role,
-        i.token as invite_code,
+        i.invite_code,
         i.expires_at,
         i.created_at,
+        i.is_shareable,
+        i.max_uses,
+        i.use_count,
         u.name as invited_by_name
       FROM invitations i
       LEFT JOIN users u ON i.invited_by = u.id
@@ -699,6 +726,292 @@ export class GetPendingInvitations extends OpenAPIRoute {
 
     return success(c, {
       invitations: invitationsResult.results || []
+    });
+  }
+}
+
+/**
+ * POST /v1/organizations/:org_id/invite-link - Create shareable invite link
+ */
+export class CreateShareableInviteLink extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Create a shareable invite link for the organization",
+    operationId: "create-shareable-invite-link",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      }),
+      body: contentJson(
+        z.object({
+          role: z.enum(['viewer', 'admin']).default('viewer'),
+          max_uses: z.number().int().positive().optional(),
+          expires_in_days: z.number().int().min(1).max(90).default(30)
+        })
+      )
+    },
+    responses: {
+      "201": {
+        description: "Shareable invite link created",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                invite_link: z.object({
+                  id: z.string(),
+                  invite_code: z.string(),
+                  role: z.string(),
+                  max_uses: z.number().nullable(),
+                  expires_at: z.string(),
+                  join_url: z.string()
+                })
+              })
+            })
+          }
+        }
+      },
+      "403": {
+        description: "No permission to create invite links"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { role, max_uses, expires_in_days } = data.body;
+
+    // Create shareable invitation
+    const inviteId = crypto.randomUUID();
+    const inviteCode = generateInviteCode();
+    const expiresAt = new Date(Date.now() + expires_in_days * 24 * 60 * 60 * 1000);
+
+    await c.env.DB.prepare(`
+      INSERT INTO invitations (
+        id, organization_id, email, role, invited_by,
+        invite_code, expires_at, created_at, is_shareable, max_uses, use_count
+      )
+      VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 1, ?, 0)
+    `).bind(
+      inviteId, orgId, role, session.user_id,
+      inviteCode, expiresAt.toISOString(), new Date().toISOString(),
+      max_uses || null
+    ).run();
+
+    const joinUrl = `https://app.clearlift.ai/join?code=${inviteCode}`;
+
+    return c.json({
+      success: true,
+      data: {
+        invite_link: {
+          id: inviteId,
+          invite_code: inviteCode,
+          role,
+          max_uses: max_uses || null,
+          expires_at: expiresAt.toISOString(),
+          join_url: joinUrl
+        }
+      }
+    }, 201);
+  }
+}
+
+/**
+ * GET /v1/organizations/:org_id/invite-link - Get existing shareable invite link
+ */
+export class GetShareableInviteLink extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Get active shareable invite link for the organization",
+    operationId: "get-shareable-invite-link",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Active shareable invite link",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                invite_link: z.object({
+                  id: z.string(),
+                  invite_code: z.string(),
+                  role: z.string(),
+                  max_uses: z.number().nullable(),
+                  use_count: z.number(),
+                  expires_at: z.string(),
+                  join_url: z.string()
+                }).nullable()
+              })
+            })
+          }
+        }
+      },
+      "403": {
+        description: "No permission"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+
+    // Get active shareable invite link
+    const inviteLink = await c.env.DB.prepare(`
+      SELECT id, invite_code, role, max_uses, use_count, expires_at
+      FROM invitations
+      WHERE organization_id = ?
+        AND is_shareable = 1
+        AND expires_at > datetime('now')
+        AND (max_uses IS NULL OR use_count < max_uses)
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).bind(orgId).first<{
+      id: string;
+      invite_code: string;
+      role: string;
+      max_uses: number | null;
+      use_count: number;
+      expires_at: string;
+    }>();
+
+    if (!inviteLink) {
+      return success(c, { invite_link: null });
+    }
+
+    return success(c, {
+      invite_link: {
+        ...inviteLink,
+        join_url: `https://app.clearlift.ai/join?code=${inviteLink.invite_code}`
+      }
+    });
+  }
+}
+
+/**
+ * DELETE /v1/organizations/:org_id/invite-link - Revoke shareable invite link
+ */
+export class RevokeShareableInviteLink extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Revoke a shareable invite link",
+    operationId: "revoke-shareable-invite-link",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Invite link revoked"
+      },
+      "403": {
+        description: "No permission"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+
+    // Expire all shareable invites for this org
+    await c.env.DB.prepare(`
+      UPDATE invitations
+      SET expires_at = datetime('now')
+      WHERE organization_id = ?
+        AND is_shareable = 1
+        AND expires_at > datetime('now')
+    `).bind(orgId).run();
+
+    return success(c, { message: "Shareable invite links revoked" });
+  }
+}
+
+/**
+ * GET /v1/organizations/lookup - Lookup organization by ID or slug
+ */
+export class LookupOrganization extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Lookup organization by ID or slug (public info only)",
+    operationId: "lookup-organization",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        id: z.string().optional(),
+        slug: z.string().optional()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Organization found",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                organization: z.object({
+                  id: z.string(),
+                  name: z.string(),
+                  slug: z.string(),
+                  has_open_invite: z.boolean()
+                }).nullable()
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { id, slug } = data.query;
+
+    if (!id && !slug) {
+      return error(c, "MISSING_PARAM", "Either id or slug is required", 400);
+    }
+
+    // Look up organization
+    let org;
+    if (id) {
+      org = await c.env.DB.prepare(`
+        SELECT id, name, slug FROM organizations WHERE id = ?
+      `).bind(id).first<{ id: string; name: string; slug: string }>();
+    } else {
+      org = await c.env.DB.prepare(`
+        SELECT id, name, slug FROM organizations WHERE slug = ?
+      `).bind(slug).first<{ id: string; name: string; slug: string }>();
+    }
+
+    if (!org) {
+      return success(c, { organization: null });
+    }
+
+    // Check if org has an open invite
+    const openInvite = await c.env.DB.prepare(`
+      SELECT 1 FROM invitations
+      WHERE organization_id = ?
+        AND is_shareable = 1
+        AND expires_at > datetime('now')
+        AND (max_uses IS NULL OR use_count < max_uses)
+      LIMIT 1
+    `).bind(org.id).first();
+
+    return success(c, {
+      organization: {
+        ...org,
+        has_open_invite: !!openInvite
+      }
     });
   }
 }

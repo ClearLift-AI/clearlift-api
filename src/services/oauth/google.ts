@@ -188,12 +188,17 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
               const customer = result?.customer;
 
               if (customer) {
+                // Test accounts have IDs ending in -0 (e.g., 123-456-7890)
+                const isTestAccount = customerId.endsWith('0');
+
                 return {
                   id: customerId,
                   name: customer.descriptiveName || `Account ${customerId}`,
                   currency: customer.currencyCode || 'USD',
                   timezone: customer.timeZone || 'America/Los_Angeles',
-                  manager: customer.manager || false
+                  manager: customer.manager || false,
+                  isTestAccount: isTestAccount,
+                  status: isTestAccount ? 'TEST_ACCOUNT' : 'ACTIVE'
                 };
               }
             } else {
@@ -206,19 +211,25 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
             }
 
             // If we can't get details, return basic info
+            const isTestAccount = customerId.endsWith('0');
             return {
               id: customerId,
               name: `Google Ads Account ${customerId}`,
               currency: 'USD',
-              timezone: 'America/Los_Angeles'
+              timezone: 'America/Los_Angeles',
+              isTestAccount: isTestAccount,
+              status: isTestAccount ? 'TEST_ACCOUNT' : 'ACTIVE'
             };
           } catch (error) {
             console.error(`Exception getting details for customer ${customerId}:`, error);
+            const isTestAccount = customerId.endsWith('0');
             return {
               id: customerId,
               name: `Google Ads Account ${customerId}`,
               currency: 'USD',
-              timezone: 'America/Los_Angeles'
+              timezone: 'America/Los_Angeles',
+              isTestAccount: isTestAccount,
+              status: isTestAccount ? 'TEST_ACCOUNT' : 'ACTIVE'
             };
           }
         })
