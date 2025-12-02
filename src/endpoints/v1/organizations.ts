@@ -91,9 +91,9 @@ export class CreateOrganization extends OpenAPIRoute {
       await c.env.DB.prepare(`
         INSERT INTO organizations (
           id, name, slug, created_at, updated_at,
-          subscription_tier, seats_limit, seats_used
+          subscription_tier
         )
-        VALUES (?, ?, ?, ?, ?, 'free', 5, 1)
+        VALUES (?, ?, ?, ?, ?, 'free')
       `).bind(orgId, name, finalSlug, now, now).run();
 
       // Add creator as owner
@@ -103,10 +103,11 @@ export class CreateOrganization extends OpenAPIRoute {
       `).bind(orgId, session.user_id, now).run();
 
       // Create org_tag_mapping for analytics
+      const tagMappingId = crypto.randomUUID();
       await c.env.DB.prepare(`
-        INSERT INTO org_tag_mappings (organization_id, short_tag, created_at)
-        VALUES (?, ?, ?)
-      `).bind(orgId, shortTag, now).run();
+        INSERT INTO org_tag_mappings (id, organization_id, short_tag, created_at)
+        VALUES (?, ?, ?, ?)
+      `).bind(tagMappingId, orgId, shortTag, now).run();
 
       return c.json({
         success: true,
@@ -442,10 +443,10 @@ export class JoinOrganization extends OpenAPIRoute {
       `).bind(now, invitation.id).run();
     }
 
-    // Update seats used
+    // Update organization timestamp
     await c.env.DB.prepare(`
       UPDATE organizations
-      SET seats_used = seats_used + 1, updated_at = ?
+      SET updated_at = ?
       WHERE id = ?
     `).bind(now, invitation.organization_id).run();
 
@@ -516,10 +517,10 @@ export class RemoveMember extends OpenAPIRoute {
       WHERE organization_id = ? AND user_id = ?
     `).bind(orgId, user_id).run();
 
-    // Update seats used
+    // Update organization timestamp
     await c.env.DB.prepare(`
       UPDATE organizations
-      SET seats_used = seats_used - 1, updated_at = ?
+      SET updated_at = ?
       WHERE id = ?
     `).bind(new Date().toISOString(), orgId).run();
 
