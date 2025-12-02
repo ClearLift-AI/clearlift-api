@@ -206,11 +206,34 @@ export abstract class OAuthProvider {
         if (error.name === 'AbortError') {
           throw new Error('OAuth token exchange timed out');
         }
-        // Re-throw existing errors
-        throw error;
+        // Sanitize error message to prevent secret leakage
+        const sanitizedMessage = this.sanitizeErrorMessage(error.message);
+        throw new Error(`OAuth token exchange failed: ${sanitizedMessage}`);
       }
       throw new Error('OAuth token exchange failed');
     }
+  }
+
+  /**
+   * Sanitize error messages to prevent leaking sensitive data
+   * Removes client_secret, access_token, refresh_token patterns
+   */
+  private sanitizeErrorMessage(message: string): string {
+    // Patterns that might contain sensitive data
+    const sensitivePatterns = [
+      /client_secret[=:]\s*[^\s&,}]*/gi,
+      /access_token[=:]\s*[^\s&,}]*/gi,
+      /refresh_token[=:]\s*[^\s&,}]*/gi,
+      /secret[=:]\s*[^\s&,}]*/gi,
+      /password[=:]\s*[^\s&,}]*/gi,
+      /api_key[=:]\s*[^\s&,}]*/gi,
+    ];
+
+    let sanitized = message;
+    for (const pattern of sensitivePatterns) {
+      sanitized = sanitized.replace(pattern, '[REDACTED]');
+    }
+    return sanitized;
   }
 
   /**

@@ -260,3 +260,197 @@ describe('Input Validation', () => {
     expect(response.status).toBe(400);
   });
 });
+
+describe('Authentication Workflows', () => {
+  const testPassword = 'SecurePass123!';
+
+  // Helper to create a new user and return token
+  async function createTestUser(emailPrefix: string = 'test') {
+    const email = `${emailPrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
+    const response = await SELF.fetch('http://localhost/v1/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        password: testPassword,
+        name: 'Test User'
+      })
+    });
+    const data = await response.json() as any;
+    return { email, token: data.data?.session?.token, response, data };
+  }
+
+  it('should register a new user and return session', async () => {
+    const { response, data, email } = await createTestUser('reg');
+
+    expect(response.status).toBe(201);
+    expect(data.success).toBe(true);
+    expect(data.data.user).toBeDefined();
+    expect(data.data.user.email).toBe(email);
+    expect(data.data.session).toBeDefined();
+    expect(data.data.session.token).toBeDefined();
+    expect(data.data.session.expires_at).toBeDefined();
+  });
+
+  it('should reject registration with duplicate email', async () => {
+    // Create first user
+    const { email } = await createTestUser('dup');
+
+    // Try to register same email again
+    const response = await SELF.fetch('http://localhost/v1/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        password: testPassword,
+        name: 'Test User'
+      })
+    });
+
+    expect(response.status).toBe(409);
+
+    const data = await response.json() as any;
+    expect(data.success).toBe(false);
+    expect(data.error.code).toBe('USER_EXISTS');
+  });
+
+  it('should login with valid credentials', async () => {
+    const { email } = await createTestUser('login');
+
+    const response = await SELF.fetch('http://localhost/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        password: testPassword
+      })
+    });
+
+    expect(response.status).toBe(200);
+
+    const data = await response.json() as any;
+    expect(data.success).toBe(true);
+    expect(data.data.user).toBeDefined();
+    expect(data.data.user.email).toBe(email);
+    expect(data.data.session).toBeDefined();
+    expect(data.data.session.token).toBeDefined();
+  });
+
+  it('should reject login with invalid password', async () => {
+    const { email } = await createTestUser('badpw');
+
+    const response = await SELF.fetch('http://localhost/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        password: 'WrongPassword123!'
+      })
+    });
+
+    expect(response.status).toBe(401);
+
+    const data = await response.json() as any;
+    expect(data.success).toBe(false);
+    expect(data.error.code).toBe('INVALID_CREDENTIALS');
+  });
+
+  it('should access protected endpoint with valid session', async () => {
+    const { email, token } = await createTestUser('me');
+
+    const response = await SELF.fetch('http://localhost/v1/user/me', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    expect(response.status).toBe(200);
+
+    const data = await response.json() as any;
+    expect(data.success).toBe(true);
+    expect(data.data.user).toBeDefined();
+    expect(data.data.user.email).toBe(email);
+  });
+
+  it('should logout and invalidate session', async () => {
+    const { token } = await createTestUser('logout');
+
+    // Logout
+    const logoutResponse = await SELF.fetch('http://localhost/v1/auth/logout', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    expect(logoutResponse.status).toBe(200);
+
+    // Try to use invalidated session
+    const meResponse = await SELF.fetch('http://localhost/v1/user/me', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    expect(meResponse.status).toBe(401);
+  });
+
+  it('should delete account with proper confirmation', async () => {
+    const { email, token } = await createTestUser('delete');
+
+    // Delete account
+    const deleteResponse = await SELF.fetch('http://localhost/v1/user/me', {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        confirmation: 'DELETE'
+      })
+    });
+
+    expect(deleteResponse.status).toBe(200);
+
+    const deleteData = await deleteResponse.json() as any;
+    expect(deleteData.success).toBe(true);
+    expect(deleteData.data.message).toContain('deleted');
+
+    // Verify user cannot login anymore
+    const postDeleteLogin = await SELF.fetch('http://localhost/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        password: testPassword
+      })
+    });
+
+    expect(postDeleteLogin.status).toBe(401);
+  });
+
+  it('should reject delete without proper confirmation', async () => {
+    const { token } = await createTestUser('nodelete');
+
+    // Try to delete without proper confirmation (Zod schema expects literal "DELETE")
+    const deleteResponse = await SELF.fetch('http://localhost/v1/user/me', {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        confirmation: 'wrong'
+      })
+    });
+
+    // Should get 400 (validation error from Zod for z.literal("DELETE"))
+    expect(deleteResponse.status).toBe(400);
+
+    const deleteData = await deleteResponse.json() as any;
+    expect(deleteData.success).toBe(false);
+    // Zod validation errors may have different structure than our custom errors
+    // The important thing is it's rejected with 400
+  });
+});
