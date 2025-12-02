@@ -19,12 +19,14 @@ import { getSecret } from "../../../utils/secrets";
 export class GetGoogleCampaigns extends OpenAPIRoute {
   schema = {
     tags: ["Google Ads"],
-    summary: "Get Google Ads campaigns",
-    description: "Retrieve Google Ads campaigns for an organization",
+    summary: "Get Google Ads campaigns with metrics",
+    description: "Retrieve Google Ads campaigns with aggregated metrics for an organization",
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
         org_id: z.string().describe("Organization ID"),
+        start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Start date (YYYY-MM-DD) for metrics aggregation"),
+        end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("End date (YYYY-MM-DD) for metrics aggregation"),
         status: z.enum(['ENABLED', 'PAUSED', 'REMOVED']).optional(),
         limit: z.coerce.number().min(1).max(1000).optional().default(100),
         offset: z.coerce.number().min(0).optional().default(0)
@@ -32,14 +34,32 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
     },
     responses: {
       "200": {
-        description: "Google Ads campaigns data",
+        description: "Google Ads campaigns data with metrics",
         content: {
           "application/json": {
             schema: z.object({
               success: z.boolean(),
               data: z.object({
-                campaigns: z.array(z.any()),
-                total: z.number()
+                platform: z.string(),
+                results: z.array(z.object({
+                  campaign_id: z.string(),
+                  campaign_name: z.string(),
+                  status: z.string(),
+                  metrics: z.object({
+                    impressions: z.number(),
+                    clicks: z.number(),
+                    spend: z.number(),
+                    conversions: z.number(),
+                    revenue: z.number()
+                  })
+                })),
+                summary: z.object({
+                  total_impressions: z.number(),
+                  total_clicks: z.number(),
+                  total_spend: z.number(),
+                  total_conversions: z.number(),
+                  average_ctr: z.number()
+                })
               })
             })
           }
@@ -75,36 +95,58 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
     const adapter = new GoogleAdsSupabaseAdapter(supabase);
 
     try {
-      const campaigns = await adapter.getCampaigns(query.query.org_id, {
-        status: query.query.status,
-        limit: query.query.limit,
-        offset: query.query.offset
-      });
+      // Default date range: last 30 days if not provided
+      const endDate = query.query.end_date || new Date().toISOString().split('T')[0];
+      const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+      const dateRange: DateRange = { start: startDate, end: endDate };
+
+      // Fetch campaigns WITH metrics using the new method
+      const campaignsWithMetrics = await adapter.getCampaignsWithMetrics(
+        query.query.org_id,
+        dateRange,
+        {
+          status: query.query.status,
+          limit: query.query.limit,
+          offset: query.query.offset
+        }
+      );
 
       // Transform to frontend expected format
-      const results = campaigns.map(c => ({
+      const results = campaignsWithMetrics.map(c => ({
         campaign_id: c.campaign_id,
         campaign_name: c.campaign_name,
         status: c.campaign_status,
         metrics: {
-          impressions: 0,
-          clicks: 0,
-          spend: 0,
-          conversions: 0,
-          revenue: 0
+          impressions: c.metrics.impressions,
+          clicks: c.metrics.clicks,
+          spend: c.metrics.spend_cents / 100, // Convert cents to dollars for frontend
+          conversions: c.metrics.conversions,
+          revenue: c.metrics.conversion_value_cents / 100 // Google has conversion value
         }
       }));
+
+      // Calculate summary from results
+      const summary = results.reduce(
+        (acc, campaign) => ({
+          total_impressions: acc.total_impressions + campaign.metrics.impressions,
+          total_clicks: acc.total_clicks + campaign.metrics.clicks,
+          total_spend: acc.total_spend + campaign.metrics.spend,
+          total_conversions: acc.total_conversions + campaign.metrics.conversions,
+          average_ctr: 0 // Calculate after
+        }),
+        { total_impressions: 0, total_clicks: 0, total_spend: 0, total_conversions: 0, average_ctr: 0 }
+      );
+
+      // Calculate average CTR
+      if (summary.total_impressions > 0) {
+        summary.average_ctr = (summary.total_clicks / summary.total_impressions) * 100;
+      }
 
       return success(c, {
         platform: 'google',
         results,
-        summary: {
-          total_impressions: 0,
-          total_clicks: 0,
-          total_spend: 0,
-          total_conversions: 0,
-          average_ctr: 0
-        }
+        summary
       });
     } catch (err: any) {
       console.error("Get Google campaigns error:", err);

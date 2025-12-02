@@ -335,6 +335,103 @@ export class GoogleAdsSupabaseAdapter {
   }
 
   /**
+   * Get campaigns with aggregated metrics for an organization
+   * Joins campaigns with campaign_daily_metrics for the date range
+   */
+  async getCampaignsWithMetrics(
+    orgId: string,
+    dateRange: DateRange,
+    options: {
+      status?: string;
+      limit?: number;
+      offset?: number;
+    } = {}
+  ): Promise<Array<GoogleCampaign & {
+    metrics: {
+      impressions: number;
+      clicks: number;
+      spend_cents: number;
+      conversions: number;
+      conversion_value_cents: number;
+      ctr: number;
+      cpc_cents: number;
+    };
+  }>> {
+    // Fetch campaigns
+    const campaigns = await this.getCampaigns(orgId, {
+      status: options.status,
+      limit: options.limit,
+      offset: options.offset
+    });
+
+    if (campaigns.length === 0) {
+      return [];
+    }
+
+    // Fetch all campaign metrics for the date range
+    const allMetrics = await this.getCampaignDailyMetrics(orgId, dateRange, {
+      limit: 50000 // High limit to get all metrics
+    });
+
+    // Group metrics by campaign_ref (which is the campaign UUID)
+    const metricsByCampaignRef: Record<string, {
+      impressions: number;
+      clicks: number;
+      spend_cents: number;
+      conversions: number;
+      conversion_value_cents: number;
+    }> = {};
+
+    for (const metric of allMetrics) {
+      const ref = (metric as any).campaign_ref;
+      if (!ref) continue;
+
+      if (!metricsByCampaignRef[ref]) {
+        metricsByCampaignRef[ref] = {
+          impressions: 0,
+          clicks: 0,
+          spend_cents: 0,
+          conversions: 0,
+          conversion_value_cents: 0
+        };
+      }
+
+      metricsByCampaignRef[ref].impressions += metric.impressions || 0;
+      metricsByCampaignRef[ref].clicks += metric.clicks || 0;
+      metricsByCampaignRef[ref].spend_cents += metric.spend_cents || 0;
+      metricsByCampaignRef[ref].conversions += metric.conversions || 0;
+      metricsByCampaignRef[ref].conversion_value_cents += metric.conversion_value_cents || 0;
+    }
+
+    // Join campaigns with their aggregated metrics
+    return campaigns.map(campaign => {
+      const campaignMetrics = metricsByCampaignRef[campaign.id] || {
+        impressions: 0,
+        clicks: 0,
+        spend_cents: 0,
+        conversions: 0,
+        conversion_value_cents: 0
+      };
+
+      const ctr = campaignMetrics.impressions > 0
+        ? (campaignMetrics.clicks / campaignMetrics.impressions) * 100
+        : 0;
+      const cpc_cents = campaignMetrics.clicks > 0
+        ? Math.round(campaignMetrics.spend_cents / campaignMetrics.clicks)
+        : 0;
+
+      return {
+        ...campaign,
+        metrics: {
+          ...campaignMetrics,
+          ctr,
+          cpc_cents
+        }
+      };
+    });
+  }
+
+  /**
    * Get aggregated metrics summary for an organization
    */
   async getMetricsSummary(
