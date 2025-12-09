@@ -109,6 +109,44 @@ export class CreateOrganization extends OpenAPIRoute {
         VALUES (?, ?, ?, ?)
       `).bind(tagMappingId, orgId, shortTag, now).run();
 
+      // Seed demo AI recommendations for Meta App Review
+      // These show Facebook-specific actions: set_budget, set_status, set_age_range
+      try {
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+        await c.env.AI_DB.prepare(`
+          INSERT INTO ai_decisions (
+            id, organization_id, tool, platform, entity_type, entity_id, entity_name,
+            parameters, current_state, reason, predicted_impact, confidence, supporting_data,
+            status, expires_at, created_at
+          ) VALUES
+          (?, ?, 'set_budget', 'facebook', 'campaign', '23851234567890123', 'Summer Sale 2025',
+           '{"amount_cents": 7500, "budget_type": "daily"}', '{"daily_budget": 5000}',
+           'Campaign has 8.5% conversion rate with 47 conversions in the last 7 days. Increasing budget by 50% should scale efficiently.',
+           -12, 'high', '{"conversion_rate": 0.085, "conversions_7d": 47, "spend_7d_cents": 35000}',
+           'pending', ?, ?),
+          (?, ?, 'set_status', 'facebook', 'campaign', '23851234567890124', 'Brand Awareness Q3',
+           '{"status": "PAUSED"}', '{"status": "ACTIVE"}',
+           'Campaign spent $125.50 with 0 conversions in 7 days. Recommending pause to reallocate budget.',
+           -5, 'high', '{"conversions_7d": 0, "spend_7d_cents": 12550, "impressions_7d": 45000}',
+           'pending', ?, ?),
+          (?, ?, 'set_age_range', 'facebook', 'ad_set', '23851234567890125', 'Summer Sale 2025 - Main Ad Set',
+           '{"min_age": 25, "max_age": 54}', '{"age_min": 18, "age_max": 65}',
+           'Based on 125,000 impressions, the 25-54 age group shows 2.3x higher engagement.',
+           -8, 'medium', '{"impressions_7d": 125000, "clicks_7d": 4200, "ctr": 3.36}',
+           'pending', ?, ?)
+        `).bind(
+          crypto.randomUUID(), orgId, expiresAt, now,
+          crypto.randomUUID(), orgId, expiresAt, now,
+          crypto.randomUUID(), orgId, expiresAt, now
+        ).run();
+
+        console.log(`[CREATE_ORG] Seeded 3 demo AI decisions for org ${orgId}`);
+      } catch (aiErr) {
+        // Non-critical - don't fail org creation if AI seeding fails
+        console.error('[CREATE_ORG] Failed to seed AI decisions:', aiErr);
+      }
+
       return c.json({
         success: true,
         data: {

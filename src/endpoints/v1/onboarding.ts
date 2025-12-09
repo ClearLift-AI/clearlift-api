@@ -67,6 +67,122 @@ export class GetOnboardingStatus extends OpenAPIRoute {
       progress = await onboarding.startOnboarding(session.user_id, orgResult.organization_id);
     }
 
+    // === NORMALIZATION / HEALING LOGIC ===
+    // Ensure organization is in a valid state regardless of how user was created
+    const orgId = progress.organization_id;
+    const now = new Date().toISOString();
+
+    // 1. Ensure org_tag_mapping exists
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).first<{ short_tag: string }>();
+
+    if (!tagMapping) {
+      // Get org name to generate tag
+      const org = await c.env.DB.prepare(`
+        SELECT name FROM organizations WHERE id = ?
+      `).bind(orgId).first<{ name: string }>();
+
+      if (org) {
+        const baseTag = org.name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5) || 'org';
+        let shortTag = baseTag;
+        let tagCounter = 1;
+        while (await c.env.DB.prepare("SELECT id FROM org_tag_mappings WHERE short_tag = ?").bind(shortTag).first()) {
+          shortTag = `${baseTag}${tagCounter}`;
+          tagCounter++;
+        }
+
+        await c.env.DB.prepare(`
+          INSERT INTO org_tag_mappings (id, organization_id, short_tag, created_at)
+          VALUES (?, ?, ?, ?)
+        `).bind(crypto.randomUUID(), orgId, shortTag, now).run();
+
+        console.log(`[ONBOARDING_HEAL] Created missing org_tag_mapping for org ${orgId}: ${shortTag}`);
+      }
+    }
+
+    // 2. Ensure AI recommendations exist (for Meta App Review demo)
+    const aiDecisions = await c.env.AI_DB.prepare(`
+      SELECT COUNT(*) as count FROM ai_decisions WHERE organization_id = ?
+    `).bind(orgId).first<{ count: number }>();
+
+    if (!aiDecisions || aiDecisions.count === 0) {
+      try {
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+        await c.env.AI_DB.prepare(`
+          INSERT INTO ai_decisions (
+            id, organization_id, tool, platform, entity_type, entity_id, entity_name,
+            parameters, current_state, reason, predicted_impact, confidence, supporting_data,
+            status, expires_at, created_at
+          ) VALUES
+          (?, ?, 'set_budget', 'facebook', 'campaign', '23851234567890123', 'Summer Sale 2025',
+           '{"amount_cents": 7500, "budget_type": "daily"}', '{"daily_budget": 5000}',
+           'Campaign has 8.5% conversion rate with 47 conversions in the last 7 days. Increasing budget by 50% should scale efficiently.',
+           -12, 'high', '{"conversion_rate": 0.085, "conversions_7d": 47, "spend_7d_cents": 35000}',
+           'pending', ?, ?),
+          (?, ?, 'set_status', 'facebook', 'campaign', '23851234567890124', 'Brand Awareness Q3',
+           '{"status": "PAUSED"}', '{"status": "ACTIVE"}',
+           'Campaign spent $125.50 with 0 conversions in 7 days. Recommending pause to reallocate budget.',
+           -5, 'high', '{"conversions_7d": 0, "spend_7d_cents": 12550, "impressions_7d": 45000}',
+           'pending', ?, ?),
+          (?, ?, 'set_age_range', 'facebook', 'ad_set', '23851234567890125', 'Summer Sale 2025 - Main Ad Set',
+           '{"min_age": 25, "max_age": 54}', '{"age_min": 18, "age_max": 65}',
+           'Based on 125,000 impressions, the 25-54 age group shows 2.3x higher engagement.',
+           -8, 'medium', '{"impressions_7d": 125000, "clicks_7d": 4200, "ctr": 3.36}',
+           'pending', ?, ?)
+        `).bind(
+          crypto.randomUUID(), orgId, expiresAt, now,
+          crypto.randomUUID(), orgId, expiresAt, now,
+          crypto.randomUUID(), orgId, expiresAt, now
+        ).run();
+
+        console.log(`[ONBOARDING_HEAL] Seeded 3 demo AI decisions for org ${orgId}`);
+      } catch (aiErr) {
+        console.error('[ONBOARDING_HEAL] Failed to seed AI decisions:', aiErr);
+      }
+    }
+
+    // 3. Sync services_connected with actual platform connections
+    const connectionCount = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM platform_connections
+      WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).first<{ count: number }>();
+
+    const actualConnections = connectionCount?.count || 0;
+    if (progress.services_connected !== actualConnections) {
+      await c.env.DB.prepare(`
+        UPDATE onboarding_progress
+        SET services_connected = ?, updated_at = ?
+        WHERE user_id = ?
+      `).bind(actualConnections, now, session.user_id).run();
+
+      progress.services_connected = actualConnections;
+      console.log(`[ONBOARDING_HEAL] Synced services_connected for user ${session.user_id}: ${actualConnections}`);
+    }
+
+    // 4. Auto-advance onboarding if conditions are met
+    if (progress.current_step === 'connect_services' && actualConnections >= 1) {
+      progress = await onboarding.completeStep(session.user_id, 'connect_services');
+      console.log(`[ONBOARDING_HEAL] Auto-advanced user ${session.user_id} past connect_services`);
+    }
+
+    // 5. Check if first sync completed (any successful sync job)
+    if (progress.current_step === 'first_sync' && !progress.first_sync_completed) {
+      const completedSync = await c.env.DB.prepare(`
+        SELECT 1 FROM sync_jobs
+        WHERE organization_id = ? AND status = 'completed'
+        LIMIT 1
+      `).bind(orgId).first();
+
+      if (completedSync) {
+        await onboarding.markFirstSyncCompleted(session.user_id);
+        progress.first_sync_completed = true;
+        progress = await onboarding.getProgress(session.user_id) as typeof progress;
+        console.log(`[ONBOARDING_HEAL] Marked first_sync_completed for user ${session.user_id}`);
+      }
+    }
+
     const steps = await onboarding.getDetailedProgress(session.user_id);
     const isComplete = await onboarding.isOnboardingComplete(session.user_id);
 
