@@ -385,23 +385,17 @@ Returns the complete journey for an identified user, including:
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const params = c.req.param();
     const query = c.req.query();
 
     const userId = decodeURIComponent(params.userId);
-    const orgId = query.org_id;
     const dateFrom = query.date_from;
     const dateTo = query.date_to;
     const includeEvents = query.include_events !== 'false';
 
     const d1 = new D1Adapter(c.env.DB);
-
-    // Verify org access
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
 
     // Get org tag
     const tagMapping = await c.env.DB.prepare(`
@@ -696,19 +690,12 @@ export class GetJourneysOverview extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const query = c.req.query();
 
-    const orgId = query.org_id;
     const dateFrom = query.date_from;
     const dateTo = query.date_to;
-
-    const d1 = new D1Adapter(c.env.DB);
-
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
 
     const tagMapping = await c.env.DB.prepare(`
       SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1

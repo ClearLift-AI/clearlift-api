@@ -89,6 +89,16 @@
       "binding": "SENDGRID_API_KEY",
       "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
       "secret_name": "SENDGRID_API_KEY"
+    },
+    {
+      "binding": "ANTHROPIC_API_KEY",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "ANTHROPIC_API_KEY"
+    },
+    {
+      "binding": "GOOGLE_AI_API_KEY",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "GOOGLE_AI_API_KEY"
     }
   ]
 }

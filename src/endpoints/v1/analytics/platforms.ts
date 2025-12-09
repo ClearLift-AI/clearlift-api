@@ -62,23 +62,12 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
-    const orgId = c.req.query("org_id");
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const startDate = c.req.query("start_date");
     const endDate = c.req.query("end_date");
 
-    if (!orgId) {
-      return error(c, "MISSING_ORG_ID", "org_id query parameter is required", 400);
-    }
-
-    // Verify user has access to the organization
-    const { D1Adapter } = await import("../../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
+    // Access check already handled by requireOrg middleware
 
     // Get Supabase secret key from Secrets Store
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);

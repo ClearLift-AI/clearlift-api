@@ -103,23 +103,16 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const query = c.req.query();
 
-    const orgId = query.org_id;
     const dateFrom = query.date_from;
     const dateTo = query.date_to;
     const useIdentityStitching = query.use_identity_stitching !== 'false';
 
-    // Verify org access
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
-
     // Get org settings for defaults
+    const d1 = new D1Adapter(c.env.DB);
     const org = await d1.getOrganizationWithAttribution(orgId);
     if (!org) {
       return error(c, "NOT_FOUND", "Organization not found", 404);
@@ -328,10 +321,10 @@ export class GetAttributionComparison extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const query = c.req.query();
 
-    const orgId = query.org_id;
     const dateFrom = query.date_from;
     const dateTo = query.date_to;
 
@@ -339,12 +332,6 @@ export class GetAttributionComparison extends OpenAPIRoute {
     const models = modelsParam.split(',').map(m => m.trim()) as AttributionModel[];
 
     const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
-
     const org = await d1.getOrganizationWithAttribution(orgId);
     if (!org) {
       return error(c, "NOT_FOUND", "Organization not found", 404);

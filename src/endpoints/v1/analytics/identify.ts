@@ -267,23 +267,12 @@ export class GetIdentityByAnonymousId extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
-    if (!session) {
-      return error(c, "UNAUTHORIZED", "Session required", 401);
-    }
-
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const params = c.req.param();
-    const query = c.req.query();
 
     const d1 = new D1Adapter(c.env.DB);
-
-    // Verify org access
-    const hasAccess = await d1.checkOrgAccess(session.user_id, query.org_id);
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
-
-    const userId = await d1.getUserIdByAnonymousId(query.org_id, params.anonymousId);
+    const userId = await d1.getUserIdByAnonymousId(orgId, params.anonymousId);
 
     return success(c, {
       anonymous_id: params.anonymousId,

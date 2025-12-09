@@ -627,17 +627,10 @@ export class GetOrganizationTag extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
-    const { org_id } = c.req.param();
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
 
-    // Verify org access
-    const { D1Adapter } = await import("../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, org_id);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
+    // Access check already handled by requireOrg middleware
 
     // Get org tag from org_tag_mappings
     const tagMapping = await c.env.DB.prepare(`
@@ -645,7 +638,7 @@ export class GetOrganizationTag extends OpenAPIRoute {
       FROM org_tag_mappings
       WHERE organization_id = ? AND is_active = 1
       LIMIT 1
-    `).bind(org_id).first<{ short_tag: string }>();
+    `).bind(orgId).first<{ short_tag: string }>();
 
     if (!tagMapping) {
       return error(c, "TAG_NOT_FOUND", "Organization tracking tag not found", 404);

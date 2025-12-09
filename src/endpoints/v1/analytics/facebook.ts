@@ -70,17 +70,9 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
-
-    // Verify org access (already done by requireOrg middleware, but double-check)
-    const { D1Adapter } = await import("../../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, query.query.org_id);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
 
     // Initialize Supabase client
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
@@ -104,7 +96,7 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
 
       // Fetch campaigns WITH metrics using the new method
       const campaignsWithMetrics = await adapter.getCampaignsWithMetrics(
-        query.query.org_id,
+        orgId,
         dateRange,
         {
           status: query.query.status,
@@ -182,17 +174,9 @@ export class GetFacebookAdSets extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
-
-    // Verify org access
-    const { D1Adapter } = await import("../../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, query.query.org_id);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
 
     // Initialize Supabase client
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
@@ -208,7 +192,7 @@ export class GetFacebookAdSets extends OpenAPIRoute {
     const adapter = new FacebookSupabaseAdapter(supabase);
 
     try {
-      const adSets = await adapter.getAdSets(query.query.org_id, {
+      const adSets = await adapter.getAdSets(orgId, {
         campaignId: query.query.campaign_id,
         status: query.query.status,
         limit: query.query.limit,
@@ -250,17 +234,9 @@ export class GetFacebookCreatives extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
-
-    // Verify org access
-    const { D1Adapter } = await import("../../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, query.query.org_id);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
 
     // Initialize Supabase client
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
@@ -276,7 +252,7 @@ export class GetFacebookCreatives extends OpenAPIRoute {
     const adapter = new FacebookSupabaseAdapter(supabase);
 
     try {
-      const creatives = await adapter.getCreatives(query.query.org_id, {
+      const creatives = await adapter.getCreatives(orgId, {
         limit: query.query.limit,
         offset: query.query.offset
       });
@@ -319,17 +295,9 @@ export class GetFacebookAds extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
-
-    // Verify org access
-    const { D1Adapter } = await import("../../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, query.query.org_id);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
 
     // Initialize Supabase client
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
@@ -345,7 +313,7 @@ export class GetFacebookAds extends OpenAPIRoute {
     const adapter = new FacebookSupabaseAdapter(supabase);
 
     try {
-      const ads = await adapter.getAds(query.query.org_id, {
+      const ads = await adapter.getAds(orgId, {
         campaignId: query.query.campaign_id,
         adSetId: query.query.ad_set_id,
         status: query.query.status,
@@ -394,17 +362,9 @@ export class GetFacebookMetrics extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
+    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
+    const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
-
-    // Verify org access
-    const { D1Adapter } = await import("../../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, query.query.org_id);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "No access to this organization", 403);
-    }
 
     // Initialize Supabase client
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
@@ -430,26 +390,26 @@ export class GetFacebookMetrics extends OpenAPIRoute {
 
       // Fetch metrics based on level
       if (query.query.level === 'campaign') {
-        metrics = await adapter.getCampaignDailyMetrics(query.query.org_id, dateRange, {
+        metrics = await adapter.getCampaignDailyMetrics(orgId, dateRange, {
           campaignId: query.query.campaign_id,
           limit: query.query.limit,
           offset: query.query.offset
         });
-        summary = await adapter.getMetricsSummary(query.query.org_id, dateRange, 'campaign');
+        summary = await adapter.getMetricsSummary(orgId, dateRange, 'campaign');
       } else if (query.query.level === 'ad_set') {
-        metrics = await adapter.getAdSetDailyMetrics(query.query.org_id, dateRange, {
+        metrics = await adapter.getAdSetDailyMetrics(orgId, dateRange, {
           adSetId: query.query.ad_set_id,
           limit: query.query.limit,
           offset: query.query.offset
         });
-        summary = await adapter.getMetricsSummary(query.query.org_id, dateRange, 'ad_set');
+        summary = await adapter.getMetricsSummary(orgId, dateRange, 'ad_set');
       } else {
-        metrics = await adapter.getAdDailyMetrics(query.query.org_id, dateRange, {
+        metrics = await adapter.getAdDailyMetrics(orgId, dateRange, {
           adId: query.query.ad_id,
           limit: query.query.limit,
           offset: query.query.offset
         });
-        summary = await adapter.getMetricsSummary(query.query.org_id, dateRange, 'ad');
+        summary = await adapter.getMetricsSummary(orgId, dateRange, 'ad');
       }
 
       return success(c, {

@@ -128,6 +128,12 @@ import {
   RejectAIDecision
 } from "./endpoints/v1/settings";
 import {
+  RunAnalysis,
+  GetAnalysisStatus,
+  GetLatestAnalysis,
+  GetEntityAnalysis
+} from "./endpoints/v1/analysis";
+import {
   GetTagConfig,
   GetTrackingConfig,
   UpdateTrackingConfig,
@@ -297,13 +303,13 @@ openapi.delete("/v1/organizations/:org_id/invite-link", auth, requireOrg, requir
 openapi.get("/v1/organizations/lookup", auth, LookupOrganization);
 
 // Analytics endpoints
-openapi.get("/v1/analytics/events", auth, GetEvents);
+openapi.get("/v1/analytics/events", auth, requireOrg, GetEvents);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributionComparison);
-openapi.get("/v1/analytics/stripe", auth, GetStripeAnalytics);
-openapi.get("/v1/analytics/stripe/daily-aggregates", auth, GetStripeDailyAggregates);
-openapi.get("/v1/analytics/platforms/unified", auth, GetUnifiedPlatformData);
+openapi.get("/v1/analytics/stripe", auth, requireOrg, GetStripeAnalytics);
+openapi.get("/v1/analytics/stripe/daily-aggregates", auth, requireOrg, GetStripeDailyAggregates);
+openapi.get("/v1/analytics/platforms/unified", auth, requireOrg, GetUnifiedPlatformData);
 
 // Identity resolution endpoints
 openapi.post("/v1/analytics/identify", PostIdentify); // Internal - uses service binding or API key auth
@@ -400,6 +406,12 @@ openapi.post("/v1/tracking-config/snippet", auth, GenerateTrackingSnippet);
 openapi.get("/v1/settings/ai-decisions", auth, requireOrg, GetAIDecisions);
 openapi.post("/v1/settings/ai-decisions/:decision_id/accept", auth, requireOrg, requireOrgAdmin, AcceptAIDecision);
 openapi.post("/v1/settings/ai-decisions/:decision_id/reject", auth, requireOrg, requireOrgAdmin, RejectAIDecision);
+
+// AI Analysis endpoints (hierarchical insights)
+openapi.post("/v1/analysis/run", auth, requireOrg, RunAnalysis);
+openapi.get("/v1/analysis/status/:job_id", auth, requireOrg, GetAnalysisStatus);
+openapi.get("/v1/analysis/latest", auth, requireOrg, GetLatestAnalysis);
+openapi.get("/v1/analysis/entity/:level/:entity_id", auth, requireOrg, GetEntityAnalysis);
 
 
 // Export the Hono app
