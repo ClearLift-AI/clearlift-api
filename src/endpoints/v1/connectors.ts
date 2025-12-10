@@ -924,6 +924,57 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementServicesConnected(oauthState.user_id);
 
+      // LOCAL MOCK: Skip sync, mark as synced, insert mock AI recommendations
+      const isLocal = c.req.url.startsWith('http://localhost') || c.req.url.startsWith('http://127.0.0.1');
+      const isMockToken = accessToken.startsWith('mock_');
+
+      if (isLocal && isMockToken) {
+        console.log('[MockOAuth] Detected mock token, skipping real sync');
+
+        // Mark connection as synced immediately
+        await c.env.DB.prepare(`
+          UPDATE platform_connections
+          SET sync_status = 'synced', last_synced_at = datetime('now')
+          WHERE id = ?
+        `).bind(connectionId).run();
+
+        // Create AI settings if missing
+        const existingSettings = await c.env.DB.prepare(`
+          SELECT org_id FROM ai_optimization_settings WHERE org_id = ?
+        `).bind(oauthState.organization_id).first();
+
+        if (!existingSettings) {
+          await c.env.DB.prepare(`
+            INSERT INTO ai_optimization_settings (org_id, growth_strategy, budget_optimization, ai_control, daily_cap_cents, monthly_cap_cents, created_at, updated_at)
+            VALUES (?, 'balanced', 'moderate', 'copilot', 100000, 3000000, datetime('now'), datetime('now'))
+          `).bind(oauthState.organization_id).run();
+          console.log('[MockOAuth] Created AI settings for org:', oauthState.organization_id);
+        }
+
+        // Insert mock AI recommendations (3 types)
+        const recommendations = [
+          { type: 'budget', title: `Increase ${provider} daily budget`, description: 'Your campaigns are limited by budget. Consider increasing to capture more conversions.', impact: 'high' },
+          { type: 'targeting', title: `Expand ${provider} audience`, description: 'Similar audiences are performing well. Expanding could increase reach by 25%.', impact: 'medium' },
+          { type: 'creative', title: `Refresh ${provider} ad creative`, description: 'Ad fatigue detected. New creative could improve CTR by 15%.', impact: 'medium' }
+        ];
+
+        for (const rec of recommendations) {
+          await c.env.AI_DB.prepare(`
+            INSERT INTO ai_decisions (id, organization_id, platform, type, title, description, impact, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
+          `).bind(crypto.randomUUID(), oauthState.organization_id, provider, rec.type, rec.title, rec.description, rec.impact).run();
+        }
+
+        console.log('[MockOAuth] Inserted 3 mock AI recommendations for', provider);
+
+        // Clean up OAuth state
+        await c.env.DB.prepare(`
+          DELETE FROM oauth_states WHERE state = ?
+        `).bind(state).run();
+
+        return success(c, { connection_id: connectionId });
+      }
+
       // Trigger sync job
       const jobId = crypto.randomUUID();
       const now = new Date().toISOString();
