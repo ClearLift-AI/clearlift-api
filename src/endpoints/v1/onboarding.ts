@@ -101,10 +101,24 @@ export class GetOnboardingStatus extends OpenAPIRoute {
       }
     }
 
-    // AI recommendations are generated from real synced data via POST /v1/analysis/run
-    // No fake demo data seeding - recommendations come from actual platform data
+    // 2. Ensure ai_optimization_settings exist for this org
+    // Creates default settings if missing - enables AI recommendation generation
+    const aiSettings = await c.env.DB.prepare(`
+      SELECT org_id FROM ai_optimization_settings WHERE org_id = ?
+    `).bind(orgId).first();
 
-    // 2. Sync services_connected with actual platform connections
+    if (!aiSettings) {
+      await c.env.DB.prepare(`
+        INSERT INTO ai_optimization_settings (
+          org_id, growth_strategy, budget_optimization, ai_control,
+          daily_cap_cents, monthly_cap_cents, created_at, updated_at
+        ) VALUES (?, 'balanced', 'moderate', 'copilot', 100000, 3000000, ?, ?)
+      `).bind(orgId, now, now).run();
+
+      console.log(`[ONBOARDING_HEAL] Created default ai_optimization_settings for org ${orgId}`);
+    }
+
+    // 3. Sync services_connected with actual platform connections
     const connectionCount = await c.env.DB.prepare(`
       SELECT COUNT(*) as count FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
@@ -122,13 +136,13 @@ export class GetOnboardingStatus extends OpenAPIRoute {
       console.log(`[ONBOARDING_HEAL] Synced services_connected for user ${session.user_id}: ${actualConnections}`);
     }
 
-    // 4. Auto-advance onboarding if conditions are met
+    // 4. Auto-advance onboarding if conditions are met (connect_services → first_sync)
     if (progress.current_step === 'connect_services' && actualConnections >= 1) {
       progress = await onboarding.completeStep(session.user_id, 'connect_services');
       console.log(`[ONBOARDING_HEAL] Auto-advanced user ${session.user_id} past connect_services`);
     }
 
-    // 5. Check if first sync completed (any successful sync job)
+    // 5. Check if first sync completed (first_sync → completed)
     if (progress.current_step === 'first_sync' && !progress.first_sync_completed) {
       const completedSync = await c.env.DB.prepare(`
         SELECT 1 FROM sync_jobs
