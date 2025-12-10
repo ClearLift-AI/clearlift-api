@@ -1,0 +1,77 @@
+# =============================================================================
+# ClearLift API Worker - Local Development Secrets
+# =============================================================================
+# Copy this file to .dev.vars and fill in your values
+# DO NOT commit .dev.vars to git (it's in .gitignore)
+# =============================================================================
+
+# Encryption key for OAuth token encryption/decryption (32-byte base64)
+# Generate with: openssl rand -base64 32
+ENCRYPTION_KEY=YOUR_32_BYTE_BASE64_KEY_HERE
+
+# =============================================================================
+# SUPABASE CREDENTIALS
+# =============================================================================
+# Get from: https://app.supabase.com/project/_/settings/api
+# Note: Uses new key naming convention (publishable_key, secret_key)
+
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_KEY
+SUPABASE_SECRET_KEY=sb_secret_YOUR_KEY
+
+# =============================================================================
+# R2 SQL ACCESS
+# =============================================================================
+# Get from Cloudflare Dashboard > R2 > API Tokens
+
+R2_SQL_TOKEN=YOUR_R2_SQL_TOKEN
+
+# =============================================================================
+# OAUTH APP CREDENTIALS
+# =============================================================================
+
+# Facebook/Meta OAuth
+# Get from: https://developers.facebook.com/apps/
+FACEBOOK_APP_ID=YOUR_FB_APP_ID
+FACEBOOK_APP_SECRET=YOUR_FB_APP_SECRET
+
+# Google OAuth
+# Get from: https://console.cloud.google.com/apis/credentials
+GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET=YOUR_GOOGLE_CLIENT_SECRET
+
+# Google Ads Developer Token
+# Get from: https://developers.google.com/google-ads/api/docs/get-started/dev-token
+GOOGLE_ADS_DEVELOPER_TOKEN=YOUR_DEVELOPER_TOKEN
+
+# =============================================================================
+# EMAIL DELIVERY
+# =============================================================================
+# Get from: https://app.sendgrid.com/settings/api_keys
+
+SENDGRID_API_KEY=YOUR_SENDGRID_API_KEY
+
+# =============================================================================
+# AI SERVICES (required for POST /v1/analysis/run)
+# =============================================================================
+
+# Anthropic API key for Claude-powered analysis
+# Get from: https://console.anthropic.com/
+ANTHROPIC_API_KEY=YOUR_ANTHROPIC_API_KEY
+
+# Google Gemini API key for AI analysis fallback
+# Get from: https://aistudio.google.com/
+GEMINI_API_KEY=YOUR_GEMINI_API_KEY
+
+# =============================================================================
+# USAGE
+# =============================================================================
+# 1. Copy this file: cp .dev.vars.example .dev.vars
+# 2. Fill in the YOUR_* placeholders with real values
+# 3. Run: npx wrangler dev
+# 4. Worker starts on http://localhost:8787
+# 5. Test: curl http://localhost:8787/v1/health
+#
+# For dashboard integration, run:
+#   cd ../clearlift-page-router/apps/dashboard
+#   npm run dev:local

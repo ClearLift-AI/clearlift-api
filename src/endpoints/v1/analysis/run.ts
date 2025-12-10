@@ -76,7 +76,7 @@ export class RunAnalysis extends OpenAPIRoute {
 
     // Check for API keys
     const anthropicKey = await getSecret(c.env.ANTHROPIC_API_KEY);
-    const geminiKey = await getSecret(c.env.GOOGLE_AI_API_KEY);
+    const geminiKey = await getSecret(c.env.GEMINI_API_KEY);
 
     if (!anthropicKey || !geminiKey) {
       return error(c, "CONFIGURATION_ERROR", "AI service not configured", 500);
