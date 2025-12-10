@@ -38,7 +38,47 @@
     ]
   },
 
-  // Secrets Store bindings - using account-level secrets
+  // ============================================================================
+  // LOCAL DEVELOPMENT ENVIRONMENT
+  // ============================================================================
+  // Run with: npx wrangler dev --env local
+  // Secrets come from .dev.vars (not Secrets Store)
+  "env": {
+    "local": {
+      "vars": {
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
+        "R2_BUCKET_NAME": "clearlift-db"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ClearLiftDash-D1",
+          "database_id": "89bd84be-b517-4c72-ab61-422384319361",
+          "migrations_dir": "migrations"
+        },
+        {
+          "binding": "AI_DB",
+          "database_name": "clearlift-ai",
+          "database_id": "0a8898ef-9ce9-458f-90b9-a89db12c1078",
+          "migrations_dir": "migrations-ai"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "SYNC_QUEUE",
+            "queue": "sync-jobs"
+          }
+        ]
+      }
+      // No secrets_store_secrets - uses .dev.vars instead
+    }
+  },
+
+  // ============================================================================
+  // PRODUCTION - Secrets Store bindings (account-level secrets)
+  // ============================================================================
   "secrets_store_secrets": [
     {
       "binding": "ENCRYPTION_KEY",
