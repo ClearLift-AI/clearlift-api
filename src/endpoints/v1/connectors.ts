@@ -160,6 +160,18 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     // Generate authorization URL with PKCE challenge
     const authorizationUrl = oauthProvider.getAuthorizationUrl(state, pkce);
 
+    // LOCAL DEVELOPMENT: Return mock callback URL instead of real OAuth
+    const requestUrl = c.req.url;
+    const isLocal = requestUrl.startsWith('http://localhost') || requestUrl.startsWith('http://127.0.0.1');
+
+    if (isLocal) {
+      const mockUrl = `http://localhost:8787/v1/connectors/${provider}/mock-callback?state=${state}`;
+      return success(c, {
+        authorization_url: mockUrl,
+        state
+      });
+    }
+
     return success(c, {
       authorization_url: authorizationUrl,
       state
@@ -366,6 +378,143 @@ export class HandleOAuthCallback extends OpenAPIRoute {
 }
 
 /**
+ * GET /v1/connectors/:provider/mock-callback - Mock OAuth callback for local development
+ * Creates fake tokens and redirects to account selection flow
+ * ONLY works on localhost - production requests will fail
+ */
+export class MockOAuthCallback extends OpenAPIRoute {
+  public schema = {
+    tags: ["Connectors"],
+    summary: "Mock OAuth callback (local development only)",
+    operationId: "mock-oauth-callback",
+    request: {
+      params: z.object({
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe'])
+      }),
+      query: z.object({
+        state: z.string()
+      })
+    },
+    responses: {
+      "302": {
+        description: "Redirect to app with mock OAuth state"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { provider } = data.params;
+    const { state } = data.query;
+
+    // SECURITY: Only allow on localhost
+    const requestUrl = c.req.url;
+    const isLocal = requestUrl.startsWith('http://localhost') || requestUrl.startsWith('http://127.0.0.1');
+
+    if (!isLocal) {
+      return error(c, "FORBIDDEN", "Mock OAuth callback only available in local development", 403);
+    }
+
+    try {
+      // Get OAuth state
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const oauthState = await connectorService.getOAuthState(state);
+
+      if (!oauthState) {
+        return c.redirect(`http://localhost:3001/oauth/callback?error=invalid_state`);
+      }
+
+      console.log('[MockOAuthCallback] Creating mock OAuth tokens for:', { provider, userId: oauthState.user_id });
+
+      // Create mock tokens and user info based on provider
+      const mockData = this.getMockData(provider);
+
+      // Get PKCE code verifier from state metadata
+      const stateMetadata = typeof oauthState.metadata === 'string'
+        ? JSON.parse(oauthState.metadata)
+        : oauthState.metadata;
+
+      const codeVerifier = stateMetadata?.code_verifier;
+
+      // Update oauth_states with mock tokens (like real callback does)
+      const metadata = {
+        code_verifier: codeVerifier,
+        access_token: mockData.access_token,
+        refresh_token: mockData.refresh_token,
+        expires_in: mockData.expires_in,
+        scope: mockData.scope,
+        user_info: mockData.user_info
+      };
+
+      await c.env.DB.prepare(`
+        UPDATE oauth_states
+        SET metadata = ?
+        WHERE state = ?
+      `).bind(JSON.stringify(metadata), state).run();
+
+      // Redirect to callback page with state for account selection (same as real flow)
+      const redirectUri = oauthState.redirect_uri || 'http://localhost:3001/oauth/callback';
+      return c.redirect(`${redirectUri}?code=mock_code&state=${state}&step=select_account&provider=${provider}`);
+
+    } catch (err) {
+      console.error('Mock OAuth callback error:', err);
+      return c.redirect(`http://localhost:3001/oauth/callback?error=mock_failed`);
+    }
+  }
+
+  private getMockData(provider: string) {
+    const now = Date.now();
+
+    switch (provider) {
+      case 'facebook':
+        return {
+          access_token: `mock_fb_token_${now}`,
+          refresh_token: null,  // Facebook doesn't use refresh tokens
+          expires_in: 5184000,  // 60 days like real long-lived token
+          scope: 'ads_read,ads_management,business_management',
+          user_info: {
+            id: '10000000000000001',
+            name: 'Test Facebook User',
+            email: 'testfb@example.com'
+          }
+        };
+      case 'google':
+        return {
+          access_token: `mock_google_token_${now}`,
+          refresh_token: `mock_google_refresh_${now}`,
+          expires_in: 3600,
+          scope: 'https://www.googleapis.com/auth/adwords',
+          user_info: {
+            id: '100000000000000000001',
+            email: 'testgoogle@example.com',
+            name: 'Test Google User'
+          }
+        };
+      case 'tiktok':
+        return {
+          access_token: `mock_tiktok_token_${now}`,
+          refresh_token: `mock_tiktok_refresh_${now}`,
+          expires_in: 86400,
+          scope: 'ad.read,ad.write',
+          user_info: {
+            id: 'tiktok_user_001',
+            name: 'Test TikTok User'
+          }
+        };
+      default:
+        return {
+          access_token: `mock_token_${now}`,
+          refresh_token: `mock_refresh_${now}`,
+          expires_in: 3600,
+          scope: 'read,write',
+          user_info: { id: 'mock_user', name: 'Test User' }
+        };
+    }
+  }
+}
+
+/**
  * GET /v1/connectors/:provider/accounts - Get available ad accounts for OAuth provider
  */
 export class GetOAuthAccounts extends OpenAPIRoute {
@@ -424,6 +573,16 @@ export class GetOAuthAccounts extends OpenAPIRoute {
       const accessToken = metadata?.access_token;
       if (!accessToken) {
         return error(c, "NO_TOKEN", "No access token found in OAuth state", 400);
+      }
+
+      // LOCAL DEVELOPMENT: Return mock accounts instead of calling real APIs
+      const requestUrl = c.req.url;
+      const isLocal = requestUrl.startsWith('http://localhost') || requestUrl.startsWith('http://127.0.0.1');
+
+      if (isLocal && accessToken.startsWith('mock_')) {
+        const mockAccounts = this.getMockAccounts(provider);
+        console.log('[GetOAuthAccounts] Returning mock accounts for local dev:', { provider, count: mockAccounts.length });
+        return success(c, { accounts: mockAccounts });
       }
 
       // Get ad accounts from provider
@@ -500,6 +659,55 @@ export class GetOAuthAccounts extends OpenAPIRoute {
       }
 
       return error(c, "FETCH_FAILED", errorMessage, 500);
+    }
+  }
+
+  private getMockAccounts(provider: string) {
+    switch (provider) {
+      case 'facebook':
+        return [
+          {
+            id: 'act_123456789',
+            name: 'Test Ad Account 1',
+            account_status: 1,
+            currency: 'USD',
+            timezone_name: 'America/Los_Angeles'
+          },
+          {
+            id: 'act_987654321',
+            name: 'Test Ad Account 2',
+            account_status: 1,
+            currency: 'USD',
+            timezone_name: 'America/New_York'
+          }
+        ];
+      case 'google':
+        return [
+          {
+            id: '1234567890',
+            name: 'Test Google Ads Account',
+            currencyCode: 'USD',
+            timeZone: 'America/Los_Angeles',
+            isManager: false
+          },
+          {
+            id: '9876543210',
+            name: 'Test Manager Account',
+            currencyCode: 'USD',
+            timeZone: 'America/New_York',
+            isManager: true
+          }
+        ];
+      case 'tiktok':
+        return [
+          {
+            id: 'tt_adv_001',
+            name: 'Test TikTok Advertiser',
+            status: 'ACTIVE'
+          }
+        ];
+      default:
+        return [];
     }
   }
 }
