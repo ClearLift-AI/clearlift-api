@@ -21,6 +21,8 @@ import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
 import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
 import { GetAttribution, GetAttributionComparison } from "./endpoints/v1/analytics/attribution";
+import { GetUtmCampaigns } from "./endpoints/v1/analytics/utm-campaigns";
+import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
 import {
@@ -330,6 +332,8 @@ openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributio
 openapi.get("/v1/analytics/stripe", auth, requireOrg, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, requireOrg, GetStripeDailyAggregates);
 openapi.get("/v1/analytics/platforms/unified", auth, requireOrg, GetUnifiedPlatformData);
+openapi.get("/v1/analytics/utm-campaigns", auth, requireOrg, GetUtmCampaigns);
+openapi.get("/v1/analytics/click-attribution", auth, requireOrg, GetClickAttribution);
 
 // Identity resolution endpoints
 openapi.post("/v1/analytics/identify", PostIdentify); // Internal - uses service binding or API key auth
