@@ -47,7 +47,9 @@ export type AttributionModel =
   | 'linear'
   | 'time_decay'
   | 'position_based'
-  | 'data_driven';
+  | 'data_driven'
+  | 'markov_chain'
+  | 'shapley_value';
 
 export interface AttributionConfig {
   model: AttributionModel;
@@ -58,6 +60,9 @@ export interface AttributionConfig {
     last: number;    // Default 0.4
     middle: number;  // Default 0.2
   };
+  // Pre-computed probabilistic model results (required for markov_chain/shapley_value)
+  markovCredits?: MarkovAttributionResult[];
+  shapleyCredits?: ShapleyAttributionResult[];
 }
 
 // ===== Attribution Model Functions =====
@@ -313,6 +318,617 @@ export function dataDrivenAttribution(
   return weights;
 }
 
+// ===== Markov Chain Attribution =====
+
+/**
+ * Markov Transition Matrix
+ * Represents probabilities of moving from one channel to another
+ */
+export interface MarkovTransitionMatrix {
+  states: string[];  // Channel names + 'start', 'conversion', 'null'
+  matrix: number[][]; // Transition probabilities
+  baselineConversionRate: number;
+}
+
+/**
+ * Markov Attribution Result
+ */
+export interface MarkovAttributionResult {
+  channel: string;
+  removal_effect: number;  // 0-1: How much conversion rate drops when removed
+  attributed_credit: number; // Normalized credit (sums to 1 across channels)
+}
+
+/**
+ * Build Markov Transition Matrix from conversion paths
+ *
+ * Creates a first-order Markov chain where:
+ * - States = channels + 'start', 'conversion', 'null'
+ * - Transitions = probability of moving from one channel to another
+ *
+ * @param conversionPaths Paths that led to conversions
+ * @param nonConversionPaths Paths that did not convert (ended in 'null')
+ */
+export function buildMarkovTransitionMatrix(
+  conversionPaths: ConversionPath[],
+  nonConversionPaths: ConversionPath[]
+): MarkovTransitionMatrix {
+  // Collect all unique channels
+  const channels = new Set<string>();
+  [...conversionPaths, ...nonConversionPaths].forEach(path => {
+    path.touchpoints.forEach(tp => {
+      channels.add(tp.utm_source);
+    });
+  });
+
+  // States: 'start' + all channels + 'conversion' + 'null'
+  const states = ['start', ...Array.from(channels).sort(), 'conversion', 'null'];
+  const stateIndex = new Map(states.map((s, i) => [s, i]));
+  const n = states.length;
+
+  // Initialize transition counts
+  const transitionCounts: number[][] = Array(n).fill(null).map(() => Array(n).fill(0));
+
+  // Count transitions from conversion paths
+  for (const path of conversionPaths) {
+    if (path.touchpoints.length === 0) continue;
+
+    // Sort touchpoints by time
+    const sorted = [...path.touchpoints].sort((a, b) =>
+      a.timestamp.getTime() - b.timestamp.getTime()
+    );
+
+    // Start -> first channel
+    const firstIdx = stateIndex.get(sorted[0].utm_source)!;
+    transitionCounts[stateIndex.get('start')!][firstIdx]++;
+
+    // Channel -> channel transitions
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const fromIdx = stateIndex.get(sorted[i].utm_source)!;
+      const toIdx = stateIndex.get(sorted[i + 1].utm_source)!;
+      transitionCounts[fromIdx][toIdx]++;
+    }
+
+    // Last channel -> conversion
+    const lastIdx = stateIndex.get(sorted[sorted.length - 1].utm_source)!;
+    transitionCounts[lastIdx][stateIndex.get('conversion')!]++;
+  }
+
+  // Count transitions from non-conversion paths
+  for (const path of nonConversionPaths) {
+    if (path.touchpoints.length === 0) continue;
+
+    const sorted = [...path.touchpoints].sort((a, b) =>
+      a.timestamp.getTime() - b.timestamp.getTime()
+    );
+
+    // Start -> first channel
+    const firstIdx = stateIndex.get(sorted[0].utm_source)!;
+    transitionCounts[stateIndex.get('start')!][firstIdx]++;
+
+    // Channel -> channel transitions
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const fromIdx = stateIndex.get(sorted[i].utm_source)!;
+      const toIdx = stateIndex.get(sorted[i + 1].utm_source)!;
+      transitionCounts[fromIdx][toIdx]++;
+    }
+
+    // Last channel -> null (no conversion)
+    const lastIdx = stateIndex.get(sorted[sorted.length - 1].utm_source)!;
+    transitionCounts[lastIdx][stateIndex.get('null')!]++;
+  }
+
+  // Convert counts to probabilities (row-normalize)
+  const matrix: number[][] = transitionCounts.map(row => {
+    const rowSum = row.reduce((a, b) => a + b, 0);
+    if (rowSum === 0) return row.map(() => 0);
+    return row.map(count => count / rowSum);
+  });
+
+  // Calculate baseline conversion rate
+  const totalPaths = conversionPaths.length + nonConversionPaths.length;
+  const baselineConversionRate = totalPaths > 0 ? conversionPaths.length / totalPaths : 0;
+
+  return { states, matrix, baselineConversionRate };
+}
+
+/**
+ * Calculate conversion probability using absorbing Markov chain
+ * Uses matrix inversion to find absorption probabilities
+ *
+ * @param matrix Transition matrix
+ * @param startIndex Starting state index
+ * @param conversionIndex Conversion state index
+ * @param maxIterations Max iterations for power method (default: 1000)
+ */
+function calculateAbsorptionProbability(
+  matrix: number[][],
+  startIndex: number,
+  conversionIndex: number,
+  nullIndex: number,
+  maxIterations: number = 1000
+): number {
+  const n = matrix.length;
+
+  // Use simulation approach: start at 'start', random walk until absorption
+  // More stable than matrix inversion for sparse matrices
+  let conversionCount = 0;
+  const simulations = 10000;
+
+  for (let sim = 0; sim < simulations; sim++) {
+    let currentState = startIndex;
+    let iterations = 0;
+
+    while (iterations < maxIterations) {
+      // Check if absorbed
+      if (currentState === conversionIndex) {
+        conversionCount++;
+        break;
+      }
+      if (currentState === nullIndex) {
+        break;
+      }
+
+      // Transition to next state based on probabilities
+      const rand = Math.random();
+      let cumProb = 0;
+      let nextState = currentState;
+
+      for (let j = 0; j < n; j++) {
+        cumProb += matrix[currentState][j];
+        if (rand < cumProb) {
+          nextState = j;
+          break;
+        }
+      }
+
+      // Prevent infinite loops on zero-probability rows
+      if (nextState === currentState && matrix[currentState].every(p => p === 0)) {
+        break;
+      }
+
+      currentState = nextState;
+      iterations++;
+    }
+  }
+
+  return conversionCount / simulations;
+}
+
+/**
+ * Calculate Markov Chain Removal Effect Attribution
+ *
+ * For each channel, calculates the "removal effect":
+ * How much does the overall conversion rate drop if we remove this channel?
+ *
+ * Credit is proportional to the removal effect.
+ *
+ * @param conversionPaths Paths that converted
+ * @param nonConversionPaths Paths that didn't convert
+ */
+export function calculateMarkovRemovalEffect(
+  conversionPaths: ConversionPath[],
+  nonConversionPaths: ConversionPath[]
+): MarkovAttributionResult[] {
+  // Build the full transition matrix
+  const { states, matrix, baselineConversionRate } = buildMarkovTransitionMatrix(
+    conversionPaths,
+    nonConversionPaths
+  );
+
+  const startIndex = states.indexOf('start');
+  const conversionIndex = states.indexOf('conversion');
+  const nullIndex = states.indexOf('null');
+
+  // Get channels (exclude start, conversion, null)
+  const channels = states.filter(s => !['start', 'conversion', 'null'].includes(s));
+
+  if (channels.length === 0) {
+    return [];
+  }
+
+  // Calculate baseline conversion probability from the Markov chain
+  const baselineProb = calculateAbsorptionProbability(
+    matrix, startIndex, conversionIndex, nullIndex
+  );
+
+  // Calculate removal effect for each channel
+  const results: MarkovAttributionResult[] = [];
+
+  for (const channel of channels) {
+    const channelIndex = states.indexOf(channel);
+
+    // Create modified matrix with channel removed
+    // Redirect all transitions TO this channel to 'null' instead
+    const modifiedMatrix = matrix.map((row, i) => {
+      if (i === channelIndex) {
+        // Row for removed channel: redirect all outgoing to null
+        const newRow = Array(states.length).fill(0);
+        newRow[nullIndex] = 1;
+        return newRow;
+      }
+      // Redistribute transitions that went to this channel
+      const newRow = [...row];
+      const probToChannel = newRow[channelIndex];
+      if (probToChannel > 0) {
+        newRow[channelIndex] = 0;
+        // Add to null (user would have dropped off)
+        newRow[nullIndex] += probToChannel;
+      }
+      return newRow;
+    });
+
+    // Calculate conversion probability without this channel
+    const probWithoutChannel = calculateAbsorptionProbability(
+      modifiedMatrix, startIndex, conversionIndex, nullIndex
+    );
+
+    // Removal effect = (baseline - without) / baseline
+    // Represents what fraction of conversions are lost when this channel is removed
+    const removalEffect = baselineProb > 0
+      ? Math.max(0, (baselineProb - probWithoutChannel) / baselineProb)
+      : 0;
+
+    results.push({
+      channel,
+      removal_effect: removalEffect,
+      attributed_credit: removalEffect // Will normalize later
+    });
+  }
+
+  // Normalize credits to sum to 1
+  const totalEffect = results.reduce((sum, r) => sum + r.removal_effect, 0);
+  if (totalEffect > 0) {
+    results.forEach(r => {
+      r.attributed_credit = r.removal_effect / totalEffect;
+    });
+  }
+
+  return results.sort((a, b) => b.attributed_credit - a.attributed_credit);
+}
+
+/**
+ * Apply Markov attribution credits to a single conversion path
+ */
+export function markovChainAttribution(
+  touchpoints: Touchpoint[],
+  conversionValue: number,
+  markovCredits: MarkovAttributionResult[]
+): AttributedTouchpoint[] {
+  if (touchpoints.length === 0) return [];
+
+  // Build credit lookup
+  const creditByChannel = new Map(markovCredits.map(r => [r.channel, r.attributed_credit]));
+
+  // Get channels in this path
+  const pathChannels = new Set(touchpoints.map(tp => tp.utm_source));
+
+  // Filter to channels that appear in this path
+  const relevantCredits = markovCredits.filter(r => pathChannels.has(r.channel));
+
+  // Normalize credits for this specific path
+  const pathTotalCredit = relevantCredits.reduce((sum, r) => sum + r.attributed_credit, 0);
+
+  const sorted = [...touchpoints].sort((a, b) =>
+    a.timestamp.getTime() - b.timestamp.getTime()
+  );
+
+  return sorted.map(tp => {
+    const globalCredit = creditByChannel.get(tp.utm_source) || 0;
+    const normalizedCredit = pathTotalCredit > 0 ? globalCredit / pathTotalCredit : 1 / touchpoints.length;
+
+    return {
+      ...tp,
+      credit: normalizedCredit * conversionValue,
+      credit_percentage: normalizedCredit * 100
+    };
+  });
+}
+
+// ===== Shapley Value Attribution =====
+
+/**
+ * Shapley Value Attribution Result
+ */
+export interface ShapleyAttributionResult {
+  channel: string;
+  shapley_value: number; // The fair value contribution
+  attributed_credit: number; // Normalized to sum to 1
+}
+
+/**
+ * Calculate subset conversion rate
+ * Returns the conversion rate when only the given channels are considered
+ */
+function calculateSubsetConversionRate(
+  conversionPaths: ConversionPath[],
+  nonConversionPaths: ConversionPath[],
+  channelSubset: Set<string>
+): number {
+  if (channelSubset.size === 0) return 0;
+
+  // Count paths that contain at least one channel from subset
+  let pathsWithSubset = 0;
+  let conversionsWithSubset = 0;
+
+  for (const path of conversionPaths) {
+    const hasSubsetChannel = path.touchpoints.some(tp => channelSubset.has(tp.utm_source));
+    if (hasSubsetChannel) {
+      pathsWithSubset++;
+      conversionsWithSubset++;
+    }
+  }
+
+  for (const path of nonConversionPaths) {
+    const hasSubsetChannel = path.touchpoints.some(tp => channelSubset.has(tp.utm_source));
+    if (hasSubsetChannel) {
+      pathsWithSubset++;
+    }
+  }
+
+  return pathsWithSubset > 0 ? conversionsWithSubset / pathsWithSubset : 0;
+}
+
+/**
+ * Calculate factorial
+ */
+function factorial(n: number): number {
+  if (n <= 1) return 1;
+  let result = 1;
+  for (let i = 2; i <= n; i++) {
+    result *= i;
+  }
+  return result;
+}
+
+/**
+ * Generate all subsets of a set
+ */
+function* generateSubsets<T>(set: T[]): Generator<T[]> {
+  const n = set.length;
+  const total = Math.pow(2, n);
+  for (let mask = 0; mask < total; mask++) {
+    const subset: T[] = [];
+    for (let i = 0; i < n; i++) {
+      if (mask & (1 << i)) {
+        subset.push(set[i]);
+      }
+    }
+    yield subset;
+  }
+}
+
+/**
+ * Calculate Shapley Value Attribution
+ *
+ * Shapley value represents the "fair" contribution of each channel,
+ * accounting for all possible orderings and coalition formations.
+ *
+ * Formula: φᵢ = Σ (|S|! × (n-|S|-1)!) / n! × [v(S ∪ {i}) - v(S)]
+ *
+ * Where:
+ * - S is a subset of channels not including i
+ * - v(S) is the value (conversion rate) achieved by coalition S
+ * - n is the total number of channels
+ *
+ * @param conversionPaths Paths that converted
+ * @param nonConversionPaths Paths that didn't convert
+ * @param maxChannels Max channels to consider (Shapley is O(2^n), limit for performance)
+ */
+export function calculateShapleyAttribution(
+  conversionPaths: ConversionPath[],
+  nonConversionPaths: ConversionPath[],
+  maxChannels: number = 10
+): ShapleyAttributionResult[] {
+  // Collect all unique channels
+  const channelSet = new Set<string>();
+  [...conversionPaths, ...nonConversionPaths].forEach(path => {
+    path.touchpoints.forEach(tp => {
+      channelSet.add(tp.utm_source);
+    });
+  });
+
+  let channels = Array.from(channelSet);
+
+  // Limit channels for performance (Shapley is exponential)
+  if (channels.length > maxChannels) {
+    // Keep top channels by frequency
+    const channelCounts = new Map<string, number>();
+    [...conversionPaths, ...nonConversionPaths].forEach(path => {
+      path.touchpoints.forEach(tp => {
+        channelCounts.set(tp.utm_source, (channelCounts.get(tp.utm_source) || 0) + 1);
+      });
+    });
+    channels = channels
+      .sort((a, b) => (channelCounts.get(b) || 0) - (channelCounts.get(a) || 0))
+      .slice(0, maxChannels);
+  }
+
+  const n = channels.length;
+  if (n === 0) return [];
+
+  const nFactorial = factorial(n);
+  const results: ShapleyAttributionResult[] = [];
+
+  // Calculate Shapley value for each channel
+  for (const channel of channels) {
+    let shapleyValue = 0;
+
+    // Other channels (excluding current one)
+    const otherChannels = channels.filter(c => c !== channel);
+
+    // Iterate over all subsets of other channels
+    for (const subset of generateSubsets(otherChannels)) {
+      const s = subset.length; // |S|
+
+      // Weight for this subset: |S|! × (n-|S|-1)! / n!
+      const weight = (factorial(s) * factorial(n - s - 1)) / nFactorial;
+
+      // v(S ∪ {i}) - v(S): marginal contribution of channel i to coalition S
+      const withoutChannel = new Set(subset);
+      const withChannel = new Set([...subset, channel]);
+
+      const valueWithout = calculateSubsetConversionRate(
+        conversionPaths, nonConversionPaths, withoutChannel
+      );
+      const valueWith = calculateSubsetConversionRate(
+        conversionPaths, nonConversionPaths, withChannel
+      );
+
+      const marginalContribution = valueWith - valueWithout;
+
+      shapleyValue += weight * marginalContribution;
+    }
+
+    results.push({
+      channel,
+      shapley_value: Math.max(0, shapleyValue), // Clamp negative values
+      attributed_credit: shapleyValue
+    });
+  }
+
+  // Normalize credits to sum to 1
+  const totalValue = results.reduce((sum, r) => sum + Math.max(0, r.shapley_value), 0);
+  if (totalValue > 0) {
+    results.forEach(r => {
+      r.attributed_credit = Math.max(0, r.shapley_value) / totalValue;
+    });
+  } else {
+    // Equal distribution if no positive values
+    results.forEach(r => {
+      r.attributed_credit = 1 / results.length;
+    });
+  }
+
+  return results.sort((a, b) => b.attributed_credit - a.attributed_credit);
+}
+
+/**
+ * Approximate Shapley Values using sampling (for large channel counts)
+ *
+ * Monte Carlo sampling approach - randomly sample permutations
+ * and calculate marginal contributions.
+ *
+ * @param conversionPaths Paths that converted
+ * @param nonConversionPaths Paths that didn't convert
+ * @param sampleSize Number of random permutations to sample
+ */
+export function approximateShapleyAttribution(
+  conversionPaths: ConversionPath[],
+  nonConversionPaths: ConversionPath[],
+  sampleSize: number = 1000
+): ShapleyAttributionResult[] {
+  // Collect all unique channels
+  const channelSet = new Set<string>();
+  [...conversionPaths, ...nonConversionPaths].forEach(path => {
+    path.touchpoints.forEach(tp => {
+      channelSet.add(tp.utm_source);
+    });
+  });
+
+  const channels = Array.from(channelSet);
+  const n = channels.length;
+  if (n === 0) return [];
+
+  // Track marginal contributions
+  const marginalSums = new Map<string, number>();
+  const marginalCounts = new Map<string, number>();
+  channels.forEach(c => {
+    marginalSums.set(c, 0);
+    marginalCounts.set(c, 0);
+  });
+
+  // Sample random permutations
+  for (let sample = 0; sample < sampleSize; sample++) {
+    // Fisher-Yates shuffle
+    const permutation = [...channels];
+    for (let i = permutation.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [permutation[i], permutation[j]] = [permutation[j], permutation[i]];
+    }
+
+    // Calculate marginal contribution for each channel in this ordering
+    const coalition = new Set<string>();
+    let prevValue = 0;
+
+    for (const channel of permutation) {
+      coalition.add(channel);
+      const currentValue = calculateSubsetConversionRate(
+        conversionPaths, nonConversionPaths, coalition
+      );
+      const marginal = currentValue - prevValue;
+
+      marginalSums.set(channel, marginalSums.get(channel)! + marginal);
+      marginalCounts.set(channel, marginalCounts.get(channel)! + 1);
+
+      prevValue = currentValue;
+    }
+  }
+
+  // Average marginal contributions = Shapley values
+  const results: ShapleyAttributionResult[] = channels.map(channel => {
+    const count = marginalCounts.get(channel) || 1;
+    const shapleyValue = (marginalSums.get(channel) || 0) / count;
+    return {
+      channel,
+      shapley_value: Math.max(0, shapleyValue),
+      attributed_credit: shapleyValue
+    };
+  });
+
+  // Normalize
+  const totalValue = results.reduce((sum, r) => sum + Math.max(0, r.shapley_value), 0);
+  if (totalValue > 0) {
+    results.forEach(r => {
+      r.attributed_credit = Math.max(0, r.shapley_value) / totalValue;
+    });
+  } else {
+    results.forEach(r => {
+      r.attributed_credit = 1 / results.length;
+    });
+  }
+
+  return results.sort((a, b) => b.attributed_credit - a.attributed_credit);
+}
+
+/**
+ * Apply Shapley attribution credits to a single conversion path
+ */
+export function shapleyValueAttribution(
+  touchpoints: Touchpoint[],
+  conversionValue: number,
+  shapleyCredits: ShapleyAttributionResult[]
+): AttributedTouchpoint[] {
+  if (touchpoints.length === 0) return [];
+
+  // Build credit lookup
+  const creditByChannel = new Map(shapleyCredits.map(r => [r.channel, r.attributed_credit]));
+
+  // Get channels in this path
+  const pathChannels = new Set(touchpoints.map(tp => tp.utm_source));
+
+  // Filter to channels that appear in this path
+  const relevantCredits = shapleyCredits.filter(r => pathChannels.has(r.channel));
+
+  // Normalize credits for this specific path
+  const pathTotalCredit = relevantCredits.reduce((sum, r) => sum + r.attributed_credit, 0);
+
+  const sorted = [...touchpoints].sort((a, b) =>
+    a.timestamp.getTime() - b.timestamp.getTime()
+  );
+
+  return sorted.map(tp => {
+    const globalCredit = creditByChannel.get(tp.utm_source) || 0;
+    const normalizedCredit = pathTotalCredit > 0 ? globalCredit / pathTotalCredit : 1 / touchpoints.length;
+
+    return {
+      ...tp,
+      credit: normalizedCredit * conversionValue,
+      credit_percentage: normalizedCredit * 100
+    };
+  });
+}
+
 // ===== Main Attribution Function =====
 
 /**
@@ -354,6 +970,32 @@ export function calculateAttribution(
     case 'data_driven':
       // Data-driven requires aggregate analysis, use linear as fallback for single path
       attributedTouchpoints = linearAttribution(path.touchpoints, path.conversion_value);
+      break;
+    case 'markov_chain':
+      // Requires pre-computed markov credits
+      if (config.markovCredits && config.markovCredits.length > 0) {
+        attributedTouchpoints = markovChainAttribution(
+          path.touchpoints,
+          path.conversion_value,
+          config.markovCredits
+        );
+      } else {
+        // Fallback to linear if no markov credits provided
+        attributedTouchpoints = linearAttribution(path.touchpoints, path.conversion_value);
+      }
+      break;
+    case 'shapley_value':
+      // Requires pre-computed shapley credits
+      if (config.shapleyCredits && config.shapleyCredits.length > 0) {
+        attributedTouchpoints = shapleyValueAttribution(
+          path.touchpoints,
+          path.conversion_value,
+          config.shapleyCredits
+        );
+      } else {
+        // Fallback to linear if no shapley credits provided
+        attributedTouchpoints = linearAttribution(path.touchpoints, path.conversion_value);
+      }
       break;
     default:
       attributedTouchpoints = lastTouchAttribution(path.touchpoints, path.conversion_value);
