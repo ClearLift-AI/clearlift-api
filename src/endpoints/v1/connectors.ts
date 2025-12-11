@@ -952,17 +952,29 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         }
 
         // Insert mock AI recommendations (3 types)
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
         const recommendations = [
-          { type: 'budget', title: `Increase ${provider} daily budget`, description: 'Your campaigns are limited by budget. Consider increasing to capture more conversions.', impact: 'high' },
-          { type: 'targeting', title: `Expand ${provider} audience`, description: 'Similar audiences are performing well. Expanding could increase reach by 25%.', impact: 'medium' },
-          { type: 'creative', title: `Refresh ${provider} ad creative`, description: 'Ad fatigue detected. New creative could improve CTR by 15%.', impact: 'medium' }
+          { tool: 'set_budget', entity_type: 'campaign', entity_id: `mock_campaign_${provider}_1`, entity_name: `${provider} Campaign 1`, parameters: '{"amount_cents": 7500}', reason: 'Your campaigns are limited by budget. Consider increasing to capture more conversions.' },
+          { tool: 'set_targeting', entity_type: 'ad_set', entity_id: `mock_adset_${provider}_1`, entity_name: `${provider} Ad Set 1`, parameters: '{"audience": "expanded"}', reason: 'Similar audiences are performing well. Expanding could increase reach by 25%.' },
+          { tool: 'set_status', entity_type: 'ad', entity_id: `mock_ad_${provider}_1`, entity_name: `${provider} Ad Creative 1`, parameters: '{"status": "PAUSED"}', reason: 'Ad fatigue detected. New creative could improve CTR by 15%.' }
         ];
 
         for (const rec of recommendations) {
           await c.env.AI_DB.prepare(`
-            INSERT INTO ai_decisions (id, organization_id, platform, type, title, description, impact, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
-          `).bind(crypto.randomUUID(), oauthState.organization_id, provider, rec.type, rec.title, rec.description, rec.impact).run();
+            INSERT INTO ai_decisions (id, organization_id, tool, platform, entity_type, entity_id, entity_name, parameters, reason, confidence, expires_at, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'high', ?, 'pending', datetime('now'))
+          `).bind(
+            crypto.randomUUID(),
+            oauthState.organization_id,
+            rec.tool,
+            provider,
+            rec.entity_type,
+            rec.entity_id,
+            rec.entity_name,
+            rec.parameters,
+            rec.reason,
+            expiresAt
+          ).run();
         }
 
         console.log('[MockOAuth] Inserted 3 mock AI recommendations for', provider);
