@@ -158,6 +158,25 @@ app.onError(errorHandler);
 // Apply security headers to all routes (SOC 2 requirement)
 app.use("*", securityHeaders());
 
+// Production Supabase warning for local development
+// Only logs once per worker instance to avoid spam
+let hasLoggedSupabaseWarning = false;
+app.use("*", async (c, next) => {
+  if (!hasLoggedSupabaseWarning && c.env.SUPABASE_URL?.includes('supabase.co')) {
+    hasLoggedSupabaseWarning = true;
+    console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.warn('⚠️  PRODUCTION SUPABASE URL DETECTED');
+    console.warn('   This worker will query PRODUCTION Supabase data!');
+    console.warn('   URL: ' + c.env.SUPABASE_URL);
+    console.warn('');
+    console.warn('   For true local development:');
+    console.warn('   1. Start local Supabase: cd ../clearlift-cron && supabase start');
+    console.warn('   2. Comment out SUPABASE_URL in .dev.vars');
+    console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  }
+  return next();
+});
+
 // Apply CORS to all routes
 app.use("*", corsMiddleware);
 

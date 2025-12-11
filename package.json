@@ -23,7 +23,7 @@
     "deploy": "wrangler deploy",
     "dev": "npm run db:migrate:local && wrangler dev",
     "dev:local": "npm run db:migrate:local && wrangler dev --env local",
-    "predeploy": "npm run db:migrate:remote",
+    "predeploy": "npx tsx scripts/capture-bookmark.ts && npm run db:migrate:remote",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "schema": "npx chanfana",

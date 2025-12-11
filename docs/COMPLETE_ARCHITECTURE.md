@@ -332,7 +332,55 @@ curl -H "Authorization: Bearer TOKEN" \
 - Rate limit violations (security_events)
 - Authentication failures (auth_audit_logs)
 
-### 7. Data Privacy & Compliance
+### 7. Disaster Recovery & Backups
+
+#### D1 Database Durability
+
+D1 has **built-in durability** - no manual backup needed:
+
+| Feature | Description |
+|---------|-------------|
+| **5x Sync Replication** | Every write replicated to 5 servers across different datacenters before commit |
+| **Time Travel** | 30-day point-in-time recovery (Workers Paid) |
+| **WAL Cold Storage** | Full write history stored, enabling reconstruction anywhere |
+
+#### Time Travel (Point-in-Time Recovery)
+
+```bash
+# Get bookmark for a specific timestamp
+npx wrangler d1 time-travel info DB --timestamp="2025-12-11T12:00:00Z"
+
+# Restore to a timestamp
+npx wrangler d1 time-travel restore DB --timestamp="2025-12-11T12:00:00Z"
+
+# Restore to a bookmark
+npx wrangler d1 time-travel restore DB --bookmark=<bookmark-id>
+```
+
+**Key points:**
+- Restore to any minute within 30 days
+- No storage cost for backups
+- Restoring doesn't delete older bookmarks (can undo a restore)
+
+#### Pre-Deployment Bookmarks
+
+`npm run deploy` automatically captures a bookmark before migrations:
+
+```
+deployments.json
+├── timestamp: "2025-12-11T16:18:52.083Z"
+├── bookmark: "00001a62-..."
+├── gitCommit: "3f9aff2"
+└── gitBranch: "main"
+```
+
+#### Long-term Backups (Beyond 30 Days)
+
+For archival beyond 30 days, export to R2:
+- Use [Cloudflare Workflows](https://developers.cloudflare.com/workflows/examples/backup-d1/)
+- Manual JSON exports in `backups/` directory
+
+### 8. Data Privacy & Compliance
 
 #### PII Handling
 - **D1:** PII encrypted before storage
@@ -364,6 +412,11 @@ curl -H "Authorization: Bearer TOKEN" \
 - Complete audit trail
 - Rate limiting
 - Security headers
+
+**Disaster Recovery:**
+- D1: 5x sync replication + 30-day Time Travel
+- Pre-deployment bookmarks captured automatically
+- Point-in-time recovery to any minute
 
 **Compliance:**
 - SOC 2 Type 2 ready

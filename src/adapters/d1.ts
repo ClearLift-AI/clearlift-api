@@ -269,6 +269,38 @@ export class D1Adapter {
   }
 
   /**
+   * Get list of active platform connections for organization
+   * Returns platform names (e.g., ['facebook', 'google'])
+   */
+  async getActiveConnections(orgId: string): Promise<string[]> {
+    const result = await this.db
+      .prepare(`
+        SELECT DISTINCT platform FROM platform_connections
+        WHERE organization_id = ? AND is_active = 1
+      `)
+      .bind(orgId)
+      .all<{ platform: string }>();
+
+    return result.results?.map(r => r.platform) || [];
+  }
+
+  /**
+   * Check if organization has an active connection for a specific platform
+   */
+  async hasActiveConnection(orgId: string, platform: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(`
+        SELECT 1 FROM platform_connections
+        WHERE organization_id = ? AND platform = ? AND is_active = 1
+        LIMIT 1
+      `)
+      .bind(orgId, platform)
+      .first();
+
+    return result !== null;
+  }
+
+  /**
    * Create or update platform connection
    */
   async upsertPlatformConnection(

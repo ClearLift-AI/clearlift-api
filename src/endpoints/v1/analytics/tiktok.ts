@@ -53,6 +53,28 @@ export class GetTikTokCampaigns extends OpenAPIRoute {
     const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
 
+    // Check if org has an active TikTok connection
+    // Prevents returning orphaned data for orgs without active connections
+    const hasConnection = await c.env.DB.prepare(`
+      SELECT 1 FROM platform_connections
+      WHERE organization_id = ? AND platform = 'tiktok' AND is_active = 1
+      LIMIT 1
+    `).bind(orgId).first();
+
+    if (!hasConnection) {
+      return success(c, {
+        platform: 'tiktok',
+        results: [],
+        summary: {
+          total_impressions: 0,
+          total_clicks: 0,
+          total_spend: 0,
+          total_conversions: 0,
+          average_ctr: 0
+        }
+      });
+    }
+
     // Initialize Supabase client
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
     if (!supabaseKey) {

@@ -320,7 +320,9 @@ curl -X POST http://localhost:8787/v1/connectors/google/connect \
 
 ## Rollback Procedure
 
-If deployment fails:
+### Worker Rollback
+
+If worker deployment fails:
 
 ```bash
 # List deployments
@@ -332,6 +334,40 @@ npx wrangler rollback
 # Or deploy specific version
 npx wrangler deploy --compatibility-date 2025-04-01
 ```
+
+### D1 Database Rollback (Time Travel)
+
+D1 has **Time Travel** built-in - 30-day point-in-time recovery at no extra cost.
+
+**Pre-deployment bookmarks are captured automatically** by `npm run deploy` (via `scripts/capture-bookmark.ts`). Check `deployments.json` for timestamps:
+
+```json
+{
+  "deployments": [
+    {
+      "timestamp": "2025-12-11T16:18:52.083Z",
+      "bookmark": "00001a62-...",
+      "gitCommit": "3f9aff2",
+      "gitBranch": "main"
+    }
+  ]
+}
+```
+
+**To rollback the database:**
+
+```bash
+# Option 1: Restore to pre-deployment timestamp from deployments.json
+npx wrangler d1 time-travel restore DB --timestamp="2025-12-11T16:18:52.083Z"
+
+# Option 2: Restore to a specific bookmark
+npx wrangler d1 time-travel restore DB --bookmark=<bookmark-id>
+
+# Get bookmark for any timestamp
+npx wrangler d1 time-travel info DB --timestamp="2025-12-11T12:00:00Z"
+```
+
+**Warning:** Database restore is destructive - overwrites the database in place. However, you can always restore to another point if needed (older bookmarks are preserved).
 
 ## Support
 

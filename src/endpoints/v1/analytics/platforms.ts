@@ -69,6 +69,32 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
 
     // Access check already handled by requireOrg middleware
 
+    // Check if org has any active platform connections
+    // Only return data for platforms with active connections (prevents orphaned data leakage)
+    const activeConnections = await c.env.DB.prepare(`
+      SELECT DISTINCT platform FROM platform_connections
+      WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).all<{ platform: string }>();
+
+    const activePlatforms = activeConnections.results?.map(r => r.platform) || [];
+
+    // If no active connections, return empty data
+    if (activePlatforms.length === 0) {
+      return success(c, {
+        summary: {
+          total_spend_cents: 0,
+          total_impressions: 0,
+          total_clicks: 0,
+          total_conversions: 0,
+          average_ctr: 0,
+          average_cpc_cents: 0,
+          platforms_active: []
+        },
+        by_platform: {},
+        time_series: []
+      });
+    }
+
     // Get Supabase secret key from Secrets Store
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
     if (!supabaseKey) {
