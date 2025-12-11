@@ -79,7 +79,10 @@ import {
   CreateShareableInviteLink,
   GetShareableInviteLink,
   RevokeShareableInviteLink,
-  LookupOrganization
+  LookupOrganization,
+  GetTrackingDomains,
+  AddTrackingDomain,
+  RemoveTrackingDomain
 } from "./endpoints/v1/organizations";
 import {
   ListConnectors,
@@ -323,6 +326,11 @@ openapi.post("/v1/organizations/:org_id/invite-link", auth, requireOrg, requireO
 openapi.get("/v1/organizations/:org_id/invite-link", auth, requireOrg, GetShareableInviteLink);
 openapi.delete("/v1/organizations/:org_id/invite-link", auth, requireOrg, requireOrgAdmin, RevokeShareableInviteLink);
 openapi.get("/v1/organizations/lookup", auth, LookupOrganization);
+
+// Tracking domains endpoints (for domain-based org auto-detection)
+openapi.get("/v1/organizations/:org_id/tracking-domains", auth, requireOrg, GetTrackingDomains);
+openapi.post("/v1/organizations/:org_id/tracking-domains", auth, requireOrg, requireOrgAdmin, AddTrackingDomain);
+openapi.delete("/v1/organizations/:org_id/tracking-domains/:domain_id", auth, requireOrg, requireOrgAdmin, RemoveTrackingDomain);
 
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, requireOrg, GetEvents);

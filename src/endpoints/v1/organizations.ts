@@ -1011,3 +1011,208 @@ export class LookupOrganization extends OpenAPIRoute {
     });
   }
 }
+
+/**
+ * GET /v1/organizations/:org_id/tracking-domains - List tracking domains
+ */
+export class GetTrackingDomains extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "List tracking domains for the organization",
+    operationId: "get-tracking-domains",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Tracking domains retrieved",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                domains: z.array(z.object({
+                  id: z.string(),
+                  domain: z.string(),
+                  is_verified: z.boolean(),
+                  is_primary: z.boolean(),
+                  created_at: z.string()
+                }))
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { org_id: orgId } = data.params;
+
+    const domains = await c.env.DB.prepare(`
+      SELECT id, domain, is_verified, is_primary, created_at
+      FROM tracking_domains
+      WHERE organization_id = ?
+      ORDER BY is_primary DESC, created_at DESC
+    `).bind(orgId).all();
+
+    return success(c, {
+      domains: domains.results || []
+    });
+  }
+}
+
+/**
+ * POST /v1/organizations/:org_id/tracking-domains - Add tracking domain
+ */
+export class AddTrackingDomain extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Add a tracking domain to the organization",
+    operationId: "add-tracking-domain",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      }),
+      body: contentJson(
+        z.object({
+          domain: z.string().min(3).max(255).regex(/^[a-zA-Z0-9][a-zA-Z0-9-_.]*\.[a-zA-Z]{2,}$/),
+          is_primary: z.boolean().optional().default(false)
+        })
+      )
+    },
+    responses: {
+      "201": {
+        description: "Tracking domain added",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                domain: z.object({
+                  id: z.string(),
+                  domain: z.string(),
+                  is_verified: z.boolean(),
+                  is_primary: z.boolean(),
+                  created_at: z.string()
+                })
+              })
+            })
+          }
+        }
+      },
+      "409": {
+        description: "Domain already exists"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { org_id: orgId } = data.params;
+    const { domain, is_primary } = data.body;
+
+    // Normalize domain to lowercase
+    const normalizedDomain = domain.toLowerCase();
+
+    // Check if domain already exists (globally - a domain can only belong to one org)
+    const existingDomain = await c.env.DB.prepare(`
+      SELECT id, organization_id FROM tracking_domains WHERE domain = ?
+    `).bind(normalizedDomain).first<{ id: string; organization_id: string }>();
+
+    if (existingDomain) {
+      if (existingDomain.organization_id === orgId) {
+        return error(c, "DOMAIN_EXISTS", "This domain is already registered to your organization", 409);
+      }
+      return error(c, "DOMAIN_TAKEN", "This domain is already registered to another organization", 409);
+    }
+
+    const domainId = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    // If setting as primary, unset other primary domains first
+    if (is_primary) {
+      await c.env.DB.prepare(`
+        UPDATE tracking_domains SET is_primary = FALSE WHERE organization_id = ?
+      `).bind(orgId).run();
+    }
+
+    await c.env.DB.prepare(`
+      INSERT INTO tracking_domains (id, organization_id, domain, is_verified, is_primary, created_at)
+      VALUES (?, ?, ?, FALSE, ?, ?)
+    `).bind(domainId, orgId, normalizedDomain, is_primary, now).run();
+
+    return success(c, {
+      domain: {
+        id: domainId,
+        domain: normalizedDomain,
+        is_verified: false,
+        is_primary: is_primary,
+        created_at: now
+      }
+    }, 201);
+  }
+}
+
+/**
+ * DELETE /v1/organizations/:org_id/tracking-domains/:domain_id - Remove tracking domain
+ */
+export class RemoveTrackingDomain extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Remove a tracking domain from the organization",
+    operationId: "remove-tracking-domain",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string(),
+        domain_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Tracking domain removed",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                message: z.string()
+              })
+            })
+          }
+        }
+      },
+      "404": {
+        description: "Domain not found"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { org_id: orgId, domain_id: domainId } = data.params;
+
+    // Verify domain belongs to this org
+    const domain = await c.env.DB.prepare(`
+      SELECT id FROM tracking_domains WHERE id = ? AND organization_id = ?
+    `).bind(domainId, orgId).first();
+
+    if (!domain) {
+      return error(c, "NOT_FOUND", "Domain not found", 404);
+    }
+
+    await c.env.DB.prepare(`
+      DELETE FROM tracking_domains WHERE id = ?
+    `).bind(domainId).run();
+
+    return success(c, {
+      message: "Domain removed successfully"
+    });
+  }
+}
