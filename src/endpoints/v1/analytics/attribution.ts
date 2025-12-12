@@ -141,6 +141,8 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     const dateTo = query.date_to;
     const useIdentityStitching = query.use_identity_stitching !== 'false';
 
+    console.log(`[Attribution] Request: orgId=${orgId}, dateFrom=${dateFrom}, dateTo=${dateTo}, model=${query.model}`);
+
     // Get org settings for defaults
     const d1 = new D1Adapter(c.env.DB);
     const org = await d1.getOrganizationWithAttribution(orgId);
@@ -168,6 +170,8 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
     `).bind(orgId).first<{ short_tag: string }>();
 
+    console.log(`[Attribution] orgId=${orgId}, tagMapping=${tagMapping?.short_tag || 'NONE'}`);
+
     // Helper function to build platform fallback attributions
     // Uses platform-specific adapters with correct schema/table names
     const buildPlatformFallback = async (supabase: SupabaseClient, dateRange?: { start: string; end: string }): Promise<{
@@ -182,7 +186,9 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         `).bind(orgId).all<{ platform: string }>();
 
         const platforms = connections.results?.map(r => r.platform) || [];
+        console.log(`[Attribution Fallback] orgId=${orgId}, platforms=${JSON.stringify(platforms)}`);
         if (platforms.length === 0) {
+          console.log(`[Attribution Fallback] No platforms connected`);
           return { attributions: [], summary: { total_conversions: 0, total_revenue: 0 } };
         }
 
@@ -288,12 +294,13 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         // Sort by attributed_conversions descending
         allCampaigns.sort((a, b) => b.attributed_conversions - a.attributed_conversions);
 
+        console.log(`[Attribution Fallback] Returning ${allCampaigns.length} campaigns, ${totalConversions} conversions`);
         return {
           attributions: allCampaigns,
           summary: { total_conversions: totalConversions, total_revenue: totalRevenue }
         };
       } catch (err) {
-        console.error('Failed to build platform fallback:', err);
+        console.error('[Attribution Fallback] Error:', err);
         return { attributions: [], summary: { total_conversions: 0, total_revenue: 0 } };
       }
     };
@@ -407,9 +414,11 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       ) || [];
 
       const eventCount = events.length;
+      console.log(`[Attribution] Events query returned ${eventCount} events`);
 
       // Check for no events scenario - fall back to platform data
       if (eventCount === 0) {
+        console.log(`[Attribution] No events found, calling buildPlatformFallback`);
         const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
         return success(c, {
           model,
@@ -533,8 +542,49 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         }
       });
     } catch (err: any) {
-      console.error("Attribution query error:", err);
+      console.error("[Attribution] Query error in main try block:", err.message || err);
 
+      // Try platform fallback on error (e.g., events table doesn't exist)
+      console.log("[Attribution] Attempting platform fallback from catch block...");
+      try {
+        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+        if (supabaseKey) {
+          const supabase = new SupabaseClient({
+            url: c.env.SUPABASE_URL,
+            serviceKey: supabaseKey
+          });
+          const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
+
+          return success(c, {
+            model,
+            config: {
+              attribution_window_days: attributionWindowDays,
+              time_decay_half_life_days: timeDecayHalfLifeDays,
+              identity_stitching_enabled: useIdentityStitching
+            },
+            data_quality: {
+              quality: 'platform_reported' as DataQuality,
+              warnings: ['no_events', 'using_platform_conversions'] as DataWarning[],
+              event_count: 0,
+              conversion_count: 0,
+              fallback_source: 'ad_platforms'
+            },
+            attributions: fallback.attributions,
+            summary: {
+              total_conversions: fallback.summary.total_conversions,
+              total_revenue: fallback.summary.total_revenue,
+              avg_path_length: 0,
+              avg_days_to_convert: 0,
+              identified_users: 0,
+              anonymous_sessions: 0
+            }
+          });
+        }
+      } catch (fallbackErr) {
+        console.warn('Platform fallback also failed:', fallbackErr);
+      }
+
+      // Return empty data only if fallback also fails
       return success(c, {
         model,
         config: {

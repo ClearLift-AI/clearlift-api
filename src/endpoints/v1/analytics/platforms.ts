@@ -109,42 +109,28 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       serviceKey: supabaseKey
     });
 
-    const { UnifiedSupabaseAdapter } = await import("../../../adapters/platforms/unified-supabase");
-    const adapter = new UnifiedSupabaseAdapter(supabase);
-
     try {
       const dateRange = startDate && endDate ? { start: startDate, end: endDate } : undefined;
 
-      // Get aggregated data using the adapter
-      let [summary, byPlatform, timeSeries] = await Promise.all([
-        adapter.getSummary(orgId, dateRange),
-        adapter.getMetricsByPlatform(orgId, dateRange),
-        adapter.getTimeSeries(orgId, dateRange)
-      ]);
+      // Fetch platform data directly using adapters (simpler than materialized view)
+      const platformData = await this.fetchPlatformData(supabase, orgId, activePlatforms, dateRange);
 
-      // "Best Available Data" fallback: if unified view is empty, query individual platform tables
-      if (summary.total_spend_cents === 0 && Object.keys(byPlatform).length === 0 && activePlatforms.length > 0) {
-        console.log(`Unified view empty for ${orgId}, falling back to individual platform tables`);
-        const fallbackData = await this.fetchPlatformFallback(supabase, orgId, activePlatforms, dateRange);
-
-        if (fallbackData.total_spend_cents > 0) {
-          summary = {
-            total_spend_cents: fallbackData.total_spend_cents,
-            total_impressions: fallbackData.total_impressions,
-            total_clicks: fallbackData.total_clicks,
-            total_conversions: fallbackData.total_conversions,
-            average_ctr: fallbackData.total_impressions > 0
-              ? (fallbackData.total_clicks / fallbackData.total_impressions) * 100
-              : 0,
-            average_cpc_cents: fallbackData.total_clicks > 0
-              ? Math.round(fallbackData.total_spend_cents / fallbackData.total_clicks)
-              : 0,
-            platforms_active: Object.keys(fallbackData.by_platform)
-          };
-          byPlatform = fallbackData.by_platform;
-          // Note: timeSeries will remain empty for fallback - can be enhanced later
-        }
-      }
+      // Build summary from platform data
+      const summary = {
+        total_spend_cents: platformData.total_spend_cents,
+        total_impressions: platformData.total_impressions,
+        total_clicks: platformData.total_clicks,
+        total_conversions: platformData.total_conversions,
+        average_ctr: platformData.total_impressions > 0
+          ? (platformData.total_clicks / platformData.total_impressions) * 100
+          : 0,
+        average_cpc_cents: platformData.total_clicks > 0
+          ? Math.round(platformData.total_spend_cents / platformData.total_clicks)
+          : 0,
+        platforms_active: Object.keys(platformData.by_platform)
+      };
+      const byPlatform = platformData.by_platform;
+      let timeSeries: Array<any> = []; // Time series can be added later if needed
 
       // Get conversion source setting
       const conversionSettings = await c.env.DB.prepare(`
@@ -271,11 +257,10 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
   }
 
   /**
-   * Fallback: Fetch data from individual platform campaign tables when unified view is empty
-   * This implements the "best available data" pattern
-   * Uses platform-specific adapters with correct schema/table names
+   * Fetch data from individual platform campaign tables using adapters
+   * Each adapter knows the correct schema (google_ads, facebook_ads, tiktok_ads)
    */
-  private async fetchPlatformFallback(
+  private async fetchPlatformData(
     supabase: SupabaseClient,
     orgId: string,
     platforms: string[],
@@ -335,7 +320,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           result.total_clicks += platformClicks;
           result.total_conversions += platformConversions;
 
-          console.log(`Platform fallback google: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
+          console.log(`Google Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
 
         } else if (normalizedPlatform === 'facebook' || normalizedPlatform === 'meta') {
           // Use FacebookSupabaseAdapter with facebook_ads schema
@@ -367,7 +352,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           result.total_clicks += platformClicks;
           result.total_conversions += platformConversions;
 
-          console.log(`Platform fallback facebook: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
+          console.log(`Facebook Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
 
         } else if (normalizedPlatform === 'tiktok') {
           // Use TikTokAdsSupabaseAdapter with tiktok_ads schema
@@ -414,12 +399,12 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           result.total_clicks += platformClicks;
           result.total_conversions += platformConversions;
 
-          console.log(`Platform fallback tiktok: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
+          console.log(`TikTok Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
         } else {
-          console.warn(`Unknown platform for fallback: ${platform}`);
+          console.warn(`Unknown platform: ${platform}`);
         }
       } catch (err) {
-        console.warn(`Failed to fetch ${platform} campaigns for fallback:`, err);
+        console.warn(`Failed to fetch ${platform} campaigns:`, err);
       }
     }
 
