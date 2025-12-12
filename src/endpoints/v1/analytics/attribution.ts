@@ -12,6 +12,9 @@ import { success, error } from "../../../utils/response";
 import { SupabaseClient } from "../../../services/supabase";
 import { getSecret } from "../../../utils/secrets";
 import { D1Adapter } from "../../../adapters/d1";
+import { GoogleAdsSupabaseAdapter } from "../../../adapters/platforms/google-supabase";
+import { FacebookSupabaseAdapter } from "../../../adapters/platforms/facebook-supabase";
+import { TikTokAdsSupabaseAdapter } from "../../../adapters/platforms/tiktok-supabase";
 import {
   AttributionModel,
   AttributionConfig,
@@ -27,6 +30,25 @@ const AttributionModelEnum = z.enum([
   'time_decay',
   'position_based'
 ]);
+
+// Data quality levels for "best available data" approach
+type DataQuality = 'verified' | 'estimated' | 'platform_reported';
+
+// Warning codes for insufficient data scenarios
+type DataWarning =
+  | 'no_events'                    // No tracked events at all
+  | 'no_tracked_conversions'       // Events exist but no conversion events
+  | 'insufficient_events'          // Too few events for reliable attribution
+  | 'using_platform_conversions'   // Using platform-reported conversions
+  | 'no_conversion_source';        // No conversion source configured
+
+interface DataQualityInfo {
+  quality: DataQuality;
+  warnings: DataWarning[];
+  event_count: number;
+  conversion_count: number;
+  fallback_source?: 'ad_platforms' | 'connectors' | null;
+}
 
 /**
  * GET /v1/analytics/attribution
@@ -75,6 +97,14 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
                   attribution_window_days: z.number(),
                   time_decay_half_life_days: z.number(),
                   identity_stitching_enabled: z.boolean()
+                }),
+                // Data quality info for "best available data" approach
+                data_quality: z.object({
+                  quality: z.enum(['verified', 'estimated', 'platform_reported']),
+                  warnings: z.array(z.string()),
+                  event_count: z.number(),
+                  conversion_count: z.number(),
+                  fallback_source: z.string().nullable().optional()
                 }),
                 attributions: z.array(z.object({
                   utm_source: z.string(),
@@ -138,13 +168,189 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
     `).bind(orgId).first<{ short_tag: string }>();
 
+    // Helper function to build platform fallback attributions
+    // Uses platform-specific adapters with correct schema/table names
+    const buildPlatformFallback = async (supabase: SupabaseClient, dateRange?: { start: string; end: string }): Promise<{
+      attributions: any[];
+      summary: { total_conversions: number; total_revenue: number };
+    }> => {
+      try {
+        // Get active platform connections
+        const connections = await c.env.DB.prepare(`
+          SELECT DISTINCT platform FROM platform_connections
+          WHERE organization_id = ? AND is_active = 1
+        `).bind(orgId).all<{ platform: string }>();
+
+        const platforms = connections.results?.map(r => r.platform) || [];
+        if (platforms.length === 0) {
+          return { attributions: [], summary: { total_conversions: 0, total_revenue: 0 } };
+        }
+
+        // Build date range for queries (default: last 30 days)
+        const effectiveDateRange = dateRange || {
+          start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          end: new Date().toISOString().split('T')[0]
+        };
+
+        // Fetch campaign data from each platform using correct adapters
+        const allCampaigns: any[] = [];
+        let totalConversions = 0;
+        let totalRevenue = 0;
+
+        for (const platform of platforms) {
+          try {
+            if (platform === 'google') {
+              // Use GoogleAdsSupabaseAdapter with google_ads schema
+              const adapter = new GoogleAdsSupabaseAdapter(supabase);
+              const campaigns = await adapter.getCampaignsWithMetrics(orgId, effectiveDateRange);
+
+              for (const campaign of campaigns) {
+                const conversions = campaign.metrics.conversions || 0;
+                const revenue = (campaign.metrics.conversion_value_cents || 0) / 100;
+
+                allCampaigns.push({
+                  utm_source: 'google',
+                  utm_medium: 'cpc',
+                  utm_campaign: campaign.campaign_name,
+                  touchpoints: 0,
+                  conversions_in_path: 0,
+                  attributed_conversions: conversions,
+                  attributed_revenue: revenue,
+                  avg_position_in_path: 0
+                });
+
+                totalConversions += conversions;
+                totalRevenue += revenue;
+              }
+            } else if (platform === 'facebook') {
+              // Use FacebookSupabaseAdapter with facebook_ads schema
+              const adapter = new FacebookSupabaseAdapter(supabase);
+              const campaigns = await adapter.getCampaignsWithMetrics(orgId, effectiveDateRange);
+
+              for (const campaign of campaigns) {
+                const conversions = campaign.metrics.conversions || 0;
+                const revenue = (campaign.metrics.conversion_value_cents || 0) / 100;
+
+                allCampaigns.push({
+                  utm_source: 'facebook',
+                  utm_medium: 'paid',
+                  utm_campaign: campaign.campaign_name,
+                  touchpoints: 0,
+                  conversions_in_path: 0,
+                  attributed_conversions: conversions,
+                  attributed_revenue: revenue,
+                  avg_position_in_path: 0
+                });
+
+                totalConversions += conversions;
+                totalRevenue += revenue;
+              }
+            } else if (platform === 'tiktok') {
+              // Use TikTokAdsSupabaseAdapter with tiktok_ads schema
+              const adapter = new TikTokAdsSupabaseAdapter(supabase);
+              const campaigns = await adapter.getCampaigns(orgId);
+              const metrics = await adapter.getCampaignDailyMetrics(orgId, effectiveDateRange);
+
+              // Aggregate metrics by campaign
+              const metricsByCampaign: Record<string, { conversions: number; revenue: number }> = {};
+              for (const m of metrics) {
+                const ref = (m as any).campaign_ref;
+                if (!metricsByCampaign[ref]) {
+                  metricsByCampaign[ref] = { conversions: 0, revenue: 0 };
+                }
+                metricsByCampaign[ref].conversions += m.conversions || 0;
+                metricsByCampaign[ref].revenue += (m.conversion_value_cents || 0) / 100;
+              }
+
+              for (const campaign of campaigns) {
+                const campaignMetrics = metricsByCampaign[campaign.id] || { conversions: 0, revenue: 0 };
+
+                allCampaigns.push({
+                  utm_source: 'tiktok',
+                  utm_medium: 'paid',
+                  utm_campaign: campaign.campaign_name,
+                  touchpoints: 0,
+                  conversions_in_path: 0,
+                  attributed_conversions: campaignMetrics.conversions,
+                  attributed_revenue: campaignMetrics.revenue,
+                  avg_position_in_path: 0
+                });
+
+                totalConversions += campaignMetrics.conversions;
+                totalRevenue += campaignMetrics.revenue;
+              }
+            }
+          } catch (err) {
+            console.warn(`Failed to fetch ${platform} campaigns for fallback:`, err);
+          }
+        }
+
+        // Sort by attributed_conversions descending
+        allCampaigns.sort((a, b) => b.attributed_conversions - a.attributed_conversions);
+
+        return {
+          attributions: allCampaigns,
+          summary: { total_conversions: totalConversions, total_revenue: totalRevenue }
+        };
+      } catch (err) {
+        console.error('Failed to build platform fallback:', err);
+        return { attributions: [], summary: { total_conversions: 0, total_revenue: 0 } };
+      }
+    };
+
     if (!tagMapping) {
+      // No tag mapping = can't query events, fall back to platform data
+      try {
+        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+        if (supabaseKey) {
+          const supabase = new SupabaseClient({
+            url: c.env.SUPABASE_URL,
+            serviceKey: supabaseKey
+          });
+          const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
+
+          return success(c, {
+            model,
+            config: {
+              attribution_window_days: attributionWindowDays,
+              time_decay_half_life_days: timeDecayHalfLifeDays,
+              identity_stitching_enabled: useIdentityStitching
+            },
+            data_quality: {
+              quality: 'platform_reported' as DataQuality,
+              warnings: ['no_events', 'using_platform_conversions'] as DataWarning[],
+              event_count: 0,
+              conversion_count: 0,
+              fallback_source: 'ad_platforms'
+            },
+            attributions: fallback.attributions,
+            summary: {
+              total_conversions: fallback.summary.total_conversions,
+              total_revenue: fallback.summary.total_revenue,
+              avg_path_length: 0,
+              avg_days_to_convert: 0,
+              identified_users: 0,
+              anonymous_sessions: 0
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to fetch platform fallback:', err);
+      }
+
       return success(c, {
         model,
         config: {
           attribution_window_days: attributionWindowDays,
           time_decay_half_life_days: timeDecayHalfLifeDays,
           identity_stitching_enabled: useIdentityStitching
+        },
+        data_quality: {
+          quality: 'platform_reported' as DataQuality,
+          warnings: ['no_events', 'no_conversion_source'] as DataWarning[],
+          event_count: 0,
+          conversion_count: 0,
+          fallback_source: null
         },
         attributions: [],
         summary: {
@@ -200,6 +406,37 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         { method: 'GET' }
       ) || [];
 
+      const eventCount = events.length;
+
+      // Check for no events scenario - fall back to platform data
+      if (eventCount === 0) {
+        const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
+        return success(c, {
+          model,
+          config: {
+            attribution_window_days: attributionWindowDays,
+            time_decay_half_life_days: timeDecayHalfLifeDays,
+            identity_stitching_enabled: useIdentityStitching
+          },
+          data_quality: {
+            quality: 'platform_reported' as DataQuality,
+            warnings: ['no_events', 'using_platform_conversions'] as DataWarning[],
+            event_count: 0,
+            conversion_count: 0,
+            fallback_source: 'ad_platforms'
+          },
+          attributions: fallback.attributions,
+          summary: {
+            total_conversions: fallback.summary.total_conversions,
+            total_revenue: fallback.summary.total_revenue,
+            avg_path_length: 0,
+            avg_days_to_convert: 0,
+            identified_users: 0,
+            anonymous_sessions: 0
+          }
+        });
+      }
+
       // Build conversion paths with identity stitching
       // Note: nonConversionPaths reserved for future data-driven attribution
       const { conversionPaths } = buildConversionPaths(
@@ -207,6 +444,51 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         identityMap,
         attributionWindowDays
       );
+
+      const conversionCount = conversionPaths.length;
+
+      // Check for no conversions scenario - events exist but no conversion events tracked
+      if (conversionCount === 0) {
+        const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
+        return success(c, {
+          model,
+          config: {
+            attribution_window_days: attributionWindowDays,
+            time_decay_half_life_days: timeDecayHalfLifeDays,
+            identity_stitching_enabled: useIdentityStitching
+          },
+          data_quality: {
+            quality: 'estimated' as DataQuality,
+            warnings: ['no_tracked_conversions', 'using_platform_conversions'] as DataWarning[],
+            event_count: eventCount,
+            conversion_count: 0,
+            fallback_source: 'ad_platforms'
+          },
+          attributions: fallback.attributions,
+          summary: {
+            total_conversions: fallback.summary.total_conversions,
+            total_revenue: fallback.summary.total_revenue,
+            avg_path_length: 0,
+            avg_days_to_convert: 0,
+            identified_users: 0,
+            anonymous_sessions: eventCount // Use event count as proxy for sessions
+          }
+        });
+      }
+
+      // Determine data quality based on event/conversion counts
+      let dataQuality: DataQualityInfo = {
+        quality: 'verified',
+        warnings: [],
+        event_count: eventCount,
+        conversion_count: conversionCount,
+        fallback_source: null
+      };
+
+      // Check for insufficient events (less than 10 is unreliable)
+      if (eventCount < 10) {
+        dataQuality.warnings.push('insufficient_events');
+      }
 
       // Calculate attribution for each conversion path
       const attributionResults = conversionPaths.map(path =>
@@ -239,6 +521,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
           time_decay_half_life_days: timeDecayHalfLifeDays,
           identity_stitching_enabled: useIdentityStitching
         },
+        data_quality: dataQuality,
         attributions,
         summary: {
           total_conversions: totalConversions,
@@ -258,6 +541,13 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
           attribution_window_days: attributionWindowDays,
           time_decay_half_life_days: timeDecayHalfLifeDays,
           identity_stitching_enabled: useIdentityStitching
+        },
+        data_quality: {
+          quality: 'platform_reported' as DataQuality,
+          warnings: ['no_events'] as DataWarning[],
+          event_count: 0,
+          conversion_count: 0,
+          fallback_source: null
         },
         attributions: [],
         summary: {

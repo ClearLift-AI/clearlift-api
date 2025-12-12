@@ -4,6 +4,9 @@ import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { SupabaseClient } from "../../../services/supabase";
 import { getSecret } from "../../../utils/secrets";
+import { GoogleAdsSupabaseAdapter } from "../../../adapters/platforms/google-supabase";
+import { FacebookSupabaseAdapter } from "../../../adapters/platforms/facebook-supabase";
+import { TikTokAdsSupabaseAdapter } from "../../../adapters/platforms/tiktok-supabase";
 
 /**
  * DEPRECATED: GetPlatformData class removed - broken table naming
@@ -113,11 +116,35 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       const dateRange = startDate && endDate ? { start: startDate, end: endDate } : undefined;
 
       // Get aggregated data using the adapter
-      const [summary, byPlatform, timeSeries] = await Promise.all([
+      let [summary, byPlatform, timeSeries] = await Promise.all([
         adapter.getSummary(orgId, dateRange),
         adapter.getMetricsByPlatform(orgId, dateRange),
         adapter.getTimeSeries(orgId, dateRange)
       ]);
+
+      // "Best Available Data" fallback: if unified view is empty, query individual platform tables
+      if (summary.total_spend_cents === 0 && Object.keys(byPlatform).length === 0 && activePlatforms.length > 0) {
+        console.log(`Unified view empty for ${orgId}, falling back to individual platform tables`);
+        const fallbackData = await this.fetchPlatformFallback(supabase, orgId, activePlatforms, dateRange);
+
+        if (fallbackData.total_spend_cents > 0) {
+          summary = {
+            total_spend_cents: fallbackData.total_spend_cents,
+            total_impressions: fallbackData.total_impressions,
+            total_clicks: fallbackData.total_clicks,
+            total_conversions: fallbackData.total_conversions,
+            average_ctr: fallbackData.total_impressions > 0
+              ? (fallbackData.total_clicks / fallbackData.total_impressions) * 100
+              : 0,
+            average_cpc_cents: fallbackData.total_clicks > 0
+              ? Math.round(fallbackData.total_spend_cents / fallbackData.total_clicks)
+              : 0,
+            platforms_active: Object.keys(fallbackData.by_platform)
+          };
+          byPlatform = fallbackData.by_platform;
+          // Note: timeSeries will remain empty for fallback - can be enhanced later
+        }
+      }
 
       // Get conversion source setting
       const conversionSettings = await c.env.DB.prepare(`
@@ -241,5 +268,161 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       console.error('Failed to fetch Stripe conversions:', err);
       return null;
     }
+  }
+
+  /**
+   * Fallback: Fetch data from individual platform campaign tables when unified view is empty
+   * This implements the "best available data" pattern
+   * Uses platform-specific adapters with correct schema/table names
+   */
+  private async fetchPlatformFallback(
+    supabase: SupabaseClient,
+    orgId: string,
+    platforms: string[],
+    dateRange?: { start: string; end: string }
+  ): Promise<{
+    total_spend_cents: number;
+    total_impressions: number;
+    total_clicks: number;
+    total_conversions: number;
+    by_platform: Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number; campaigns: number }>;
+  }> {
+    const result = {
+      total_spend_cents: 0,
+      total_impressions: 0,
+      total_clicks: 0,
+      total_conversions: 0,
+      by_platform: {} as Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number; campaigns: number }>
+    };
+
+    // Build date range for queries (default: last 30 days)
+    const effectiveDateRange = dateRange || {
+      start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      end: new Date().toISOString().split('T')[0]
+    };
+
+    for (const platform of platforms) {
+      try {
+        const normalizedPlatform = platform.toLowerCase().replace('_ads', '');
+
+        if (normalizedPlatform === 'google') {
+          // Use GoogleAdsSupabaseAdapter with google_ads schema
+          const adapter = new GoogleAdsSupabaseAdapter(supabase);
+          const campaigns = await adapter.getCampaignsWithMetrics(orgId, effectiveDateRange);
+
+          let platformSpend = 0;
+          let platformImpressions = 0;
+          let platformClicks = 0;
+          let platformConversions = 0;
+
+          for (const campaign of campaigns) {
+            platformSpend += campaign.metrics.spend_cents || 0;
+            platformImpressions += campaign.metrics.impressions || 0;
+            platformClicks += campaign.metrics.clicks || 0;
+            platformConversions += campaign.metrics.conversions || 0;
+          }
+
+          result.by_platform['google'] = {
+            spend_cents: platformSpend,
+            impressions: platformImpressions,
+            clicks: platformClicks,
+            conversions: platformConversions,
+            campaigns: campaigns.length
+          };
+
+          result.total_spend_cents += platformSpend;
+          result.total_impressions += platformImpressions;
+          result.total_clicks += platformClicks;
+          result.total_conversions += platformConversions;
+
+          console.log(`Platform fallback google: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
+
+        } else if (normalizedPlatform === 'facebook' || normalizedPlatform === 'meta') {
+          // Use FacebookSupabaseAdapter with facebook_ads schema
+          const adapter = new FacebookSupabaseAdapter(supabase);
+          const campaigns = await adapter.getCampaignsWithMetrics(orgId, effectiveDateRange);
+
+          let platformSpend = 0;
+          let platformImpressions = 0;
+          let platformClicks = 0;
+          let platformConversions = 0;
+
+          for (const campaign of campaigns) {
+            platformSpend += campaign.metrics.spend_cents || 0;
+            platformImpressions += campaign.metrics.impressions || 0;
+            platformClicks += campaign.metrics.clicks || 0;
+            platformConversions += campaign.metrics.conversions || 0;
+          }
+
+          result.by_platform['facebook'] = {
+            spend_cents: platformSpend,
+            impressions: platformImpressions,
+            clicks: platformClicks,
+            conversions: platformConversions,
+            campaigns: campaigns.length
+          };
+
+          result.total_spend_cents += platformSpend;
+          result.total_impressions += platformImpressions;
+          result.total_clicks += platformClicks;
+          result.total_conversions += platformConversions;
+
+          console.log(`Platform fallback facebook: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
+
+        } else if (normalizedPlatform === 'tiktok') {
+          // Use TikTokAdsSupabaseAdapter with tiktok_ads schema
+          const adapter = new TikTokAdsSupabaseAdapter(supabase);
+          const campaigns = await adapter.getCampaigns(orgId);
+          const metrics = await adapter.getCampaignDailyMetrics(orgId, effectiveDateRange);
+
+          // Aggregate metrics by campaign
+          const metricsByCampaign: Record<string, { spend: number; impressions: number; clicks: number; conversions: number }> = {};
+          for (const m of metrics) {
+            const ref = (m as any).campaign_ref;
+            if (!metricsByCampaign[ref]) {
+              metricsByCampaign[ref] = { spend: 0, impressions: 0, clicks: 0, conversions: 0 };
+            }
+            metricsByCampaign[ref].spend += m.spend_cents || 0;
+            metricsByCampaign[ref].impressions += m.impressions || 0;
+            metricsByCampaign[ref].clicks += m.clicks || 0;
+            metricsByCampaign[ref].conversions += m.conversions || 0;
+          }
+
+          let platformSpend = 0;
+          let platformImpressions = 0;
+          let platformClicks = 0;
+          let platformConversions = 0;
+
+          for (const campaign of campaigns) {
+            const cm = metricsByCampaign[campaign.id] || { spend: 0, impressions: 0, clicks: 0, conversions: 0 };
+            platformSpend += cm.spend;
+            platformImpressions += cm.impressions;
+            platformClicks += cm.clicks;
+            platformConversions += cm.conversions;
+          }
+
+          result.by_platform['tiktok'] = {
+            spend_cents: platformSpend,
+            impressions: platformImpressions,
+            clicks: platformClicks,
+            conversions: platformConversions,
+            campaigns: campaigns.length
+          };
+
+          result.total_spend_cents += platformSpend;
+          result.total_impressions += platformImpressions;
+          result.total_clicks += platformClicks;
+          result.total_conversions += platformConversions;
+
+          console.log(`Platform fallback tiktok: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
+        } else {
+          console.warn(`Unknown platform for fallback: ${platform}`);
+        }
+      } catch (err) {
+        console.warn(`Failed to fetch ${platform} campaigns for fallback:`, err);
+      }
+    }
+
+    return result;
   }
 }
