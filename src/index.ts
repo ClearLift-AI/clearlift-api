@@ -396,6 +396,14 @@ openapi.post("/v1/onboarding/reset", auth, ResetOnboarding);
 // Connector endpoints
 openapi.get("/v1/connectors", auth, ListConnectors);
 openapi.get("/v1/connectors/connected", auth, ListConnectedPlatforms);
+
+// Stripe-specific connector endpoints (MUST be before generic :provider routes)
+openapi.post("/v1/connectors/stripe/connect", auth, ConnectStripe);
+openapi.put("/v1/connectors/stripe/:connection_id/config", auth, UpdateStripeConfig);
+openapi.post("/v1/connectors/stripe/:connection_id/sync", auth, TriggerStripeSync);
+openapi.post("/v1/connectors/stripe/:connection_id/test", auth, TestStripeConnection);
+
+// Generic OAuth provider endpoints (after platform-specific routes)
 openapi.post("/v1/connectors/:provider/connect", auth, InitiateOAuthFlow);
 openapi.get("/v1/connectors/:provider/callback", HandleOAuthCallback); // No auth - OAuth callback
 openapi.get("/v1/connectors/:provider/mock-callback", MockOAuthCallback); // No auth - Mock OAuth for local dev
@@ -413,12 +421,6 @@ openapi.post("/v1/connectors/:connection_id/resync", auth, TriggerResync);
 // Google Ads-specific connector endpoints (deprecated - use general settings endpoints instead)
 openapi.get("/v1/connectors/:connection_id/google-ads/accounts", auth, ListGoogleAdsAccounts);
 openapi.put("/v1/connectors/:connection_id/google-ads/settings", auth, UpdateGoogleAdsSettings);
-
-// Stripe-specific connector endpoints
-openapi.post("/v1/connectors/stripe/connect", auth, ConnectStripe);
-openapi.put("/v1/connectors/stripe/:connection_id/config", auth, UpdateStripeConfig);
-openapi.post("/v1/connectors/stripe/:connection_id/sync", auth, TriggerStripeSync);
-openapi.post("/v1/connectors/stripe/:connection_id/test", auth, TestStripeConnection);
 
 // Filter management endpoints
 openapi.post("/v1/connectors/:connection_id/filters", auth, CreateFilterRule);

@@ -88,41 +88,125 @@ export class StripeAPIProvider {
   }
 
   /**
+   * Hash API key to generate a unique identifier
+   * Used for restricted keys where we can't get the real account ID
+   */
+  private async hashApiKey(apiKey: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(apiKey);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /**
    * Validate API key and get account info
    * Works with both standard (sk_) and restricted (rk_) API keys
+   *
+   * For restricted keys, we use a minimal validation approach:
+   * 1. Try /v1/account (requires rak_accounts_kyc_basic_read)
+   * 2. If that fails, try listing 1 charge to validate read access
    */
   async validateAPIKey(apiKey: string): Promise<StripeAccountInfo> {
+    console.log('[Stripe] Starting API key validation...');
+    console.log('[Stripe] Key prefix:', apiKey.substring(0, 10) + '...');
+
     try {
-      // Both standard and restricted keys can access /v1/account endpoint
-      // /v1/account (singular) returns the account associated with the API key
-      const response = await fetch(`${this.baseUrl}/account`, {
+      // First, try the full /v1/account endpoint (works with standard keys)
+      console.log('[Stripe] Trying /v1/account endpoint...');
+      const accountResponse = await fetch(`${this.baseUrl}/account`, {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Stripe-Version': this.apiVersion
         }
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Invalid API key (${response.status}): ${errorText}`);
+      console.log('[Stripe] /v1/account response status:', accountResponse.status);
+
+      if (accountResponse.ok) {
+        // Standard key or restricted key with account permissions
+        const account = await accountResponse.json() as {
+          id: string;
+          business_profile: any;
+          charges_enabled: boolean;
+          country: string;
+          default_currency: string;
+        };
+
+        console.log('[Stripe] Account endpoint succeeded, account_id:', account.id);
+        return {
+          stripe_account_id: account.id,
+          business_profile: account.business_profile,
+          charges_enabled: account.charges_enabled,
+          country: account.country,
+          default_currency: account.default_currency
+        };
       }
 
-      const account = await response.json() as {
-        id: string;
-        business_profile: any;
-        charges_enabled: boolean;
-        country: string;
-        default_currency: string;
-      };
+      // If /v1/account fails (likely restricted key), validate with charges endpoint
+      console.log('[Stripe] Account endpoint failed (status:', accountResponse.status, '), trying charges validation for restricted key');
 
+      console.log('[Stripe] Trying /v1/charges?limit=1 endpoint...');
+      const chargesResponse = await fetch(`${this.baseUrl}/charges?limit=1`, {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Stripe-Version': this.apiVersion
+        }
+      });
+
+      console.log('[Stripe] /v1/charges response status:', chargesResponse.status);
+
+      if (!chargesResponse.ok) {
+        const errorText = await chargesResponse.text();
+        console.error('[Stripe] Charges endpoint failed:', errorText);
+        throw new Error(`Invalid API key - cannot read charges (${chargesResponse.status}): ${errorText}`);
+      }
+
+      console.log('[Stripe] Charges endpoint succeeded, generating key hash...');
+      // Key is valid for reading charges
+      // Generate a unique account ID based on key hash for duplicate detection
+      const keyHash = await this.hashApiKey(apiKey);
+      console.log('[Stripe] Key hash generated:', keyHash.substring(0, 8) + '...');
+      const keyParts = apiKey.split('_');
+      const isLive = keyParts[1] === 'live';
+
+      // Try to get minimal account info from balance endpoint (often allowed)
+      let accountId = `acct_rk_${keyHash.substring(0, 16)}`;
+      let currency = 'usd';
+      let country = 'US';
+
+      try {
+        const balanceResponse = await fetch(`${this.baseUrl}/balance`, {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Stripe-Version': this.apiVersion
+          }
+        });
+
+        if (balanceResponse.ok) {
+          const balance = await balanceResponse.json() as {
+            available: Array<{ currency: string }>;
+            livemode: boolean;
+          };
+          if (balance.available?.[0]?.currency) {
+            currency = balance.available[0].currency;
+          }
+        }
+      } catch (e) {
+        // Balance endpoint not available, use defaults
+        console.log('Balance endpoint not available, using defaults');
+      }
+
+      console.log('[Stripe] Returning restricted key validation result:', { accountId, currency, country });
       return {
-        stripe_account_id: account.id,
-        business_profile: account.business_profile,
-        charges_enabled: account.charges_enabled,
-        country: account.country,
-        default_currency: account.default_currency
+        stripe_account_id: accountId,
+        business_profile: { name: 'Stripe Account (Restricted Key)' },
+        charges_enabled: true, // If we can read charges, assume charges are enabled
+        country: country,
+        default_currency: currency
       };
     } catch (error) {
+      console.error('[Stripe] Validation failed with error:', error);
       throw new Error(`Failed to validate Stripe API key: ${error instanceof Error ? error.message : error}`);
     }
   }
