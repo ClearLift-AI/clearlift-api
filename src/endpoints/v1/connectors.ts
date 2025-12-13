@@ -35,7 +35,7 @@ export class ListConnectors extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const connectorService = new ConnectorService(c.env.DB);
+    const connectorService = ConnectorService.createSync(c.env.DB);
     const connectors = await connectorService.getAvailableConnectors();
 
     return success(c, { connectors });
@@ -78,7 +78,7 @@ export class ListConnectedPlatforms extends OpenAPIRoute {
         return error(c, "FORBIDDEN", "No access to this organization", 403);
       }
 
-      const connectorService = new ConnectorService(c.env.DB);
+      const connectorService = ConnectorService.createSync(c.env.DB);
       const connections = await connectorService.getOrganizationConnections(org_id);
 
       return success(c, { connections });
@@ -148,7 +148,7 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
 
     // Create OAuth state with PKCE verifier stored in metadata
     const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-    const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+    const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
     const state = await connectorService.createOAuthState(
       session.user_id,
       organization_id,
@@ -264,7 +264,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     try {
       // Get state (don't consume yet - needed for account selection)
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
 
       console.log('[HandleOAuthCallback] Looking up OAuth state:', { state, provider });
       const oauthState = await connectorService.getOAuthState(state);
@@ -418,7 +418,7 @@ export class MockOAuthCallback extends OpenAPIRoute {
     try {
       // Get OAuth state
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const oauthState = await connectorService.getOAuthState(state);
 
       if (!oauthState) {
@@ -555,7 +555,7 @@ export class GetOAuthAccounts extends OpenAPIRoute {
     try {
       // Get OAuth state (don't consume yet - still needed for finalize step)
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const oauthState = await connectorService.getOAuthState(state);
 
       if (!oauthState) {
@@ -765,7 +765,7 @@ export class GetChildAccounts extends OpenAPIRoute {
     try {
       // Get OAuth state (don't consume yet)
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const oauthState = await connectorService.getOAuthState(state);
 
       if (!oauthState) {
@@ -862,7 +862,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
     try {
       // Validate OAuth state
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const oauthState = await connectorService.validateOAuthState(state);
 
       if (!oauthState) {
@@ -1095,7 +1095,7 @@ export class ListGoogleAdsAccounts extends OpenAPIRoute {
 
       // Get connection and verify access
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const connection = await connectorService.getConnection(connection_id);
 
       if (!connection) {
@@ -1204,7 +1204,7 @@ export class GetConnectorSettings extends OpenAPIRoute {
 
       // Get connection and verify access
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const connection = await connectorService.getConnection(connection_id);
 
       if (!connection) {
@@ -1308,7 +1308,7 @@ export class UpdateConnectorSettings extends OpenAPIRoute {
 
       // Get connection and verify access
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const connection = await connectorService.getConnection(connection_id);
 
       if (!connection) {
@@ -1386,7 +1386,7 @@ export class UpdateGoogleAdsSettings extends OpenAPIRoute {
 
       // Get connection and verify access
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const connection = await connectorService.getConnection(connection_id);
 
       if (!connection) {
@@ -1460,7 +1460,7 @@ export class TriggerResync extends OpenAPIRoute {
 
       // Get connection and verify access
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const connection = await connectorService.getConnection(connection_id);
 
       if (!connection) {
@@ -1542,7 +1542,7 @@ export class DisconnectPlatform extends OpenAPIRoute {
     const { connection_id } = data.params;
 
     const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-    const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+    const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
     const connection = await connectorService.getConnection(connection_id);
 
     if (!connection) {

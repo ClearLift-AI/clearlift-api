@@ -416,7 +416,7 @@ export class AcceptAIDecision extends OpenAPIRoute {
     if (!encryptionKey) throw new Error("Encryption key not configured");
 
     const { ConnectorService } = await import("../../services/connectors");
-    const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+    const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
     const accessToken = await connectorService.getAccessToken(connection.id);
 
     if (!accessToken) throw new Error("Failed to retrieve access token");

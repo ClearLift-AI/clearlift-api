@@ -505,8 +505,7 @@ export class UpdateFacebookCampaignStatus extends OpenAPIRoute {
         return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
       }
       const { ConnectorService } = await import('../../../services/connectors');
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const accessToken = await connectorService.getAccessToken(connection.id);
 
       if (!accessToken) {
@@ -593,8 +592,7 @@ export class UpdateFacebookAdSetStatus extends OpenAPIRoute {
         return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
       }
       const { ConnectorService } = await import('../../../services/connectors');
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const accessToken = await connectorService.getAccessToken(connection.id);
 
       if (!accessToken) {
@@ -681,8 +679,7 @@ export class UpdateFacebookAdStatus extends OpenAPIRoute {
         return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
       }
       const { ConnectorService } = await import('../../../services/connectors');
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const accessToken = await connectorService.getAccessToken(connection.id);
 
       if (!accessToken) {
@@ -774,8 +771,7 @@ export class UpdateFacebookCampaignBudget extends OpenAPIRoute {
         return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
       }
       const { ConnectorService } = await import('../../../services/connectors');
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const accessToken = await connectorService.getAccessToken(connection.id);
 
       if (!accessToken) {
@@ -866,8 +862,7 @@ export class UpdateFacebookAdSetBudget extends OpenAPIRoute {
         return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
       }
       const { ConnectorService } = await import('../../../services/connectors');
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const accessToken = await connectorService.getAccessToken(connection.id);
 
       if (!accessToken) {
@@ -1001,8 +996,7 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
         return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
       }
       const { ConnectorService } = await import('../../../services/connectors');
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const accessToken = await connectorService.getAccessToken(connection.id);
 
       if (!accessToken) {

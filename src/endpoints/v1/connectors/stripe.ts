@@ -107,10 +107,7 @@ export class ConnectStripe extends OpenAPIRoute {
 
       // Create connection
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
-
-      // Wait for encryption to initialize (async constructor issue)
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
 
       const connectionId = await connectorService.createConnection({
         organizationId: organization_id,
@@ -386,7 +383,7 @@ export class TestStripeConnection extends OpenAPIRoute {
     try {
       // Get API key
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
       const apiKey = await connectorService.getAccessToken(connectionId);
 
       if (!apiKey) {

@@ -50,12 +50,25 @@ export interface OAuthState {
 export class ConnectorService {
   private encryption: FieldEncryption | null = null;
 
-  constructor(private db: D1Database, encryptionKey?: string) {
+  private constructor(private db: D1Database) {}
+
+  /**
+   * Create a ConnectorService instance with encryption properly initialized
+   * Use this instead of `new ConnectorService()` to ensure encryption is ready
+   */
+  static async create(db: D1Database, encryptionKey?: string): Promise<ConnectorService> {
+    const service = new ConnectorService(db);
     if (encryptionKey) {
-      FieldEncryption.create(encryptionKey).then(enc => {
-        this.encryption = enc;
-      });
+      service.encryption = await FieldEncryption.create(encryptionKey);
     }
+    return service;
+  }
+
+  /**
+   * @deprecated Use ConnectorService.create() instead
+   */
+  static createSync(db: D1Database): ConnectorService {
+    return new ConnectorService(db);
   }
 
   /**

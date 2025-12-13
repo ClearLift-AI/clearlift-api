@@ -345,10 +345,7 @@ export class TestConnectionToken extends OpenAPIRoute {
       // Get decrypted access token
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
       const { ConnectorService } = await import('../../services/connectors');
-      const connectorService = new ConnectorService(c.env.DB, encryptionKey);
-
-      // Wait for encryption to initialize
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
 
       const accessToken = await connectorService.getAccessToken(connection_id);
 
