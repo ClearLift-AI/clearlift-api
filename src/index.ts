@@ -134,6 +134,16 @@ import {
   RejectAIDecision
 } from "./endpoints/v1/settings";
 import {
+  ListConversionGoals,
+  CreateConversionGoal,
+  UpdateConversionGoal,
+  DeleteConversionGoal,
+  ListEventFilters,
+  CreateEventFilter,
+  UpdateEventFilter,
+  DeleteEventFilter
+} from "./endpoints/v1/goals";
+import {
   RunAnalysis,
   GetAnalysisStatus,
   GetLatestAnalysis,
@@ -439,6 +449,18 @@ openapi.post("/v1/tracking-config/snippet", auth, GenerateTrackingSnippet);
 openapi.get("/v1/settings/ai-decisions", auth, requireOrg, GetAIDecisions);
 openapi.post("/v1/settings/ai-decisions/:decision_id/accept", auth, requireOrg, requireOrgAdmin, AcceptAIDecision);
 openapi.post("/v1/settings/ai-decisions/:decision_id/reject", auth, requireOrg, requireOrgAdmin, RejectAIDecision);
+
+// Conversion Goals endpoints
+openapi.get("/v1/goals", auth, requireOrg, ListConversionGoals);
+openapi.post("/v1/goals", auth, requireOrg, requireOrgAdmin, CreateConversionGoal);
+openapi.put("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, UpdateConversionGoal);
+openapi.delete("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, DeleteConversionGoal);
+
+// Event Filters endpoints
+openapi.get("/v1/event-filters", auth, requireOrg, ListEventFilters);
+openapi.post("/v1/event-filters", auth, requireOrg, requireOrgAdmin, CreateEventFilter);
+openapi.put("/v1/event-filters/:id", auth, requireOrg, requireOrgAdmin, UpdateEventFilter);
+openapi.delete("/v1/event-filters/:id", auth, requireOrg, requireOrgAdmin, DeleteEventFilter);
 
 // AI Analysis endpoints (hierarchical insights)
 openapi.post("/v1/analysis/run", auth, requireOrg, RunAnalysis);

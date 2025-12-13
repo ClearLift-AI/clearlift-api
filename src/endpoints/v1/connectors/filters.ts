@@ -509,19 +509,33 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
       serviceKey: supabaseKey
     });
     const adapter = new StripeSupabaseAdapter(supabase);
-    const keys = await adapter.getMetadataKeys(connectionId);
 
-    // Get cached metadata key info
-    const cachedKeys = await c.env.DB.prepare(`
-      SELECT object_type, key_path, sample_values, value_type, occurrence_count
-      FROM stripe_metadata_keys
-      WHERE connection_id = ?
-      ORDER BY occurrence_count DESC
-    `).bind(connectionId).all();
+    let keys: Record<string, string[]> = {};
+    try {
+      keys = await adapter.getMetadataKeys(connectionId);
+    } catch (err: any) {
+      console.error("Failed to get metadata keys from Supabase:", err);
+      // Return empty keys if Supabase query fails - don't block the response
+    }
+
+    // Get cached metadata key info (table may not exist for new connections)
+    let cachedKeys: any[] = [];
+    try {
+      const result = await c.env.DB.prepare(`
+        SELECT object_type, key_path, sample_values, value_type, occurrence_count
+        FROM stripe_metadata_keys
+        WHERE connection_id = ?
+        ORDER BY occurrence_count DESC
+      `).bind(connectionId).all();
+      cachedKeys = result.results || [];
+    } catch (err: any) {
+      console.error("Failed to get cached metadata keys:", err);
+      // Table may not exist - not a critical error
+    }
 
     return success(c, {
       discovered_keys: keys,
-      metadata_info: cachedKeys.results || [],
+      metadata_info: cachedKeys,
       total_keys: Object.values(keys).reduce((sum, arr) => sum + arr.length, 0)
     });
   }

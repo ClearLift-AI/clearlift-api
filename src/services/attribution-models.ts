@@ -42,6 +42,7 @@ export interface AttributionResult {
 }
 
 export type AttributionModel =
+  | 'platform'         // Self-reported by ad platforms (no attribution calculation)
   | 'first_touch'
   | 'last_touch'
   | 'linear'
@@ -1201,4 +1202,369 @@ function eventToTouchpoint(event: any): Touchpoint {
     event_type: event.event_type,
     page_url: event.page_url
   };
+}
+
+// ===== Engagement-Weighted Blending for Platform + Tag Scenario =====
+
+export interface SessionEngagement {
+  session_id: string;
+  anonymous_id?: string;
+  campaign: string;            // UTM campaign or source/medium combo
+  utm_source: string;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  engagement_score: number;    // 0-100
+  time_seconds: number;
+  pages_viewed: number;
+  avg_scroll_depth: number;    // 0-100
+  interactions: number;
+  is_return_visit: boolean;
+}
+
+export interface PlatformConversion {
+  platform: string;           // google, facebook, tiktok
+  campaign_name: string;
+  conversions: number;
+  revenue_cents: number;
+}
+
+export interface BlendedAttribution {
+  campaign: string;
+  utm_source: string;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  attributed_conversions: number;
+  attributed_revenue: number;
+  sessions_count: number;
+  avg_engagement_score: number;
+}
+
+/**
+ * Calculate engagement score for a session
+ * Weights:
+ *   time_on_site: 30% (normalized to 5 min max = 30 points)
+ *   pages_viewed: 25% (normalized to 10 pages max = 25 points)
+ *   scroll_depth_avg: 20% (0-100 maps to 0-20 points)
+ *   interactions: 15% (normalized to 10 interactions max = 15 points)
+ *   return_visit: 10% (boolean, 0 or 10 points)
+ */
+export function calculateEngagementScore(session: {
+  time_seconds: number;
+  pages_viewed: number;
+  avg_scroll_depth: number;
+  interactions: number;
+  is_return_visit: boolean;
+}): number {
+  const timeScore = Math.min(session.time_seconds / 300, 1) * 30;      // Max 5 min = 30 points
+  const pagesScore = Math.min(session.pages_viewed / 10, 1) * 25;      // Max 10 pages = 25 points
+  const scrollScore = (session.avg_scroll_depth / 100) * 20;           // 0-100 maps to 0-20
+  const interactScore = Math.min(session.interactions / 10, 1) * 15;   // Max 10 = 15 points
+  const returnScore = session.is_return_visit ? 10 : 0;                // Boolean = 0 or 10
+
+  return Math.min(100, Math.round(timeScore + pagesScore + scrollScore + interactScore + returnScore));
+}
+
+/**
+ * Calculate session metrics from a list of events
+ */
+export function calculateSessionMetrics(sessionEvents: any[]): {
+  time_seconds: number;
+  pages_viewed: number;
+  avg_scroll_depth: number;
+  interactions: number;
+  is_return_visit: boolean;
+} {
+  if (sessionEvents.length === 0) {
+    return {
+      time_seconds: 0,
+      pages_viewed: 0,
+      avg_scroll_depth: 0,
+      interactions: 0,
+      is_return_visit: false,
+    };
+  }
+
+  // Sort by timestamp
+  const sorted = [...sessionEvents].sort((a, b) =>
+    new Date(a.event_timestamp || a.timestamp).getTime() -
+    new Date(b.event_timestamp || b.timestamp).getTime()
+  );
+
+  // Time on site: first to last event
+  const firstTime = new Date(sorted[0].event_timestamp || sorted[0].timestamp).getTime();
+  const lastTime = new Date(sorted[sorted.length - 1].event_timestamp || sorted[sorted.length - 1].timestamp).getTime();
+  const time_seconds = Math.round((lastTime - firstTime) / 1000);
+
+  // Pages viewed: unique page URLs
+  const pageUrls = new Set(sorted.filter(e => e.page_url).map(e => e.page_url));
+  const pages_viewed = pageUrls.size;
+
+  // Avg scroll depth: average of scroll events
+  const scrollEvents = sorted.filter(e => e.scroll_depth !== undefined);
+  const avg_scroll_depth = scrollEvents.length > 0
+    ? Math.round(scrollEvents.reduce((sum, e) => sum + (e.scroll_depth || 0), 0) / scrollEvents.length)
+    : 0;
+
+  // Interactions: clicks, form submits, etc.
+  const interactionTypes = ['click', 'form_submit', 'button_click', 'link_click', 'add_to_cart'];
+  const interactions = sorted.filter(e => interactionTypes.includes(e.event_type)).length;
+
+  // Return visit: check if any event has is_returning flag or previous session count
+  const is_return_visit = sorted.some(e => e.is_returning || (e.session_count && e.session_count > 1));
+
+  return {
+    time_seconds,
+    pages_viewed,
+    avg_scroll_depth,
+    interactions,
+    is_return_visit,
+  };
+}
+
+/**
+ * Group events by session and calculate engagement for each
+ */
+export function groupEventsBySession(events: any[]): Map<string, SessionEngagement> {
+  // Group events by session_id
+  const sessionGroups = new Map<string, any[]>();
+  for (const event of events) {
+    const sessionId = event.session_id;
+    if (!sessionId) continue;
+
+    if (!sessionGroups.has(sessionId)) {
+      sessionGroups.set(sessionId, []);
+    }
+    sessionGroups.get(sessionId)!.push(event);
+  }
+
+  // Calculate engagement for each session
+  const sessions = new Map<string, SessionEngagement>();
+  for (const [sessionId, sessionEvents] of sessionGroups) {
+    const firstEvent = sessionEvents.find(e => e.utm_source) || sessionEvents[0];
+    const metrics = calculateSessionMetrics(sessionEvents);
+    const engagementScore = calculateEngagementScore(metrics);
+
+    // Build campaign key from UTM params
+    const utmSource = firstEvent.utm_source || '(direct)';
+    const utmMedium = firstEvent.utm_medium || null;
+    const utmCampaign = firstEvent.utm_campaign || null;
+    const campaign = utmCampaign || `${utmSource}/${utmMedium || 'none'}`;
+
+    sessions.set(sessionId, {
+      session_id: sessionId,
+      anonymous_id: firstEvent.anonymous_id,
+      campaign,
+      utm_source: utmSource,
+      utm_medium: utmMedium,
+      utm_campaign: utmCampaign,
+      engagement_score: engagementScore,
+      ...metrics,
+    });
+  }
+
+  return sessions;
+}
+
+/**
+ * Distribute platform conversions across sessions weighted by engagement
+ *
+ * Example:
+ *   Platform reports 10 conversions for "Summer Sale" campaign
+ *   Session A: score 65, Session B: score 12, Session C: score 48
+ *   Total score: 125
+ *   Session A gets: (65/125) × 10 = 5.2 conversions
+ *   Session B gets: (12/125) × 10 = 0.96 conversions
+ *   Session C gets: (48/125) × 10 = 3.84 conversions
+ */
+export function distributeConversionsWeighted(
+  sessions: SessionEngagement[],
+  totalConversions: number,
+  totalRevenue: number
+): Map<string, { conversions: number; revenue: number }> {
+  const distribution = new Map<string, { conversions: number; revenue: number }>();
+
+  if (sessions.length === 0) {
+    return distribution;
+  }
+
+  const totalScore = sessions.reduce((sum, s) => sum + s.engagement_score, 0);
+  if (totalScore === 0) {
+    // Equal distribution if all scores are 0
+    const perSession = totalConversions / sessions.length;
+    const perSessionRevenue = totalRevenue / sessions.length;
+    for (const session of sessions) {
+      distribution.set(session.session_id, {
+        conversions: perSession,
+        revenue: perSessionRevenue,
+      });
+    }
+    return distribution;
+  }
+
+  for (const session of sessions) {
+    const weight = session.engagement_score / totalScore;
+    distribution.set(session.session_id, {
+      conversions: totalConversions * weight,
+      revenue: totalRevenue * weight,
+    });
+  }
+
+  return distribution;
+}
+
+/**
+ * Match sessions to platform campaigns by UTM source/campaign
+ */
+export function matchSessionsToPlatforms(
+  sessions: SessionEngagement[],
+  platformConversions: PlatformConversion[]
+): Map<string, SessionEngagement[]> {
+  // Map platform names to UTM sources
+  const platformToSource: Record<string, string[]> = {
+    google: ['google', 'adwords', 'google_ads'],
+    facebook: ['facebook', 'fb', 'meta', 'instagram', 'ig'],
+    tiktok: ['tiktok', 'tik_tok', 'tt'],
+  };
+
+  const matchedSessions = new Map<string, SessionEngagement[]>();
+
+  for (const platformConv of platformConversions) {
+    const key = `${platformConv.platform}:${platformConv.campaign_name}`;
+    matchedSessions.set(key, []);
+
+    const sources = platformToSource[platformConv.platform] || [platformConv.platform];
+
+    for (const session of sessions) {
+      // Match by source
+      const sourceMatch = sources.some(s =>
+        session.utm_source.toLowerCase().includes(s)
+      );
+
+      // If campaign name provided, also check campaign match
+      const campaignMatch = !session.utm_campaign ||
+        session.utm_campaign?.toLowerCase().includes(platformConv.campaign_name.toLowerCase());
+
+      if (sourceMatch && campaignMatch) {
+        matchedSessions.get(key)!.push(session);
+      }
+    }
+  }
+
+  return matchedSessions;
+}
+
+/**
+ * Blend platform-reported conversions with tracked sessions
+ * Returns attribution data with estimated conversions per campaign
+ */
+export function blendPlatformWithSessions(
+  sessions: SessionEngagement[],
+  platformConversions: PlatformConversion[],
+  model: AttributionModel = 'last_touch'
+): BlendedAttribution[] {
+  const results: BlendedAttribution[] = [];
+
+  // Group sessions by campaign
+  const sessionsByCampaign = new Map<string, SessionEngagement[]>();
+  for (const session of sessions) {
+    const key = session.campaign;
+    if (!sessionsByCampaign.has(key)) {
+      sessionsByCampaign.set(key, []);
+    }
+    sessionsByCampaign.get(key)!.push(session);
+  }
+
+  // Match sessions to platform campaigns and distribute
+  const matchedSessions = matchSessionsToPlatforms(sessions, platformConversions);
+
+  for (const platformConv of platformConversions) {
+    const key = `${platformConv.platform}:${platformConv.campaign_name}`;
+    const campaignSessions = matchedSessions.get(key) || [];
+
+    if (campaignSessions.length === 0) {
+      // No sessions matched, use platform data directly
+      results.push({
+        campaign: platformConv.campaign_name,
+        utm_source: platformConv.platform,
+        utm_medium: 'cpc',
+        utm_campaign: platformConv.campaign_name,
+        attributed_conversions: platformConv.conversions,
+        attributed_revenue: platformConv.revenue_cents / 100,
+        sessions_count: 0,
+        avg_engagement_score: 0,
+      });
+    } else {
+      // Distribute conversions weighted by engagement
+      const distribution = distributeConversionsWeighted(
+        campaignSessions,
+        platformConv.conversions,
+        platformConv.revenue_cents / 100
+      );
+
+      // Aggregate back to campaign level
+      let totalAttributed = 0;
+      let totalRevenue = 0;
+      let totalEngagement = 0;
+
+      for (const session of campaignSessions) {
+        const sessionDist = distribution.get(session.session_id);
+        if (sessionDist) {
+          totalAttributed += sessionDist.conversions;
+          totalRevenue += sessionDist.revenue;
+        }
+        totalEngagement += session.engagement_score;
+      }
+
+      results.push({
+        campaign: platformConv.campaign_name,
+        utm_source: platformConv.platform,
+        utm_medium: campaignSessions[0]?.utm_medium || 'cpc',
+        utm_campaign: platformConv.campaign_name,
+        attributed_conversions: totalAttributed,
+        attributed_revenue: totalRevenue,
+        sessions_count: campaignSessions.length,
+        avg_engagement_score: campaignSessions.length > 0
+          ? Math.round(totalEngagement / campaignSessions.length)
+          : 0,
+      });
+    }
+  }
+
+  // Add any campaigns from sessions that don't match platform data
+  const coveredCampaigns = new Set(
+    platformConversions.map(p => `${p.platform}:${p.campaign_name}`)
+  );
+
+  for (const [campaign, campSessions] of sessionsByCampaign) {
+    const firstSession = campSessions[0];
+    const matchKey = `${firstSession.utm_source}:${campaign}`;
+
+    // Skip if already covered by platform data
+    const isCovered = platformConversions.some(p => {
+      const key = `${p.platform}:${p.campaign_name}`;
+      return matchedSessions.get(key)?.some(s => s.campaign === campaign);
+    });
+
+    if (!isCovered) {
+      const avgEngagement = Math.round(
+        campSessions.reduce((sum, s) => sum + s.engagement_score, 0) / campSessions.length
+      );
+
+      results.push({
+        campaign,
+        utm_source: firstSession.utm_source,
+        utm_medium: firstSession.utm_medium,
+        utm_campaign: firstSession.utm_campaign,
+        attributed_conversions: 0, // No platform data to distribute
+        attributed_revenue: 0,
+        sessions_count: campSessions.length,
+        avg_engagement_score: avgEngagement,
+      });
+    }
+  }
+
+  // Sort by attributed conversions descending
+  results.sort((a, b) => b.attributed_conversions - a.attributed_conversions);
+
+  return results;
 }
