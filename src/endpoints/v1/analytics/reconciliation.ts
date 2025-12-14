@@ -118,7 +118,7 @@ Compare ad platform claims against actual verified revenue from payment platform
     const platform = (query.platform || 'all') as AdPlatform | 'all';
 
     const d1 = new D1Adapter(c.env.DB);
-    const org = await d1.getOrganizationById(orgId);
+    const org = await d1.getOrganization(orgId);
     if (!org) {
       return error(c, "NOT_FOUND", "Organization not found", 404);
     }
@@ -578,7 +578,7 @@ export class ImportPlatformClaims extends OpenAPIRoute {
         updated_at: claim.updated_at.toISOString()
       }));
 
-      await supabase.upsert('revenue.platform_conversion_claims', insertData, 'revenue');
+      await supabase.upsert('revenue.platform_conversion_claims', insertData, { onConflict: 'organization_id,ad_platform,platform_conversion_id' });
 
       return success(c, {
         imported: claims.length,

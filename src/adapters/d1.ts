@@ -68,6 +68,7 @@ export interface OrganizationWithAttribution extends Organization {
   attribution_window_days: number;
   default_attribution_model: string;
   time_decay_half_life_days: number;
+  conversion_source: 'platform' | 'tag' | 'hybrid';
 }
 
 export class D1Adapter {
@@ -120,6 +121,10 @@ export class D1Adapter {
           om.role,
           om.joined_at,
           otm.short_tag as org_tag,
+          COALESCE(o.default_attribution_model, 'last_touch') as default_attribution_model,
+          COALESCE(o.attribution_window_days, 30) as attribution_window_days,
+          COALESCE(o.time_decay_half_life_days, 7) as time_decay_half_life_days,
+          COALESCE(o.conversion_source, 'tag') as conversion_source,
           (SELECT COUNT(*) FROM organization_members WHERE organization_id = o.id) as members_count,
           (SELECT COUNT(*) FROM platform_connections WHERE organization_id = o.id AND is_active = 1) as platforms_count
         FROM organizations o
@@ -505,7 +510,8 @@ export class D1Adapter {
           id, name, slug, created_at, updated_at, settings, subscription_tier,
           COALESCE(attribution_window_days, 30) as attribution_window_days,
           COALESCE(default_attribution_model, 'last_touch') as default_attribution_model,
-          COALESCE(time_decay_half_life_days, 7) as time_decay_half_life_days
+          COALESCE(time_decay_half_life_days, 7) as time_decay_half_life_days,
+          COALESCE(conversion_source, 'tag') as conversion_source
         FROM organizations WHERE id = ?
       `)
       .bind(orgId)

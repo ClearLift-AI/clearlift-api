@@ -150,10 +150,11 @@ export class UpdateOrganization extends OpenAPIRoute {
           name: z.string().min(2).max(100).optional(),
           default_attribution_model: z.enum([
             'first_touch', 'last_touch', 'linear', 'time_decay',
-            'position_based', 'markov_chain', 'shapley_value'
+            'position_based', 'markov_chain', 'shapley_value', 'platform'
           ]).optional(),
           attribution_window_days: z.number().int().min(1).max(180).optional(),
-          time_decay_half_life_days: z.number().int().min(1).max(90).optional()
+          time_decay_half_life_days: z.number().int().min(1).max(90).optional(),
+          conversion_source: z.enum(['platform', 'tag', 'hybrid']).optional()
         })
       )
     },
@@ -192,7 +193,8 @@ export class UpdateOrganization extends OpenAPIRoute {
       name,
       default_attribution_model,
       attribution_window_days,
-      time_decay_half_life_days
+      time_decay_half_life_days,
+      conversion_source
     } = data.body;
 
     // Authorization check handled by requireOrgAdmin middleware
@@ -218,6 +220,10 @@ export class UpdateOrganization extends OpenAPIRoute {
       updates.push('time_decay_half_life_days = ?');
       values.push(time_decay_half_life_days);
     }
+    if (conversion_source !== undefined) {
+      updates.push('conversion_source = ?');
+      values.push(conversion_source);
+    }
 
     // Update organization
     values.push(orgId);
@@ -230,7 +236,7 @@ export class UpdateOrganization extends OpenAPIRoute {
     // Fetch updated organization
     const org = await c.env.DB.prepare(`
       SELECT id, name, default_attribution_model, attribution_window_days,
-             time_decay_half_life_days, updated_at
+             time_decay_half_life_days, conversion_source, updated_at
       FROM organizations WHERE id = ?
     `).bind(orgId).first();
 
@@ -241,6 +247,7 @@ export class UpdateOrganization extends OpenAPIRoute {
         default_attribution_model: org!.default_attribution_model || 'last_touch',
         attribution_window_days: org!.attribution_window_days || 30,
         time_decay_half_life_days: org!.time_decay_half_life_days || 7,
+        conversion_source: org!.conversion_source || 'tag',
         updated_at: org!.updated_at
       }
     });
@@ -1196,7 +1203,7 @@ export class AddTrackingDomain extends OpenAPIRoute {
         is_primary: is_primary,
         created_at: now
       }
-    }, 201);
+    }, undefined, 201);
   }
 }
 

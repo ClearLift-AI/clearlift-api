@@ -144,6 +144,10 @@ import {
   DeleteEventFilter
 } from "./endpoints/v1/goals";
 import {
+  GetGoalMetrics,
+  GetGoalConversions
+} from "./endpoints/v1/goal-metrics";
+import {
   RunAnalysis,
   GetAnalysisStatus,
   GetLatestAnalysis,
@@ -457,6 +461,10 @@ openapi.get("/v1/goals", auth, requireOrg, ListConversionGoals);
 openapi.post("/v1/goals", auth, requireOrg, requireOrgAdmin, CreateConversionGoal);
 openapi.put("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, UpdateConversionGoal);
 openapi.delete("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, DeleteConversionGoal);
+
+// Goal Metrics endpoints (Supabase data)
+openapi.get("/v1/goals/:id/metrics", auth, requireOrg, GetGoalMetrics);
+openapi.get("/v1/goals/:id/conversions", auth, requireOrg, GetGoalConversions);
 
 // Event Filters endpoints
 openapi.get("/v1/event-filters", auth, requireOrg, ListEventFilters);

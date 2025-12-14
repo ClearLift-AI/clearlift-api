@@ -424,7 +424,7 @@ export class ReconciliationService {
         Math.abs(conv.revenue_cents - claim.claimed_conversion_value_cents) <= 100 // Within $1
       );
 
-      if (similarValueConversions.length > 0 && analysis.possible_reason === 'unknown') {
+      if (similarValueConversions.length > 0) {
         analysis.possible_reason = 'value_match_no_click_id';
         analysis.suggestion = `Found ${similarValueConversions.length} conversion(s) with similar value but different/missing click_id.`;
         analysis.potential_matches = similarValueConversions.slice(0, 5).map(c => ({
