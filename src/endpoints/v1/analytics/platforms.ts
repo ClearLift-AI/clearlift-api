@@ -212,7 +212,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
 
 
   /**
-   * Fetch conversions from Stripe (stripe_conversions table)
+   * Fetch conversions from Stripe (stripe.payment_intents table)
    */
   private async fetchStripeConversions(
     supabase: SupabaseClient,
@@ -221,21 +221,25 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     endDate?: string
   ): Promise<{ total_conversions: number; by_date: any[] } | null> {
     try {
-      // Build date filter for stripe_conversions table (uses stripe_created_at timestamp)
-      const filters = [`organization_id.eq.${orgId}`];
+      // Build query params for stripe.payment_intents table
+      const params = new URLSearchParams();
+      params.append('organization_id', `eq.${orgId}`);
+      params.append('status', 'eq.succeeded');
       if (startDate && endDate) {
-        filters.push(`stripe_created_at.gte.${startDate}T00:00:00Z`, `stripe_created_at.lte.${endDate}T23:59:59Z`);
+        params.append('created', `gte.${startDate}T00:00:00Z`);
+        params.append('created', `lte.${endDate}T23:59:59Z`);
       }
-      const query = filters.join('&');
+      params.append('order', 'created.asc');
+      params.append('limit', '10000');
 
-      // Fetch Stripe conversion data
-      const conversions = await supabase.select(
-        'stripe_conversions',
-        query,
-        { limit: 10000, order: 'stripe_created_at.asc' }
-      );
+      // Fetch Stripe payment intents from stripe schema
+      const conversions = await supabase.queryWithSchema<any[]>(
+        `payment_intents?${params.toString()}`,
+        'stripe',
+        { method: 'GET' }
+      ) || [];
 
-      if (!conversions || conversions.length === 0) {
+      if (conversions.length === 0) {
         return null;
       }
 
@@ -244,8 +248,8 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       let totalConversions = 0;
 
       for (const conversion of conversions) {
-        // Extract date from stripe_created_at timestamp (YYYY-MM-DD)
-        const timestamp = conversion.stripe_created_at;
+        // Extract date from created timestamp (YYYY-MM-DD)
+        const timestamp = conversion.created;
         const date = timestamp ? timestamp.split('T')[0] : null;
 
         if (!date) continue;

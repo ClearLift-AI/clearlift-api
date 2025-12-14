@@ -275,14 +275,14 @@ function identifyConversions(events: any[], goals: ConversionGoal[]): any[] {
   return conversions;
 }
 
-// Helper: Query connector conversions from revenue.conversions table
+// Helper: Query connector conversions from conversions.unified table
 async function queryConnectorConversions(
   supabase: SupabaseClient,
   orgId: string,
   dateRange: { start: string; end: string }
 ): Promise<ConnectorConversion[]> {
   try {
-    // Query revenue.conversions table via Supabase REST API
+    // Query conversions.unified table via Supabase REST API
     const params = new URLSearchParams();
     params.append('organization_id', `eq.${orgId}`);
     params.append('conversion_timestamp', `gte.${dateRange.start}T00:00:00Z`);
@@ -292,8 +292,8 @@ async function queryConnectorConversions(
     params.append('limit', '10000');
 
     const conversions = await supabase.queryWithSchema<ConnectorConversion[]>(
-      `conversions?${params.toString()}`,
-      'revenue',
+      `unified?${params.toString()}`,
+      'conversions',
       { method: 'GET' }
     ) || [];
 
@@ -1175,15 +1175,15 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         });
       }
 
-      // Query events from Supabase
+      // Query conversion attribution data from Supabase
       const params = new URLSearchParams();
       params.append('org_tag', `eq.${tagMapping.short_tag}`);
-      params.append('event_timestamp', `gte.${dateFrom}T00:00:00Z`);
-      params.append('event_timestamp', `lte.${dateTo}T23:59:59Z`);
+      params.append('conversion_timestamp', `gte.${dateFrom}T00:00:00Z`);
+      params.append('conversion_timestamp', `lte.${dateTo}T23:59:59Z`);
       params.append('limit', '10000');
 
       const events = await supabase.queryWithSchema<any[]>(
-        `events?${params.toString()}`,
+        `conversion_attribution?${params.toString()}`,
         'events',
         { method: 'GET' }
       ) || [];
@@ -1495,15 +1495,15 @@ export class GetAttributionComparison extends OpenAPIRoute {
         identityMap.get(row.user_id)!.push(row.anonymous_id);
       });
 
-      // Query events
+      // Query conversion attribution data
       const params = new URLSearchParams();
       params.append('org_tag', `eq.${tagMapping.short_tag}`);
-      params.append('event_timestamp', `gte.${dateFrom}T00:00:00Z`);
-      params.append('event_timestamp', `lte.${dateTo}T23:59:59Z`);
+      params.append('conversion_timestamp', `gte.${dateFrom}T00:00:00Z`);
+      params.append('conversion_timestamp', `lte.${dateTo}T23:59:59Z`);
       params.append('limit', '10000');
 
       const events = await supabase.queryWithSchema<any[]>(
-        `events?${params.toString()}`,
+        `conversion_attribution?${params.toString()}`,
         'events',
         { method: 'GET' }
       ) || [];
