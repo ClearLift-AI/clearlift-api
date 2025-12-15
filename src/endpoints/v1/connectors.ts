@@ -160,11 +160,12 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     // Generate authorization URL with PKCE challenge
     const authorizationUrl = oauthProvider.getAuthorizationUrl(state, pkce);
 
-    // LOCAL DEVELOPMENT: Return mock callback URL instead of real OAuth
+    // LOCAL DEVELOPMENT: Return mock callback URL unless OAUTH_CALLBACK_BASE is set (tunnel mode)
     const requestUrl = c.req.url;
     const isLocal = requestUrl.startsWith('http://localhost') || requestUrl.startsWith('http://127.0.0.1');
+    const useTunnel = !!c.env.OAUTH_CALLBACK_BASE;
 
-    if (isLocal) {
+    if (isLocal && !useTunnel) {
       const mockUrl = `http://localhost:8787/v1/connectors/${provider}/mock-callback?state=${state}`;
       return success(c, {
         authorization_url: mockUrl,
@@ -179,7 +180,9 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
   }
 
   private async getOAuthProvider(provider: string, c: AppContext) {
-    const redirectUri = `https://api.clearlift.ai/v1/connectors/${provider}/callback`;
+    // Use OAUTH_CALLBACK_BASE env var for local tunnel testing, otherwise production URL
+    const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+    const redirectUri = `${callbackBase}/v1/connectors/${provider}/callback`;
 
     switch (provider) {
       case 'google': {
@@ -256,9 +259,12 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       // Don't fail the request if cleanup fails
     }
 
+    // Get app base URL for redirects (configurable for local testing)
+    const appBaseUrl = c.env.APP_BASE_URL || 'https://app.clearlift.ai';
+
     // Handle OAuth error
     if (oauthError) {
-      return c.redirect(`https://app.clearlift.ai/oauth/callback?error=${oauthError}`);
+      return c.redirect(`${appBaseUrl}/oauth/callback?error=${oauthError}`);
     }
 
     try {
@@ -271,7 +277,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
 
       if (!oauthState) {
         console.error('[HandleOAuthCallback] OAuth state not found in database:', { state, provider });
-        return c.redirect(`https://app.clearlift.ai/oauth/callback?error=invalid_state`);
+        return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_state`);
       }
 
       console.log('[HandleOAuthCallback] OAuth state found:', { userId: oauthState.user_id, organizationId: oauthState.organization_id });
@@ -287,7 +293,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       const codeVerifier = stateMetadata?.code_verifier;
       if (!codeVerifier || typeof codeVerifier !== 'string') {
         console.error('PKCE code verifier not found in OAuth state', { hasMetadata: !!stateMetadata, metadataType: typeof stateMetadata });
-        return c.redirect(`https://app.clearlift.ai/oauth/callback?error=invalid_state&error_description=PKCE+verifier+missing`);
+        return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_state&error_description=PKCE+verifier+missing`);
       }
 
       // Exchange code for token with PKCE verification
@@ -324,7 +330,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       `).bind(JSON.stringify(metadata), state).run();
 
       // Redirect to callback page with state for account selection
-      const redirectUri = oauthState.redirect_uri || 'https://app.clearlift.ai/oauth/callback';
+      const redirectUri = oauthState.redirect_uri || `${appBaseUrl}/oauth/callback`;
       return c.redirect(`${redirectUri}?code=${code}&state=${state}&step=select_account&provider=${provider}`);
 
     } catch (err) {
@@ -339,12 +345,14 @@ export class HandleOAuthCallback extends OpenAPIRoute {
         console.error('Failed to cleanup oauth state:', cleanupErr);
       }
 
-      return c.redirect(`https://app.clearlift.ai/oauth/callback?error=connection_failed&error_description=${errorDetails}`);
+      return c.redirect(`${appBaseUrl}/oauth/callback?error=connection_failed&error_description=${errorDetails}`);
     }
   }
 
   private async getOAuthProvider(provider: string, c: AppContext) {
-    const redirectUri = `https://api.clearlift.ai/v1/connectors/${provider}/callback`;
+    // Use OAUTH_CALLBACK_BASE env var for local tunnel testing, otherwise production URL
+    const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+    const redirectUri = `${callbackBase}/v1/connectors/${provider}/callback`;
 
     switch (provider) {
       case 'google': {
@@ -841,7 +849,12 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
           state: z.string(),
           account_id: z.string(),
           account_name: z.string(),
-          selectedAccounts: z.array(z.string()).optional() // For Google Ads manager accounts
+          selectedAccounts: z.array(z.string()).optional(), // For Google Ads manager accounts
+          sync_config: z.object({
+            timeframe: z.enum(['default', 'all_time', 'custom']),
+            custom_start: z.string().optional(),
+            custom_end: z.string().optional()
+          }).optional()
         })
       )
     },
@@ -865,9 +878,9 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>();
     const { provider } = data.params;
-    const { state, account_id, account_name, selectedAccounts } = data.body;
+    const { state, account_id, account_name, selectedAccounts, sync_config } = data.body;
 
-    console.log('Finalize OAuth connection request:', { provider, account_id, account_name, state: state.substring(0, 10) + '...' });
+    console.log('Finalize OAuth connection request:', { provider, account_id, account_name, state: state.substring(0, 10) + '...', sync_config });
 
     try {
       // Validate OAuth state
@@ -902,8 +915,10 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
 
       console.log('Creating connection in database...');
 
-      // Prepare initial settings for Google Ads if child accounts were selected
-      let initialSettings = undefined;
+      // Prepare initial settings
+      let initialSettings: Record<string, any> | undefined = undefined;
+
+      // Google Ads: store selected accounts if specified
       if (provider === 'google' && selectedAccounts && selectedAccounts.length > 0) {
         initialSettings = {
           accountSelection: {
@@ -912,6 +927,15 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
           }
         };
         console.log('Google Ads manager account - storing selected accounts:', selectedAccounts);
+      }
+
+      // Store sync_config for cron scheduler to use if initial sync fails
+      if (sync_config) {
+        initialSettings = {
+          ...initialSettings,
+          sync_config: sync_config
+        };
+        console.log('Storing sync_config in connection settings:', sync_config);
       }
 
       // Create connection with selected account and optional settings
@@ -934,73 +958,38 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementServicesConnected(oauthState.user_id);
 
-      // LOCAL MOCK: Skip sync, mark as synced, insert mock AI recommendations
+      // Check if running in local development mode
       const isLocal = c.req.url.startsWith('http://localhost') || c.req.url.startsWith('http://127.0.0.1');
-      const isMockToken = accessToken.startsWith('mock_');
-
-      if (isLocal && isMockToken) {
-        console.log('[MockOAuth] Detected mock token, skipping real sync');
-
-        // Mark connection as synced immediately
-        await c.env.DB.prepare(`
-          UPDATE platform_connections
-          SET sync_status = 'synced', last_synced_at = datetime('now')
-          WHERE id = ?
-        `).bind(connectionId).run();
-
-        // Create AI settings if missing
-        const existingSettings = await c.env.DB.prepare(`
-          SELECT org_id FROM ai_optimization_settings WHERE org_id = ?
-        `).bind(oauthState.organization_id).first();
-
-        if (!existingSettings) {
-          await c.env.DB.prepare(`
-            INSERT INTO ai_optimization_settings (org_id, growth_strategy, budget_optimization, ai_control, daily_cap_cents, monthly_cap_cents, created_at, updated_at)
-            VALUES (?, 'balanced', 'moderate', 'copilot', 100000, 3000000, datetime('now'), datetime('now'))
-          `).bind(oauthState.organization_id).run();
-          console.log('[MockOAuth] Created AI settings for org:', oauthState.organization_id);
-        }
-
-        // Insert mock AI recommendations (3 types)
-        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-        const recommendations = [
-          { tool: 'set_budget', entity_type: 'campaign', entity_id: `mock_campaign_${provider}_1`, entity_name: `${provider} Campaign 1`, parameters: '{"amount_cents": 7500}', reason: 'Your campaigns are limited by budget. Consider increasing to capture more conversions.' },
-          { tool: 'set_targeting', entity_type: 'ad_set', entity_id: `mock_adset_${provider}_1`, entity_name: `${provider} Ad Set 1`, parameters: '{"audience": "expanded"}', reason: 'Similar audiences are performing well. Expanding could increase reach by 25%.' },
-          { tool: 'set_status', entity_type: 'ad', entity_id: `mock_ad_${provider}_1`, entity_name: `${provider} Ad Creative 1`, parameters: '{"status": "PAUSED"}', reason: 'Ad fatigue detected. New creative could improve CTR by 15%.' }
-        ];
-
-        for (const rec of recommendations) {
-          await c.env.AI_DB.prepare(`
-            INSERT INTO ai_decisions (id, organization_id, tool, platform, entity_type, entity_id, entity_name, parameters, reason, confidence, expires_at, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'high', ?, 'pending', datetime('now'))
-          `).bind(
-            crypto.randomUUID(),
-            oauthState.organization_id,
-            rec.tool,
-            provider,
-            rec.entity_type,
-            rec.entity_id,
-            rec.entity_name,
-            rec.parameters,
-            rec.reason,
-            expiresAt
-          ).run();
-        }
-
-        console.log('[MockOAuth] Inserted 3 mock AI recommendations for', provider);
-
-        // Clean up OAuth state
-        await c.env.DB.prepare(`
-          DELETE FROM oauth_states WHERE state = ?
-        `).bind(state).run();
-
-        return success(c, { connection_id: connectionId });
-      }
 
       // Trigger sync job
       const jobId = crypto.randomUUID();
       const now = new Date().toISOString();
-      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      // Calculate sync window based on user's selection
+      const calculateSyncWindow = () => {
+        const defaultWindow = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString();
+
+        if (!sync_config || sync_config.timeframe === 'default') {
+          return { type: 'full', start: defaultWindow, end: now };
+        }
+
+        if (sync_config.timeframe === 'all_time') {
+          return { type: 'full', start: twoYearsAgo, end: now };
+        }
+
+        if (sync_config.timeframe === 'custom') {
+          const customStart = sync_config.custom_start || defaultWindow;
+          const customEnd = sync_config.custom_end || now;
+          return { type: 'full', start: customStart, end: customEnd };
+        }
+
+        // Fallback to default
+        return { type: 'full', start: defaultWindow, end: now };
+      };
+
+      const syncWindow = calculateSyncWindow();
+      console.log('Calculated sync window:', syncWindow);
 
       await c.env.DB.prepare(`
         INSERT INTO sync_jobs (id, organization_id, connection_id, status, job_type, metadata, created_at)
@@ -1012,31 +1001,49 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         JSON.stringify({
           platform: provider,
           account_id: account_id,
-          sync_window: {
-            type: 'full',
-            start: sevenDaysAgo,
-            end: now
-          },
+          sync_window: syncWindow,
+          sync_config: sync_config, // Store original config for reference
           created_by: 'oauth_flow'
         }),
         now
       ).run();
 
-      // Send to queue if available
-      if (c.env.SYNC_QUEUE) {
+      // Send sync job to be processed
+      const syncJobPayload = {
+        job_id: jobId,
+        connection_id: connectionId,
+        organization_id: oauthState.organization_id,
+        platform: provider,
+        account_id: account_id,
+        sync_window: syncWindow
+      };
+
+      if (isLocal) {
+        // LOCAL DEV: Call queue consumer directly via HTTP (queues don't work locally)
+        console.log('[LocalDev] Calling queue consumer directly at http://localhost:8789/test-sync');
         try {
-          await c.env.SYNC_QUEUE.send({
-            job_id: jobId,
-            connection_id: connectionId,
-            organization_id: oauthState.organization_id,
-            platform: provider,
-            account_id: account_id,
-            sync_window: {
-              type: 'full',
-              start: sevenDaysAgo,
-              end: now
-            }
+          const response = await fetch('http://localhost:8789/test-sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(syncJobPayload)
           });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('[LocalDev] Queue consumer returned error:', errorText);
+          } else {
+            const result = await response.json();
+            console.log('[LocalDev] Sync job processed by queue consumer:', result);
+          }
+        } catch (err) {
+          console.error('[LocalDev] Failed to call queue consumer:', err);
+          // Don't fail the connection - sync can be retried from connectors page
+        }
+      } else if (c.env.SYNC_QUEUE) {
+        // PRODUCTION: Send to real Cloudflare Queue
+        try {
+          await c.env.SYNC_QUEUE.send(syncJobPayload);
+          console.log('Sync job sent to queue with window:', syncWindow);
         } catch (queueErr) {
           console.error('Failed to send sync job to queue:', queueErr);
           // Don't fail the connection if queue send fails

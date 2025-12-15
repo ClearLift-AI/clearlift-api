@@ -48,22 +48,44 @@ export class GetOnboardingStatus extends OpenAPIRoute {
     const session = c.get("session");
     const onboarding = new OnboardingService(c.env.DB);
 
+    // Get user's primary organization
+    const orgResult = await c.env.DB.prepare(`
+      SELECT organization_id FROM organization_members
+      WHERE user_id = ?
+      ORDER BY joined_at ASC
+      LIMIT 1
+    `).bind(session.user_id).first<{ organization_id: string }>();
+
+    // If user has no organization, return gracefully with organization step
+    if (!orgResult) {
+      const organizationStep = {
+        name: 'organization',
+        display_name: 'Organization',
+        description: 'Create or join an organization',
+        is_completed: false,
+        is_current: true,
+        order: 1
+      };
+
+      return success(c, {
+        current_step: 'organization',
+        steps: [
+          organizationStep,
+          { name: 'connect_services', display_name: 'Connect Services', description: 'Connect at least one advertising platform', is_completed: false, is_current: false, order: 2 },
+          { name: 'first_sync', display_name: 'First Sync', description: 'Complete your first data sync', is_completed: false, is_current: false, order: 3 },
+          { name: 'completed', display_name: 'Setup Complete', description: "You're all set!", is_completed: false, is_current: false, order: 4 }
+        ],
+        services_connected: 0,
+        first_sync_completed: false,
+        is_complete: false,
+        needs_organization: true
+      });
+    }
+
     let progress = await onboarding.getProgress(session.user_id);
 
-    // Auto-initialize onboarding if not started
+    // Auto-initialize onboarding if not started (user has org but no progress)
     if (!progress) {
-      // Get user's primary organization
-      const orgResult = await c.env.DB.prepare(`
-        SELECT organization_id FROM organization_members
-        WHERE user_id = ?
-        ORDER BY joined_at ASC
-        LIMIT 1
-      `).bind(session.user_id).first<{ organization_id: string }>();
-
-      if (!orgResult) {
-        return error(c, "NO_ORGANIZATION", "User has no organization", 400);
-      }
-
       progress = await onboarding.startOnboarding(session.user_id, orgResult.organization_id);
     }
 
