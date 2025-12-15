@@ -81,7 +81,7 @@ export class EntityTreeBuilder {
       campaign_id: string;
       campaign_name: string;
       campaign_status: string;
-    }>('campaigns', `organization_id.eq.${orgId}&deleted_at.is.null`, {
+    }>('campaigns', `organization_id=eq.${orgId}&deleted_at=is.null`, {
       schema: 'google_ads'
     });
 
@@ -93,7 +93,7 @@ export class EntityTreeBuilder {
       ad_group_id: string;
       ad_group_name: string;
       ad_group_status: string;
-    }>('ad_groups', `organization_id.eq.${orgId}&deleted_at.is.null`, {
+    }>('ad_groups', `organization_id=eq.${orgId}&deleted_at=is.null`, {
       schema: 'google_ads'
     });
 
@@ -106,7 +106,7 @@ export class EntityTreeBuilder {
       ad_id: string;
       ad_name: string;
       ad_status: string;
-    }>('ads', `organization_id.eq.${orgId}&deleted_at.is.null`, {
+    }>('ads', `organization_id=eq.${orgId}&deleted_at=is.null`, {
       schema: 'google_ads'
     });
 
@@ -201,7 +201,7 @@ export class EntityTreeBuilder {
       campaign_id: string;
       name: string;
       status: string;
-    }>('campaigns', `organization_id.eq.${orgId}&deleted_at.is.null`, {
+    }>('campaigns', `organization_id=eq.${orgId}&deleted_at=is.null`, {
       schema: 'facebook_ads'
     });
 
@@ -213,7 +213,7 @@ export class EntityTreeBuilder {
       adset_id: string;
       name: string;
       status: string;
-    }>('ad_sets', `organization_id.eq.${orgId}&deleted_at.is.null`, {
+    }>('ad_sets', `organization_id=eq.${orgId}&deleted_at=is.null`, {
       schema: 'facebook_ads'
     });
 
@@ -226,7 +226,7 @@ export class EntityTreeBuilder {
       ad_id: string;
       name: string;
       status: string;
-    }>('ads', `organization_id.eq.${orgId}&deleted_at.is.null`, {
+    }>('ads', `organization_id=eq.${orgId}&deleted_at=is.null`, {
       schema: 'facebook_ads'
     });
 

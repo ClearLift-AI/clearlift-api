@@ -207,7 +207,10 @@ export class HierarchicalAnalyzer {
       platformSummaries,
       runId,
       customInstructions,
-      config?.agentic
+      {
+        ...config?.agentic,
+        days  // Pass the analysis date range to constrain exploration queries
+      }
     );
 
     const durationMs = Date.now() - startTime;
@@ -351,13 +354,16 @@ export class HierarchicalAnalyzer {
       const childIds = account.children.map(c => c.id);
       const metrics = await this.metrics.fetchAggregatedMetrics(
         account.platform,
-        'campaign',
+        'account',  // Fixed: was 'campaign' which caused wrong table lookup
         childIds,
         dateRange
       );
       const totals = this.metrics.sumMetrics(metrics);
       totalSpendCents += totals.spend_cents;
       totalRevenueCents += totals.conversion_value_cents;
+
+      // Debug logging for date filtering verification
+      console.log(`[Analysis] Account ${account.id} (${account.platform}): ${metrics.length} metric days in range ${dateRange.start} to ${dateRange.end}, spend: $${(totals.spend_cents / 100).toFixed(2)}`);
     }
 
     const totalSpend = `$${(totalSpendCents / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;

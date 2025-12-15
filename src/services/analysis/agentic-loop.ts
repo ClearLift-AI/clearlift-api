@@ -53,6 +53,16 @@ interface AgenticLoopResult {
 export interface AgenticLoopConfig {
   maxRecommendations?: number;
   enableExploration?: boolean;
+  days?: number;  // Analysis date range - LLM should use this for exploration queries
+}
+
+interface RecentRecommendation {
+  action: string;
+  parameters: string;
+  reason: string;
+  status: 'accepted' | 'rejected';
+  days_ago: number;
+  reviewed_at: string;
 }
 
 export class AgenticLoop {
@@ -86,6 +96,10 @@ export class AgenticLoop {
     let iterations = 0;
     const maxRecommendations = config?.maxRecommendations ?? 4;
     const enableExploration = config?.enableExploration !== false;
+    const days = config?.days ?? 7;  // Default to 7 days if not specified
+
+    // Fetch recent recommendation history to avoid repetition
+    const recentRecs = await this.getRecentRecommendations(orgId);
 
     // Build initial context with platform summaries
     const contextPrompt = this.buildContextPrompt(executiveSummary, platformSummaries);
@@ -100,6 +114,13 @@ export class AgenticLoop {
 
     // Build system prompt with optional custom instructions
     let systemPrompt = `You are an expert digital advertising strategist. Based on the analysis provided, identify actionable optimizations.
+
+IMPORTANT DATE RANGE: This analysis covers the LAST ${days} DAYS only. When using exploration tools (query_metrics, compare_entities), you MUST use days=${days} to stay consistent with the analysis period.
+
+IMPORTANT DATA UNITS: All monetary values in raw data are in CENTS (not dollars). When interpreting spend_cents or conversion_value_cents:
+- spend_cents: 100 = $1.00
+- spend_cents: 1000000 = $10,000.00
+- To convert to dollars: divide by 100
 
 IMPORTANT RULES:
 1. PREFER actionable recommendations (set_budget, set_status, set_audience) over general_insight
@@ -116,6 +137,9 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
     if (customInstructions && customInstructions.trim()) {
       systemPrompt += `\n\n## CUSTOM BUSINESS CONTEXT (from the user)\nThe following is specific context about this business that you MUST consider when making recommendations:\n\n${customInstructions.trim()}`;
     }
+
+    // Append recent recommendation history to prevent repetition
+    systemPrompt += this.formatRecentRecommendations(recentRecs);
 
     while (iterations < this.maxIterations) {
       iterations++;
@@ -302,6 +326,100 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
     }
 
     return await response.json();
+  }
+
+  /**
+   * Fetch recently reviewed recommendations (accepted/rejected in last 30 days)
+   * These are passed to the LLM so it understands user preferences and doesn't repeat itself
+   */
+  private async getRecentRecommendations(
+    orgId: string,
+    lookbackDays: number = 30
+  ): Promise<RecentRecommendation[]> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - lookbackDays);
+
+    try {
+      const result = await this.db.prepare(`
+        SELECT
+          recommended_action,
+          parameters,
+          reason,
+          status,
+          reviewed_at,
+          CAST(julianday('now') - julianday(reviewed_at) AS INTEGER) as days_ago
+        FROM ai_decisions
+        WHERE org_id = ?
+          AND status IN ('accepted', 'rejected')
+          AND reviewed_at >= ?
+        ORDER BY reviewed_at DESC
+        LIMIT 30
+      `).bind(orgId, cutoffDate.toISOString()).all<{
+        recommended_action: string;
+        parameters: string;
+        reason: string;
+        status: string;
+        reviewed_at: string;
+        days_ago: number;
+      }>();
+
+      return (result.results || []).map(r => ({
+        action: r.recommended_action,
+        parameters: r.parameters,
+        reason: r.reason,
+        status: r.status as 'accepted' | 'rejected',
+        days_ago: r.days_ago,
+        reviewed_at: r.reviewed_at
+      }));
+    } catch (err) {
+      // If query fails (e.g., schema mismatch), return empty array
+      console.error('Failed to fetch recent recommendations:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Format recent recommendations for LLM context
+   */
+  private formatRecentRecommendations(recs: RecentRecommendation[]): string {
+    if (recs.length === 0) {
+      return '';
+    }
+
+    const accepted = recs.filter(r => r.status === 'accepted');
+    const rejected = recs.filter(r => r.status === 'rejected');
+
+    let context = '\n\n## RECENT RECOMMENDATION HISTORY (last 30 days)';
+
+    if (accepted.length > 0) {
+      context += '\n\n### IMPLEMENTED (do not recommend similar changes):';
+      for (const r of accepted) {
+        let params = '';
+        try {
+          const p = JSON.parse(r.parameters);
+          params = Object.entries(p).map(([k, v]) => `${k}: ${v}`).join(', ');
+        } catch {
+          params = r.parameters;
+        }
+        context += `\n- ${r.action} (${params}) - ${r.days_ago} days ago`;
+      }
+    }
+
+    if (rejected.length > 0) {
+      context += '\n\n### REJECTED BY USER (avoid similar recommendations):';
+      for (const r of rejected) {
+        let params = '';
+        try {
+          const p = JSON.parse(r.parameters);
+          params = Object.entries(p).map(([k, v]) => `${k}: ${v}`).join(', ');
+        } catch {
+          params = r.parameters;
+        }
+        context += `\n- ${r.action} (${params}) - ${r.days_ago} days ago: "${r.reason}"`;
+      }
+    }
+
+    return context;
   }
 
   /**

@@ -232,9 +232,9 @@ export class ExplorationToolExecutor {
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     const { platform, entity_type, entity_id, metrics, days } = input;
 
-    const tableInfo = this.getTableInfo(platform, entity_type);
+    const tableInfo = this.getMetricsTableInfo(platform, entity_type);
     if (!tableInfo) {
-      return { success: false, error: `Unsupported platform/entity: ${platform}/${entity_type}` };
+      return { success: false, error: `Unsupported platform/entity for metrics: ${platform}/${entity_type}` };
     }
 
     // Build date range
@@ -245,9 +245,9 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     // Build query string for Supabase REST API
-    const columns = ['date', 'name', 'spend_cents', 'impressions', 'clicks', 'conversions', 'conversion_value_cents'].join(',');
-    const filters = `${tableInfo.idColumn}=eq.${entity_id}&org_id=eq.${orgId}&date=gte.${startStr}&date=lte.${endStr}`;
-    const endpoint = `${tableInfo.table}?select=${columns}&${filters}&order=date.asc`;
+    const columns = ['metric_date', 'spend_cents', 'impressions', 'clicks', 'conversions', 'conversion_value_cents'].join(',');
+    const filters = `${tableInfo.idColumn}=eq.${entity_id}&organization_id=eq.${orgId}&metric_date=gte.${startStr}&metric_date=lte.${endStr}`;
+    const endpoint = `${tableInfo.table}?select=${columns}&${filters}&order=metric_date.asc`;
 
     try {
       const data = await this.supabase.queryWithSchema<any[]>(endpoint, tableInfo.schema);
@@ -285,9 +285,9 @@ export class ExplorationToolExecutor {
       return { success: false, error: 'Maximum 5 entities can be compared' };
     }
 
-    const tableInfo = this.getTableInfo(platform, entity_type);
+    const tableInfo = this.getMetricsTableInfo(platform, entity_type);
     if (!tableInfo) {
-      return { success: false, error: `Unsupported platform/entity` };
+      return { success: false, error: `Unsupported platform/entity for metrics: ${platform}/${entity_type}` };
     }
 
     const endDate = new Date();
@@ -298,17 +298,16 @@ export class ExplorationToolExecutor {
 
     const comparisons = await Promise.all(
       entity_ids.map(async (entityId) => {
-        const columns = ['date', 'name', 'spend_cents', 'impressions', 'clicks', 'conversions', 'conversion_value_cents'].join(',');
-        const filters = `${tableInfo.idColumn}=eq.${entityId}&org_id=eq.${orgId}&date=gte.${startStr}&date=lte.${endStr}`;
+        const columns = ['metric_date', 'spend_cents', 'impressions', 'clicks', 'conversions', 'conversion_value_cents'].join(',');
+        const filters = `${tableInfo.idColumn}=eq.${entityId}&organization_id=eq.${orgId}&metric_date=gte.${startStr}&metric_date=lte.${endStr}`;
         const endpoint = `${tableInfo.table}?select=${columns}&${filters}`;
 
         try {
           const data = await this.supabase.queryWithSchema<any[]>(endpoint, tableInfo.schema);
           const enrichedData = this.enrichMetrics(data || [], metrics);
           const summary = this.summarizeMetrics(enrichedData);
-          const name = data?.[0]?.name || entityId;
 
-          return { entity_id: entityId, name, summary };
+          return { entity_id: entityId, name: entityId, summary };
         } catch {
           return { entity_id: entityId, name: entityId, summary: { error: 'Query failed' } };
         }
@@ -332,12 +331,12 @@ export class ExplorationToolExecutor {
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     const { platform, ad_id } = input;
 
-    const tableInfo = this.getTableInfo(platform, 'ad');
+    const tableInfo = this.getEntityTableInfo(platform, 'ad');
     if (!tableInfo) {
       return { success: false, error: `Unsupported platform` };
     }
 
-    const filters = `${tableInfo.idColumn}=eq.${ad_id}&org_id=eq.${orgId}`;
+    const filters = `${tableInfo.idColumn}=eq.${ad_id}&organization_id=eq.${orgId}`;
     const endpoint = `${tableInfo.table}?${filters}&limit=1`;
 
     try {
@@ -374,12 +373,12 @@ export class ExplorationToolExecutor {
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     const { platform, entity_type, entity_id, dimension } = input;
 
-    const tableInfo = this.getTableInfo(platform, entity_type);
+    const tableInfo = this.getEntityTableInfo(platform, entity_type);
     if (!tableInfo) {
       return { success: false, error: 'Unsupported platform/entity' };
     }
 
-    const filters = `${tableInfo.idColumn}=eq.${entity_id}&org_id=eq.${orgId}`;
+    const filters = `${tableInfo.idColumn}=eq.${entity_id}&organization_id=eq.${orgId}`;
     const endpoint = `${tableInfo.table}?select=name,targeting&${filters}&limit=1`;
 
     try {
@@ -411,7 +410,37 @@ export class ExplorationToolExecutor {
 
   // Helper methods
 
-  private getTableInfo(platform: string, entityType: string): { table: string; idColumn: string; schema: string } | null {
+  /**
+   * Get METRICS table info (for queryMetrics, compareEntities)
+   * These tables have daily performance data with metric_date column
+   */
+  private getMetricsTableInfo(platform: string, entityType: string): { table: string; idColumn: string; schema: string } | null {
+    const tables: Record<string, Record<string, { table: string; idColumn: string; schema: string }>> = {
+      facebook: {
+        ad: { table: 'ad_daily_metrics', idColumn: 'ad_ref', schema: 'facebook_ads' },
+        adset: { table: 'ad_set_daily_metrics', idColumn: 'ad_set_ref', schema: 'facebook_ads' },
+        campaign: { table: 'campaign_daily_metrics', idColumn: 'campaign_ref', schema: 'facebook_ads' }
+      },
+      google: {
+        ad: { table: 'ad_daily_metrics', idColumn: 'ad_ref', schema: 'google_ads' },
+        adset: { table: 'ad_group_daily_metrics', idColumn: 'ad_group_ref', schema: 'google_ads' },
+        campaign: { table: 'campaign_daily_metrics', idColumn: 'campaign_ref', schema: 'google_ads' }
+      },
+      tiktok: {
+        ad: { table: 'ad_daily_metrics', idColumn: 'ad_ref', schema: 'tiktok_ads' },
+        adset: { table: 'ad_group_daily_metrics', idColumn: 'ad_group_ref', schema: 'tiktok_ads' },
+        campaign: { table: 'campaign_daily_metrics', idColumn: 'campaign_ref', schema: 'tiktok_ads' }
+      }
+    };
+
+    return tables[platform]?.[entityType] || null;
+  }
+
+  /**
+   * Get ENTITY table info (for getCreativeDetails, getAudienceBreakdown)
+   * These tables have entity metadata like name, status, targeting
+   */
+  private getEntityTableInfo(platform: string, entityType: string): { table: string; idColumn: string; schema: string } | null {
     const tables: Record<string, Record<string, { table: string; idColumn: string; schema: string }>> = {
       facebook: {
         ad: { table: 'ads', idColumn: 'ad_id', schema: 'facebook_ads' },

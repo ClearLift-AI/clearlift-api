@@ -50,9 +50,9 @@ export class MetricsFetcher {
     }
 
     const filters = [
-      `${refColumn}.eq.${entityId}`,
-      `metric_date.gte.${dateRange.start}`,
-      `metric_date.lte.${dateRange.end}`
+      `${refColumn}=eq.${entityId}`,
+      `metric_date=gte.${dateRange.start}`,
+      `metric_date=lte.${dateRange.end}`
     ].join('&');
 
     const result = await this.supabase.select<{
