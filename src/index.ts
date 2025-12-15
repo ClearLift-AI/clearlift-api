@@ -116,6 +116,12 @@ import {
   TestStripeConnection
 } from "./endpoints/v1/connectors/stripe";
 import {
+  ConnectAttentive,
+  UpdateAttentiveConfig,
+  TriggerAttentiveSync,
+  TestAttentiveConnection
+} from "./endpoints/v1/connectors/attentive";
+import {
   CreateFilterRule,
   ListFilterRules,
   UpdateFilterRule,
@@ -424,6 +430,12 @@ openapi.post("/v1/connectors/stripe/connect", auth, ConnectStripe);
 openapi.put("/v1/connectors/stripe/:connection_id/config", auth, UpdateStripeConfig);
 openapi.post("/v1/connectors/stripe/:connection_id/sync", auth, TriggerStripeSync);
 openapi.post("/v1/connectors/stripe/:connection_id/test", auth, TestStripeConnection);
+
+// Attentive-specific connector endpoints
+openapi.post("/v1/connectors/attentive/connect", auth, ConnectAttentive);
+openapi.put("/v1/connectors/attentive/:connection_id/config", auth, UpdateAttentiveConfig);
+openapi.post("/v1/connectors/attentive/:connection_id/sync", auth, TriggerAttentiveSync);
+openapi.post("/v1/connectors/attentive/:connection_id/test", auth, TestAttentiveConnection);
 
 // Generic OAuth provider endpoints (after platform-specific routes)
 openapi.post("/v1/connectors/:provider/connect", auth, InitiateOAuthFlow);

@@ -71,24 +71,27 @@ export class GetConversions extends OpenAPIRoute {
       return error(c, "CONFIGURATION_ERROR", "Supabase key not configured", 500);
     }
 
-    const supabase = createClient(c.env.SUPABASE_URL, supabaseKey);
+    // Use conversions schema for conversions table
+    const supabase = createClient(c.env.SUPABASE_URL, supabaseKey, {
+      db: { schema: 'conversions' }
+    });
 
     try {
-      // Build base query
+      // Build base query using correct column names from conversions.conversions
       let query = supabase
         .from("conversions")
-        .select("*")
-        .eq("org_id", orgId)
-        .gte("date", dateRange.start_date)
-        .lte("date", dateRange.end_date);
+        .select("id, organization_id, source_platform, revenue_cents, conversion_timestamp, conversion_type")
+        .eq("organization_id", orgId)
+        .gte("conversion_timestamp", `${dateRange.start_date}T00:00:00Z`)
+        .lte("conversion_timestamp", `${dateRange.end_date}T23:59:59Z`);
 
-      // Filter by channel if specified
+      // Filter by source_platform (was "channel")
       if (channel) {
-        query = query.eq("channel", channel);
+        query = query.eq("source_platform", channel);
       }
 
-      // Order by date
-      query = query.order("date", { ascending: true });
+      // Order by conversion_timestamp
+      query = query.order("conversion_timestamp", { ascending: true });
 
       const { data: rawData, error: queryError } = await query;
 
@@ -106,20 +109,22 @@ export class GetConversions extends OpenAPIRoute {
         );
       }
 
-      // Validate and parse raw data through schema
-      // This validates required fields while allowing additional fields to pass through
-      const validatedData = rawData.map(row => {
-        try {
-          return ConversionRecordSchema.parse(row);
-        } catch (parseError) {
-          console.warn("Conversion record validation warning:", parseError);
-          // Return row anyway with defaults applied (schema has .default() on fields)
-          return ConversionRecordSchema.safeParse(row).data || row;
-        }
-      }) as ConversionRecord[];
+      // Transform raw data from conversions.conversions schema to expected format
+      // - source_platform -> channel
+      // - revenue_cents -> revenue (convert to dollars)
+      // - conversion_timestamp -> date (extract date part)
+      // - Each row = 1 conversion (no conversion_count column)
+      const transformedData = rawData.map(row => ({
+        id: row.id,
+        channel: row.source_platform,
+        date: row.conversion_timestamp?.split('T')[0] || row.conversion_timestamp,
+        conversion_count: 1, // Each row is one conversion
+        revenue: (row.revenue_cents || 0) / 100, // Convert cents to dollars
+        conversion_type: row.conversion_type
+      }));
 
       // Aggregate data based on group_by parameter
-      const result = this.aggregateData(validatedData, groupBy);
+      const result = this.aggregateData(transformedData, groupBy);
 
       return success(c, result, { date_range: dateRange });
     } catch (err) {
@@ -133,7 +138,7 @@ export class GetConversions extends OpenAPIRoute {
    */
   private aggregateData(data: any[], groupBy: string): any {
     const totalConversions = data.reduce((sum, row) => sum + (row.conversion_count || 0), 0);
-    const totalRevenue = data.reduce((sum, row) => sum + parseFloat(row.revenue || 0), 0);
+    const totalRevenue = data.reduce((sum, row) => sum + (row.revenue || 0), 0);
 
     switch (groupBy) {
       case "channel": {
@@ -162,7 +167,7 @@ export class GetConversions extends OpenAPIRoute {
           date: row.date,
           channel: row.channel,
           conversions: row.conversion_count || 0,
-          revenue: parseFloat(row.revenue || 0)
+          revenue: row.revenue || 0
         }));
         return {
           breakdown,
@@ -185,7 +190,7 @@ export class GetConversions extends OpenAPIRoute {
   }
 
   /**
-   * Group data by channel
+   * Group data by channel (source_platform)
    */
   private groupByChannel(data: any[]): any[] {
     const channelMap = new Map<string, { conversions: number; revenue: number }>();
@@ -195,7 +200,7 @@ export class GetConversions extends OpenAPIRoute {
       const existing = channelMap.get(channel) || { conversions: 0, revenue: 0 };
 
       existing.conversions += row.conversion_count || 0;
-      existing.revenue += parseFloat(row.revenue || 0);
+      existing.revenue += row.revenue || 0;
 
       channelMap.set(channel, existing);
     }
@@ -218,7 +223,7 @@ export class GetConversions extends OpenAPIRoute {
       const existing = dateMap.get(date) || { conversions: 0, revenue: 0 };
 
       existing.conversions += row.conversion_count || 0;
-      existing.revenue += parseFloat(row.revenue || 0);
+      existing.revenue += row.revenue || 0;
 
       dateMap.set(date, existing);
     }

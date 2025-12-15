@@ -733,11 +733,12 @@ export class GetJourneysOverview extends OpenAPIRoute {
         FROM identity_mappings WHERE organization_id = ?
       `).bind(orgId).first<{ users: number; anon_ids: number }>();
 
-      // Query events
+      // Query events from events schema
+      // Note: Table is events.events, column is 'timestamp' (not 'event_timestamp')
       const params = new URLSearchParams();
       params.append('org_tag', `eq.${tagMapping.short_tag}`);
-      params.append('event_timestamp', `gte.${dateFrom}T00:00:00Z`);
-      params.append('event_timestamp', `lte.${dateTo}T23:59:59Z`);
+      params.append('timestamp', `gte.${dateFrom}T00:00:00Z`);
+      params.append('timestamp', `lte.${dateTo}T23:59:59Z`);
       params.append('limit', '10000');
 
       const events = await supabase.queryWithSchema<any[]>(
