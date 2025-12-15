@@ -75,7 +75,7 @@ Provide a 4-5 sentence analysis: portfolio health, top/bottom performers, scalin
 
 Summarize in 4-5 sentences: account health, budget allocation efficiency, key recommendations.'),
 
-  ('cross_platform_default', 'cross_platform', NULL,
+  ('cross_platform_level_default', 'cross_platform', NULL,
 'Generate an executive summary for the past {days} days.
 
 **Organization:** {org_name}

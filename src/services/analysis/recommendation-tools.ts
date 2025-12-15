@@ -251,6 +251,42 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
       },
       required: ['platform', 'entity_type', 'entity_id', 'entity_name', 'reason', 'confidence']
     }
+  },
+  {
+    name: 'general_insight',
+    description: 'Surface strategic observations that CANNOT be addressed with set_budget, set_status, or set_audience. Examples: cross-platform attribution gaps, data quality issues, seasonal patterns. Do NOT use this for underperforming campaigns/ads - use set_status to recommend pausing those instead.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        category: {
+          type: 'string',
+          description: 'Category of insight',
+          enum: ['data_quality', 'strategic', 'opportunity', 'warning', 'observation']
+        },
+        title: {
+          type: 'string',
+          description: 'Short title for the insight (max 100 chars)'
+        },
+        insight: {
+          type: 'string',
+          description: 'The detailed finding or observation'
+        },
+        affected_entities: {
+          type: 'string',
+          description: 'Comma-separated list of entity names this affects'
+        },
+        suggested_action: {
+          type: 'string',
+          description: 'Optional suggested action the user could take'
+        },
+        confidence: {
+          type: 'string',
+          description: 'Confidence level',
+          enum: ['low', 'medium', 'high']
+        }
+      },
+      required: ['category', 'title', 'insight', 'confidence']
+    }
   }
 ];
 
@@ -297,6 +333,21 @@ export function parseToolCallToRecommendation(
   toolName: string,
   toolInput: Record<string, any>
 ): Recommendation {
+  // Handle general_insight specially - it doesn't have platform/entity fields
+  if (toolName === 'general_insight') {
+    return {
+      tool: toolName,
+      platform: 'general',  // Not platform-specific
+      entity_type: 'insight',
+      entity_id: toolInput.category || 'general',  // Use category as identifier
+      entity_name: toolInput.title,  // Title becomes entity_name for display
+      parameters: toolInput,
+      reason: toolInput.insight,  // Insight becomes the reason
+      predicted_impact: null,  // Insights don't have predicted impact
+      confidence: toolInput.confidence || 'medium'
+    };
+  }
+
   return {
     tool: toolName,
     platform: toolInput.platform,

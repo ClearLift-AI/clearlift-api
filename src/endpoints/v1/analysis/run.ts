@@ -18,7 +18,8 @@ import {
   PromptManager,
   AnalysisLogger,
   JobManager,
-  HierarchicalAnalyzer
+  HierarchicalAnalyzer,
+  AnalysisConfig
 } from "../../../services/analysis";
 
 export class RunAnalysis extends OpenAPIRoute {
@@ -114,11 +115,46 @@ export class RunAnalysis extends OpenAPIRoute {
       supabase  // For exploration tools
     );
 
-    // Load custom instructions from org settings
+    // Load settings from org (including LLM configuration)
     const settings = await c.env.DB.prepare(`
-      SELECT custom_instructions FROM ai_optimization_settings WHERE org_id = ?
-    `).bind(orgId).first<{ custom_instructions: string | null }>();
+      SELECT
+        custom_instructions,
+        llm_default_provider,
+        llm_claude_model,
+        llm_gemini_model,
+        llm_max_recommendations,
+        llm_enable_exploration
+      FROM ai_optimization_settings WHERE org_id = ?
+    `).bind(orgId).first<{
+      custom_instructions: string | null;
+      llm_default_provider: string | null;
+      llm_claude_model: string | null;
+      llm_gemini_model: string | null;
+      llm_max_recommendations: number | null;
+      llm_enable_exploration: number | null;
+    }>();
+
     const customInstructions = settings?.custom_instructions || null;
+
+    // Build analysis configuration from org settings
+    const analysisConfig: AnalysisConfig = {
+      llm: {
+        defaultProvider: (settings?.llm_default_provider || 'auto') as 'auto' | 'claude' | 'gemini',
+        claudeModel: (settings?.llm_claude_model || 'haiku') as 'opus' | 'sonnet' | 'haiku',
+        geminiModel: (settings?.llm_gemini_model || 'flash') as 'pro' | 'flash' | 'flash_lite'
+      },
+      agentic: {
+        maxRecommendations: settings?.llm_max_recommendations ?? 3,
+        enableExploration: settings?.llm_enable_exploration !== 0
+      }
+    };
+
+    // Expire any pending recommendations from previous analysis runs
+    await c.env.AI_DB.prepare(`
+      UPDATE ai_decisions
+      SET status = 'expired'
+      WHERE organization_id = ? AND status = 'pending'
+    `).bind(orgId).run();
 
     // Create job
     const jobId = await jobs.createJob(orgId, days, webhookUrl);
@@ -127,7 +163,7 @@ export class RunAnalysis extends OpenAPIRoute {
     c.executionCtx.waitUntil(
       (async () => {
         try {
-          const result = await analyzer.analyzeOrganization(orgId, days, jobId, customInstructions);
+          const result = await analyzer.analyzeOrganization(orgId, days, jobId, customInstructions, analysisConfig);
           await jobs.completeJob(jobId, result.runId);
         } catch (err) {
           const message = err instanceof Error ? err.message : "Unknown error";

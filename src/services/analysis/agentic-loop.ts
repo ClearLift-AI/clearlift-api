@@ -4,7 +4,7 @@
  * After generating the executive summary, enter an agentic loop where:
  * 1. LLM can make tool calls (recommendations)
  * 2. Tool results are appended and we call again
- * 3. Stop when 3 recommendations accumulated OR no more tool calls
+ * 3. Stop when 4 recommendations accumulated OR no more tool calls
  * 4. Log recommendations to ai_decisions table
  */
 
@@ -47,9 +47,16 @@ interface AgenticLoopResult {
   stoppedReason: 'max_recommendations' | 'no_tool_calls' | 'max_iterations';
 }
 
+/**
+ * Runtime configuration for the agentic loop
+ */
+export interface AgenticLoopConfig {
+  maxRecommendations?: number;
+  enableExploration?: boolean;
+}
+
 export class AgenticLoop {
-  private readonly maxRecommendations = 3;
-  private readonly maxIterations = 10;  // Increased to allow exploration before recommendations
+  private readonly maxIterations = 200;  // Allow extensive exploration before recommendations
   private readonly baseUrl = 'https://api.anthropic.com/v1';
   private readonly apiVersion = '2023-06-01';
   private explorationExecutor: ExplorationToolExecutor | null = null;
@@ -72,10 +79,13 @@ export class AgenticLoop {
     executiveSummary: string,
     platformSummaries: Record<string, string>,
     analysisRunId: string,
-    customInstructions?: string | null
+    customInstructions?: string | null,
+    config?: AgenticLoopConfig
   ): Promise<AgenticLoopResult> {
     const recommendations: Recommendation[] = [];
     let iterations = 0;
+    const maxRecommendations = config?.maxRecommendations ?? 4;
+    const enableExploration = config?.enableExploration !== false;
 
     // Build initial context with platform summaries
     const contextPrompt = this.buildContextPrompt(executiveSummary, platformSummaries);
@@ -92,14 +102,15 @@ export class AgenticLoop {
     let systemPrompt = `You are an expert digital advertising strategist. Based on the analysis provided, identify actionable optimizations.
 
 IMPORTANT RULES:
-1. Only make recommendations when you have HIGH confidence based on clear data patterns
+1. PREFER actionable recommendations (set_budget, set_status, set_audience) over general_insight
 2. Focus on the most impactful changes first
 3. For budget changes, stay within 30% of current values
-4. For pausing, only recommend for entities with clear underperformance (ROAS < 1.0, declining trends)
+4. For pausing: recommend for entities with poor ROAS (<1.5), high CPA, or declining performance trends
 5. Be specific about entities - use their actual IDs and names from the data
+6. Only use general_insight for cross-platform patterns or issues that genuinely cannot be addressed with the other tools
 
-After analyzing the data, you may use the available tools to make specific recommendations.
-If you have no confident recommendations to make, simply provide a brief final summary without tool calls.`;
+After analyzing the data, use the available tools to make specific recommendations.
+If you see underperforming campaigns or ads, use set_status to recommend pausing them.`;
 
     // Append custom instructions if provided
     if (customInstructions && customInstructions.trim()) {
@@ -110,7 +121,7 @@ If you have no confident recommendations to make, simply provide a brief final s
       iterations++;
 
       // Call Claude with tools
-      const response = await this.callWithTools(systemPrompt, messages);
+      const response = await this.callWithTools(systemPrompt, messages, enableExploration);
 
       // Extract tool uses and text from response
       const toolUses = response.content.filter(
@@ -137,8 +148,9 @@ If you have no confident recommendations to make, simply provide a brief final s
         content: response.content
       });
 
-      // Process tool uses
+      // Process tool uses - MUST provide results for ALL tool_uses before continuing
       const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = [];
+      let hitMaxRecommendations = false;
 
       for (const toolUse of toolUses) {
         // Handle exploration tools (unlimited use)
@@ -152,8 +164,22 @@ If you have no confident recommendations to make, simply provide a brief final s
           continue;
         }
 
-        // Handle recommendation tools (capped at 3)
+        // Handle recommendation tools (capped at maxRecommendations)
         if (isRecommendationTool(toolUse.name)) {
+          // Check if we've already hit max - skip logging but still return a result
+          if (hitMaxRecommendations || recommendations.length >= maxRecommendations) {
+            hitMaxRecommendations = true;
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({
+                status: 'skipped',
+                message: `Maximum recommendations (${maxRecommendations}) already reached. This recommendation was not logged.`
+              })
+            });
+            continue;
+          }
+
           // Parse and store recommendation
           const rec = parseToolCallToRecommendation(toolUse.name, toolUse.input);
           recommendations.push(rec);
@@ -173,40 +199,40 @@ If you have no confident recommendations to make, simply provide a brief final s
           });
 
           // Check if we've hit max recommendations
-          if (recommendations.length >= this.maxRecommendations) {
-            // Add tool results and get final summary
-            messages.push({
-              role: 'user',
-              content: toolResults
-            });
-
-            // One more call to get final summary
-            const finalResponse = await this.callWithTools(
-              systemPrompt + '\n\nYou have made 3 recommendations which is the maximum. Provide a brief final summary.',
-              messages
-            );
-
-            const finalText = finalResponse.content
-              .filter((block): block is AnthropicTextBlock => block.type === 'text')
-              .map(b => b.text)
-              .join('\n');
-
-            return {
-              finalSummary: finalText || executiveSummary,
-              recommendations,
-              iterations,
-              stoppedReason: 'max_recommendations'
-            };
+          if (recommendations.length >= maxRecommendations) {
+            hitMaxRecommendations = true;
           }
         }
       }
 
-      // Add tool results for next iteration
+      // Add all tool results to messages
       if (toolResults.length > 0) {
         messages.push({
           role: 'user',
           content: toolResults
         });
+      }
+
+      // If we hit max, get final summary and return
+      if (hitMaxRecommendations) {
+        // One more call to get final summary
+        const finalResponse = await this.callWithTools(
+          systemPrompt + `\n\nYou have made ${maxRecommendations} recommendations which is the maximum. Provide a brief final summary.`,
+          messages,
+          enableExploration
+        );
+
+        const finalText = finalResponse.content
+          .filter((block): block is AnthropicTextBlock => block.type === 'text')
+          .map(b => b.text)
+          .join('\n');
+
+        return {
+          finalSummary: finalText || executiveSummary,
+          recommendations,
+          iterations,
+          stoppedReason: 'max_recommendations'
+        };
       }
     }
 
@@ -233,7 +259,7 @@ If you have no confident recommendations to make, simply provide a brief final s
       prompt += `### ${platform.charAt(0).toUpperCase() + platform.slice(1)}\n${summary}\n\n`;
     }
 
-    prompt += `Based on the analysis above, identify up to 3 high-confidence actionable recommendations. Use the available tools to log specific budget or status change recommendations. Only recommend changes you are confident will improve performance.`;
+    prompt += `Based on the analysis above, identify up to 4 actionable recommendations. PRIORITIZE using set_budget, set_status, or set_audience tools for specific optimizations. If you see underperforming entities, use set_status to recommend pausing them. Only use general_insight for strategic observations that cannot be addressed with the other tools.`;
 
     return prompt;
   }
@@ -243,11 +269,17 @@ If you have no confident recommendations to make, simply provide a brief final s
    */
   private async callWithTools(
     systemPrompt: string,
-    messages: AnthropicMessage[]
+    messages: AnthropicMessage[],
+    enableExploration: boolean = true
   ): Promise<{
     content: Array<AnthropicToolUse | AnthropicTextBlock>;
     stop_reason: string;
   }> {
+    // Build tools list - always include recommendation tools, conditionally include exploration
+    const tools = enableExploration
+      ? [...getAnthropicTools(), ...getExplorationTools()]
+      : getAnthropicTools();
+
     const response = await fetch(`${this.baseUrl}/messages`, {
       method: 'POST',
       headers: {
@@ -260,7 +292,7 @@ If you have no confident recommendations to make, simply provide a brief final s
         max_tokens: 2048,
         system: systemPrompt,
         messages,
-        tools: [...getAnthropicTools(), ...getExplorationTools()]
+        tools
       })
     });
 

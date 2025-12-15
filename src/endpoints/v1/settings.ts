@@ -11,7 +11,13 @@ const MatrixSettingsSchema = z.object({
   monthly_cap_cents: z.number().int().positive().optional().nullable(),
   pause_threshold_percent: z.number().int().min(0).max(100).optional().nullable(),
   conversion_source: z.enum(['ad_platforms', 'tag', 'connectors']).optional(),
-  custom_instructions: z.string().max(5000).optional().nullable()
+  custom_instructions: z.string().max(5000).optional().nullable(),
+  // LLM provider settings
+  llm_default_provider: z.enum(['auto', 'claude', 'gemini']).optional(),
+  llm_claude_model: z.enum(['opus', 'sonnet', 'haiku']).optional(),
+  llm_gemini_model: z.enum(['pro', 'flash', 'flash_lite']).optional(),
+  llm_max_recommendations: z.number().int().min(1).max(10).optional(),
+  llm_enable_exploration: z.boolean().optional()
 });
 
 /**
@@ -74,7 +80,12 @@ export class GetMatrixSettings extends OpenAPIRoute {
         monthly_cap_cents,
         pause_threshold_percent,
         conversion_source,
-        custom_instructions
+        custom_instructions,
+        llm_default_provider,
+        llm_claude_model,
+        llm_gemini_model,
+        llm_max_recommendations,
+        llm_enable_exploration
       FROM ai_optimization_settings
       WHERE org_id = ?
     `).bind(orgId).first();
@@ -89,7 +100,13 @@ export class GetMatrixSettings extends OpenAPIRoute {
         monthly_cap_cents: null,
         pause_threshold_percent: null,
         conversion_source: 'tag',
-        custom_instructions: null
+        custom_instructions: null,
+        // LLM defaults
+        llm_default_provider: 'auto',
+        llm_claude_model: 'haiku',
+        llm_gemini_model: 'flash',
+        llm_max_recommendations: 3,
+        llm_enable_exploration: true
       });
     }
 
@@ -101,7 +118,13 @@ export class GetMatrixSettings extends OpenAPIRoute {
       monthly_cap_cents: settings.monthly_cap_cents,
       pause_threshold_percent: settings.pause_threshold_percent,
       conversion_source: settings.conversion_source,
-      custom_instructions: settings.custom_instructions
+      custom_instructions: settings.custom_instructions,
+      // LLM settings
+      llm_default_provider: (settings as any).llm_default_provider || 'auto',
+      llm_claude_model: (settings as any).llm_claude_model || 'haiku',
+      llm_gemini_model: (settings as any).llm_gemini_model || 'flash',
+      llm_max_recommendations: (settings as any).llm_max_recommendations || 3,
+      llm_enable_exploration: (settings as any).llm_enable_exploration !== 0
     });
   }
 }
@@ -174,8 +197,13 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         pause_threshold_percent,
         conversion_source,
         custom_instructions,
+        llm_default_provider,
+        llm_claude_model,
+        llm_gemini_model,
+        llm_max_recommendations,
+        llm_enable_exploration,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(org_id) DO UPDATE SET
         growth_strategy = excluded.growth_strategy,
         budget_optimization = excluded.budget_optimization,
@@ -185,6 +213,11 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         pause_threshold_percent = excluded.pause_threshold_percent,
         conversion_source = excluded.conversion_source,
         custom_instructions = excluded.custom_instructions,
+        llm_default_provider = excluded.llm_default_provider,
+        llm_claude_model = excluded.llm_claude_model,
+        llm_gemini_model = excluded.llm_gemini_model,
+        llm_max_recommendations = excluded.llm_max_recommendations,
+        llm_enable_exploration = excluded.llm_enable_exploration,
         updated_at = datetime('now')
     `).bind(
       orgId,
@@ -195,7 +228,12 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
       body.monthly_cap_cents || null,
       body.pause_threshold_percent || null,
       body.conversion_source || 'tag',
-      body.custom_instructions || null
+      body.custom_instructions || null,
+      body.llm_default_provider || 'auto',
+      body.llm_claude_model || 'haiku',
+      body.llm_gemini_model || 'flash',
+      body.llm_max_recommendations || 3,
+      body.llm_enable_exploration !== false ? 1 : 0
     ).run();
 
     return success(c, { message: "Settings updated successfully" });

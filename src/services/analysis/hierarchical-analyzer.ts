@@ -7,14 +7,22 @@
 
 import { EntityTreeBuilder, Entity, EntityTree, AccountEntity, Platform, EntityLevel } from './entity-tree';
 import { MetricsFetcher, TimeseriesMetric, DateRange } from './metrics-fetcher';
-import { LLMRouter } from './llm-router';
+import { LLMRouter, LLMRuntimeConfig } from './llm-router';
 import { PromptManager } from './prompt-manager';
 import { AnalysisLogger } from './analysis-logger';
 import { JobManager } from './job-manager';
 import { AnalysisLevel } from './llm-provider';
-import { AgenticLoop } from './agentic-loop';
+import { AgenticLoop, AgenticLoopConfig } from './agentic-loop';
 import { Recommendation } from './recommendation-tools';
 import { SupabaseClient } from '../../services/supabase';
+
+/**
+ * Configuration for analysis run from organization settings
+ */
+export interface AnalysisConfig {
+  llm?: LLMRuntimeConfig;
+  agentic?: AgenticLoopConfig;
+}
 
 // Use p-limit pattern for concurrency control
 const createLimiter = (concurrency: number) => {
@@ -99,7 +107,8 @@ export class HierarchicalAnalyzer {
     orgId: string,
     days: number = 7,
     jobId?: string,
-    customInstructions?: string | null
+    customInstructions?: string | null,
+    config?: AnalysisConfig
   ): Promise<AnalysisResult> {
     const startTime = Date.now();
     const runId = crypto.randomUUID().replace(/-/g, '');
@@ -142,7 +151,8 @@ export class HierarchicalAnalyzer {
               dateRange,
               summariesByEntity,
               runId,
-              days
+              days,
+              config?.llm
             );
             processedCount++;
 
@@ -177,7 +187,8 @@ export class HierarchicalAnalyzer {
       platformSummaries,
       dateRange,
       runId,
-      days
+      days,
+      config?.llm
     );
     processedCount++;
 
@@ -195,7 +206,8 @@ export class HierarchicalAnalyzer {
       crossPlatformSummary,
       platformSummaries,
       runId,
-      customInstructions
+      customInstructions,
+      config?.agentic
     );
 
     const durationMs = Date.now() - startTime;
@@ -222,7 +234,8 @@ export class HierarchicalAnalyzer {
     dateRange: DateRange,
     summariesByEntity: Map<string, string>,
     runId: string,
-    days: number
+    days: number,
+    llmConfig?: LLMRuntimeConfig
   ): Promise<string> {
     // Get metrics for this entity
     let metrics: TimeseriesMetric[];
@@ -280,7 +293,9 @@ export class HierarchicalAnalyzer {
     const response = await this.llm.generateSummaryForLevel(
       level,
       systemPrompt,
-      userPrompt
+      userPrompt,
+      undefined,  // overrideOptions
+      llmConfig
     );
 
     // Log the call
@@ -325,7 +340,8 @@ export class HierarchicalAnalyzer {
     platformSummaries: Record<string, string>,
     dateRange: DateRange,
     runId: string,
-    days: number
+    days: number,
+    llmConfig?: LLMRuntimeConfig
   ): Promise<string> {
     // Calculate totals across platforms
     let totalSpendCents = 0;
@@ -374,11 +390,13 @@ export class HierarchicalAnalyzer {
     const userPrompt = this.prompts.hydrateTemplate(template, variables);
     const systemPrompt = 'You are a strategic marketing advisor. Provide executive-level insights.';
 
-    // Generate with Opus
+    // Generate with Opus (or configured model)
     const response = await this.llm.generateSummaryForLevel(
       'cross_platform',
       systemPrompt,
-      userPrompt
+      userPrompt,
+      undefined,  // overrideOptions
+      llmConfig
     );
 
     // Log
