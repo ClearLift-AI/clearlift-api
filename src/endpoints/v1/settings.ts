@@ -10,7 +10,8 @@ const MatrixSettingsSchema = z.object({
   daily_cap_cents: z.number().int().positive().optional().nullable(),
   monthly_cap_cents: z.number().int().positive().optional().nullable(),
   pause_threshold_percent: z.number().int().min(0).max(100).optional().nullable(),
-  conversion_source: z.enum(['ad_platforms', 'tag', 'connectors']).optional()
+  conversion_source: z.enum(['ad_platforms', 'tag', 'connectors']).optional(),
+  custom_instructions: z.string().max(5000).optional().nullable()
 });
 
 /**
@@ -72,7 +73,8 @@ export class GetMatrixSettings extends OpenAPIRoute {
         daily_cap_cents,
         monthly_cap_cents,
         pause_threshold_percent,
-        conversion_source
+        conversion_source,
+        custom_instructions
       FROM ai_optimization_settings
       WHERE org_id = ?
     `).bind(orgId).first();
@@ -86,7 +88,8 @@ export class GetMatrixSettings extends OpenAPIRoute {
         daily_cap_cents: null,
         monthly_cap_cents: null,
         pause_threshold_percent: null,
-        conversion_source: 'tag'
+        conversion_source: 'tag',
+        custom_instructions: null
       });
     }
 
@@ -97,7 +100,8 @@ export class GetMatrixSettings extends OpenAPIRoute {
       daily_cap_cents: settings.daily_cap_cents,
       monthly_cap_cents: settings.monthly_cap_cents,
       pause_threshold_percent: settings.pause_threshold_percent,
-      conversion_source: settings.conversion_source
+      conversion_source: settings.conversion_source,
+      custom_instructions: settings.custom_instructions
     });
   }
 }
@@ -169,8 +173,9 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         monthly_cap_cents,
         pause_threshold_percent,
         conversion_source,
+        custom_instructions,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(org_id) DO UPDATE SET
         growth_strategy = excluded.growth_strategy,
         budget_optimization = excluded.budget_optimization,
@@ -179,6 +184,7 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         monthly_cap_cents = excluded.monthly_cap_cents,
         pause_threshold_percent = excluded.pause_threshold_percent,
         conversion_source = excluded.conversion_source,
+        custom_instructions = excluded.custom_instructions,
         updated_at = datetime('now')
     `).bind(
       orgId,
@@ -188,7 +194,8 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
       body.daily_cap_cents || null,
       body.monthly_cap_cents || null,
       body.pause_threshold_percent || null,
-      body.conversion_source || 'tag'
+      body.conversion_source || 'tag',
+      body.custom_instructions || null
     ).run();
 
     return success(c, { message: "Settings updated successfully" });
@@ -483,7 +490,58 @@ export class AcceptAIDecision extends OpenAPIRoute {
     }
 
     if (platform === 'tiktok') {
-      throw new Error(`TikTok Ads execution not yet implemented for ${tool}`);
+      const { TikTokAdsOAuthProvider } = await import("../../services/oauth/tiktok");
+      const appId = await getSecret(c.env.TIKTOK_APP_ID);
+      const appSecret = await getSecret(c.env.TIKTOK_APP_SECRET);
+      if (!appId || !appSecret) throw new Error("TikTok credentials not configured");
+
+      // Get advertiser ID from connection
+      const connectionDetails = await c.env.DB.prepare(`
+        SELECT account_id FROM platform_connections WHERE id = ?
+      `).bind(connection.id).first<{ account_id: string }>();
+
+      if (!connectionDetails?.account_id) throw new Error("No TikTok advertiser ID found");
+      const advertiserId = connectionDetails.account_id;
+
+      const tiktok = new TikTokAdsOAuthProvider(appId, appSecret, '');
+
+      // set_active tool (or legacy set_status)
+      if (tool === 'set_status' || tool === 'set_active') {
+        // Map ACTIVE/PAUSED to TikTok's ENABLE/DISABLE
+        const tiktokStatus = (params.status === 'ACTIVE' || params.status === 'ENABLE') ? 'ENABLE' : 'DISABLE';
+        if (entity_type === 'campaign') return tiktok.updateCampaignStatus(accessToken, advertiserId, entity_id, tiktokStatus);
+        if (entity_type === 'adgroup' || entity_type === 'ad_group') return tiktok.updateAdGroupStatus(accessToken, advertiserId, entity_id, tiktokStatus);
+      }
+
+      // set_budget tool
+      if (tool === 'set_budget') {
+        const budgetMode = params.budget_type === 'lifetime' ? 'BUDGET_MODE_TOTAL' : 'BUDGET_MODE_DAY';
+        if (entity_type === 'campaign') return tiktok.updateCampaignBudget(accessToken, advertiserId, entity_id, params.amount_cents, budgetMode);
+        if (entity_type === 'adgroup' || entity_type === 'ad_group') return tiktok.updateAdGroupBudget(accessToken, advertiserId, entity_id, params.amount_cents, budgetMode);
+      }
+
+      // set_audience tool (or legacy set_age_range)
+      if (tool === 'set_age_range' || tool === 'set_audience') {
+        // Convert age range to TikTok age groups
+        const ageGroups: string[] = [];
+        const minAge = params.min_age || 18;
+        const maxAge = params.max_age || 65;
+
+        // Map age ranges to TikTok's age group enum values
+        if (minAge <= 17 && maxAge >= 13) ageGroups.push('AGE_13_17');
+        if (minAge <= 24 && maxAge >= 18) ageGroups.push('AGE_18_24');
+        if (minAge <= 34 && maxAge >= 25) ageGroups.push('AGE_25_34');
+        if (minAge <= 44 && maxAge >= 35) ageGroups.push('AGE_35_44');
+        if (minAge <= 54 && maxAge >= 45) ageGroups.push('AGE_45_54');
+        if (maxAge >= 55) ageGroups.push('AGE_55_100');
+
+        return tiktok.updateAdGroupTargeting(accessToken, advertiserId, entity_id, {
+          age: ageGroups,
+          gender: params.gender,
+          interest_category_ids: params.interest_ids,
+          location_ids: params.location_ids
+        });
+      }
     }
 
     throw new Error(`Unsupported: ${tool} on ${platform}/${entity_type}`);

@@ -110,8 +110,15 @@ export class RunAnalysis extends OpenAPIRoute {
       logger,
       jobs,
       c.env.AI_DB,
-      anthropicKey.toString()  // For agentic loop
+      anthropicKey.toString(),  // For agentic loop
+      supabase  // For exploration tools
     );
+
+    // Load custom instructions from org settings
+    const settings = await c.env.DB.prepare(`
+      SELECT custom_instructions FROM ai_optimization_settings WHERE org_id = ?
+    `).bind(orgId).first<{ custom_instructions: string | null }>();
+    const customInstructions = settings?.custom_instructions || null;
 
     // Create job
     const jobId = await jobs.createJob(orgId, days, webhookUrl);
@@ -120,7 +127,7 @@ export class RunAnalysis extends OpenAPIRoute {
     c.executionCtx.waitUntil(
       (async () => {
         try {
-          const result = await analyzer.analyzeOrganization(orgId, days, jobId);
+          const result = await analyzer.analyzeOrganization(orgId, days, jobId, customInstructions);
           await jobs.completeJob(jobId, result.runId);
         } catch (err) {
           const message = err instanceof Error ? err.message : "Unknown error";

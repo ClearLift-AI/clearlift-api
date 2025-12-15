@@ -42,13 +42,21 @@ import {
   GetGoogleCampaigns,
   GetGoogleAdGroups,
   GetGoogleAds,
-  GetGoogleMetrics
+  GetGoogleMetrics,
+  UpdateGoogleCampaignStatus,
+  UpdateGoogleAdGroupStatus,
+  UpdateGoogleCampaignBudget
 } from "./endpoints/v1/analytics/google";
 import {
   GetTikTokCampaigns,
   GetTikTokAdGroups,
   GetTikTokAds,
-  GetTikTokMetrics
+  GetTikTokMetrics,
+  UpdateTikTokCampaignStatus,
+  UpdateTikTokAdGroupStatus,
+  UpdateTikTokCampaignBudget,
+  UpdateTikTokAdGroupBudget,
+  UpdateTikTokAdGroupTargeting
 } from "./endpoints/v1/analytics/tiktok";
 import {
   GetOnboardingStatus,
@@ -384,12 +392,22 @@ openapi.get("/v1/analytics/google/campaigns", auth, requireOrg, GetGoogleCampaig
 openapi.get("/v1/analytics/google/ad-groups", auth, requireOrg, GetGoogleAdGroups);
 openapi.get("/v1/analytics/google/ads", auth, requireOrg, GetGoogleAds);
 openapi.get("/v1/analytics/google/metrics/daily", auth, requireOrg, GetGoogleMetrics);
+// Google write endpoints (AI_PLAN.md tools: set_active, set_budget)
+openapi.patch("/v1/analytics/google/campaigns/:campaign_id/status", auth, requireOrg, UpdateGoogleCampaignStatus);
+openapi.patch("/v1/analytics/google/ad-groups/:ad_group_id/status", auth, requireOrg, UpdateGoogleAdGroupStatus);
+openapi.patch("/v1/analytics/google/campaigns/:campaign_id/budget", auth, requireOrg, UpdateGoogleCampaignBudget);
 
 // TikTok Ads endpoints
 openapi.get("/v1/analytics/tiktok/campaigns", auth, requireOrg, GetTikTokCampaigns);
 openapi.get("/v1/analytics/tiktok/ad-groups", auth, requireOrg, GetTikTokAdGroups);
 openapi.get("/v1/analytics/tiktok/ads", auth, requireOrg, GetTikTokAds);
 openapi.get("/v1/analytics/tiktok/metrics/daily", auth, requireOrg, GetTikTokMetrics);
+// TikTok write endpoints (AI_PLAN.md tools: set_active, set_budget, set_audience)
+openapi.patch("/v1/analytics/tiktok/campaigns/:campaign_id/status", auth, requireOrg, UpdateTikTokCampaignStatus);
+openapi.patch("/v1/analytics/tiktok/ad-groups/:ad_group_id/status", auth, requireOrg, UpdateTikTokAdGroupStatus);
+openapi.patch("/v1/analytics/tiktok/campaigns/:campaign_id/budget", auth, requireOrg, UpdateTikTokCampaignBudget);
+openapi.patch("/v1/analytics/tiktok/ad-groups/:ad_group_id/budget", auth, requireOrg, UpdateTikTokAdGroupBudget);
+openapi.patch("/v1/analytics/tiktok/ad-groups/:ad_group_id/targeting", auth, requireOrg, UpdateTikTokAdGroupTargeting);
 
 // Onboarding endpoints
 openapi.get("/v1/onboarding/status", auth, GetOnboardingStatus);

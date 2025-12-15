@@ -185,6 +185,72 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
       },
       required: ['platform', 'from_entity_id', 'from_entity_name', 'to_entity_id', 'to_entity_name', 'amount_cents', 'reason', 'confidence']
     }
+  },
+  {
+    name: 'set_audience',
+    description: 'Recommend audience targeting changes for an ad set or ad group. Use when demographic or interest targeting could improve performance based on conversion data patterns.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        platform: {
+          type: 'string',
+          description: 'The ad platform',
+          enum: ['facebook', 'tiktok']
+        },
+        entity_type: {
+          type: 'string',
+          description: 'Type of entity to adjust (ad_set for Facebook, ad_group for TikTok)',
+          enum: ['ad_set', 'ad_group']
+        },
+        entity_id: {
+          type: 'string',
+          description: 'ID of the ad set or ad group'
+        },
+        entity_name: {
+          type: 'string',
+          description: 'Name of the entity for display'
+        },
+        targeting_changes: {
+          type: 'object',
+          description: 'Object containing targeting parameters to change'
+        },
+        age_groups: {
+          type: 'array',
+          description: 'Age groups to target. TikTok: AGE_13_17, AGE_18_24, AGE_25_34, AGE_35_44, AGE_45_54, AGE_55_100. Facebook: 18-24, 25-34, 35-44, 45-54, 55-64, 65+'
+        },
+        gender: {
+          type: 'string',
+          description: 'Gender targeting',
+          enum: ['MALE', 'FEMALE', 'ALL']
+        },
+        locations: {
+          type: 'array',
+          description: 'Location IDs or names to target'
+        },
+        interests: {
+          type: 'array',
+          description: 'Interest category IDs to target'
+        },
+        exclude_interests: {
+          type: 'array',
+          description: 'Interest category IDs to exclude'
+        },
+        reason: {
+          type: 'string',
+          description: 'Brief explanation for this recommendation'
+        },
+        predicted_impact: {
+          type: 'number',
+          description: 'Expected impact as percentage change (e.g., 20 for 20% conversion rate improvement)'
+        },
+        confidence: {
+          type: 'string',
+          description: 'Confidence level',
+          enum: ['low', 'medium', 'high']
+        }
+      },
+      required: ['platform', 'entity_type', 'entity_id', 'entity_name', 'reason', 'confidence']
+    }
   }
 ];
 

@@ -14,6 +14,7 @@ import { JobManager } from './job-manager';
 import { AnalysisLevel } from './llm-provider';
 import { AgenticLoop } from './agentic-loop';
 import { Recommendation } from './recommendation-tools';
+import { SupabaseClient } from '../../services/supabase';
 
 // Use p-limit pattern for concurrency control
 const createLimiter = (concurrency: number) => {
@@ -85,9 +86,10 @@ export class HierarchicalAnalyzer {
     private logger: AnalysisLogger,
     private jobs: JobManager,
     private db: D1Database,
-    anthropicApiKey: string
+    anthropicApiKey: string,
+    private supabase?: SupabaseClient
   ) {
-    this.agenticLoop = new AgenticLoop(anthropicApiKey, db);
+    this.agenticLoop = new AgenticLoop(anthropicApiKey, db, supabase);
   }
 
   /**
@@ -96,7 +98,8 @@ export class HierarchicalAnalyzer {
   async analyzeOrganization(
     orgId: string,
     days: number = 7,
-    jobId?: string
+    jobId?: string,
+    customInstructions?: string | null
   ): Promise<AnalysisResult> {
     const startTime = Date.now();
     const runId = crypto.randomUUID().replace(/-/g, '');
@@ -191,7 +194,8 @@ export class HierarchicalAnalyzer {
       orgId,
       crossPlatformSummary,
       platformSummaries,
-      runId
+      runId,
+      customInstructions
     );
 
     const durationMs = Date.now() - startTime;

@@ -22,4 +22,5 @@ export * from './hierarchical-analyzer';
 
 // Agentic Loop
 export * from './recommendation-tools';
+export * from './exploration-tools';
 export * from './agentic-loop';

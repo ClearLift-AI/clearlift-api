@@ -5,13 +5,15 @@
  * All endpoints use auth + requireOrg middleware for access control
  */
 
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { TikTokAdsSupabaseAdapter, DateRange } from "../../../adapters/platforms/tiktok-supabase";
 import { SupabaseClient } from "../../../services/supabase";
 import { getSecret } from "../../../utils/secrets";
+import { BUDGET_LIMITS, AGE_GROUPS, STATUS } from "../../../constants/tiktok";
+import { TikTokAdsOAuthProvider, TikTokTargeting } from "../../../services/oauth/tiktok";
 
 /**
  * GET /v1/analytics/tiktok/campaigns
@@ -343,6 +345,479 @@ export class GetTikTokMetrics extends OpenAPIRoute {
     } catch (err: any) {
       console.error("Get TikTok metrics error:", err);
       return error(c, "QUERY_FAILED", `Failed to fetch metrics: ${err.message}`, 500);
+    }
+  }
+}
+
+// ==================== WRITE ENDPOINTS ====================
+// These implement the AI_PLAN.md tools: set_active, set_budget, set_audience
+
+/**
+ * PATCH /v1/analytics/tiktok/campaigns/:campaign_id/status
+ * Implements set_active tool for campaigns
+ */
+export class UpdateTikTokCampaignStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["TikTok Ads"],
+    summary: "Update TikTok campaign status",
+    description: "Enable or disable a TikTok campaign",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        campaign_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          status: z.enum(['ENABLE', 'DISABLE']).describe("New status for the campaign")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Campaign status updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { campaign_id } = data.params;
+    const { status } = data.body;
+
+    try {
+      // Get TikTok connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'tiktok' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first<{ id: string; account_id: string }>();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active TikTok connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update campaign status via TikTok API
+      const appId = await getSecret(c.env.TIKTOK_APP_ID);
+      const appSecret = await getSecret(c.env.TIKTOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "TikTok credentials not configured", 500);
+      }
+      const tiktokProvider = new TikTokAdsOAuthProvider(appId, appSecret, '');
+
+      await tiktokProvider.updateCampaignStatus(
+        accessToken,
+        connection.account_id,  // advertiser_id
+        campaign_id,
+        status
+      );
+
+      return success(c, {
+        campaign_id,
+        status,
+        message: `Campaign ${status === 'ENABLE' ? 'enabled' : 'disabled'} successfully`
+      });
+    } catch (err: any) {
+      console.error("Update TikTok campaign status error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update campaign status: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/tiktok/ad-groups/:ad_group_id/status
+ * Implements set_active tool for ad groups
+ */
+export class UpdateTikTokAdGroupStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["TikTok Ads"],
+    summary: "Update TikTok ad group status",
+    description: "Enable or disable a TikTok ad group",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        ad_group_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          status: z.enum(['ENABLE', 'DISABLE']).describe("New status for the ad group")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Ad group status updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { ad_group_id } = data.params;
+    const { status } = data.body;
+
+    try {
+      // Get TikTok connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'tiktok' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first<{ id: string; account_id: string }>();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active TikTok connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update ad group status via TikTok API
+      const appId = await getSecret(c.env.TIKTOK_APP_ID);
+      const appSecret = await getSecret(c.env.TIKTOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "TikTok credentials not configured", 500);
+      }
+      const tiktokProvider = new TikTokAdsOAuthProvider(appId, appSecret, '');
+
+      await tiktokProvider.updateAdGroupStatus(
+        accessToken,
+        connection.account_id,  // advertiser_id
+        ad_group_id,
+        status
+      );
+
+      return success(c, {
+        ad_group_id,
+        status,
+        message: `Ad group ${status === 'ENABLE' ? 'enabled' : 'disabled'} successfully`
+      });
+    } catch (err: any) {
+      console.error("Update TikTok ad group status error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update ad group status: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/tiktok/campaigns/:campaign_id/budget
+ * Implements set_budget tool for campaigns
+ */
+export class UpdateTikTokCampaignBudget extends OpenAPIRoute {
+  schema = {
+    tags: ["TikTok Ads"],
+    summary: "Update TikTok campaign budget",
+    description: "Update the budget for a TikTok campaign",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        campaign_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          budget_cents: z.number().min(BUDGET_LIMITS.DAILY_MIN_CENTS)
+            .describe(`Budget in cents (minimum $${BUDGET_LIMITS.DAILY_MIN_CENTS / 100})`),
+          budget_mode: z.enum(['BUDGET_MODE_DAY', 'BUDGET_MODE_TOTAL']).optional()
+            .default('BUDGET_MODE_DAY')
+            .describe("Budget mode: daily or lifetime")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Campaign budget updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { campaign_id } = data.params;
+    const { budget_cents, budget_mode } = data.body;
+
+    try {
+      // Get TikTok connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'tiktok' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first<{ id: string; account_id: string }>();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active TikTok connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update campaign budget via TikTok API
+      const appId = await getSecret(c.env.TIKTOK_APP_ID);
+      const appSecret = await getSecret(c.env.TIKTOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "TikTok credentials not configured", 500);
+      }
+      const tiktokProvider = new TikTokAdsOAuthProvider(appId, appSecret, '');
+
+      await tiktokProvider.updateCampaignBudget(
+        accessToken,
+        connection.account_id,  // advertiser_id
+        campaign_id,
+        budget_cents,
+        budget_mode
+      );
+
+      return success(c, {
+        campaign_id,
+        budget_cents,
+        budget_mode,
+        message: `Campaign budget updated to $${(budget_cents / 100).toFixed(2)} ${budget_mode === 'BUDGET_MODE_DAY' ? 'daily' : 'lifetime'}`
+      });
+    } catch (err: any) {
+      console.error("Update TikTok campaign budget error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update campaign budget: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/tiktok/ad-groups/:ad_group_id/budget
+ * Implements set_budget tool for ad groups
+ */
+export class UpdateTikTokAdGroupBudget extends OpenAPIRoute {
+  schema = {
+    tags: ["TikTok Ads"],
+    summary: "Update TikTok ad group budget",
+    description: "Update the budget for a TikTok ad group",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        ad_group_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          budget_cents: z.number().min(BUDGET_LIMITS.DAILY_MIN_CENTS)
+            .describe(`Budget in cents (minimum $${BUDGET_LIMITS.DAILY_MIN_CENTS / 100})`),
+          budget_mode: z.enum(['BUDGET_MODE_DAY', 'BUDGET_MODE_TOTAL']).optional()
+            .default('BUDGET_MODE_DAY')
+            .describe("Budget mode: daily or lifetime")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Ad group budget updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { ad_group_id } = data.params;
+    const { budget_cents, budget_mode } = data.body;
+
+    try {
+      // Get TikTok connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'tiktok' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first<{ id: string; account_id: string }>();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active TikTok connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update ad group budget via TikTok API
+      const appId = await getSecret(c.env.TIKTOK_APP_ID);
+      const appSecret = await getSecret(c.env.TIKTOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "TikTok credentials not configured", 500);
+      }
+      const tiktokProvider = new TikTokAdsOAuthProvider(appId, appSecret, '');
+
+      await tiktokProvider.updateAdGroupBudget(
+        accessToken,
+        connection.account_id,  // advertiser_id
+        ad_group_id,
+        budget_cents,
+        budget_mode
+      );
+
+      return success(c, {
+        ad_group_id,
+        budget_cents,
+        budget_mode,
+        message: `Ad group budget updated to $${(budget_cents / 100).toFixed(2)} ${budget_mode === 'BUDGET_MODE_DAY' ? 'daily' : 'lifetime'}`
+      });
+    } catch (err: any) {
+      console.error("Update TikTok ad group budget error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update ad group budget: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/tiktok/ad-groups/:ad_group_id/targeting
+ * Implements set_audience tool
+ */
+export class UpdateTikTokAdGroupTargeting extends OpenAPIRoute {
+  schema = {
+    tags: ["TikTok Ads"],
+    summary: "Update TikTok ad group targeting",
+    description: "Update the audience targeting for a TikTok ad group",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        ad_group_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          age: z.array(z.enum([
+            AGE_GROUPS.AGE_13_17,
+            AGE_GROUPS.AGE_18_24,
+            AGE_GROUPS.AGE_25_34,
+            AGE_GROUPS.AGE_35_44,
+            AGE_GROUPS.AGE_45_54,
+            AGE_GROUPS.AGE_55_PLUS
+          ])).optional().describe("Age group targeting"),
+          gender: z.enum(['MALE', 'FEMALE', 'UNLIMITED']).optional()
+            .describe("Gender targeting"),
+          interest_category_ids: z.array(z.string()).optional()
+            .describe("Interest category IDs for targeting"),
+          location_ids: z.array(z.string()).optional()
+            .describe("Location IDs for geo-targeting")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Ad group targeting updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { ad_group_id } = data.params;
+    const targeting: TikTokTargeting = data.body;
+
+    try {
+      // Get TikTok connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'tiktok' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first<{ id: string; account_id: string }>();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active TikTok connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Update ad group targeting via TikTok API
+      const appId = await getSecret(c.env.TIKTOK_APP_ID);
+      const appSecret = await getSecret(c.env.TIKTOK_APP_SECRET);
+      if (!appId || !appSecret) {
+        return error(c, "CONFIG_ERROR", "TikTok credentials not configured", 500);
+      }
+      const tiktokProvider = new TikTokAdsOAuthProvider(appId, appSecret, '');
+
+      await tiktokProvider.updateAdGroupTargeting(
+        accessToken,
+        connection.account_id,  // advertiser_id
+        ad_group_id,
+        targeting
+      );
+
+      return success(c, {
+        ad_group_id,
+        targeting,
+        message: "Ad group targeting updated successfully"
+      });
+    } catch (err: any) {
+      console.error("Update TikTok ad group targeting error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update ad group targeting: ${err.message}`, 500);
     }
   }
 }

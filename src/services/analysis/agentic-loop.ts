@@ -15,7 +15,13 @@ import {
   parseToolCallToRecommendation,
   Recommendation
 } from './recommendation-tools';
+import {
+  getExplorationTools,
+  isExplorationTool,
+  ExplorationToolExecutor
+} from './exploration-tools';
 import { CLAUDE_MODELS } from './llm-provider';
+import { SupabaseClient } from '../../services/supabase';
 
 interface AnthropicToolUse {
   type: 'tool_use';
@@ -43,14 +49,20 @@ interface AgenticLoopResult {
 
 export class AgenticLoop {
   private readonly maxRecommendations = 3;
-  private readonly maxIterations = 5;  // Safety limit
+  private readonly maxIterations = 10;  // Increased to allow exploration before recommendations
   private readonly baseUrl = 'https://api.anthropic.com/v1';
   private readonly apiVersion = '2023-06-01';
+  private explorationExecutor: ExplorationToolExecutor | null = null;
 
   constructor(
     private anthropicApiKey: string,
-    private db: D1Database
-  ) {}
+    private db: D1Database,
+    private supabase?: SupabaseClient
+  ) {
+    if (supabase) {
+      this.explorationExecutor = new ExplorationToolExecutor(supabase);
+    }
+  }
 
   /**
    * Run the agentic loop starting from the executive summary
@@ -59,7 +71,8 @@ export class AgenticLoop {
     orgId: string,
     executiveSummary: string,
     platformSummaries: Record<string, string>,
-    analysisRunId: string
+    analysisRunId: string,
+    customInstructions?: string | null
   ): Promise<AgenticLoopResult> {
     const recommendations: Recommendation[] = [];
     let iterations = 0;
@@ -75,7 +88,8 @@ export class AgenticLoop {
       }
     ];
 
-    const systemPrompt = `You are an expert digital advertising strategist. Based on the analysis provided, identify actionable optimizations.
+    // Build system prompt with optional custom instructions
+    let systemPrompt = `You are an expert digital advertising strategist. Based on the analysis provided, identify actionable optimizations.
 
 IMPORTANT RULES:
 1. Only make recommendations when you have HIGH confidence based on clear data patterns
@@ -86,6 +100,11 @@ IMPORTANT RULES:
 
 After analyzing the data, you may use the available tools to make specific recommendations.
 If you have no confident recommendations to make, simply provide a brief final summary without tool calls.`;
+
+    // Append custom instructions if provided
+    if (customInstructions && customInstructions.trim()) {
+      systemPrompt += `\n\n## CUSTOM BUSINESS CONTEXT (from the user)\nThe following is specific context about this business that you MUST consider when making recommendations:\n\n${customInstructions.trim()}`;
+    }
 
     while (iterations < this.maxIterations) {
       iterations++;
@@ -122,6 +141,18 @@ If you have no confident recommendations to make, simply provide a brief final s
       const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = [];
 
       for (const toolUse of toolUses) {
+        // Handle exploration tools (unlimited use)
+        if (isExplorationTool(toolUse.name) && this.explorationExecutor) {
+          const result = await this.explorationExecutor.execute(toolUse.name, toolUse.input, orgId);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: JSON.stringify(result)
+          });
+          continue;
+        }
+
+        // Handle recommendation tools (capped at 3)
         if (isRecommendationTool(toolUse.name)) {
           // Parse and store recommendation
           const rec = parseToolCallToRecommendation(toolUse.name, toolUse.input);
@@ -229,7 +260,7 @@ If you have no confident recommendations to make, simply provide a brief final s
         max_tokens: 2048,
         system: systemPrompt,
         messages,
-        tools: getAnthropicTools()
+        tools: [...getAnthropicTools(), ...getExplorationTools()]
       })
     });
 

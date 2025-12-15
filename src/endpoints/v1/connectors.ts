@@ -637,8 +637,18 @@ export class GetOAuthAccounts extends OpenAPIRoute {
           break;
         }
         case 'tiktok': {
-          // TikTok implementation will be added later
-          return error(c, "NOT_IMPLEMENTED", "TikTok account fetching not yet implemented", 501);
+          const { TikTokAdsOAuthProvider } = await import("../../services/oauth/tiktok");
+          const appId = await getSecret(c.env.TIKTOK_APP_ID);
+          const appSecret = await getSecret(c.env.TIKTOK_APP_SECRET);
+          const redirectUri = `https://api.clearlift.ai/v1/connectors/tiktok/callback`;
+
+          if (!appId || !appSecret) {
+            return error(c, "MISSING_CREDENTIALS", "TikTok OAuth credentials not configured", 500);
+          }
+
+          const tiktokProvider = new TikTokAdsOAuthProvider(appId, appSecret, redirectUri);
+          accounts = await tiktokProvider.getAdAccounts(accessToken);
+          break;
         }
       }
 

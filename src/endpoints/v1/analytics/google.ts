@@ -5,13 +5,14 @@
  * All endpoints use auth + requireOrg middleware for access control
  */
 
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { GoogleAdsSupabaseAdapter, DateRange } from "../../../adapters/platforms/google-supabase";
 import { SupabaseClient } from "../../../services/supabase";
 import { getSecret } from "../../../utils/secrets";
+import { GoogleAdsOAuthProvider } from "../../../services/oauth/google";
 
 /**
  * GET /v1/analytics/google/campaigns
@@ -385,6 +386,298 @@ export class GetGoogleMetrics extends OpenAPIRoute {
     } catch (err: any) {
       console.error("Get Google metrics error:", err);
       return error(c, "QUERY_FAILED", `Failed to fetch metrics: ${err.message}`, 500);
+    }
+  }
+}
+
+// ==================== WRITE ENDPOINTS ====================
+// These implement the AI_PLAN.md tools: set_active, set_budget
+
+/**
+ * PATCH /v1/analytics/google/campaigns/:campaign_id/status
+ * Implements set_active tool for campaigns
+ */
+export class UpdateGoogleCampaignStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["Google Ads"],
+    summary: "Update Google campaign status",
+    description: "Enable, pause, or remove a Google campaign",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        campaign_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          status: z.enum(['ENABLED', 'PAUSED', 'REMOVED']).describe("New status for the campaign")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Campaign status updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { campaign_id } = data.params;
+    const { status } = data.body;
+
+    try {
+      // Get Google connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'google' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first<{ id: string; account_id: string }>();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active Google connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Get credentials
+      const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
+      const clientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
+      const developerToken = await getSecret(c.env.GOOGLE_ADS_DEVELOPER_TOKEN);
+      if (!clientId || !clientSecret) {
+        return error(c, "CONFIG_ERROR", "Google credentials not configured", 500);
+      }
+      if (!developerToken) {
+        return error(c, "CONFIG_ERROR", "Google Ads developer token not configured", 500);
+      }
+
+      const googleProvider = new GoogleAdsOAuthProvider(clientId, clientSecret, '');
+
+      await googleProvider.updateCampaignStatus(
+        accessToken,
+        developerToken,
+        connection.account_id,  // customer_id
+        campaign_id,
+        status
+      );
+
+      return success(c, {
+        campaign_id,
+        status,
+        message: `Campaign ${status === 'ENABLED' ? 'enabled' : status === 'PAUSED' ? 'paused' : 'removed'} successfully`
+      });
+    } catch (err: any) {
+      console.error("Update Google campaign status error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update campaign status: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/google/ad-groups/:ad_group_id/status
+ * Implements set_active tool for ad groups
+ */
+export class UpdateGoogleAdGroupStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["Google Ads"],
+    summary: "Update Google ad group status",
+    description: "Enable, pause, or remove a Google ad group",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        ad_group_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          status: z.enum(['ENABLED', 'PAUSED', 'REMOVED']).describe("New status for the ad group")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Ad group status updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { ad_group_id } = data.params;
+    const { status } = data.body;
+
+    try {
+      // Get Google connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'google' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first<{ id: string; account_id: string }>();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active Google connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Get credentials
+      const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
+      const clientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
+      const developerToken = await getSecret(c.env.GOOGLE_ADS_DEVELOPER_TOKEN);
+      if (!clientId || !clientSecret) {
+        return error(c, "CONFIG_ERROR", "Google credentials not configured", 500);
+      }
+      if (!developerToken) {
+        return error(c, "CONFIG_ERROR", "Google Ads developer token not configured", 500);
+      }
+
+      const googleProvider = new GoogleAdsOAuthProvider(clientId, clientSecret, '');
+
+      await googleProvider.updateAdGroupStatus(
+        accessToken,
+        developerToken,
+        connection.account_id,  // customer_id
+        ad_group_id,
+        status
+      );
+
+      return success(c, {
+        ad_group_id,
+        status,
+        message: `Ad group ${status === 'ENABLED' ? 'enabled' : status === 'PAUSED' ? 'paused' : 'removed'} successfully`
+      });
+    } catch (err: any) {
+      console.error("Update Google ad group status error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update ad group status: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * PATCH /v1/analytics/google/campaigns/:campaign_id/budget
+ * Implements set_budget tool for campaigns
+ */
+export class UpdateGoogleCampaignBudget extends OpenAPIRoute {
+  schema = {
+    tags: ["Google Ads"],
+    summary: "Update Google campaign budget",
+    description: "Update the daily budget for a Google campaign",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        campaign_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      }),
+      body: contentJson(
+        z.object({
+          budget_cents: z.number().min(100)
+            .describe("Daily budget in cents (minimum $1.00)")
+        })
+      )
+    },
+    responses: {
+      "200": {
+        description: "Campaign budget updated successfully"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { campaign_id } = data.params;
+    const { budget_cents } = data.body;
+
+    try {
+      // Get Google connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id
+        FROM platform_connections
+        WHERE organization_id = ? AND platform = 'google' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first<{ id: string; account_id: string }>();
+
+      if (!connection) {
+        return error(c, "NO_CONNECTION", "No active Google connection found for this organization", 404);
+      }
+
+      // Get access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      if (!encryptionKey) {
+        return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+      }
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "Failed to retrieve access token", 500);
+      }
+
+      // Get credentials
+      const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
+      const clientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
+      const developerToken = await getSecret(c.env.GOOGLE_ADS_DEVELOPER_TOKEN);
+      if (!clientId || !clientSecret) {
+        return error(c, "CONFIG_ERROR", "Google credentials not configured", 500);
+      }
+      if (!developerToken) {
+        return error(c, "CONFIG_ERROR", "Google Ads developer token not configured", 500);
+      }
+
+      const googleProvider = new GoogleAdsOAuthProvider(clientId, clientSecret, '');
+
+      // Google Ads uses micros (1 dollar = 1,000,000 micros), convert from cents
+      const budgetMicros = budget_cents * 10000;
+
+      await googleProvider.updateCampaignBudget(
+        accessToken,
+        developerToken,
+        connection.account_id,  // customer_id
+        campaign_id,
+        budgetMicros
+      );
+
+      return success(c, {
+        campaign_id,
+        budget_cents,
+        message: `Campaign budget updated to $${(budget_cents / 100).toFixed(2)} daily`
+      });
+    } catch (err: any) {
+      console.error("Update Google campaign budget error:", err);
+      return error(c, "UPDATE_FAILED", `Failed to update campaign budget: ${err.message}`, 500);
     }
   }
 }

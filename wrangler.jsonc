@@ -75,6 +75,16 @@
       "binding": "GEMINI_API_KEY",
       "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
       "secret_name": "GEMINI_API_KEY"
+    },
+    {
+      "binding": "TIKTOK_APP_ID",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "TIKTOK_APP_ID"
+    },
+    {
+      "binding": "TIKTOK_APP_SECRET",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "TIKTOK_APP_SECRET"
     }
   ],
 
@@ -231,6 +241,16 @@
           "binding": "GEMINI_API_KEY",
           "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
           "secret_name": "GEMINI_API_KEY"
+        },
+        {
+          "binding": "TIKTOK_APP_ID",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "TIKTOK_APP_ID"
+        },
+        {
+          "binding": "TIKTOK_APP_SECRET",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "TIKTOK_APP_SECRET"
         }
       ]
     }
