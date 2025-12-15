@@ -415,7 +415,7 @@ export class ExplorationToolExecutor {
     const tables: Record<string, Record<string, { table: string; idColumn: string; schema: string }>> = {
       facebook: {
         ad: { table: 'ads', idColumn: 'ad_id', schema: 'facebook_ads' },
-        adset: { table: 'adsets', idColumn: 'adset_id', schema: 'facebook_ads' },
+        adset: { table: 'ad_sets', idColumn: 'ad_set_id', schema: 'facebook_ads' },
         campaign: { table: 'campaigns', idColumn: 'campaign_id', schema: 'facebook_ads' },
         account: { table: 'accounts', idColumn: 'account_id', schema: 'facebook_ads' }
       },
@@ -427,7 +427,7 @@ export class ExplorationToolExecutor {
       },
       tiktok: {
         ad: { table: 'ads', idColumn: 'ad_id', schema: 'tiktok_ads' },
-        adset: { table: 'adgroups', idColumn: 'adgroup_id', schema: 'tiktok_ads' },
+        adset: { table: 'ad_groups', idColumn: 'ad_group_id', schema: 'tiktok_ads' },
         campaign: { table: 'campaigns', idColumn: 'campaign_id', schema: 'tiktok_ads' },
         account: { table: 'advertisers', idColumn: 'advertiser_id', schema: 'tiktok_ads' }
       }

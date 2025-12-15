@@ -163,7 +163,7 @@ export class MetricsFetcher {
       },
       facebook: {
         ad: 'ad_daily_metrics',
-        adset: 'adset_daily_metrics',
+        adset: 'ad_set_daily_metrics',
         campaign: 'campaign_daily_metrics',
         account: null  // Aggregate from campaigns
       },
@@ -191,7 +191,7 @@ export class MetricsFetcher {
       },
       facebook: {
         ad: 'ad_ref',
-        adset: 'adset_ref',
+        adset: 'ad_set_ref',
         campaign: 'campaign_ref',
         account: null
       },

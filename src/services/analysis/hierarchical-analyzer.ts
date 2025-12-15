@@ -440,13 +440,13 @@ export class HierarchicalAnalyzer {
       id,
       orgId,
       level,
-      platform,
-      entityId,
-      entityName,
-      summary,
-      JSON.stringify(metrics),
-      days,
-      runId,
+      platform ?? null,
+      entityId ?? null,
+      entityName ?? null,
+      summary ?? null,
+      JSON.stringify(metrics ?? {}),
+      days ?? 7,
+      runId ?? null,
       expiresAt.toISOString()
     ).run();
   }

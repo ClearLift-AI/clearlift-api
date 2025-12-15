@@ -59,17 +59,17 @@ export class AnalysisLogger {
       id,
       params.orgId,
       params.level,
-      params.platform || null,
-      params.entityId,
-      params.entityName,
-      params.provider,
-      params.model,
-      params.inputTokens,
-      params.outputTokens,
-      params.latencyMs,
-      params.prompt,
-      params.response,
-      params.analysisRunId || null
+      params.platform ?? null,
+      params.entityId ?? null,
+      params.entityName ?? null,
+      params.provider ?? null,
+      params.model ?? null,
+      params.inputTokens ?? 0,
+      params.outputTokens ?? 0,
+      params.latencyMs ?? 0,
+      params.prompt ?? null,
+      params.response ?? null,
+      params.analysisRunId ?? null
     ).run();
 
     return id;
