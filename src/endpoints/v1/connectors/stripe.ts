@@ -31,8 +31,8 @@ export class ConnectStripe extends OpenAPIRoute {
             /^(sk_test_|sk_live_|rk_test_|rk_live_)[a-zA-Z0-9]{24,}$/,
             "Invalid Stripe API key format. Must start with sk_test_, sk_live_, rk_test_, or rk_live_ followed by at least 24 alphanumeric characters"
           ),
-          sync_mode: z.enum(['charges', 'payment_intents', 'invoices']).optional().default('charges'),
-          lookback_days: z.number().int().min(1).max(365).optional().default(30),
+          sync_mode: z.enum(['charges', 'subscriptions']).optional().default('charges'),
+          lookback_days: z.number().int().min(1).max(730).optional().default(90),
           auto_sync: z.boolean().optional().default(true)
         })
       )
@@ -73,9 +73,7 @@ export class ConnectStripe extends OpenAPIRoute {
   async handle(c: AppContext) {
     const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
-    const { organization_id, api_key } = data.body;
-    // Note: sync_mode, lookback_days, auto_sync are validated but not yet used
-    // These will be implemented when sync configuration is added
+    const { organization_id, api_key, sync_mode, lookback_days, auto_sync } = data.body;
 
     // Verify user has access to org
     const { D1Adapter } = await import("../../../adapters/d1");
@@ -120,16 +118,25 @@ export class ConnectStripe extends OpenAPIRoute {
         scopes: ['read_only'] // Based on key restrictions
       });
 
-      // Store Stripe-specific fields
+      // Store Stripe-specific fields and settings
       const isLiveMode = api_key.startsWith('sk_live_') || api_key.startsWith('rk_live_') ? 1 : 0;
+      const settings = JSON.stringify({
+        sync_mode: sync_mode || 'charges',
+        lookback_days: lookback_days || 90,
+        auto_sync: auto_sync !== false,
+        initial_sync_completed: false
+      });
+
       await c.env.DB.prepare(`
         UPDATE platform_connections
         SET stripe_account_id = ?,
-            stripe_livemode = ?
+            stripe_livemode = ?,
+            settings = ?
         WHERE id = ?
       `).bind(
         accountInfo.stripe_account_id,
         isLiveMode,
+        settings,
         connectionId
       ).run();
 
@@ -171,8 +178,8 @@ export class UpdateStripeConfig extends OpenAPIRoute {
       }),
       body: contentJson(
         z.object({
-          sync_mode: z.enum(['charges', 'payment_intents', 'invoices']).optional(),
-          lookback_days: z.number().min(1).max(365).optional(),
+          sync_mode: z.enum(['charges', 'subscriptions']).optional(),
+          lookback_days: z.number().min(1).max(730).optional(),
           auto_sync: z.boolean().optional()
         })
       )
@@ -276,15 +283,35 @@ export class TriggerStripeSync extends OpenAPIRoute {
       return error(c, "CONFLICT", "A sync is already in progress", 409);
     }
 
+    // Parse connection settings
+    let connectionSettings: {
+      sync_mode?: string;
+      lookback_days?: number;
+      auto_sync?: boolean;
+      initial_sync_completed?: boolean;
+    } = {};
+    try {
+      connectionSettings = connection.settings ? JSON.parse(connection.settings as string) : {};
+    } catch (e) {
+      console.warn('Failed to parse connection settings:', e);
+    }
+
+    // Determine sync parameters
+    const isInitialSync = !connectionSettings.initial_sync_completed;
+    const syncMode = connectionSettings.sync_mode || 'charges';
+    const lookbackDays = body.lookback_days || connectionSettings.lookback_days || (isInitialSync ? 90 : 7);
+
     // Queue new sync job
     const jobId = crypto.randomUUID();
 
     const metadata = {
       platform: 'stripe',
       account_id: connection.stripe_account_id || connection.account_id,
+      sync_mode: syncMode,
       date_from: body.date_from,
       date_to: body.date_to,
-      lookback_days: body.lookback_days || 7,
+      lookback_days: lookbackDays,
+      is_initial_sync: isInitialSync,
       triggered_by: session.user_id,
       retry_count: 0
     };
@@ -303,6 +330,10 @@ export class TriggerStripeSync extends OpenAPIRoute {
       JSON.stringify(metadata)
     ).run();
 
+    // Calculate sync window based on settings
+    const syncEnd = body.date_to || new Date().toISOString();
+    const syncStart = body.date_from || new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
+
     // Send job to queue for processing
     console.log('SYNC_QUEUE exists?', !!c.env.SYNC_QUEUE);
     if (c.env.SYNC_QUEUE) {
@@ -314,19 +345,30 @@ export class TriggerStripeSync extends OpenAPIRoute {
           platform: 'stripe',
           account_id: connection.stripe_account_id || connection.account_id,
           job_type: body.sync_type || 'incremental',
+          sync_mode: syncMode,
           sync_window: {
-            start: body.date_from || new Date(Date.now() - (body.lookback_days || 7) * 24 * 60 * 60 * 1000).toISOString(),
-            end: body.date_to || new Date().toISOString()
+            start: syncStart,
+            end: syncEnd
           },
           metadata: {
             retry_count: 0,
             created_at: new Date().toISOString(),
-            priority: 'normal'
+            priority: 'normal',
+            is_initial_sync: isInitialSync,
+            lookback_days: lookbackDays
           }
         };
         console.log('Sending to queue:', JSON.stringify(queueMessage));
         await c.env.SYNC_QUEUE.send(queueMessage);
         console.log('Successfully sent to queue');
+
+        // Mark initial sync as started if this is the first sync
+        if (isInitialSync) {
+          const updatedSettings = { ...connectionSettings, initial_sync_completed: true };
+          await c.env.DB.prepare(`
+            UPDATE platform_connections SET settings = ? WHERE id = ?
+          `).bind(JSON.stringify(updatedSettings), connectionId).run();
+        }
       } catch (queueError) {
         console.error('Queue send error:', queueError);
       }
