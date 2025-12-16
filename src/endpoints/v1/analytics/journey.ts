@@ -444,13 +444,13 @@ Returns the complete journey for an identified user, including:
       }
 
       if (dateFrom) {
-        params.append('event_timestamp', `gte.${dateFrom}T00:00:00Z`);
+        params.append('timestamp', `gte.${dateFrom}T00:00:00Z`);
       }
       if (dateTo) {
-        params.append('event_timestamp', `lte.${dateTo}T23:59:59Z`);
+        params.append('timestamp', `lte.${dateTo}T23:59:59Z`);
       }
 
-      params.append('order', 'event_timestamp.asc');
+      params.append('order', 'timestamp.asc');
       params.append('limit', '5000');
 
       const events = await supabase.queryWithSchema<any[]>(
@@ -461,7 +461,7 @@ Returns the complete journey for an identified user, including:
 
       // Process events
       const sortedEvents = events.sort((a, b) =>
-        new Date(a.event_timestamp).getTime() - new Date(b.event_timestamp).getTime()
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       );
 
       // Extract journey data
@@ -487,14 +487,14 @@ Returns the complete journey for an identified user, including:
         source: firstTouchEvent.utm_source,
         medium: firstTouchEvent.utm_medium || null,
         campaign: firstTouchEvent.utm_campaign || null,
-        date: firstTouchEvent.event_timestamp.split('T')[0]
+        date: firstTouchEvent.timestamp.split('T')[0]
       } : null;
 
       const lastTouch = lastTouchEvent ? {
         source: lastTouchEvent.utm_source,
         medium: lastTouchEvent.utm_medium || null,
         campaign: lastTouchEvent.utm_campaign || null,
-        date: lastTouchEvent.event_timestamp.split('T')[0]
+        date: lastTouchEvent.timestamp.split('T')[0]
       } : null;
 
       // Tag-based conversions
@@ -503,7 +503,7 @@ Returns the complete journey for an identified user, including:
       );
       const tagConversions = conversionEvents.map(e => ({
         event_id: e.event_id,
-        timestamp: e.event_timestamp,
+        timestamp: e.timestamp,
         type: e.event_type,
         revenue: e.revenue || e.value || 0,
         session_id: e.session_id || null
@@ -542,8 +542,8 @@ Returns the complete journey for an identified user, including:
         connectorConversions.length > 0 ? 'connectors' : 'tag';
 
       // Summary calculations
-      const firstSeen = sortedEvents.length > 0 ? sortedEvents[0].event_timestamp : null;
-      const lastSeen = sortedEvents.length > 0 ? sortedEvents[sortedEvents.length - 1].event_timestamp : null;
+      const firstSeen = sortedEvents.length > 0 ? sortedEvents[0].timestamp : null;
+      const lastSeen = sortedEvents.length > 0 ? sortedEvents[sortedEvents.length - 1].timestamp : null;
 
       // Use connector revenue as source of truth if available (actual transactions)
       const lifetimeValue = totalConnectorRevenue > 0 ? totalConnectorRevenue : totalTagRevenue;
@@ -565,14 +565,14 @@ Returns the complete journey for an identified user, including:
 
       // Days active (unique dates with events)
       const activeDates = new Set(
-        sortedEvents.map(e => e.event_timestamp.split('T')[0])
+        sortedEvents.map(e => e.timestamp.split('T')[0])
       );
       const daysActive = activeDates.size;
 
       // Build event timeline if requested
       const eventTimeline = includeEvents ? sortedEvents.slice(0, 500).map(e => ({
         event_id: e.event_id,
-        timestamp: e.event_timestamp,
+        timestamp: e.timestamp,
         event_type: e.event_type,
         session_id: e.session_id || null,
         anonymous_id: e.anonymous_id || null,
