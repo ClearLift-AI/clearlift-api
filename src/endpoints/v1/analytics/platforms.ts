@@ -45,6 +45,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
                   total_impressions: z.number(),
                   total_clicks: z.number(),
                   total_conversions: z.number(),
+                  total_conversion_value_cents: z.number(),
                   average_ctr: z.number(),
                   average_cpc_cents: z.number(),
                   platforms_active: z.array(z.string())
@@ -54,6 +55,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
                   impressions: z.number(),
                   clicks: z.number(),
                   conversions: z.number(),
+                  conversion_value_cents: z.number(),
                   campaigns: z.number()
                 }))
               })
@@ -134,6 +136,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         total_impressions: platformData.total_impressions,
         total_clicks: platformData.total_clicks,
         total_conversions: platformData.total_conversions,
+        total_conversion_value_cents: platformData.total_conversion_value_cents,
         average_ctr: platformData.total_impressions > 0
           ? (platformData.total_clicks / platformData.total_impressions) * 100
           : 0,
@@ -197,6 +200,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           total_impressions: summary.total_impressions,
           total_clicks: summary.total_clicks,
           total_conversions: totalConversions,
+          total_conversion_value_cents: summary.total_conversion_value_cents,
           average_ctr: Math.round(summary.average_ctr * 100) / 100,
           average_cpc_cents: summary.average_cpc_cents,
           platforms_active: summary.platforms_active
@@ -292,14 +296,16 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     total_impressions: number;
     total_clicks: number;
     total_conversions: number;
-    by_platform: Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number; campaigns: number }>;
+    total_conversion_value_cents: number;
+    by_platform: Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number; conversion_value_cents: number; campaigns: number }>;
   }> {
     const result = {
       total_spend_cents: 0,
       total_impressions: 0,
       total_clicks: 0,
       total_conversions: 0,
-      by_platform: {} as Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number; campaigns: number }>
+      total_conversion_value_cents: 0,
+      by_platform: {} as Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number; conversion_value_cents: number; campaigns: number }>
     };
 
     // Build date range for queries (default: last 30 days)
@@ -321,12 +327,14 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           let platformImpressions = 0;
           let platformClicks = 0;
           let platformConversions = 0;
+          let platformConversionValue = 0;
 
           for (const campaign of campaigns) {
             platformSpend += campaign.metrics.spend_cents || 0;
             platformImpressions += campaign.metrics.impressions || 0;
             platformClicks += campaign.metrics.clicks || 0;
             platformConversions += campaign.metrics.conversions || 0;
+            platformConversionValue += campaign.metrics.conversion_value_cents || 0;
           }
 
           result.by_platform['google'] = {
@@ -334,6 +342,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
             impressions: platformImpressions,
             clicks: platformClicks,
             conversions: platformConversions,
+            conversion_value_cents: platformConversionValue,
             campaigns: campaigns.length
           };
 
@@ -341,8 +350,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           result.total_impressions += platformImpressions;
           result.total_clicks += platformClicks;
           result.total_conversions += platformConversions;
+          result.total_conversion_value_cents += platformConversionValue;
 
-          console.log(`Google Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
+          console.log(`Google Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}, convValue=${platformConversionValue}`);
 
         } else if (normalizedPlatform === 'facebook' || normalizedPlatform === 'meta') {
           // Use FacebookSupabaseAdapter with facebook_ads schema
@@ -353,12 +363,14 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           let platformImpressions = 0;
           let platformClicks = 0;
           let platformConversions = 0;
+          let platformConversionValue = 0;
 
           for (const campaign of campaigns) {
             platformSpend += campaign.metrics.spend_cents || 0;
             platformImpressions += campaign.metrics.impressions || 0;
             platformClicks += campaign.metrics.clicks || 0;
             platformConversions += campaign.metrics.conversions || 0;
+            platformConversionValue += (campaign.metrics as any).conversion_value_cents || 0;
           }
 
           result.by_platform['facebook'] = {
@@ -366,6 +378,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
             impressions: platformImpressions,
             clicks: platformClicks,
             conversions: platformConversions,
+            conversion_value_cents: platformConversionValue,
             campaigns: campaigns.length
           };
 
@@ -373,8 +386,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           result.total_impressions += platformImpressions;
           result.total_clicks += platformClicks;
           result.total_conversions += platformConversions;
+          result.total_conversion_value_cents += platformConversionValue;
 
-          console.log(`Facebook Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
+          console.log(`Facebook Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}, convValue=${platformConversionValue}`);
 
         } else if (normalizedPlatform === 'tiktok') {
           // Use TikTokAdsSupabaseAdapter with tiktok_ads schema
@@ -383,29 +397,32 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           const metrics = await adapter.getCampaignDailyMetrics(orgId, effectiveDateRange);
 
           // Aggregate metrics by campaign
-          const metricsByCampaign: Record<string, { spend: number; impressions: number; clicks: number; conversions: number }> = {};
+          const metricsByCampaign: Record<string, { spend: number; impressions: number; clicks: number; conversions: number; conversionValue: number }> = {};
           for (const m of metrics) {
             const ref = (m as any).campaign_ref;
             if (!metricsByCampaign[ref]) {
-              metricsByCampaign[ref] = { spend: 0, impressions: 0, clicks: 0, conversions: 0 };
+              metricsByCampaign[ref] = { spend: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0 };
             }
             metricsByCampaign[ref].spend += m.spend_cents || 0;
             metricsByCampaign[ref].impressions += m.impressions || 0;
             metricsByCampaign[ref].clicks += m.clicks || 0;
             metricsByCampaign[ref].conversions += m.conversions || 0;
+            metricsByCampaign[ref].conversionValue += (m as any).conversion_value_cents || 0;
           }
 
           let platformSpend = 0;
           let platformImpressions = 0;
           let platformClicks = 0;
           let platformConversions = 0;
+          let platformConversionValue = 0;
 
           for (const campaign of campaigns) {
-            const cm = metricsByCampaign[campaign.id] || { spend: 0, impressions: 0, clicks: 0, conversions: 0 };
+            const cm = metricsByCampaign[campaign.id] || { spend: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0 };
             platformSpend += cm.spend;
             platformImpressions += cm.impressions;
             platformClicks += cm.clicks;
             platformConversions += cm.conversions;
+            platformConversionValue += cm.conversionValue;
           }
 
           result.by_platform['tiktok'] = {
@@ -413,6 +430,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
             impressions: platformImpressions,
             clicks: platformClicks,
             conversions: platformConversions,
+            conversion_value_cents: platformConversionValue,
             campaigns: campaigns.length
           };
 
@@ -420,8 +438,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           result.total_impressions += platformImpressions;
           result.total_clicks += platformClicks;
           result.total_conversions += platformConversions;
+          result.total_conversion_value_cents += platformConversionValue;
 
-          console.log(`TikTok Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}`);
+          console.log(`TikTok Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}, convValue=${platformConversionValue}`);
         } else {
           console.warn(`Unknown platform: ${platform}`);
         }

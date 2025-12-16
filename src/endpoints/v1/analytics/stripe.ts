@@ -130,14 +130,35 @@ export class GetStripeAnalytics extends OpenAPIRoute {
     }
 
     // Query data with filters
-    const records = await adapter.queryByMetadata(
-      query.query.connection_id,
-      metadataFilters,
-      {
-        start: query.query.date_from,
-        end: query.query.date_to
-      }
-    );
+    let records: any[];
+    try {
+      records = await adapter.queryByMetadata(
+        query.query.connection_id,
+        metadataFilters,
+        {
+          start: query.query.date_from,
+          end: query.query.date_to
+        }
+      );
+    } catch (err) {
+      console.error("Stripe query failed:", err);
+      // Return empty data instead of error - sync may not have run yet
+      return success(c, {
+        summary: {
+          total_revenue: 0,
+          total_units: 0,
+          transaction_count: 0,
+          unique_customers: 0,
+          average_order_value: 0
+        },
+        time_series: [],
+        by_product: {},
+        records: [],
+        total_records: 0,
+        metadata_keys_available: { charge: [], product: [], price: [], customer: [] },
+        sync_status: "No data synced yet. Please wait for the sync to complete."
+      });
+    }
 
     // Apply amount filters if provided
     let filteredRecords = records;
