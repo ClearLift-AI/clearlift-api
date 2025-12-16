@@ -120,7 +120,9 @@ export class SupabaseClient {
     updates: any,
     filter: string
   ): Promise<T> {
-    return await this.query<T>(`${table}?${filter}`, {
+    // Transform filter format from column.op.value to column=op.value for PostgREST
+    const transformedFilter = filter.replace(/(\w+)\.(eq|neq|gt|gte|lt|lte|like|ilike|is|in)\./g, '$1=$2.');
+    return await this.query<T>(`${table}?${transformedFilter}`, {
       method: 'PATCH',
       body: JSON.stringify(updates)
     });
@@ -133,7 +135,9 @@ export class SupabaseClient {
     table: string,
     filter: string
   ): Promise<void> {
-    await this.query(`${table}?${filter}`, {
+    // Transform filter format from column.op.value to column=op.value for PostgREST
+    const transformedFilter = filter.replace(/(\w+)\.(eq|neq|gt|gte|lt|lte|like|ilike|is|in)\./g, '$1=$2.');
+    await this.query(`${table}?${transformedFilter}`, {
       method: 'DELETE',
       headers: {
         ...this.headers,
@@ -157,8 +161,11 @@ export class SupabaseClient {
     } = {}
   ): Promise<T[]> {
     // Build query string - the 'query' parameter contains filter conditions
-    // like "organization_id.eq.123&date.gte.2025-01-01"
-    let queryString = query;
+    // Transform filter format from column.op.value to column=op.value for PostgREST
+    // e.g., "organization_id.eq.123&metric_date.gte.2025-01-01"
+    //    -> "organization_id=eq.123&metric_date=gte.2025-01-01"
+    const transformedQuery = query.replace(/(\w+)\.(eq|neq|gt|gte|lt|lte|like|ilike|is|in)\./g, '$1=$2.');
+    let queryString = transformedQuery;
 
     const additionalParams = new URLSearchParams();
 

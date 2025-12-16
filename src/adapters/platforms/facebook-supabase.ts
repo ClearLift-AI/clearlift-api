@@ -410,6 +410,8 @@ export class FacebookSupabaseAdapter {
       cpc_cents: number;
     };
   }>> {
+    console.log('[Facebook Adapter] getCampaignsWithMetrics called with:', { orgId, dateRange, options });
+
     // Fetch campaigns
     const campaigns = await this.getCampaigns(orgId, {
       status: options.status,
@@ -417,14 +419,36 @@ export class FacebookSupabaseAdapter {
       offset: options.offset
     });
 
+    console.log('[Facebook Adapter] Campaigns fetched:', campaigns.length);
+
     if (campaigns.length === 0) {
       return [];
     }
 
-    // Fetch all campaign metrics for the date range
-    const allMetrics = await this.getCampaignDailyMetrics(orgId, dateRange, {
-      limit: 50000 // High limit to get all metrics
-    });
+    // Fetch all campaign metrics for the date range using pagination
+    // PostgREST has a default row limit, so we need to paginate
+    const pageSize = 1000;
+    let allMetrics: FacebookDailyMetrics[] = [];
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const batch = await this.getCampaignDailyMetrics(orgId, dateRange, {
+        limit: pageSize,
+        offset: offset
+      });
+      allMetrics = allMetrics.concat(batch);
+      hasMore = batch.length === pageSize;
+      offset += pageSize;
+
+      // Safety limit to prevent infinite loops
+      if (offset > 100000) {
+        console.warn('[Facebook Adapter] Hit safety limit on metrics pagination');
+        break;
+      }
+    }
+
+    console.log('[Facebook Adapter] Total metrics fetched for date range:', allMetrics.length);
 
     // Group metrics by campaign_ref (which is the campaign UUID)
     const metricsByCampaignRef: Record<string, {
@@ -455,6 +479,8 @@ export class FacebookSupabaseAdapter {
       metricsByCampaignRef[ref].conversions += metric.conversions || 0;
       metricsByCampaignRef[ref].reach += metric.reach || 0;
     }
+
+    console.log('[Facebook Adapter] Metrics grouped by campaign_ref:', Object.keys(metricsByCampaignRef).length);
 
     // Join campaigns with their aggregated metrics
     return campaigns.map(campaign => {

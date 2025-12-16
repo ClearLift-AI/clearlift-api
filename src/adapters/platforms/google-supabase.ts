@@ -238,6 +238,8 @@ export class GoogleAdsSupabaseAdapter {
       `metric_date.lte.${dateRange.end}`
     ];
 
+    console.log('[Google Adapter] getCampaignDailyMetrics query filters:', filters.join('&'));
+
     if (options.campaignId) {
       filters.push(`campaign_ref.eq.${options.campaignId}`);
     }
@@ -357,6 +359,8 @@ export class GoogleAdsSupabaseAdapter {
       cpc_cents: number;
     };
   }>> {
+    console.log('[Google Adapter] getCampaignsWithMetrics called with:', { orgId, dateRange, options });
+
     // Fetch campaigns
     const campaigns = await this.getCampaigns(orgId, {
       status: options.status,
@@ -364,14 +368,46 @@ export class GoogleAdsSupabaseAdapter {
       offset: options.offset
     });
 
+    console.log('[Google Adapter] Campaigns fetched:', campaigns.length);
+
     if (campaigns.length === 0) {
       return [];
     }
 
-    // Fetch all campaign metrics for the date range
-    const allMetrics = await this.getCampaignDailyMetrics(orgId, dateRange, {
-      limit: 50000 // High limit to get all metrics
-    });
+    // Fetch all campaign metrics for the date range using pagination
+    // PostgREST has a default row limit, so we need to paginate
+    const pageSize = 1000;
+    let allMetrics: GoogleDailyMetrics[] = [];
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const batch = await this.getCampaignDailyMetrics(orgId, dateRange, {
+        limit: pageSize,
+        offset: offset
+      });
+      allMetrics = allMetrics.concat(batch);
+      hasMore = batch.length === pageSize;
+      offset += pageSize;
+
+      // Safety limit to prevent infinite loops
+      if (offset > 100000) {
+        console.warn('[Google Adapter] Hit safety limit on metrics pagination');
+        break;
+      }
+    }
+
+    console.log('[Google Adapter] Total metrics fetched for date range:', allMetrics.length);
+
+    // Log date range of returned metrics to verify filter is working
+    if (allMetrics.length > 0) {
+      const dates = allMetrics.map(m => m.metric_date).sort();
+      console.log('[Google Adapter] Metrics date range:', {
+        first: dates[0],
+        last: dates[dates.length - 1],
+        uniqueDates: [...new Set(dates)].length
+      });
+    }
 
     // Group metrics by campaign_ref (which is the campaign UUID)
     const metricsByCampaignRef: Record<string, {
@@ -402,6 +438,8 @@ export class GoogleAdsSupabaseAdapter {
       metricsByCampaignRef[ref].conversions += metric.conversions || 0;
       metricsByCampaignRef[ref].conversion_value_cents += metric.conversion_value_cents || 0;
     }
+
+    console.log('[Google Adapter] Metrics grouped by campaign_ref:', Object.keys(metricsByCampaignRef).length);
 
     // Join campaigns with their aggregated metrics
     return campaigns.map(campaign => {

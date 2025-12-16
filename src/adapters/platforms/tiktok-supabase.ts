@@ -331,6 +331,129 @@ export class TikTokAdsSupabaseAdapter {
   }
 
   /**
+   * Get campaigns with aggregated metrics for an organization
+   * Joins campaigns with campaign_daily_metrics for the date range
+   */
+  async getCampaignsWithMetrics(
+    orgId: string,
+    dateRange: DateRange,
+    options: {
+      status?: string;
+      limit?: number;
+      offset?: number;
+    } = {}
+  ): Promise<Array<TikTokCampaign & {
+    metrics: {
+      impressions: number;
+      clicks: number;
+      spend_cents: number;
+      conversions: number;
+      reach: number;
+      ctr: number;
+      cpc_cents: number;
+    };
+  }>> {
+    console.log('[TikTok Adapter] getCampaignsWithMetrics called with:', { orgId, dateRange, options });
+
+    // Fetch campaigns
+    const campaigns = await this.getCampaigns(orgId, {
+      status: options.status,
+      limit: options.limit,
+      offset: options.offset
+    });
+
+    console.log('[TikTok Adapter] Campaigns fetched:', campaigns.length);
+
+    if (campaigns.length === 0) {
+      return [];
+    }
+
+    // Fetch all campaign metrics for the date range using pagination
+    // PostgREST has a default row limit, so we need to paginate
+    const pageSize = 1000;
+    let allMetrics: TikTokDailyMetrics[] = [];
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const batch = await this.getCampaignDailyMetrics(orgId, dateRange, {
+        limit: pageSize,
+        offset: offset
+      });
+      allMetrics = allMetrics.concat(batch);
+      hasMore = batch.length === pageSize;
+      offset += pageSize;
+
+      // Safety limit to prevent infinite loops
+      if (offset > 100000) {
+        console.warn('[TikTok Adapter] Hit safety limit on metrics pagination');
+        break;
+      }
+    }
+
+    console.log('[TikTok Adapter] Total metrics fetched for date range:', allMetrics.length);
+
+    // Group metrics by campaign_ref (which is the campaign UUID)
+    const metricsByCampaignRef: Record<string, {
+      impressions: number;
+      clicks: number;
+      spend_cents: number;
+      conversions: number;
+      reach: number;
+    }> = {};
+
+    for (const metric of allMetrics) {
+      const ref = (metric as any).campaign_ref;
+      if (!ref) continue;
+
+      if (!metricsByCampaignRef[ref]) {
+        metricsByCampaignRef[ref] = {
+          impressions: 0,
+          clicks: 0,
+          spend_cents: 0,
+          conversions: 0,
+          reach: 0
+        };
+      }
+
+      metricsByCampaignRef[ref].impressions += metric.impressions || 0;
+      metricsByCampaignRef[ref].clicks += metric.clicks || 0;
+      metricsByCampaignRef[ref].spend_cents += metric.spend_cents || 0;
+      metricsByCampaignRef[ref].conversions += metric.conversions || 0;
+      metricsByCampaignRef[ref].reach += metric.reach || 0;
+    }
+
+    console.log('[TikTok Adapter] Metrics grouped by campaign_ref:', Object.keys(metricsByCampaignRef).length);
+
+    // Join campaigns with their aggregated metrics
+    return campaigns.map(campaign => {
+      const campaignMetrics = metricsByCampaignRef[campaign.id] || {
+        impressions: 0,
+        clicks: 0,
+        spend_cents: 0,
+        conversions: 0,
+        reach: 0
+      };
+
+      const ctr = campaignMetrics.impressions > 0
+        ? (campaignMetrics.clicks / campaignMetrics.impressions) * 100
+        : 0;
+      const cpc_cents = campaignMetrics.clicks > 0
+        ? Math.round(campaignMetrics.spend_cents / campaignMetrics.clicks)
+        : 0;
+
+      return {
+        ...campaign,
+        metrics: {
+          ...campaignMetrics,
+          ctr,
+          cpc_cents
+        }
+      };
+    });
+  }
+
+  /**
    * Get aggregated metrics summary for an organization
    */
   async getMetricsSummary(

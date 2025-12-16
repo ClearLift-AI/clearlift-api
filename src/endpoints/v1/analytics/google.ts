@@ -46,6 +46,7 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
                   campaign_id: z.string(),
                   campaign_name: z.string(),
                   status: z.string(),
+                  last_updated: z.string().optional(),
                   metrics: z.object({
                     impressions: z.number(),
                     clicks: z.number(),
@@ -116,6 +117,8 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
 
       const dateRange: DateRange = { start: startDate, end: endDate };
 
+      console.log('[Google Campaigns] Date range requested:', { startDate, endDate });
+
       // Fetch campaigns WITH metrics using the new method
       const campaignsWithMetrics = await adapter.getCampaignsWithMetrics(
         orgId,
@@ -127,11 +130,14 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
         }
       );
 
+      console.log('[Google Campaigns] Campaigns with metrics returned:', campaignsWithMetrics.length);
+
       // Transform to frontend expected format
       const results = campaignsWithMetrics.map(c => ({
         campaign_id: c.campaign_id,
         campaign_name: c.campaign_name,
         status: c.campaign_status,
+        last_updated: c.last_synced_at || c.updated_at,
         metrics: {
           impressions: c.metrics.impressions,
           clicks: c.metrics.clicks,
@@ -140,6 +146,15 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
           revenue: c.metrics.conversion_value_cents / 100 // Google has conversion value
         }
       }));
+
+      // Debug: Log first campaign's metrics to verify date filtering
+      if (results.length > 0) {
+        console.log('[Google Campaigns] Sample campaign metrics:', {
+          name: results[0].campaign_name,
+          spend: results[0].metrics.spend,
+          impressions: results[0].metrics.impressions
+        });
+      }
 
       // Calculate summary from results
       const summary = results.reduce(
