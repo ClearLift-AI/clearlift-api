@@ -120,6 +120,9 @@ export interface QueryOptions {
   limit?: number;
   offset?: number;
   select?: string[];
+  // Domain patterns for org_tag resolution (e.g., ['domain_%rockbot_com'])
+  // When provided, queries will match org_tag = 'explicit' OR org_tag LIKE 'domain_%xxx'
+  domainPatterns?: string[];
 }
 
 // Summary statistics
@@ -296,8 +299,23 @@ export class R2SQLAdapter {
     // Build WHERE clauses
     const whereClauses: string[] = [];
 
-    // Always filter by org_tag
-    whereClauses.push(`org_tag = '${this.escapeValue(orgTag)}'`);
+    // Build org_tag filter (explicit tag + domain patterns)
+    const orgTagConditions: string[] = [];
+    orgTagConditions.push(`org_tag = '${this.escapeValue(orgTag)}'`);
+
+    // Add domain pattern conditions (e.g., org_tag LIKE 'domain_%rockbot_com')
+    if (options.domainPatterns && options.domainPatterns.length > 0) {
+      for (const pattern of options.domainPatterns) {
+        orgTagConditions.push(`org_tag LIKE '${this.escapeValue(pattern)}'`);
+      }
+    }
+
+    // Combine with OR if multiple conditions
+    if (orgTagConditions.length === 1) {
+      whereClauses.push(orgTagConditions[0]);
+    } else {
+      whereClauses.push(`(${orgTagConditions.join(" OR ")})`);
+    }
 
     // Add time filter
     const timeFilter = this.buildTimeFilter(options);

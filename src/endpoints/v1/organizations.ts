@@ -1087,7 +1087,10 @@ export class GetTrackingDomains extends OpenAPIRoute {
                   domain: z.string(),
                   is_verified: z.boolean(),
                   is_primary: z.boolean(),
-                  created_at: z.string()
+                  created_at: z.string(),
+                  backfill_status: z.enum(['pending', 'syncing', 'completed', 'failed']).optional(),
+                  backfill_events_count: z.number().optional(),
+                  backfill_completed_at: z.string().nullable().optional()
                 }))
               })
             })
@@ -1108,8 +1111,43 @@ export class GetTrackingDomains extends OpenAPIRoute {
       ORDER BY is_primary DESC, created_at DESC
     `).bind(orgId).all();
 
+    // Enrich domains with backfill status from Supabase
+    let enrichedDomains = domains.results || [];
+
+    if (enrichedDomains.length > 0 && c.env.SUPABASE_URL && c.env.SUPABASE_SECRET_KEY) {
+      try {
+        const { getSecret } = await import("../../utils/secrets");
+        const { SupabaseClient } = await import("../../services/supabase");
+        const { EventsBackfillService } = await import("../../services/events-backfill");
+
+        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+        if (supabaseKey) {
+          const supabase = new SupabaseClient({
+            url: c.env.SUPABASE_URL,
+            serviceKey: supabaseKey
+          });
+          const backfillService = new EventsBackfillService(supabase);
+
+          enrichedDomains = await Promise.all(
+            enrichedDomains.map(async (d: any) => {
+              const backfillStatus = await backfillService.getDomainBackfillStatus(d.domain);
+              return {
+                ...d,
+                backfill_status: backfillStatus?.status || 'pending',
+                backfill_events_count: backfillStatus?.events_count || 0,
+                backfill_completed_at: backfillStatus?.completed_at || null
+              };
+            })
+          );
+        }
+      } catch (backfillError) {
+        // Log but continue - domains are still useful without backfill status
+        console.error('Failed to fetch backfill status:', backfillError);
+      }
+    }
+
     return success(c, {
-      domains: domains.results || []
+      domains: enrichedDomains
     });
   }
 }
@@ -1148,7 +1186,11 @@ export class AddTrackingDomain extends OpenAPIRoute {
                   is_verified: z.boolean(),
                   is_primary: z.boolean(),
                   created_at: z.string()
-                })
+                }),
+                backfill: z.object({
+                  events_found: z.number(),
+                  claim_id: z.string()
+                }).optional()
               })
             })
           }
@@ -1190,10 +1232,46 @@ export class AddTrackingDomain extends OpenAPIRoute {
       `).bind(orgId).run();
     }
 
+    // Insert into D1 tracking_domains
     await c.env.DB.prepare(`
       INSERT INTO tracking_domains (id, organization_id, domain, is_verified, is_primary, created_at)
       VALUES (?, ?, ?, FALSE, ?, ?)
     `).bind(domainId, orgId, normalizedDomain, is_primary, now).run();
+
+    // Get org_tag for Supabase backfill
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings
+      WHERE organization_id = ? AND is_active = 1
+      LIMIT 1
+    `).bind(orgId).first<{ short_tag: string }>();
+
+    // Trigger Supabase events backfill (claims domain for historical event resolution)
+    let backfillResult: { events_found: number; claim_id: string } | undefined;
+    if (tagMapping && c.env.SUPABASE_URL && c.env.SUPABASE_SECRET_KEY) {
+      try {
+        const { getSecret } = await import("../../utils/secrets");
+        const { SupabaseClient } = await import("../../services/supabase");
+        const { EventsBackfillService } = await import("../../services/events-backfill");
+
+        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+        if (supabaseKey) {
+          const supabase = new SupabaseClient({
+            url: c.env.SUPABASE_URL,
+            serviceKey: supabaseKey
+          });
+          const backfillService = new EventsBackfillService(supabase);
+
+          const result = await backfillService.claimDomain(normalizedDomain, tagMapping.short_tag);
+          backfillResult = {
+            events_found: result.events_updated,
+            claim_id: result.claim_id
+          };
+        }
+      } catch (backfillError) {
+        // Log but don't fail - D1 domain was already added successfully
+        console.error('Events backfill failed:', backfillError);
+      }
+    }
 
     return success(c, {
       domain: {
@@ -1202,7 +1280,8 @@ export class AddTrackingDomain extends OpenAPIRoute {
         is_verified: false,
         is_primary: is_primary,
         created_at: now
-      }
+      },
+      backfill: backfillResult
     }, undefined, 201);
   }
 }
@@ -1230,7 +1309,8 @@ export class RemoveTrackingDomain extends OpenAPIRoute {
             schema: z.object({
               success: z.boolean(),
               data: z.object({
-                message: z.string()
+                message: z.string(),
+                domain_claim_released: z.boolean().optional()
               })
             })
           }
@@ -1246,21 +1326,159 @@ export class RemoveTrackingDomain extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>();
     const { org_id: orgId, domain_id: domainId } = data.params;
 
-    // Verify domain belongs to this org
-    const domain = await c.env.DB.prepare(`
-      SELECT id FROM tracking_domains WHERE id = ? AND organization_id = ?
-    `).bind(domainId, orgId).first();
+    // Verify domain belongs to this org and get domain string
+    const domainRecord = await c.env.DB.prepare(`
+      SELECT id, domain FROM tracking_domains WHERE id = ? AND organization_id = ?
+    `).bind(domainId, orgId).first<{ id: string; domain: string }>();
 
-    if (!domain) {
+    if (!domainRecord) {
       return error(c, "NOT_FOUND", "Domain not found", 404);
     }
 
+    // Delete from D1
     await c.env.DB.prepare(`
       DELETE FROM tracking_domains WHERE id = ?
     `).bind(domainId).run();
 
+    // Release domain claim in Supabase
+    let domainClaimReleased = false;
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings
+      WHERE organization_id = ? AND is_active = 1
+      LIMIT 1
+    `).bind(orgId).first<{ short_tag: string }>();
+
+    if (tagMapping && c.env.SUPABASE_URL && c.env.SUPABASE_SECRET_KEY) {
+      try {
+        const { getSecret } = await import("../../utils/secrets");
+        const { SupabaseClient } = await import("../../services/supabase");
+        const { EventsBackfillService } = await import("../../services/events-backfill");
+
+        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+        if (supabaseKey) {
+          const supabase = new SupabaseClient({
+            url: c.env.SUPABASE_URL,
+            serviceKey: supabaseKey
+          });
+          const backfillService = new EventsBackfillService(supabase);
+
+          domainClaimReleased = await backfillService.releaseDomain(
+            domainRecord.domain,
+            tagMapping.short_tag
+          );
+        }
+      } catch (releaseError) {
+        // Log but don't fail - D1 domain was already deleted successfully
+        console.error('Domain claim release failed:', releaseError);
+      }
+    }
+
     return success(c, {
-      message: "Domain removed successfully"
+      message: "Domain removed successfully",
+      domain_claim_released: domainClaimReleased
+    });
+  }
+}
+
+/**
+ * POST /v1/organizations/:org_id/tracking-domains/:domain_id/resync - Resync a tracking domain
+ */
+export class ResyncTrackingDomain extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Resync historical events for a tracking domain",
+    operationId: "resync-tracking-domain",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string(),
+        domain_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Domain resync started",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                message: z.string(),
+                events_found: z.number(),
+                backfill_status: z.enum(['pending', 'syncing', 'completed', 'failed'])
+              })
+            })
+          }
+        }
+      },
+      "404": {
+        description: "Domain not found"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { org_id: orgId, domain_id: domainId } = data.params;
+
+    // Verify domain belongs to this org and get domain string
+    const domainRecord = await c.env.DB.prepare(`
+      SELECT id, domain FROM tracking_domains WHERE id = ? AND organization_id = ?
+    `).bind(domainId, orgId).first<{ id: string; domain: string }>();
+
+    if (!domainRecord) {
+      return error(c, "NOT_FOUND", "Domain not found", 404);
+    }
+
+    // Get org_tag for backfill
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings
+      WHERE organization_id = ? AND is_active = 1
+      LIMIT 1
+    `).bind(orgId).first<{ short_tag: string }>();
+
+    if (!tagMapping) {
+      return error(c, "NO_ORG_TAG", "Organization has no active org_tag mapping", 400);
+    }
+
+    // Trigger resync
+    let eventsFound = 0;
+    let backfillStatus: 'pending' | 'syncing' | 'completed' | 'failed' = 'pending';
+
+    if (c.env.SUPABASE_URL && c.env.SUPABASE_SECRET_KEY) {
+      try {
+        const { getSecret } = await import("../../utils/secrets");
+        const { SupabaseClient } = await import("../../services/supabase");
+        const { EventsBackfillService } = await import("../../services/events-backfill");
+
+        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+        if (supabaseKey) {
+          const supabase = new SupabaseClient({
+            url: c.env.SUPABASE_URL,
+            serviceKey: supabaseKey
+          });
+          const backfillService = new EventsBackfillService(supabase);
+
+          const result = await backfillService.resyncDomain(
+            domainRecord.domain,
+            tagMapping.short_tag
+          );
+          eventsFound = result.events_updated;
+          backfillStatus = 'completed';
+        }
+      } catch (resyncError) {
+        console.error('Domain resync failed:', resyncError);
+        backfillStatus = 'failed';
+        return error(c, "RESYNC_FAILED", resyncError instanceof Error ? resyncError.message : "Failed to resync domain", 500);
+      }
+    } else {
+      return error(c, "NO_SUPABASE", "Supabase not configured", 500);
+    }
+
+    return success(c, {
+      message: "Domain resync completed",
+      events_found: eventsFound,
+      backfill_status: backfillStatus
     });
   }
 }

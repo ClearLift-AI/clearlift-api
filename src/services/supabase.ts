@@ -234,6 +234,20 @@ export class SupabaseClient {
   }
 
   /**
+   * Execute an RPC function with a specific schema (e.g., 'events')
+   */
+  async rpcWithSchema<T = any>(
+    functionName: string,
+    params: any = {},
+    schema: string
+  ): Promise<T> {
+    return await this.queryWithSchema<T>(`rpc/${functionName}`, schema, {
+      method: 'POST',
+      body: JSON.stringify(params)
+    });
+  }
+
+  /**
    * Upsert records (insert or update)
    */
   async upsert<T = any>(

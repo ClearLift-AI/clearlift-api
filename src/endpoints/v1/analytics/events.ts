@@ -73,6 +73,24 @@ export class GetEvents extends OpenAPIRoute {
 
     const orgTag = orgTagMapping.short_tag;
 
+    // Get domain patterns for this org (for domain_xxx event resolution)
+    // These are domains claimed by the org - events with domain_xxx org_tags
+    // will be included in the query results
+    const trackingDomains = await c.env.DB.prepare(`
+      SELECT domain FROM tracking_domains WHERE organization_id = ?
+    `).bind(orgId).all<{ domain: string }>();
+
+    // Convert domains to LIKE patterns: rockbot.com -> domain_%rockbot_com
+    const domainPatterns: string[] = [];
+    if (trackingDomains.results) {
+      for (const row of trackingDomains.results) {
+        // Normalize: lowercase, strip www prefix, convert dots to underscores
+        const baseDomain = row.domain.toLowerCase().replace(/^www\./, '');
+        const pattern = `domain_%${baseDomain.replace(/\./g, '_')}`;
+        domainPatterns.push(pattern);
+      }
+    }
+
     // Get R2 SQL token from Secrets Store
     const r2SqlToken = await getSecret(c.env.R2_SQL_TOKEN);
 
@@ -88,10 +106,11 @@ export class GetEvents extends OpenAPIRoute {
     );
 
     try {
-      // Fetch events - no filters, just time-based query
+      // Fetch events - include both explicit org_tag and domain patterns
       const result = await r2sql.getEvents(orgTag, {
         lookback,
-        limit
+        limit,
+        domainPatterns
       });
 
       if (result.error) {
