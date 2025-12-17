@@ -176,28 +176,53 @@ export class ConnectStripe extends OpenAPIRoute {
       ).run();
 
       // Send job to queue for processing
-      if (c.env.SYNC_QUEUE) {
+      const queueMessage = {
+        job_id: jobId,
+        connection_id: connectionId,
+        organization_id: organization_id,
+        platform: 'stripe',
+        account_id: accountInfo.stripe_account_id,
+        job_type: 'full',
+        sync_mode: syncMode,
+        sync_window: {
+          start: syncStart,
+          end: syncEnd
+        },
+        metadata: {
+          retry_count: 0,
+          created_at: new Date().toISOString(),
+          priority: 'normal',
+          is_initial_sync: true,
+          lookback_days: initialLookbackDays
+        }
+      };
+
+      // Check if running locally (Supabase URL points to localhost)
+      const isLocal = c.env.SUPABASE_URL?.includes('127.0.0.1') || c.env.SUPABASE_URL?.includes('localhost');
+
+      if (isLocal) {
+        // LOCAL DEV: Call queue consumer directly via HTTP (queues don't work locally)
+        console.log('[ConnectStripe] LocalDev: Calling queue consumer directly');
         try {
-          const queueMessage = {
-            job_id: jobId,
-            connection_id: connectionId,
-            organization_id: organization_id,
-            platform: 'stripe',
-            account_id: accountInfo.stripe_account_id,
-            job_type: 'full',
-            sync_mode: syncMode,
-            sync_window: {
-              start: syncStart,
-              end: syncEnd
-            },
-            metadata: {
-              retry_count: 0,
-              created_at: new Date().toISOString(),
-              priority: 'normal',
-              is_initial_sync: true,
-              lookback_days: initialLookbackDays
-            }
-          };
+          const response = await fetch('http://localhost:8789/test-sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(queueMessage)
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('[ConnectStripe] Queue consumer returned error:', errorText);
+          } else {
+            const result = await response.json();
+            console.log('[ConnectStripe] Sync job processed by queue consumer:', result);
+          }
+        } catch (err) {
+          console.error('[ConnectStripe] Failed to call queue consumer:', err);
+        }
+      } else if (c.env.SYNC_QUEUE) {
+        // PRODUCTION: Send to real Cloudflare Queue
+        try {
           console.log('[ConnectStripe] Sending initial sync to queue:', JSON.stringify(queueMessage));
           await c.env.SYNC_QUEUE.send(queueMessage);
           console.log('[ConnectStripe] Successfully sent to queue');
