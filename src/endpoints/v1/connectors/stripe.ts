@@ -144,8 +144,71 @@ export class ConnectStripe extends OpenAPIRoute {
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementServicesConnected(session.user_id);
 
+      // Auto-trigger initial sync
+      const jobId = crypto.randomUUID();
+      const syncMode = sync_mode || 'charges';
+      const initialLookbackDays = lookback_days || 90;
+
+      const syncEnd = new Date().toISOString();
+      const syncStart = new Date(Date.now() - initialLookbackDays * 24 * 60 * 60 * 1000).toISOString();
+
+      const metadata = {
+        platform: 'stripe',
+        account_id: accountInfo.stripe_account_id,
+        sync_mode: syncMode,
+        lookback_days: initialLookbackDays,
+        is_initial_sync: true,
+        triggered_by: session.user_id,
+        retry_count: 0
+      };
+
+      // Create job record in database
+      await c.env.DB.prepare(`
+        INSERT INTO sync_jobs (
+          id, organization_id, connection_id,
+          status, job_type, metadata
+        ) VALUES (?, ?, ?, 'pending', 'full', ?)
+      `).bind(
+        jobId,
+        organization_id,
+        connectionId,
+        JSON.stringify(metadata)
+      ).run();
+
+      // Send job to queue for processing
+      if (c.env.SYNC_QUEUE) {
+        try {
+          const queueMessage = {
+            job_id: jobId,
+            connection_id: connectionId,
+            organization_id: organization_id,
+            platform: 'stripe',
+            account_id: accountInfo.stripe_account_id,
+            job_type: 'full',
+            sync_mode: syncMode,
+            sync_window: {
+              start: syncStart,
+              end: syncEnd
+            },
+            metadata: {
+              retry_count: 0,
+              created_at: new Date().toISOString(),
+              priority: 'normal',
+              is_initial_sync: true,
+              lookback_days: initialLookbackDays
+            }
+          };
+          console.log('[ConnectStripe] Sending initial sync to queue:', JSON.stringify(queueMessage));
+          await c.env.SYNC_QUEUE.send(queueMessage);
+          console.log('[ConnectStripe] Successfully sent to queue');
+        } catch (queueError) {
+          console.error('[ConnectStripe] Queue send error:', queueError);
+        }
+      }
+
       return success(c, {
         connection_id: connectionId,
+        sync_job_id: jobId,
         account_info: {
           stripe_account_id: accountInfo.stripe_account_id,
           business_name: accountInfo.business_profile?.name,

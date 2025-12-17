@@ -188,6 +188,7 @@ export class StripeSupabaseAdapter {
     const params = new URLSearchParams();
     params.append('organization_id', `eq.${orgId}`);
     params.append('payment_status', 'eq.succeeded'); // Only succeeded payments
+    params.append('deleted_at', 'is.null'); // Exclude soft-deleted records
 
     // Add date range filter using stripe_created_at
     if (dateRange) {
@@ -318,6 +319,7 @@ export class StripeSupabaseAdapter {
     // Query samples from stripe.payment_intents
     const params = new URLSearchParams();
     params.append('organization_id', `eq.${orgId}`);
+    params.append('deleted_at', 'is.null'); // Exclude soft-deleted records
     params.append('select', 'metadata,raw_data');
     params.append('limit', '1000');
 
@@ -418,6 +420,7 @@ export class StripeSupabaseAdapter {
     params.append('stripe_created_at', `gte.${dateRange.start}T00:00:00Z`);
     params.append('stripe_created_at', `lte.${dateRange.end}T23:59:59Z`);
     params.append('payment_status', 'eq.succeeded');
+    params.append('deleted_at', 'is.null'); // Exclude soft-deleted records
 
     if (currency) {
       params.append('currency', `eq.${currency}`);
