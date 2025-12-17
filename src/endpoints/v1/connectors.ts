@@ -1577,6 +1577,49 @@ export class DisconnectPlatform extends OpenAPIRoute {
 
     await connectorService.disconnectPlatform(connection_id);
 
+    // Soft-delete synced data in Supabase for this connection
+    try {
+      const { SupabaseClient } = await import("../../adapters/supabase-client");
+      const supabase = new SupabaseClient({
+        url: c.env.SUPABASE_URL,
+        serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
+      });
+
+      const now = new Date().toISOString();
+
+      if (connection.platform === 'stripe') {
+        // Soft-delete Stripe payment records
+        await supabase.client
+          .schema('stripe')
+          .from('payment_intents')
+          .update({
+            deleted_at: now,
+            deletion_reason: 'connection_deleted',
+            updated_at: now,
+            updated_by: 'api-disconnect'
+          })
+          .eq('connection_id', connection_id)
+          .is('deleted_at', null);
+        console.log(`Soft-deleted Stripe records for connection ${connection_id}`);
+      } else if (connection.platform === 'google') {
+        // Soft-delete Google Ads records
+        await supabase.client
+          .schema('google_ads')
+          .from('campaigns')
+          .update({
+            deleted_at: now,
+            updated_at: now
+          })
+          .eq('connection_id', connection_id)
+          .is('deleted_at', null);
+        console.log(`Soft-deleted Google Ads records for connection ${connection_id}`);
+      }
+      // Add facebook, tiktok as needed
+    } catch (supabaseError) {
+      console.error('Failed to soft-delete Supabase records:', supabaseError);
+      // Don't fail the disconnect, just log the error
+    }
+
     // Update onboarding progress counter
     const { OnboardingService } = await import("../../services/onboarding");
     const onboarding = new OnboardingService(c.env.DB);
