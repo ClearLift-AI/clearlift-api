@@ -187,7 +187,10 @@ export class StripeSupabaseAdapter {
     // Build URL params directly
     const params = new URLSearchParams();
     params.append('organization_id', `eq.${orgId}`);
-    params.append('payment_status', 'eq.succeeded'); // Only succeeded payments
+    // Exclude incomplete statuses (works for both charges and subscriptions)
+    // - Charges: succeeded payments are not incomplete
+    // - Subscriptions: active/trialing/past_due etc. are not incomplete
+    params.append('payment_status', 'not.in.(incomplete,incomplete_expired)');
     params.append('deleted_at', 'is.null'); // Exclude soft-deleted records
 
     // Add date range filter using stripe_created_at
@@ -198,11 +201,11 @@ export class StripeSupabaseAdapter {
 
     params.append('limit', '10000');
 
-    // Query stripe.payment_intents table (using stripe schema)
-    const endpoint = `payment_intents?${params.toString()}`;
+    // Query stripe.all_conversions view (union of charges and subscriptions)
+    const endpoint = `all_conversions?${params.toString()}`;
     const results = await this.supabase.queryWithSchema<any[]>(endpoint, 'stripe', { method: 'GET' });
 
-    // Transform payment_intents records to StripeRevenueRecord format
+    // Transform records to StripeRevenueRecord format
     const transformedResults: StripeRevenueRecord[] = (results || []).map(row => {
       // Extract metadata from JSONB field
       const metadata = row.metadata || {};
@@ -214,11 +217,11 @@ export class StripeSupabaseAdapter {
         organization_id: orgId,
         date: row.stripe_created_at ? row.stripe_created_at.split('T')[0] : '',
 
-        // Primary identifiers
-        charge_id: row.payment_intent_id, // Using payment_intent_id as charge_id
-        payment_intent_id: row.payment_intent_id,
+        // Primary identifiers - use external_id from union view
+        charge_id: row.external_id,
+        payment_intent_id: row.external_id,
         invoice_id: row.invoice_id,
-        subscription_id: rawData.subscription,
+        subscription_id: row.stripe_type === 'subscription' ? row.external_id : rawData.subscription,
         product_id: metadata.product_id,
         price_id: metadata.price_id,
         customer_id: row.customer_id,
@@ -316,14 +319,14 @@ export class StripeSupabaseAdapter {
     const parts = connectionId.split('-');
     const orgId = parts.slice(0, 5).join('-');
 
-    // Query samples from stripe.payment_intents
+    // Query samples from stripe.all_conversions view
     const params = new URLSearchParams();
     params.append('organization_id', `eq.${orgId}`);
     params.append('deleted_at', 'is.null'); // Exclude soft-deleted records
     params.append('select', 'metadata,raw_data');
     params.append('limit', '1000');
 
-    const endpoint = `payment_intents?${params.toString()}`;
+    const endpoint = `all_conversions?${params.toString()}`;
     const samples = await this.supabase.queryWithSchema<any[]>(endpoint, 'stripe', { method: 'GET' }) || [];
 
     const keysBySource: Record<string, Set<string>> = {
@@ -414,12 +417,13 @@ export class StripeSupabaseAdapter {
     const parts = connectionId.split('-');
     const orgId = parts.slice(0, 5).join('-');
 
-    // Query stripe.payment_intents directly and aggregate in-memory
+    // Query stripe.all_conversions view and aggregate in-memory
     const params = new URLSearchParams();
     params.append('organization_id', `eq.${orgId}`);
     params.append('stripe_created_at', `gte.${dateRange.start}T00:00:00Z`);
     params.append('stripe_created_at', `lte.${dateRange.end}T23:59:59Z`);
-    params.append('payment_status', 'eq.succeeded');
+    // Exclude incomplete statuses (works for both charges and subscriptions)
+    params.append('payment_status', 'not.in.(incomplete,incomplete_expired)');
     params.append('deleted_at', 'is.null'); // Exclude soft-deleted records
 
     if (currency) {
@@ -428,8 +432,8 @@ export class StripeSupabaseAdapter {
 
     params.append('limit', '10000');
 
-    // Query stripe.payment_intents table (using stripe schema)
-    const endpoint = `payment_intents?${params.toString()}`;
+    // Query stripe.all_conversions view (union of charges and subscriptions)
+    const endpoint = `all_conversions?${params.toString()}`;
 
     try {
       // Use the queryWithSchema method to query the stripe schema

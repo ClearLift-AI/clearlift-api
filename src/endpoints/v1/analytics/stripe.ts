@@ -220,7 +220,10 @@ export class GetStripeAnalytics extends OpenAPIRoute {
   }
 
   private calculateSummary(records: any[]): any {
-    const successfulRecords = records.filter(r => r.status === 'succeeded');
+    // For charges: status === 'succeeded'
+    // For subscriptions: status in ('active', 'trialing', 'past_due') - active billing relationships
+    const successfulStatuses = ['succeeded', 'active', 'trialing', 'past_due'];
+    const successfulRecords = records.filter(r => successfulStatuses.includes(r.status));
     const customerSet = new Set(records.map(r => r.customer_id).filter(Boolean));
 
     const totalRevenue = successfulRecords.reduce((sum, r) => sum + r.amount, 0);
@@ -241,9 +244,10 @@ export class GetStripeAnalytics extends OpenAPIRoute {
     groupBy: 'day' | 'week' | 'month'
   ): any[] {
     const grouped: Record<string, { revenue: number; units: number; transactions: number }> = {};
+    const successfulStatuses = ['succeeded', 'active', 'trialing', 'past_due'];
 
     for (const record of records) {
-      if (record.status !== 'succeeded') continue;
+      if (!successfulStatuses.includes(record.status)) continue;
 
       const date = this.getGroupedDate(record.date, groupBy);
 

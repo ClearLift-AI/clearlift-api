@@ -33,7 +33,12 @@ export class ConnectStripe extends OpenAPIRoute {
           ),
           sync_mode: z.enum(['charges', 'subscriptions']).optional().default('charges'),
           lookback_days: z.number().int().min(1).max(730).optional().default(90),
-          auto_sync: z.boolean().optional().default(true)
+          auto_sync: z.boolean().optional().default(true),
+          initial_filters: z.array(z.object({
+            field: z.string(),
+            operator: z.string(),
+            value: z.string()
+          })).optional()
         })
       )
     },
@@ -73,7 +78,7 @@ export class ConnectStripe extends OpenAPIRoute {
   async handle(c: AppContext) {
     const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
-    const { organization_id, api_key, sync_mode, lookback_days, auto_sync } = data.body;
+    const { organization_id, api_key, sync_mode, lookback_days, auto_sync, initial_filters } = data.body;
 
     // Verify user has access to org
     const { D1Adapter } = await import("../../../adapters/d1");
@@ -140,13 +145,97 @@ export class ConnectStripe extends OpenAPIRoute {
         connectionId
       ).run();
 
+      // Create mode-specific default filter (serves as demo filter)
+      const defaultFilterId = crypto.randomUUID();
+      const syncMode = sync_mode || 'charges';
+      const isSubscriptionMode = syncMode === 'subscriptions';
+
+      // Use provided initial_filters or fall back to defaults
+      let filterConfig: {
+        name: string;
+        description: string;
+        rule_type: string;
+        conditions: Array<{ type: string; field: string; operator: string; value: string | string[] }>;
+      };
+
+      if (initial_filters && initial_filters.length > 0) {
+        // Convert user-provided filters to the internal format
+        const conditions = initial_filters.map(f => ({
+          type: 'standard' as const,
+          field: f.field,
+          operator: f.operator,
+          // Handle comma-separated values for 'in' and 'not_in' operators
+          value: (f.operator === 'in' || f.operator === 'not_in')
+            ? f.value.split(',').map(v => v.trim())
+            : f.value
+        }));
+
+        filterConfig = {
+          name: isSubscriptionMode ? 'Subscription Filter' : 'Payment Filter',
+          description: 'Custom filter configured during setup',
+          rule_type: conditions.some(c => c.operator === 'not_in' || c.operator === 'not_equals') ? 'exclude' : 'include',
+          conditions
+        };
+      } else {
+        // Use default filters based on sync mode
+        filterConfig = isSubscriptionMode ? {
+          name: 'Exclude Incomplete Subscriptions',
+          description: 'Excludes subscriptions that have not completed payment setup',
+          rule_type: 'exclude',
+          conditions: [
+            {
+              type: 'standard',
+              field: 'status',
+              operator: 'in',
+              value: ['incomplete', 'incomplete_expired']
+            }
+          ]
+        } : {
+          name: 'Successful Payments Only',
+          description: 'Only includes payments that have succeeded',
+          rule_type: 'include',
+          conditions: [
+            {
+              type: 'standard',
+              field: 'status',
+              operator: 'equals',
+              value: 'succeeded'
+            }
+          ]
+        };
+      }
+
+      const defaultFilterConfig = filterConfig;
+
+      await c.env.DB.prepare(`
+        INSERT INTO connector_filter_rules (
+          id, connection_id, name, description, rule_type,
+          operator, conditions, is_active, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        defaultFilterId,
+        connectionId,
+        defaultFilterConfig.name,
+        defaultFilterConfig.description,
+        defaultFilterConfig.rule_type,
+        'AND',
+        JSON.stringify(defaultFilterConfig.conditions),
+        1,
+        session.user_id
+      ).run();
+
+      // Update filter count on connection
+      await c.env.DB.prepare(`
+        UPDATE platform_connections SET filter_rules_count = 1 WHERE id = ?
+      `).bind(connectionId).run();
+
       // Auto-advance onboarding when user connects first service
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementServicesConnected(session.user_id);
 
       // Auto-trigger initial sync
       const jobId = crypto.randomUUID();
-      const syncMode = sync_mode || 'charges';
+      // syncMode already defined above for filter creation
       const initialLookbackDays = lookback_days || 90;
 
       const syncEnd = new Date().toISOString();

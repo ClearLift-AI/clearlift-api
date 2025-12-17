@@ -1579,7 +1579,7 @@ export class DisconnectPlatform extends OpenAPIRoute {
 
     // Soft-delete synced data in Supabase for this connection
     try {
-      const { SupabaseClient } = await import("../../adapters/supabase-client");
+      const { SupabaseClient } = await import("../../services/supabase");
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
         serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
@@ -1588,30 +1588,25 @@ export class DisconnectPlatform extends OpenAPIRoute {
       const now = new Date().toISOString();
 
       if (connection.platform === 'stripe') {
-        // Soft-delete Stripe payment records
-        await supabase.client
-          .schema('stripe')
-          .from('payment_intents')
-          .update({
-            deleted_at: now,
-            deletion_reason: 'connection_deleted',
-            updated_at: now,
-            updated_by: 'api-disconnect'
-          })
-          .eq('connection_id', connection_id)
-          .is('deleted_at', null);
+        // Soft-delete Stripe records from both charges and subscriptions tables
+        const softDeleteUpdates = {
+          deleted_at: now,
+          deletion_reason: 'connection_deleted'
+        };
+        const filter = `connection_id.eq.${connection_id}&deleted_at.is.null`;
+
+        await Promise.all([
+          supabase.updateWithSchema('charges', softDeleteUpdates, filter, 'stripe'),
+          supabase.updateWithSchema('subscriptions', softDeleteUpdates, filter, 'stripe')
+        ]);
         console.log(`Soft-deleted Stripe records for connection ${connection_id}`);
       } else if (connection.platform === 'google') {
         // Soft-delete Google Ads records
-        await supabase.client
-          .schema('google_ads')
-          .from('campaigns')
-          .update({
-            deleted_at: now,
-            updated_at: now
-          })
-          .eq('connection_id', connection_id)
-          .is('deleted_at', null);
+        const filter = `connection_id.eq.${connection_id}&deleted_at.is.null`;
+        await supabase.updateWithSchema('campaigns', {
+          deleted_at: now,
+          updated_at: now
+        }, filter, 'google_ads');
         console.log(`Soft-deleted Google Ads records for connection ${connection_id}`);
       }
       // Add facebook, tiktok as needed

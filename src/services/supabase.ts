@@ -129,6 +129,23 @@ export class SupabaseClient {
   }
 
   /**
+   * Update records in a table with a specific schema
+   */
+  async updateWithSchema<T = any>(
+    table: string,
+    updates: any,
+    filter: string,
+    schema: string
+  ): Promise<T> {
+    // Transform filter format from column.op.value to column=op.value for PostgREST
+    const transformedFilter = filter.replace(/(\w+)\.(eq|neq|gt|gte|lt|lte|like|ilike|is|in)\./g, '$1=$2.');
+    return await this.queryWithSchema<T>(`${table}?${transformedFilter}`, schema, {
+      method: 'PATCH',
+      body: JSON.stringify(updates)
+    });
+  }
+
+  /**
    * Delete records from a table
    */
   async delete(
