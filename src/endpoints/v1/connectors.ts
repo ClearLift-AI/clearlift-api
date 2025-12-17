@@ -1589,15 +1589,18 @@ export class DisconnectPlatform extends OpenAPIRoute {
 
       if (connection.platform === 'stripe') {
         // Soft-delete Stripe records from both charges and subscriptions tables
-        const softDeleteUpdates = {
-          deleted_at: now,
-          deletion_reason: 'connection_deleted'
-        };
         const filter = `connection_id.eq.${connection_id}&deleted_at.is.null`;
 
         await Promise.all([
-          supabase.updateWithSchema('charges', softDeleteUpdates, filter, 'stripe'),
-          supabase.updateWithSchema('subscriptions', softDeleteUpdates, filter, 'stripe')
+          // Charges table has deletion_reason column
+          supabase.updateWithSchema('charges', {
+            deleted_at: now,
+            deletion_reason: 'connection_deleted'
+          }, filter, 'stripe'),
+          // Subscriptions table only has deleted_at
+          supabase.updateWithSchema('subscriptions', {
+            deleted_at: now
+          }, filter, 'stripe')
         ]);
         console.log(`Soft-deleted Stripe records for connection ${connection_id}`);
       } else if (connection.platform === 'google') {
@@ -1612,6 +1615,17 @@ export class DisconnectPlatform extends OpenAPIRoute {
       // Add facebook, tiktok as needed
     } catch (supabaseError) {
       console.error('Failed to soft-delete Supabase records:', supabaseError);
+      // Don't fail the disconnect, just log the error
+    }
+
+    // Delete connector filter rules from D1
+    try {
+      await c.env.DB.prepare(`
+        DELETE FROM connector_filter_rules WHERE connection_id = ?
+      `).bind(connection_id).run();
+      console.log(`Deleted filter rules for connection ${connection_id}`);
+    } catch (filterError) {
+      console.error('Failed to delete filter rules:', filterError);
       // Don't fail the disconnect, just log the error
     }
 

@@ -413,47 +413,79 @@ export class TestFilterRule extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "Access denied", 403);
     }
 
-    // Get sample data
-    const sampleData = await c.env.DB.prepare(`
-      SELECT * FROM stripe_revenue_data
-      WHERE connection_id = ?
-      ORDER BY stripe_created_at DESC
-      LIMIT ?
-    `).bind(connectionId, body.sample_size).all();
+    // Get sample data from Supabase (Stripe data is stored there, not in D1)
+    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+    if (!supabaseKey) {
+      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    }
 
-    if (!sampleData.results || sampleData.results.length === 0) {
+    const supabase = new SupabaseClient({
+      url: c.env.SUPABASE_URL,
+      serviceKey: supabaseKey
+    });
+    const adapter = new StripeSupabaseAdapter(supabase);
+
+    // Get recent data (last 30 days) to test filter against
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 30);
+
+    let sampleData: any[] = [];
+    try {
+      sampleData = await adapter.queryByMetadata(
+        connectionId,
+        [], // No pre-filtering, get all data
+        {
+          start: startDate.toISOString().split('T')[0],
+          end: endDate.toISOString().split('T')[0]
+        }
+      );
+      // Limit to sample size
+      sampleData = sampleData.slice(0, body.sample_size);
+    } catch (err: any) {
+      console.error("Failed to get sample data from Supabase:", err);
       return success(c, {
         total_samples: 0,
         matched: 0,
         filtered_out: 0,
         matches: [],
-        message: "No data available for testing"
+        message: "No data available for testing. Complete a sync first."
+      });
+    }
+
+    if (sampleData.length === 0) {
+      return success(c, {
+        total_samples: 0,
+        matched: 0,
+        filtered_out: 0,
+        matches: [],
+        message: "No data available for testing. Complete a sync first."
       });
     }
 
     // Apply filter
     const queryBuilder = new StripeQueryBuilder();
     const filtered = queryBuilder.applyFilters(
-      sampleData.results,
+      sampleData,
       [body.filter_rule]
     );
 
     // Return results
     return success(c, {
-      total_samples: sampleData.results.length,
+      total_samples: sampleData.length,
       matched: filtered.length,
-      filtered_out: sampleData.results.length - filtered.length,
-      matches: filtered.slice(0, 5).map(item => ({
+      filtered_out: sampleData.length - filtered.length,
+      matches: filtered.slice(0, 5).map((item: any) => ({
         charge_id: item.charge_id,
         amount: item.amount,
         currency: item.currency,
         status: item.status,
         product_id: item.product_id,
         date: item.date,
-        // Include sample metadata
+        // Include sample metadata (already objects from Supabase JSONB)
         metadata_sample: {
-          charge: item.charge_metadata ? JSON.parse(item.charge_metadata).slice(0, 3) : {},
-          product: item.product_metadata ? JSON.parse(item.product_metadata).slice(0, 3) : {}
+          charge: item.charge_metadata || {},
+          product: item.product_metadata || {}
         }
       }))
     });
