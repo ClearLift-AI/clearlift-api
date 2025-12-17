@@ -2,7 +2,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error, getDateRange } from "../../../utils/response";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import {
   ConversionRecordSchema,
   ConversionResponseSchema,
@@ -101,6 +101,29 @@ export class GetConversions extends OpenAPIRoute {
       }
 
       if (!rawData || rawData.length === 0) {
+        // No data in conversions.conversions - check conversion_source setting
+        const conversionSourceSetting = await c.env.DB.prepare(`
+          SELECT conversion_source FROM ai_optimization_settings WHERE org_id = ?
+        `).bind(orgId).first<{ conversion_source: string | null }>();
+
+        const conversionSource = conversionSourceSetting?.conversion_source || 'tag';
+
+        // If conversion_source is 'connectors', fallback to Stripe data
+        if (conversionSource === 'connectors') {
+          const stripeData = await this.fetchStripeConversionsFallback(
+            c.env.SUPABASE_URL,
+            supabaseKey,
+            orgId,
+            dateRange,
+            c.env.DB
+          );
+
+          if (stripeData && stripeData.length > 0) {
+            const result = this.aggregateData(stripeData, groupBy);
+            return success(c, { ...result, data_source: 'stripe_fallback' }, { date_range: dateRange });
+          }
+        }
+
         // Return empty result structure
         return success(
           c,

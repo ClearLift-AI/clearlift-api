@@ -21,7 +21,7 @@ import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
 import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
 import { GetAttribution, GetAttributionComparison } from "./endpoints/v1/analytics/attribution";
-import { GetUtmCampaigns } from "./endpoints/v1/analytics/utm-campaigns";
+import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-campaigns";
 import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
@@ -90,7 +90,8 @@ import {
   LookupOrganization,
   GetTrackingDomains,
   AddTrackingDomain,
-  RemoveTrackingDomain
+  RemoveTrackingDomain,
+  ResyncTrackingDomain
 } from "./endpoints/v1/organizations";
 import {
   ListConnectors,
@@ -359,6 +360,7 @@ openapi.get("/v1/organizations/lookup", auth, LookupOrganization);
 openapi.get("/v1/organizations/:org_id/tracking-domains", auth, requireOrg, GetTrackingDomains);
 openapi.post("/v1/organizations/:org_id/tracking-domains", auth, requireOrg, requireOrgAdmin, AddTrackingDomain);
 openapi.delete("/v1/organizations/:org_id/tracking-domains/:domain_id", auth, requireOrg, requireOrgAdmin, RemoveTrackingDomain);
+openapi.post("/v1/organizations/:org_id/tracking-domains/:domain_id/resync", auth, requireOrg, requireOrgAdmin, ResyncTrackingDomain);
 
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, requireOrg, GetEvents);
@@ -369,6 +371,7 @@ openapi.get("/v1/analytics/stripe", auth, requireOrg, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, requireOrg, GetStripeDailyAggregates);
 openapi.get("/v1/analytics/platforms/unified", auth, requireOrg, GetUnifiedPlatformData);
 openapi.get("/v1/analytics/utm-campaigns", auth, requireOrg, GetUtmCampaigns);
+openapi.get("/v1/analytics/utm-campaigns/time-series", auth, requireOrg, GetUtmTimeSeries);
 openapi.get("/v1/analytics/click-attribution", auth, requireOrg, GetClickAttribution);
 
 // Identity resolution endpoints
