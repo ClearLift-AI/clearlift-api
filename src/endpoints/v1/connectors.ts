@@ -1611,8 +1611,26 @@ export class DisconnectPlatform extends OpenAPIRoute {
           updated_at: now
         }, filter, 'google_ads');
         console.log(`Soft-deleted Google Ads records for connection ${connection_id}`);
+      } else if (connection.platform === 'facebook') {
+        // Soft-delete Facebook Ads records
+        const filter = `connection_id.eq.${connection_id}&deleted_at.is.null`;
+        await Promise.all([
+          supabase.updateWithSchema('campaigns', {
+            deleted_at: now,
+            updated_at: now
+          }, filter, 'facebook_ads'),
+          supabase.updateWithSchema('ad_sets', {
+            deleted_at: now,
+            updated_at: now
+          }, filter, 'facebook_ads'),
+          supabase.updateWithSchema('ads', {
+            deleted_at: now,
+            updated_at: now
+          }, filter, 'facebook_ads')
+        ]);
+        console.log(`Soft-deleted Facebook Ads records for connection ${connection_id}`);
       }
-      // Add facebook, tiktok as needed
+      // Add tiktok as needed
     } catch (supabaseError) {
       console.error('Failed to soft-delete Supabase records:', supabaseError);
       // Don't fail the disconnect, just log the error

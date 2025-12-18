@@ -174,6 +174,7 @@ import {
   UpdateTrackingConfig,
   GenerateTrackingSnippet
 } from "./endpoints/v1/tracking-config";
+import { SeedFacebookDemoRecommendations } from "./endpoints/v1/recommendations";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -378,6 +379,9 @@ openapi.get("/v1/analytics/click-attribution", auth, requireOrg, GetClickAttribu
 openapi.post("/v1/analytics/identify", PostIdentify); // Internal - uses service binding or API key auth
 openapi.post("/v1/analytics/identify/merge", PostIdentityMerge); // Internal
 openapi.get("/v1/analytics/identity/:anonymousId", auth, requireOrg, GetIdentityByAnonymousId);
+
+// Demo recommendations endpoint (Meta App Review)
+openapi.post("/v1/recommendations/seed", SeedFacebookDemoRecommendations); // Internal - called by queue-consumer
 
 // User journey endpoints
 openapi.get("/v1/analytics/users/:userId/journey", auth, requireOrg, GetUserJourney);
