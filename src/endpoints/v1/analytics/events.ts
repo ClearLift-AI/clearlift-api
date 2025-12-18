@@ -1,20 +1,21 @@
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
-import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
+import { createClient } from "@supabase/supabase-js";
 import { success, error } from "../../../utils/response";
 import { EventResponseSchema } from "../../../schemas/analytics";
 import { getSecret } from "../../../utils/secrets";
 
 /**
- * GET /v1/analytics/events - Get raw events from R2 SQL
- * Simple endpoint that fetches events by org_tag with time filter
+ * GET /v1/analytics/events - Get raw events from Supabase
+ * Fetches events by org_tag using the org_events view which handles
+ * domain_xxx event resolution automatically via effective_org_tag.
  */
 export class GetEvents extends OpenAPIRoute {
   public schema = {
     tags: ["Analytics"],
     summary: "Get raw events",
-    description: "Fetches raw events from R2 SQL for a specific org_tag",
+    description: "Fetches raw events from Supabase for a specific organization",
     operationId: "get-events",
     security: [{ bearerAuth: [] }],
     request: {
@@ -26,7 +27,7 @@ export class GetEvents extends OpenAPIRoute {
     },
     responses: {
       "200": {
-        description: "Raw events from R2 SQL with validated core fields (60+ fields allowed via passthrough)",
+        description: "Raw events with validated core fields (60+ fields allowed via passthrough)",
         content: {
           "application/json": {
             schema: z.object({
@@ -60,8 +61,6 @@ export class GetEvents extends OpenAPIRoute {
       return error(c, "INVALID_LIMIT", "Limit cannot exceed 1000", 400);
     }
 
-    // Access check already handled by requireOrg middleware
-
     // Look up the org_tag for this organization
     const orgTagMapping = await c.env.DB.prepare(`
       SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
@@ -73,55 +72,60 @@ export class GetEvents extends OpenAPIRoute {
 
     const orgTag = orgTagMapping.short_tag;
 
-    // Get domain patterns for this org (for domain_xxx event resolution)
-    // These are domains claimed by the org - events with domain_xxx org_tags
-    // will be included in the query results
-    const trackingDomains = await c.env.DB.prepare(`
-      SELECT domain FROM tracking_domains WHERE organization_id = ?
-    `).bind(orgId).all<{ domain: string }>();
-
-    // Convert domains to LIKE patterns: rockbot.com -> domain_%rockbot_com
-    const domainPatterns: string[] = [];
-    if (trackingDomains.results) {
-      for (const row of trackingDomains.results) {
-        // Normalize: lowercase, strip www prefix, convert dots to underscores
-        const baseDomain = row.domain.toLowerCase().replace(/^www\./, '');
-        const pattern = `domain_%${baseDomain.replace(/\./g, '_')}`;
-        domainPatterns.push(pattern);
-      }
+    // Get Supabase secret key from Secrets Store
+    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+    if (!supabaseKey) {
+      return error(c, "CONFIGURATION_ERROR", "Supabase key not configured", 500);
     }
 
-    // Get R2 SQL token from Secrets Store
-    const r2SqlToken = await getSecret(c.env.R2_SQL_TOKEN);
+    // Calculate timestamp threshold from lookback period
+    const now = new Date();
+    let startTime: Date;
 
-    if (!r2SqlToken) {
-      return error(c, "CONFIGURATION_ERROR", "R2 SQL token not configured", 500);
+    switch (lookback) {
+      case "1h":
+        startTime = new Date(now.getTime() - 60 * 60 * 1000);
+        break;
+      case "7d":
+        startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case "30d":
+        startTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        break;
+      case "24h":
+      default:
+        startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        break;
     }
 
-    // Create R2 SQL adapter
-    const r2sql = new R2SQLAdapter(
-      c.env.CLOUDFLARE_ACCOUNT_ID,
-      c.env.R2_BUCKET_NAME,
-      r2SqlToken
-    );
+    // Use events schema to access org_events view
+    const supabase = createClient(c.env.SUPABASE_URL, supabaseKey, {
+      db: { schema: 'events' }
+    });
 
     try {
-      // Fetch events - include both explicit org_tag and domain patterns
-      const result = await r2sql.getEvents(orgTag, {
-        lookback,
-        limit,
-        domainPatterns
-      });
+      // Query org_events view - it resolves domain_xxx events automatically
+      // via the effective_org_tag column. This handles:
+      // - Events with explicit org_tag matching our orgTag
+      // - Events with domain_xxx org_tag where the domain is claimed by orgTag
+      const { data: events, error: queryError } = await supabase
+        .from("org_events")
+        .select("*")
+        .eq("effective_org_tag", orgTag)
+        .gte("timestamp", startTime.toISOString())
+        .order("timestamp", { ascending: false })
+        .limit(limit);
 
-      if (result.error) {
-        return error(c, "QUERY_FAILED", result.error, 500);
+      if (queryError) {
+        console.error("Supabase query error:", queryError);
+        return error(c, "QUERY_FAILED", queryError.message, 500);
       }
 
       return success(
         c,
         {
-          events: result.events,
-          count: result.rowCount
+          events: events || [],
+          count: events?.length || 0
         },
         {
           lookback,
