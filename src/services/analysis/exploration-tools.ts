@@ -296,6 +296,70 @@ export const EXPLORATION_TOOLS = {
       },
       required: ['days', 'metric']
     }
+  },
+
+  // Math tools - for accurate budget calculations
+  calculate_budget_change: {
+    name: 'calculate_budget_change',
+    description: 'Calculate the exact new budget after applying a percentage change. ALWAYS use this before recommending budget changes to ensure accurate math. Returns the new budget in cents.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        current_budget_cents: {
+          type: 'number',
+          description: 'Current budget in cents (e.g., 10000 for $100.00)'
+        },
+        percentage_change: {
+          type: 'number',
+          description: 'Percentage change to apply (e.g., 25 for +25%, -15 for -15%)'
+        }
+      },
+      required: ['current_budget_cents', 'percentage_change']
+    }
+  },
+
+  calculate_percentage_change: {
+    name: 'calculate_percentage_change',
+    description: 'Calculate the percentage change between two values. Use to understand how much a metric has changed over time.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        old_value: {
+          type: 'number',
+          description: 'The original value'
+        },
+        new_value: {
+          type: 'number',
+          description: 'The new value'
+        }
+      },
+      required: ['old_value', 'new_value']
+    }
+  },
+
+  get_entity_budget: {
+    name: 'get_entity_budget',
+    description: 'Get the current budget configuration for a campaign or ad set. Use this BEFORE making budget recommendations to know the actual configured budget (not spend!).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        platform: {
+          type: 'string',
+          enum: ['facebook', 'google', 'tiktok'],
+          description: 'The ad platform'
+        },
+        entity_type: {
+          type: 'string',
+          enum: ['campaign', 'adset', 'ad_group'],
+          description: 'Type of entity (campaign, adset for Facebook, ad_group for Google/TikTok)'
+        },
+        entity_id: {
+          type: 'string',
+          description: 'The entity ID'
+        }
+      },
+      required: ['platform', 'entity_type', 'entity_id']
+    }
   }
 };
 
@@ -393,6 +457,23 @@ interface QuerySubscriptionCohortsInput {
   };
 }
 
+// Math tool interfaces
+interface CalculateBudgetChangeInput {
+  current_budget_cents: number;
+  percentage_change: number;
+}
+
+interface CalculatePercentageChangeInput {
+  old_value: number;
+  new_value: number;
+}
+
+interface GetEntityBudgetInput {
+  platform: string;
+  entity_type: string;
+  entity_id: string;
+}
+
 /**
  * Exploration Tool Executor
  */
@@ -425,6 +506,13 @@ export class ExplorationToolExecutor {
           return await this.queryAttributionQuality(input as QueryAttributionQualityInput, orgId);
         case 'query_subscription_cohorts':
           return await this.querySubscriptionCohorts(input as QuerySubscriptionCohortsInput, orgId);
+        // Math tools
+        case 'calculate_budget_change':
+          return this.calculateBudgetChange(input as CalculateBudgetChangeInput);
+        case 'calculate_percentage_change':
+          return this.calculatePercentageChange(input as CalculatePercentageChangeInput);
+        case 'get_entity_budget':
+          return await this.getEntityBudget(input as GetEntityBudgetInput, orgId);
         default:
           return { success: false, error: `Unknown exploration tool: ${toolName}` };
       }
@@ -1060,6 +1148,202 @@ export class ExplorationToolExecutor {
           summary,
           [`by_${breakdown_by || 'cohort_month'}`]: breakdownData,
           retention_curve: retentionCurve
+        }
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+    }
+  }
+
+  // Math tools implementation
+
+  /**
+   * Calculate new budget after applying a percentage change
+   */
+  private calculateBudgetChange(
+    input: CalculateBudgetChangeInput
+  ): { success: boolean; data?: any; error?: string } {
+    const { current_budget_cents, percentage_change } = input;
+
+    if (current_budget_cents < 0) {
+      return { success: false, error: 'current_budget_cents cannot be negative' };
+    }
+
+    if (current_budget_cents === 0 && percentage_change !== 0) {
+      return {
+        success: true,
+        data: {
+          current_budget_cents: 0,
+          percentage_change,
+          new_budget_cents: 0,
+          current_budget: '$0.00',
+          new_budget: '$0.00',
+          change_amount: '$0.00',
+          warning: 'Cannot apply percentage change to $0 budget. The result is still $0.',
+          suggestion: 'If you want to set a budget, use a specific amount rather than a percentage change.'
+        }
+      };
+    }
+
+    const multiplier = 1 + (percentage_change / 100);
+    const new_budget_cents = Math.round(current_budget_cents * multiplier);
+    const change_amount_cents = new_budget_cents - current_budget_cents;
+
+    return {
+      success: true,
+      data: {
+        current_budget_cents,
+        percentage_change,
+        new_budget_cents,
+        change_amount_cents,
+        current_budget: '$' + (current_budget_cents / 100).toFixed(2),
+        new_budget: '$' + (new_budget_cents / 100).toFixed(2),
+        change_amount: (change_amount_cents >= 0 ? '+$' : '-$') + Math.abs(change_amount_cents / 100).toFixed(2),
+        summary: `${percentage_change >= 0 ? '+' : ''}${percentage_change}% change: $${(current_budget_cents / 100).toFixed(2)} → $${(new_budget_cents / 100).toFixed(2)}`
+      }
+    };
+  }
+
+  /**
+   * Calculate percentage change between two values
+   */
+  private calculatePercentageChange(
+    input: CalculatePercentageChangeInput
+  ): { success: boolean; data?: any; error?: string } {
+    const { old_value, new_value } = input;
+
+    if (old_value === 0) {
+      if (new_value === 0) {
+        return {
+          success: true,
+          data: {
+            old_value: 0,
+            new_value: 0,
+            percentage_change: 0,
+            summary: 'No change (0 → 0)'
+          }
+        };
+      }
+      return {
+        success: true,
+        data: {
+          old_value: 0,
+          new_value,
+          percentage_change: null,
+          summary: 'Cannot calculate percentage change from zero',
+          note: 'Division by zero - old_value is 0'
+        }
+      };
+    }
+
+    const percentage_change = ((new_value - old_value) / old_value) * 100;
+    const rounded = Math.round(percentage_change * 100) / 100; // Round to 2 decimals
+
+    return {
+      success: true,
+      data: {
+        old_value,
+        new_value,
+        absolute_change: new_value - old_value,
+        percentage_change: rounded,
+        summary: `${rounded >= 0 ? '+' : ''}${rounded.toFixed(1)}% change: ${old_value} → ${new_value}`
+      }
+    };
+  }
+
+  /**
+   * Get current budget for an entity from platform tables
+   */
+  private async getEntityBudget(
+    input: GetEntityBudgetInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { platform, entity_type, entity_id } = input;
+
+    // Normalize entity_type - accept both 'adset' and 'ad_set' for Facebook
+    const normalizedEntityType = entity_type === 'ad_set' ? 'adset' : entity_type;
+
+    const tableInfo = this.getEntityTableInfo(platform, normalizedEntityType);
+    if (!tableInfo) {
+      return { success: false, error: `Unsupported platform/entity for budget: ${platform}/${entity_type}` };
+    }
+
+    // Build columns based on platform
+    let budgetColumns: string;
+    if (platform === 'google') {
+      budgetColumns = 'campaign_id,name,status,budget_amount_cents,budget_type';
+    } else if (platform === 'facebook') {
+      if (normalizedEntityType === 'campaign') {
+        budgetColumns = 'campaign_id,name,status,daily_budget_cents,lifetime_budget_cents';
+      } else {
+        budgetColumns = 'ad_set_id,name,status,daily_budget_cents,lifetime_budget_cents,budget_remaining_cents';
+      }
+    } else if (platform === 'tiktok') {
+      if (normalizedEntityType === 'campaign') {
+        budgetColumns = 'campaign_id,campaign_name,status,budget_cents,budget_mode';
+      } else {
+        budgetColumns = 'ad_group_id,ad_group_name,status,budget_cents';
+      }
+    } else {
+      return { success: false, error: `Unknown platform: ${platform}` };
+    }
+
+    const filters = `${tableInfo.idColumn}=eq.${entity_id}&organization_id=eq.${orgId}`;
+    const endpoint = `${tableInfo.table}?select=${budgetColumns}&${filters}&limit=1`;
+
+    try {
+      const data = await this.supabase.queryWithSchema<any[]>(endpoint, tableInfo.schema);
+
+      if (!data || data.length === 0) {
+        return { success: false, error: `Entity not found: ${entity_id}` };
+      }
+
+      const entity = data[0];
+
+      // Normalize budget response
+      let budget_cents: number | null = null;
+      let budget_type: 'daily' | 'lifetime' | null = null;
+
+      if (platform === 'google') {
+        budget_cents = entity.budget_amount_cents;
+        budget_type = entity.budget_type === 'DAILY' ? 'daily' : 'lifetime';
+      } else if (platform === 'facebook') {
+        // Facebook: prefer daily, fallback to lifetime
+        if (entity.daily_budget_cents && entity.daily_budget_cents > 0) {
+          budget_cents = entity.daily_budget_cents;
+          budget_type = 'daily';
+        } else if (entity.lifetime_budget_cents && entity.lifetime_budget_cents > 0) {
+          budget_cents = entity.lifetime_budget_cents;
+          budget_type = 'lifetime';
+        }
+      } else if (platform === 'tiktok') {
+        budget_cents = entity.budget_cents;
+        budget_type = entity.budget_mode === 'BUDGET_MODE_DAY' ? 'daily' : 'lifetime';
+      }
+
+      const name = entity.name || entity.campaign_name || entity.ad_group_name;
+
+      return {
+        success: true,
+        data: {
+          entity_id,
+          entity_type: normalizedEntityType,
+          platform,
+          name,
+          status: entity.status,
+          budget_cents,
+          budget: budget_cents ? '$' + (budget_cents / 100).toFixed(2) : null,
+          budget_type,
+          // Platform-specific raw data
+          raw_budget_data: platform === 'facebook' ? {
+            daily_budget_cents: entity.daily_budget_cents,
+            lifetime_budget_cents: entity.lifetime_budget_cents,
+            budget_remaining_cents: entity.budget_remaining_cents
+          } : undefined,
+          // Helper for recommendations
+          recommendation_hint: budget_cents === null || budget_cents === 0
+            ? 'WARNING: No budget set or budget is $0. Cannot calculate percentage-based changes on zero budget.'
+            : `Current ${budget_type} budget is $${(budget_cents / 100).toFixed(2)}. Use calculate_budget_change to compute new budget.`
         }
       };
     } catch (err) {

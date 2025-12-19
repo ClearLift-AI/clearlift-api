@@ -122,6 +122,23 @@ IMPORTANT DATA UNITS: All monetary values in raw data are in CENTS (not dollars)
 - spend_cents: 1000000 = $10,000.00
 - To convert to dollars: divide by 100
 
+CRITICAL - BUDGET vs SPEND:
+- BUDGET is the configured limit (daily or lifetime budget setting on the campaign/adset)
+- SPEND is what was actually spent during the analysis period
+- They are NOT the same! A campaign with $100/day budget might only spend $20 if ads aren't competitive.
+- ALWAYS use get_entity_budget to check actual budget before recommending budget changes.
+
+MATH TOOLS AVAILABLE:
+- get_entity_budget: Get actual configured budget for an entity (not spend!)
+- calculate_budget_change: Compute exact new budget from current budget + percentage change
+- calculate_percentage_change: Compute percentage difference between two values
+
+FOR BUDGET RECOMMENDATIONS:
+1. First call get_entity_budget to get the actual current budget
+2. Then call calculate_budget_change with the budget and your desired percentage
+3. Use the returned new_budget_cents in your set_budget recommendation
+4. If budget is $0, do NOT recommend percentage-based changes - use general_insight to flag the issue
+
 IMPORTANT RULES:
 1. PREFER actionable recommendations (set_budget, set_status, set_audience) over general_insight
 2. Focus on the most impactful changes first
@@ -129,6 +146,7 @@ IMPORTANT RULES:
 4. For pausing: recommend for entities with poor ROAS (<1.5), high CPA, or declining performance trends
 5. Be specific about entities - use their actual IDs and names from the data
 6. Only use general_insight for cross-platform patterns or issues that genuinely cannot be addressed with the other tools
+7. NEVER recommend a budget amount without first using get_entity_budget and calculate_budget_change
 
 After analyzing the data, use the available tools to make specific recommendations.
 If you see underperforming campaigns or ads, use set_status to recommend pausing them.`;

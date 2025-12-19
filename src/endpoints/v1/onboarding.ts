@@ -158,7 +158,13 @@ export class GetOnboardingStatus extends OpenAPIRoute {
       console.log(`[ONBOARDING_HEAL] Synced services_connected for user ${session.user_id}: ${actualConnections}`);
     }
 
-    // 4. Auto-advance onboarding if conditions are met (connect_services → first_sync)
+    // 4. Auto-advance onboarding if conditions are met
+    // Handle case where user connected services but is still stuck at 'welcome'
+    if (progress.current_step === 'welcome' && actualConnections >= 1) {
+      progress = await onboarding.completeStep(session.user_id, 'welcome');
+      console.log(`[ONBOARDING_HEAL] Auto-advanced user ${session.user_id} past welcome (had ${actualConnections} connections)`);
+    }
+    // Handle connect_services → first_sync
     if (progress.current_step === 'connect_services' && actualConnections >= 1) {
       progress = await onboarding.completeStep(session.user_id, 'connect_services');
       console.log(`[ONBOARDING_HEAL] Auto-advanced user ${session.user_id} past connect_services`);

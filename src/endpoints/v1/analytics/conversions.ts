@@ -275,4 +275,54 @@ export class GetConversions extends OpenAPIRoute {
         return { total_conversions: 0, total_revenue: 0, channel_count: 0 };
     }
   }
+
+  /**
+   * Fallback to Stripe data when conversions table is empty
+   * Queries stripe.all_conversions view and transforms to conversion format
+   */
+  private async fetchStripeConversionsFallback(
+    supabaseUrl: string,
+    supabaseKey: string,
+    orgId: string,
+    dateRange: { start_date: string; end_date: string },
+    db: D1Database
+  ): Promise<any[]> {
+    try {
+      // Create Supabase client for stripe schema
+      const stripeSupabase = createClient(supabaseUrl, supabaseKey, {
+        db: { schema: 'stripe' }
+      });
+
+      // Query all_conversions view with filters
+      const { data, error: queryError } = await stripeSupabase
+        .from("all_conversions")
+        .select("id, organization_id, amount_cents, stripe_created_at, payment_status, stripe_type, deleted_at")
+        .eq("organization_id", orgId)
+        .gte("stripe_created_at", `${dateRange.start_date}T00:00:00Z`)
+        .lte("stripe_created_at", `${dateRange.end_date}T23:59:59Z`)
+        .not("payment_status", "in", "(incomplete,incomplete_expired)")
+        .is("deleted_at", null)
+        .order("stripe_created_at", { ascending: true });
+
+      if (queryError) {
+        console.error("Stripe fallback query error:", queryError);
+        return [];
+      }
+
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      // Transform Stripe records to conversion format
+      return data.map(row => ({
+        channel: 'stripe',
+        date: row.stripe_created_at?.split('T')[0] || '',
+        conversion_count: 1,
+        revenue: (row.amount_cents || 0) / 100
+      }));
+    } catch (err) {
+      console.error("Failed to fetch Stripe fallback data:", err);
+      return [];
+    }
+  }
 }
