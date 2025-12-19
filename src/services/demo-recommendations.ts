@@ -88,7 +88,7 @@ export async function generateFacebookDemoRecommendations(
         entity_type: 'campaign',
         entity_id: campaign.campaign_id,
         entity_name: campaign.campaign_name,
-        parameters: { recommended_status: 'PAUSED' },
+        parameters: { status: 'PAUSED' },
         current_state: { status: campaign.campaign_status },
         reason: '[Demo] Campaign performance review - pause to evaluate strategy and prevent unnecessary spend.',
         predicted_impact: -15.0,
@@ -103,7 +103,7 @@ export async function generateFacebookDemoRecommendations(
         entity_id: campaign.campaign_id,
         entity_name: campaign.campaign_name,
         parameters: {
-          recommended_budget_cents: Math.max((campaign.daily_budget_cents || 1000) + 500, 1500),
+          amount_cents: Math.max((campaign.daily_budget_cents || 1000) + 500, 1500),
           budget_type: 'daily'
         },
         current_state: {
@@ -121,7 +121,7 @@ export async function generateFacebookDemoRecommendations(
         entity_type: 'ad_set',
         entity_id: adSet.ad_set_id,
         entity_name: adSet.ad_set_name,
-        parameters: { recommended_status: 'PAUSED' },
+        parameters: { status: 'PAUSED' },
         current_state: { status: adSet.ad_set_status },
         reason: '[Demo] Pause ad set for audience optimization and budget reallocation.',
         predicted_impact: -10.0,
@@ -136,7 +136,7 @@ export async function generateFacebookDemoRecommendations(
         entity_id: adSet.ad_set_id,
         entity_name: adSet.ad_set_name,
         parameters: {
-          recommended_budget_cents: Math.max((adSet.daily_budget_cents || 500) + 300, 800),
+          amount_cents: Math.max((adSet.daily_budget_cents || 500) + 300, 800),
           budget_type: 'daily'
         },
         current_state: {
@@ -147,17 +147,16 @@ export async function generateFacebookDemoRecommendations(
         confidence: 'medium'
       },
 
-      // 5. Ad Set Targeting (Audience)
+      // 5. Ad Set Targeting (Age Range)
       {
-        tool: 'set_audience',
+        tool: 'set_age_range',
         platform: 'facebook',
         entity_type: 'ad_set',
         entity_id: adSet.ad_set_id,
         entity_name: adSet.ad_set_name,
         parameters: {
-          age_min: 25,
-          age_max: 54,
-          genders: ['male', 'female']
+          min_age: 25,
+          max_age: 54
         },
         current_state: {
           targeting: adSet.targeting || {}
@@ -174,7 +173,7 @@ export async function generateFacebookDemoRecommendations(
         entity_type: 'ad',
         entity_id: ad.ad_id,
         entity_name: ad.ad_name,
-        parameters: { recommended_status: 'PAUSED' },
+        parameters: { status: 'PAUSED' },
         current_state: { status: ad.ad_status },
         reason: '[Demo] Pause ad creative to test new variations and improve overall performance.',
         predicted_impact: -5.0,
