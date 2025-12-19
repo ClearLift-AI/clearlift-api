@@ -98,23 +98,42 @@ export class GetEvents extends OpenAPIRoute {
         break;
     }
 
-    // Use events schema to access org_events view
+    // Use events schema
     const supabase = createClient(c.env.SUPABASE_URL, supabaseKey, {
       db: { schema: 'events' }
     });
 
     try {
-      // Query org_events view - it resolves domain_xxx events automatically
-      // via the effective_org_tag column. This handles:
-      // - Events with explicit org_tag matching our orgTag
-      // - Events with domain_xxx org_tag where the domain is claimed by orgTag
-      const { data: events, error: queryError } = await supabase
-        .from("org_events")
+      // First, get any domain patterns claimed by this org
+      // This allows us to also fetch domain_xxx events that belong to this org
+      const { data: domainClaims } = await supabase
+        .from("domain_claims")
+        .select("domain_pattern")
+        .eq("claimed_org_tag", orgTag)
+        .is("released_at", null);
+
+      const domainPatterns = domainClaims?.map(d => d.domain_pattern) || [];
+
+      // Query events directly - much faster than filtering on computed column
+      // We filter on org_tag = orgTag OR org_tag matches any domain pattern
+      let query = supabase
+        .from("events")
         .select("*")
-        .eq("effective_org_tag", orgTag)
         .gte("timestamp", startTime.toISOString())
         .order("timestamp", { ascending: false })
         .limit(limit);
+
+      if (domainPatterns.length > 0) {
+        // Build OR filter: org_tag = orgTag OR org_tag LIKE pattern1 OR ...
+        // PostgREST doesn't support LIKE with .or(), so we use a raw filter
+        const likeFilters = domainPatterns.map(p => `org_tag.like.${p}`).join(',');
+        query = query.or(`org_tag.eq.${orgTag},${likeFilters}`);
+      } else {
+        // No domain claims, just filter by exact org_tag
+        query = query.eq("org_tag", orgTag);
+      }
+
+      const { data: events, error: queryError } = await query;
 
       if (queryError) {
         console.error("Supabase query error:", queryError);
