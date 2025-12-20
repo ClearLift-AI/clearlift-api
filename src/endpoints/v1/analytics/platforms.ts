@@ -442,7 +442,11 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
 
           console.log(`TikTok Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}, convValue=${platformConversionValue}`);
         } else {
-          console.warn(`Unknown platform: ${platform}`);
+          // Skip non-ad platforms (stripe, etc.) - they're handled separately
+          const nonAdPlatforms = ['stripe'];
+          if (!nonAdPlatforms.includes(normalizedPlatform)) {
+            console.warn(`Unknown platform: ${platform}`);
+          }
         }
       } catch (err) {
         console.warn(`Failed to fetch ${platform} campaigns:`, err);
