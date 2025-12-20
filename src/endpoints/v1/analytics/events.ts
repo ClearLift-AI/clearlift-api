@@ -22,7 +22,9 @@ export class GetEvents extends OpenAPIRoute {
       query: z.object({
         org_id: z.string().describe("Organization ID"),
         lookback: z.string().optional().describe("Time period: 1h, 24h, 7d, 30d (default: 24h)"),
-        limit: z.string().optional().describe("Maximum number of events (default: 100, max: 1000)")
+        limit: z.string().optional().describe("Maximum number of events (default: 100, max: 999). Use cursor pagination for larger datasets."),
+        cursor: z.string().optional().describe("ISO timestamp cursor for pagination (events older than this)"),
+        direction: z.enum(["next", "prev"]).optional().describe("Pagination direction (default: next)")
       })
     },
     responses: {
@@ -56,10 +58,14 @@ export class GetEvents extends OpenAPIRoute {
     const lookback = c.req.query("lookback") || "24h";
     const limit = parseInt(c.req.query("limit") || "100");
 
-    // Validate limit
-    if (limit > 1000) {
-      return error(c, "INVALID_LIMIT", "Limit cannot exceed 1000", 400);
-    }
+    // Cap limit at 999 so we can request 1000 and detect if more exist
+    // (Supabase PostgREST caps at 1000 rows by default)
+    // Clients should use cursor pagination for larger datasets
+    const cappedLimit = Math.min(limit, 999);
+
+    // Get cursor parameters for pagination
+    const cursor = c.req.query("cursor");
+    const direction = c.req.query("direction") || "next";
 
     // Look up the org_tag for this organization
     const orgTagMapping = await c.env.DB.prepare(`
@@ -85,6 +91,9 @@ export class GetEvents extends OpenAPIRoute {
     switch (lookback) {
       case "1h":
         startTime = new Date(now.getTime() - 60 * 60 * 1000);
+        break;
+      case "6h":
+        startTime = new Date(now.getTime() - 6 * 60 * 60 * 1000);
         break;
       case "7d":
         startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -116,12 +125,24 @@ export class GetEvents extends OpenAPIRoute {
 
       // Query events directly - much faster than filtering on computed column
       // We filter on org_tag = orgTag OR org_tag matches any domain pattern
+      // Fetch one extra to determine if there are more results (cursor pagination)
       let query = supabase
         .from("events")
         .select("*")
         .gte("timestamp", startTime.toISOString())
         .order("timestamp", { ascending: false })
-        .limit(limit);
+        .limit(cappedLimit + 1);
+
+      // Apply cursor-based pagination if cursor is provided
+      if (cursor) {
+        if (direction === "next") {
+          // Get events older than cursor (going back in time)
+          query = query.lt("timestamp", cursor);
+        } else {
+          // Get events newer than cursor (going forward in time)
+          query = query.gt("timestamp", cursor);
+        }
+      }
 
       if (domainPatterns.length > 0) {
         // Build OR filter: org_tag = orgTag OR org_tag LIKE pattern1 OR ...
@@ -140,11 +161,35 @@ export class GetEvents extends OpenAPIRoute {
         return error(c, "QUERY_FAILED", queryError.message, 500);
       }
 
+      // Determine if there are more results (we fetched cappedLimit + 1)
+      const hasMore = events && events.length > cappedLimit;
+      const returnedEvents = hasMore ? events.slice(0, cappedLimit) : (events || []);
+      const nextCursor = returnedEvents.length > 0
+        ? returnedEvents[returnedEvents.length - 1].timestamp
+        : null;
+
+      // Set cache headers based on lookback period
+      // Shorter lookbacks = more real-time = shorter cache
+      const cacheSeconds: Record<string, number> = {
+        '1h': 30,
+        '6h': 30,
+        '24h': 60,
+        '7d': 300,
+        '30d': 600
+      };
+      const maxAge = cacheSeconds[lookback] || 60;
+      c.header('Cache-Control', `private, max-age=${maxAge}`);
+
       return success(
         c,
         {
-          events: events || [],
-          count: events?.length || 0
+          events: returnedEvents,
+          count: returnedEvents.length,
+          pagination: {
+            has_more: hasMore,
+            next_cursor: nextCursor,
+            limit: cappedLimit
+          }
         },
         {
           lookback,

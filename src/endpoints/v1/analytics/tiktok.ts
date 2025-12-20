@@ -346,6 +346,32 @@ export class GetTikTokMetrics extends OpenAPIRoute {
     const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
 
+    // Check if org has an active TikTok connection first
+    // Prevents timeout when querying Supabase for orgs without TikTok
+    const hasConnection = await c.env.DB.prepare(`
+      SELECT 1 FROM platform_connections
+      WHERE organization_id = ? AND platform = 'tiktok' AND is_active = 1
+      LIMIT 1
+    `).bind(orgId).first();
+
+    if (!hasConnection) {
+      return success(c, {
+        metrics: [],
+        summary: {
+          total_impressions: 0,
+          total_clicks: 0,
+          total_spend_cents: 0,
+          total_conversions: 0
+        },
+        total: 0,
+        date_range: {
+          start: query.query.start_date,
+          end: query.query.end_date
+        },
+        level: query.query.level
+      });
+    }
+
     // Initialize Supabase client
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
     if (!supabaseKey) {
