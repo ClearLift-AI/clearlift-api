@@ -112,6 +112,14 @@
     ]
   },
 
+  "workflows": [
+    {
+      "name": "analysis-workflow",
+      "binding": "ANALYSIS_WORKFLOW",
+      "class_name": "AnalysisWorkflow"
+    }
+  ],
+
   // ============================================================================
   // LOCAL DEVELOPMENT ENVIRONMENT
   // ============================================================================
@@ -145,7 +153,14 @@
             "queue": "sync-jobs"
           }
         ]
-      }
+      },
+      "workflows": [
+        {
+          "name": "analysis-workflow",
+          "binding": "ANALYSIS_WORKFLOW",
+          "class_name": "AnalysisWorkflow"
+        }
+      ]
       // No secrets_store_secrets - uses .dev.vars instead
     },
 
@@ -181,6 +196,13 @@
           }
         ]
       },
+      "workflows": [
+        {
+          "name": "analysis-workflow",
+          "binding": "ANALYSIS_WORKFLOW",
+          "class_name": "AnalysisWorkflow"
+        }
+      ],
       "secrets_store_secrets": [
         {
           "binding": "ENCRYPTION_KEY",

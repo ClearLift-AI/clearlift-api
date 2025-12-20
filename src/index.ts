@@ -25,6 +25,7 @@ import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-
 import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
+import { GetEventsSyncStatus } from "./endpoints/v1/analytics/events-sync";
 import {
   GetFacebookCampaigns,
   GetFacebookAdSets,
@@ -226,8 +227,10 @@ app.use("*", validateContentType());
 app.use("*", async (c, next) => {
   const path = new URL(c.req.url).pathname;
 
-  // Exempt status polling endpoints from global rate limit
-  const isExempt = path.includes('sync-status') || path === '/v1/health';
+  // Exempt status polling endpoints from global rate limit (lightweight reads)
+  const isExempt = path.includes('sync-status') ||
+                   path.includes('/analysis/status') ||
+                   path === '/v1/health';
 
   if (isExempt) {
     return next();
@@ -365,6 +368,7 @@ openapi.post("/v1/organizations/:org_id/tracking-domains/:domain_id/resync", aut
 
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, requireOrg, GetEvents);
+openapi.get("/v1/analytics/events/sync-status", auth, requireOrg, GetEventsSyncStatus);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributionComparison);
@@ -518,3 +522,6 @@ openapi.get("/v1/analysis/entity/:level/:entity_id", auth, requireOrg, GetEntity
 
 // Export the Hono app
 export default app;
+
+// Export the workflow class for Cloudflare Workflows binding
+export { AnalysisWorkflow } from './workflows/analysis-workflow';

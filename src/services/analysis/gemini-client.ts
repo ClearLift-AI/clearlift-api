@@ -51,7 +51,12 @@ interface GeminiResponse {
 export class GeminiClient implements LLMClient {
   private readonly baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
   private readonly maxRetries = 3;
-  private readonly retryDelayMs = 1000;
+  private readonly baseRetryDelayMs = 500;  // Reduced to avoid waitUntil timeout
+
+  // Request tracking for audit
+  private requestCount = 0;
+  private requestsThisMinute = 0;
+  private minuteStartTime = Date.now();
 
   constructor(private apiKey: string) {}
 
@@ -83,6 +88,17 @@ export class GeminiClient implements LLMClient {
     const startTime = Date.now();
     let lastError: Error | null = null;
 
+    // Track requests per minute
+    const now = Date.now();
+    if (now - this.minuteStartTime > 60000) {
+      this.requestsThisMinute = 0;
+      this.minuteStartTime = now;
+    }
+    this.requestCount++;
+    this.requestsThisMinute++;
+
+    console.log(`[Gemini AUDIT] Request #${this.requestCount} (${this.requestsThisMinute} this minute) to ${model}`);
+
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
         const url = `${this.baseUrl}/models/${model}:generateContent?key=${this.apiKey}`;
@@ -96,15 +112,27 @@ export class GeminiClient implements LLMClient {
         });
 
         if (response.status === 429) {
-          // Rate limited - wait and retry
-          const retryAfter = parseInt(response.headers.get('retry-after') || '5');
-          await this.sleep(retryAfter * 1000);
+          // Rate limited - log full error for debugging
+          const errorBody = await response.text();
+          console.log(`[Gemini AUDIT] 429 Rate Limited! Request #${this.requestCount}, ${this.requestsThisMinute} RPM`);
+          console.log(`[Gemini AUDIT] Error body: ${errorBody}`);
+          console.log(`[Gemini AUDIT] Headers: ${JSON.stringify(Object.fromEntries(response.headers.entries()))}`);
+
+          // Exponential backoff with jitter
+          const retryAfter = parseInt(response.headers.get('retry-after') || '0');
+          const backoffMs = Math.max(retryAfter * 1000, this.baseRetryDelayMs * Math.pow(2, attempt));
+          const jitter = Math.random() * 1000;
+          console.log(`[Gemini] Rate limited, retrying in ${Math.round((backoffMs + jitter) / 1000)}s (attempt ${attempt + 1}/${this.maxRetries})`);
+          await this.sleep(backoffMs + jitter);
           continue;
         }
 
         if (response.status === 503) {
-          // Service unavailable - wait and retry with exponential backoff
-          await this.sleep(this.retryDelayMs * Math.pow(2, attempt));
+          // Service unavailable - exponential backoff with jitter
+          const backoffMs = this.baseRetryDelayMs * Math.pow(2, attempt);
+          const jitter = Math.random() * 1000;
+          console.log(`[Gemini] Service unavailable, retrying in ${Math.round((backoffMs + jitter) / 1000)}s (attempt ${attempt + 1}/${this.maxRetries})`);
+          await this.sleep(backoffMs + jitter);
           continue;
         }
 
@@ -119,6 +147,8 @@ export class GeminiClient implements LLMClient {
         // Extract text from response
         const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
+        console.log(`[Gemini AUDIT] Request #${this.requestCount} SUCCESS in ${latencyMs}ms (${data.usageMetadata?.promptTokenCount || 0} in / ${data.usageMetadata?.candidatesTokenCount || 0} out tokens)`);
+
         return {
           content,
           inputTokens: data.usageMetadata?.promptTokenCount || 0,
@@ -131,9 +161,12 @@ export class GeminiClient implements LLMClient {
       } catch (error) {
         lastError = error as Error;
 
-        // Retry on network errors
+        // Retry on network errors with exponential backoff
         if (attempt < this.maxRetries - 1) {
-          await this.sleep(this.retryDelayMs * Math.pow(2, attempt));
+          const backoffMs = this.baseRetryDelayMs * Math.pow(2, attempt);
+          const jitter = Math.random() * 1000;
+          console.log(`[Gemini] Network error, retrying in ${Math.round((backoffMs + jitter) / 1000)}s (attempt ${attempt + 1}/${this.maxRetries}): ${lastError.message}`);
+          await this.sleep(backoffMs + jitter);
           continue;
         }
       }

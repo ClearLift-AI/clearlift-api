@@ -83,7 +83,7 @@ export interface AnalysisResult {
 }
 
 export class HierarchicalAnalyzer {
-  private llmLimiter = createLimiter(5);  // Max 5 concurrent LLM calls
+  private llmLimiter = createLimiter(2);  // Max 2 concurrent LLM calls (reduced for preview model rate limits)
   private agenticLoop: AgenticLoop;
 
   constructor(
@@ -126,8 +126,9 @@ export class HierarchicalAnalyzer {
     const tree = await this.entityTree.buildTree(orgId);
 
     // Update job with total entities
+    // +2 for cross_platform summary and recommendations steps
     if (jobId) {
-      await this.jobs.startJob(jobId, tree.totalEntities);
+      await this.jobs.startJob(jobId, tree.totalEntities + 2);
     }
 
     // Storage for summaries at each level
@@ -212,6 +213,12 @@ export class HierarchicalAnalyzer {
         days  // Pass the analysis date range to constrain exploration queries
       }
     );
+
+    // Mark recommendations step complete
+    processedCount++;
+    if (jobId) {
+      await this.jobs.updateProgress(jobId, processedCount, 'recommendations');
+    }
 
     const durationMs = Date.now() - startTime;
 

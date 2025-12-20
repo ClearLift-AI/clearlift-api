@@ -43,29 +43,26 @@ export const CLAUDE_MODELS = {
 } as const;
 
 export const GEMINI_MODELS = {
-  // Most capable - $2/$12 per M tokens
+  // Best quality, 25 RPM - for executive summaries only
   PRO: 'gemini-3-pro-preview',
-  // Best price-performance
-  FLASH: 'gemini-2.5-flash',
-  // Fastest/cheapest
+  // Fast & capable, 1000 RPM - for entity processing
+  FLASH: 'gemini-3-flash-preview',
+  // Legacy fallback
   FLASH_LITE: 'gemini-2.5-flash-lite'
 } as const;
 
 // Default model selection by level (optimized for cost/quality balance)
-// - Leaf levels (high volume): Use cheapest models
-// - Mid levels: Balance cost and quality
-// - Top levels: Use best models for executive summaries
+// - Entity levels: Gemini 3 Flash (1000 RPM, fast & capable)
+// - Executive summary: Gemini 3 Pro (25 RPM, best quality)
+// - Recommendations: Claude Opus (agentic tool calling)
 export const DEFAULT_MODEL_BY_LEVEL: Record<AnalysisLevel, { provider: LLMProvider; model: string }> = {
-  // Gemini Flash-Lite for ads: $0.10/$0.40 per M tokens (cheapest, high volume)
-  ad: { provider: 'gemini', model: GEMINI_MODELS.FLASH_LITE },
-  // Gemini Flash-Lite for adsets: still high volume
-  adset: { provider: 'gemini', model: GEMINI_MODELS.FLASH_LITE },
-  // Claude Haiku for campaigns: $1/$5 per M tokens (good synthesis)
-  campaign: { provider: 'claude', model: CLAUDE_MODELS.HAIKU },
-  // Gemini 3 Pro for accounts: $2/$12 per M tokens (good aggregation)
-  account: { provider: 'gemini', model: GEMINI_MODELS.PRO },
-  // Claude Opus for cross-platform: best quality for executive summaries
-  cross_platform: { provider: 'claude', model: CLAUDE_MODELS.OPUS },
+  // Gemini 3 Flash for entity processing (1000 RPM)
+  ad: { provider: 'gemini', model: GEMINI_MODELS.FLASH },
+  adset: { provider: 'gemini', model: GEMINI_MODELS.FLASH },
+  campaign: { provider: 'gemini', model: GEMINI_MODELS.FLASH },
+  account: { provider: 'gemini', model: GEMINI_MODELS.FLASH },
+  // Gemini 3 Pro for executive summary (25 RPM, single call)
+  cross_platform: { provider: 'gemini', model: GEMINI_MODELS.PRO },
   // Claude Opus for recommendations: agentic loop with tool calling
   recommendations: { provider: 'claude', model: CLAUDE_MODELS.OPUS }
 };

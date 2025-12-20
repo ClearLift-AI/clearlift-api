@@ -3,6 +3,7 @@
  *
  * POST /v1/analysis/run
  * Triggers async hierarchical analysis for the organization
+ * Uses Cloudflare Workflows for durable execution
  */
 
 import { OpenAPIRoute } from "chanfana";
@@ -10,17 +11,7 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { getSecret } from "../../../utils/secrets";
-import { SupabaseClient } from "../../../services/supabase";
-import {
-  EntityTreeBuilder,
-  MetricsFetcher,
-  LLMRouter,
-  PromptManager,
-  AnalysisLogger,
-  JobManager,
-  HierarchicalAnalyzer,
-  AnalysisConfig
-} from "../../../services/analysis";
+import { JobManager, AnalysisConfig } from "../../../services/analysis";
 
 export class RunAnalysis extends OpenAPIRoute {
   public schema = {
@@ -75,45 +66,13 @@ export class RunAnalysis extends OpenAPIRoute {
     const days = body.days || 7;
     const webhookUrl = body.webhook_url;
 
-    // Check for API keys
+    // Verify API keys are configured (workflow will access them directly)
     const anthropicKey = await getSecret(c.env.ANTHROPIC_API_KEY);
     const geminiKey = await getSecret(c.env.GEMINI_API_KEY);
 
     if (!anthropicKey || !geminiKey) {
       return error(c, "CONFIGURATION_ERROR", "AI service not configured", 500);
     }
-
-    // Initialize services
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
-    }
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
-    });
-
-    const entityTree = new EntityTreeBuilder(supabase);
-    const metrics = new MetricsFetcher(supabase);
-    const llm = new LLMRouter({
-      anthropicApiKey: anthropicKey.toString(),
-      geminiApiKey: geminiKey.toString()
-    });
-    const prompts = new PromptManager(c.env.AI_DB);
-    const logger = new AnalysisLogger(c.env.AI_DB);
-    const jobs = new JobManager(c.env.AI_DB);
-
-    const analyzer = new HierarchicalAnalyzer(
-      entityTree,
-      metrics,
-      llm,
-      prompts,
-      logger,
-      jobs,
-      c.env.AI_DB,
-      anthropicKey.toString(),  // For agentic loop
-      supabase  // For exploration tools
-    );
 
     // Load settings from org (including LLM configuration)
     const settings = await c.env.DB.prepare(`
@@ -156,22 +115,30 @@ export class RunAnalysis extends OpenAPIRoute {
       WHERE organization_id = ? AND status = 'pending'
     `).bind(orgId).run();
 
-    // Create job
+    // Create job in D1 (for status polling)
+    const jobs = new JobManager(c.env.AI_DB);
     const jobId = await jobs.createJob(orgId, days, webhookUrl);
 
-    // Run analysis in background using waitUntil
-    c.executionCtx.waitUntil(
-      (async () => {
-        try {
-          const result = await analyzer.analyzeOrganization(orgId, days, jobId, customInstructions, analysisConfig);
-          await jobs.completeJob(jobId, result.runId);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "Unknown error";
-          console.error("Analysis failed:", err);
-          await jobs.failJob(jobId, message);
+    // Start the durable workflow (replaces waitUntil)
+    // Workflow handles all LLM calls with unlimited wall-clock time for I/O
+    try {
+      await c.env.ANALYSIS_WORKFLOW.create({
+        id: jobId,
+        params: {
+          orgId,
+          days,
+          jobId,
+          customInstructions,
+          config: analysisConfig
         }
-      })()
-    );
+      });
+    } catch (err) {
+      // If workflow creation fails, mark job as failed
+      const message = err instanceof Error ? err.message : "Failed to start workflow";
+      console.error("Workflow creation failed:", err);
+      await jobs.failJob(jobId, message);
+      return error(c, "WORKFLOW_ERROR", message, 500);
+    }
 
     return success(c, {
       job_id: jobId,
