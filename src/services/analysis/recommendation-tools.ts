@@ -254,7 +254,7 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
   },
   {
     name: 'general_insight',
-    description: 'Surface strategic observations that CANNOT be addressed with set_budget, set_status, or set_audience. Examples: cross-platform attribution gaps, data quality issues, seasonal patterns. Do NOT use this for underperforming campaigns/ads - use set_status to recommend pausing those instead.',
+    description: 'Surface strategic observations that CANNOT be addressed with set_budget, set_status, or set_audience. Examples: cross-platform attribution gaps, data quality issues, seasonal patterns. Do NOT use this for underperforming campaigns/ads - use set_status to recommend pausing those instead. NOTE: All general_insight calls ACCUMULATE into a single document and count as ONE recommendation toward your limit.',
     input_schema: {
       type: 'object',
       properties: {
@@ -287,12 +287,40 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
       },
       required: ['category', 'title', 'insight', 'confidence']
     }
+  },
+  {
+    name: 'terminate_analysis',
+    description: 'End the analysis loop early when sufficient recommendations have been made or no further actionable insights exist. Call this instead of continuing to iterate when: (1) you have made high-quality actionable recommendations, (2) data quality prevents meaningful further analysis, (3) all major opportunities have been addressed, or (4) continuing would produce low-confidence or repetitive suggestions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string',
+          description: 'Clear explanation of why analysis is being terminated early'
+        },
+        summary: {
+          type: 'string',
+          description: 'Brief summary of what was accomplished in this analysis'
+        }
+      },
+      required: ['reason']
+    }
   }
 ];
 
 // Check if a tool name is a recommendation tool
 export function isRecommendationTool(toolName: string): boolean {
   return RECOMMENDATION_TOOLS.some(t => t.name === toolName);
+}
+
+// Check if tool is the terminate_analysis control tool
+export function isTerminateAnalysisTool(toolName: string): boolean {
+  return toolName === 'terminate_analysis';
+}
+
+// Check if tool is a general_insight (for accumulation handling)
+export function isGeneralInsightTool(toolName: string): boolean {
+  return toolName === 'general_insight';
 }
 
 // Format tools for Anthropic API
@@ -326,6 +354,16 @@ export interface Recommendation {
   reason: string;
   predicted_impact: number | null;
   confidence: 'low' | 'medium' | 'high';
+}
+
+// Interface for accumulated insight data
+export interface AccumulatedInsight {
+  title: string;
+  insight: string;
+  category: string;
+  affected_entities?: string;
+  suggested_action?: string;
+  confidence?: string;
 }
 
 // Parse tool call into recommendation

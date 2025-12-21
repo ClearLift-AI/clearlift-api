@@ -57,7 +57,7 @@ export class GetEventsSyncStatus extends OpenAPIRoute {
       const { org_id } = c.req.query();
 
       if (!org_id) {
-        return error(c, "org_id is required", 400);
+        return error(c, "VALIDATION_ERROR", "org_id is required", 400);
       }
 
       // Get org slug for this organization
@@ -68,7 +68,7 @@ export class GetEventsSyncStatus extends OpenAPIRoute {
         .first<{ slug: string }>();
 
       if (!orgResult) {
-        return error(c, "Organization not found", 404);
+        return error(c, "NOT_FOUND", "Organization not found", 404);
       }
 
       // Get all active workflows for this org's accounts
@@ -122,7 +122,7 @@ export class GetEventsSyncStatus extends OpenAPIRoute {
       return success(c, statusData);
     } catch (err) {
       console.error("Error getting events sync status:", err);
-      return error(c, err instanceof Error ? err.message : "Unknown error", 500);
+      return error(c, "INTERNAL_ERROR", err instanceof Error ? err.message : "Unknown error", 500);
     }
   }
 }

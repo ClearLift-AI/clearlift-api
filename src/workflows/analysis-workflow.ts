@@ -23,6 +23,7 @@ import {
   SerializedEntity,
   LevelAnalysisResult,
   AgenticIterationResult,
+  AccumulatedInsightData,
   serializeEntityTree,
   deserializeEntityTree,
   getEntitiesAtLevel,
@@ -39,8 +40,11 @@ import { SupabaseClient } from '../services/supabase';
 import {
   getAnthropicTools,
   isRecommendationTool,
+  isTerminateAnalysisTool,
+  isGeneralInsightTool,
   parseToolCallToRecommendation,
-  Recommendation
+  Recommendation,
+  AccumulatedInsight
 } from '../services/analysis/recommendation-tools';
 import {
   getExplorationTools,
@@ -59,7 +63,8 @@ export interface AnalysisWorkflowResult {
   entityCount: number;
   recommendations: Recommendation[];
   agenticIterations: number;
-  stoppedReason: 'max_recommendations' | 'no_tool_calls' | 'max_iterations';
+  stoppedReason: 'max_recommendations' | 'no_tool_calls' | 'max_iterations' | 'early_termination';
+  terminationReason?: string;
 }
 
 export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowParams> {
@@ -155,7 +160,12 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     let recommendations: Recommendation[] = [];
     let agenticMessages: any[] = [];
     let iterations = 0;
-    let stoppedReason: 'max_recommendations' | 'no_tool_calls' | 'max_iterations' = 'max_iterations';
+    let stoppedReason: 'max_recommendations' | 'no_tool_calls' | 'max_iterations' | 'early_termination' = 'max_iterations';
+    let terminationReason: string | undefined;
+
+    // Track accumulated insight state across iterations
+    let accumulatedInsightId: string | null = null;
+    let accumulatedInsights: AccumulatedInsightData[] = [];
 
     // Initialize agentic loop context
     const agenticContext = await step.do('agentic_init', {
@@ -195,7 +205,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           agenticContext.systemPrompt,
           recommendations,
           maxRecommendations,
-          enableExploration
+          enableExploration,
+          accumulatedInsightId,
+          accumulatedInsights
         );
       });
 
@@ -203,8 +215,17 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       agenticMessages = iterResult.messages;
       recommendations = iterResult.recommendations;
 
+      // Merge accumulated insight state
+      if (iterResult.accumulatedInsightId) {
+        accumulatedInsightId = iterResult.accumulatedInsightId;
+      }
+      if (iterResult.accumulatedInsights) {
+        accumulatedInsights = iterResult.accumulatedInsights;
+      }
+
       if (iterResult.shouldStop) {
         stoppedReason = iterResult.stopReason || 'no_tool_calls';
+        terminationReason = iterResult.terminationReason;
         break;
       }
     }
@@ -245,7 +266,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       entityCount: entityTree.totalEntities,
       recommendations,
       agenticIterations: iterations,
-      stoppedReason
+      stoppedReason,
+      terminationReason
     };
   }
 
@@ -694,7 +716,17 @@ IMPORTANT RULES:
 3. For budget changes, stay within 30% of current values
 4. For pausing: recommend for entities with poor ROAS (<1.5), high CPA, or declining trends
 5. Be specific about entities - use their actual IDs and names
-6. Only use general_insight for cross-platform patterns`;
+6. Only use general_insight for cross-platform patterns
+
+TOOL BEHAVIOR:
+- general_insight: Your insights ACCUMULATE into a single document. The first call creates it, subsequent calls append to it. All insights together count as ONE recommendation toward your limit. Use freely for observations.
+- terminate_analysis: Call this when you have made sufficient recommendations or determined no further actionable insights exist. This immediately ends the analysis loop.
+
+WHEN TO USE terminate_analysis:
+1. You have made high-quality actionable recommendations
+2. Data quality prevents meaningful further analysis
+3. All major opportunities have been addressed
+4. Continuing would produce low-confidence or repetitive suggestions`;
 
     if (customInstructions?.trim()) {
       systemPrompt += `\n\n## CUSTOM BUSINESS CONTEXT\n${customInstructions.trim()}`;
@@ -733,8 +765,13 @@ IMPORTANT RULES:
     systemPrompt: string,
     existingRecommendations: Recommendation[],
     maxRecommendations: number,
-    enableExploration: boolean
+    enableExploration: boolean,
+    existingAccumulatedInsightId: string | null,
+    existingAccumulatedInsights: AccumulatedInsightData[]
   ): Promise<AgenticIterationResult> {
+    // Clone accumulated insights array to avoid mutation
+    let accumulatedInsightId = existingAccumulatedInsightId;
+    let accumulatedInsights = [...existingAccumulatedInsights];
     const supabase = await this.createSupabaseClient();
     const explorationExecutor = new ExplorationToolExecutor(supabase);
 
@@ -778,7 +815,9 @@ IMPORTANT RULES:
         messages,
         recommendations: existingRecommendations,
         shouldStop: true,
-        stopReason: 'no_tool_calls'
+        stopReason: 'no_tool_calls',
+        accumulatedInsightId: accumulatedInsightId || undefined,
+        accumulatedInsights
       };
     }
 
@@ -791,6 +830,90 @@ IMPORTANT RULES:
     let hitMaxRecommendations = false;
 
     for (const toolUse of toolUses) {
+      // Handle terminate_analysis (control tool - NOT logged to DB)
+      if (isTerminateAnalysisTool(toolUse.name)) {
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify({ status: 'terminating', message: 'Analysis terminated by AI decision' })
+        });
+
+        // Return immediately with early termination
+        if (toolResults.length > 0) {
+          updatedMessages.push({ role: 'user', content: toolResults });
+        }
+
+        return {
+          messages: updatedMessages,
+          recommendations,
+          shouldStop: true,
+          stopReason: 'early_termination',
+          terminationReason: toolUse.input.reason,
+          accumulatedInsightId: accumulatedInsightId || undefined,
+          accumulatedInsights
+        };
+      }
+
+      // Handle general_insight (accumulation logic)
+      if (isGeneralInsightTool(toolUse.name)) {
+        const input = toolUse.input;
+
+        // Add to accumulated insights array
+        accumulatedInsights.push({
+          title: input.title,
+          insight: input.insight,
+          category: input.category,
+          affected_entities: input.affected_entities,
+          suggested_action: input.suggested_action,
+          confidence: input.confidence
+        });
+
+        if (accumulatedInsightId) {
+          // UPDATE existing row - subsequent insights just append
+          await this.updateAccumulatedInsight(orgId, accumulatedInsightId, accumulatedInsights);
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: JSON.stringify({
+              status: 'appended',
+              message: `Insight appended to accumulated document (${accumulatedInsights.length} total)`,
+              total_insights: accumulatedInsights.length
+            })
+          });
+        } else {
+          // CREATE new row - only first one counts toward limit
+          accumulatedInsightId = await this.createAccumulatedInsight(orgId, accumulatedInsights, runId);
+
+          // Add placeholder to recommendations count (counts as 1 toward limit)
+          recommendations.push({
+            tool: 'accumulated_insight',
+            platform: 'general',
+            entity_type: 'insight',
+            entity_id: 'accumulated',
+            entity_name: 'Analysis Insights',
+            parameters: {},
+            reason: 'Accumulated insights from analysis',
+            predicted_impact: null,
+            confidence: 'medium'
+          });
+
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: JSON.stringify({
+              status: 'created',
+              message: 'Accumulated insight document created. Additional insights will append to this document.',
+              total_insights: 1
+            })
+          });
+
+          if (recommendations.length >= maxRecommendations) {
+            hitMaxRecommendations = true;
+          }
+        }
+        continue;
+      }
+
       // Handle exploration tools
       if (isExplorationTool(toolUse.name)) {
         const exploreResult = await explorationExecutor.execute(toolUse.name, toolUse.input, orgId);
@@ -802,7 +925,7 @@ IMPORTANT RULES:
         continue;
       }
 
-      // Handle recommendation tools
+      // Handle other recommendation tools
       if (isRecommendationTool(toolUse.name)) {
         if (hitMaxRecommendations || recommendations.length >= maxRecommendations) {
           hitMaxRecommendations = true;
@@ -841,7 +964,9 @@ IMPORTANT RULES:
       messages: updatedMessages,
       recommendations,
       shouldStop: hitMaxRecommendations,
-      stopReason: hitMaxRecommendations ? 'max_recommendations' : undefined
+      stopReason: hitMaxRecommendations ? 'max_recommendations' : undefined,
+      accumulatedInsightId: accumulatedInsightId || undefined,
+      accumulatedInsights
     };
   }
 
@@ -917,6 +1042,60 @@ IMPORTANT RULES:
       rec.confidence,
       expiresAt.toISOString(),
       JSON.stringify({ analysis_run_id: analysisRunId })
+    ).run();
+  }
+
+  /**
+   * Create a new accumulated insight document
+   */
+  private async createAccumulatedInsight(
+    orgId: string,
+    insights: AccumulatedInsightData[],
+    analysisRunId: string
+  ): Promise<string> {
+    const id = crypto.randomUUID().replace(/-/g, '');
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+
+    await this.env.AI_DB.prepare(`
+      INSERT INTO ai_decisions (
+        id, organization_id, tool, platform, entity_type, entity_id, entity_name,
+        parameters, reason, predicted_impact, confidence, status, expires_at,
+        supporting_data
+      ) VALUES (?, ?, 'accumulated_insight', 'general', 'insight', 'accumulated', ?, ?, ?, NULL, 'medium', 'pending', ?, ?)
+    `).bind(
+      id,
+      orgId,
+      `Analysis Insights (${insights.length})`,
+      JSON.stringify({ insights, total_insights: insights.length }),
+      insights.map(i => i.insight).join('\n\n---\n\n'),
+      expiresAt.toISOString(),
+      JSON.stringify({ analysis_run_id: analysisRunId })
+    ).run();
+
+    return id;
+  }
+
+  /**
+   * Update an existing accumulated insight document with new insights
+   */
+  private async updateAccumulatedInsight(
+    orgId: string,
+    insightId: string,
+    insights: AccumulatedInsightData[]
+  ): Promise<void> {
+    await this.env.AI_DB.prepare(`
+      UPDATE ai_decisions
+      SET parameters = ?,
+          reason = ?,
+          entity_name = ?
+      WHERE id = ? AND organization_id = ?
+    `).bind(
+      JSON.stringify({ insights, total_insights: insights.length }),
+      insights.map(i => i.insight).join('\n\n---\n\n'),
+      `Analysis Insights (${insights.length})`,
+      insightId,
+      orgId
     ).run();
   }
 }

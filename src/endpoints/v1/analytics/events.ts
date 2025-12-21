@@ -121,7 +121,9 @@ export class GetEvents extends OpenAPIRoute {
         .eq("claimed_org_tag", orgTag)
         .is("released_at", null);
 
-      const domainPatterns = domainClaims?.map(d => d.domain_pattern) || [];
+      // Convert SQL LIKE patterns (%) to PostgREST patterns (*)
+      const domainPatterns = (domainClaims?.map(d => d.domain_pattern) || [])
+        .map(p => p.replace(/%/g, '*'));
 
       // Query events directly - much faster than filtering on computed column
       // We filter on org_tag = orgTag OR org_tag matches any domain pattern
@@ -146,8 +148,8 @@ export class GetEvents extends OpenAPIRoute {
 
       if (domainPatterns.length > 0) {
         // Build OR filter: org_tag = orgTag OR org_tag LIKE pattern1 OR ...
-        // PostgREST doesn't support LIKE with .or(), so we use a raw filter
-        const likeFilters = domainPatterns.map(p => `org_tag.like.${p}`).join(',');
+        // PostgREST uses * as wildcard (not %), and ilike for case-insensitive
+        const likeFilters = domainPatterns.map(p => `org_tag.ilike.${p}`).join(',');
         query = query.or(`org_tag.eq.${orgTag},${likeFilters}`);
       } else {
         // No domain claims, just filter by exact org_tag

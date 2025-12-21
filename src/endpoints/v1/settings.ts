@@ -650,3 +650,86 @@ export class RejectAIDecision extends OpenAPIRoute {
     return success(c, { id: data.params.decision_id, status: "rejected" });
   }
 }
+
+/**
+ * POST /v1/settings/ai-decisions/:decision_id/rate - Rate an accumulated insight (1-5 stars)
+ */
+export class RateAIDecision extends OpenAPIRoute {
+  public schema = {
+    tags: ["Settings"],
+    summary: "Rate an accumulated insight (1-5 stars)",
+    operationId: "rate-ai-decision",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        decision_id: z.string()
+      }),
+      query: z.object({
+        org_id: z.string().optional()
+      }),
+      body: contentJson(z.object({
+        rating: z.number().int().min(1).max(5),
+        feedback_text: z.string().max(500).optional()
+      }))
+    },
+    responses: {
+      "200": {
+        description: "Rating recorded"
+      },
+      "400": {
+        description: "Invalid request - only accumulated insights can be rated"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const data = await this.getValidatedData<typeof this.schema>();
+    const orgId = data.query?.org_id || c.get("org_id");
+
+    if (!orgId) {
+      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    }
+
+    // Verify user has access to this organization
+    const memberCheck = await c.env.DB.prepare(`
+      SELECT 1 FROM organization_members
+      WHERE organization_id = ? AND user_id = ?
+    `).bind(orgId, session.user_id).first();
+
+    if (!memberCheck) {
+      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
+    }
+
+    // Get decision from AI_DB
+    const decision = await c.env.AI_DB.prepare(`
+      SELECT tool, parameters, status FROM ai_decisions WHERE id = ? AND organization_id = ?
+    `).bind(data.params.decision_id, orgId).first<any>();
+
+    if (!decision) {
+      return error(c, "NOT_FOUND", "Decision not found", 404);
+    }
+
+    // Only accumulated insights can be rated
+    if (decision.tool !== 'accumulated_insight') {
+      return error(c, "INVALID_TYPE", "Only accumulated insights can be rated. Use accept/reject for other recommendations.", 400);
+    }
+
+    // Update parameters with rating
+    const params = JSON.parse(decision.parameters || '{}');
+    params.rating = data.body.rating;
+    params.feedback_text = data.body.feedback_text || null;
+    params.rated_at = new Date().toISOString();
+
+    await c.env.AI_DB.prepare(`
+      UPDATE ai_decisions
+      SET parameters = ?,
+          status = 'acknowledged',
+          reviewed_at = datetime('now'),
+          reviewed_by = ?
+      WHERE id = ?
+    `).bind(JSON.stringify(params), session.user_id, data.params.decision_id).run();
+
+    return success(c, { id: data.params.decision_id, status: "acknowledged", rating: data.body.rating });
+  }
+}

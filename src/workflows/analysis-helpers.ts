@@ -196,13 +196,29 @@ export interface LevelAnalysisResult {
 }
 
 /**
+ * Accumulated insight data structure
+ */
+export interface AccumulatedInsightData {
+  title: string;
+  insight: string;
+  category: string;
+  affected_entities?: string;
+  suggested_action?: string;
+  confidence?: string;
+}
+
+/**
  * Result from a single agentic iteration
  */
 export interface AgenticIterationResult {
   messages: any[];  // Conversation history
   recommendations: any[];
   shouldStop: boolean;
-  stopReason?: 'max_recommendations' | 'no_tool_calls' | 'max_iterations';
+  stopReason?: 'max_recommendations' | 'no_tool_calls' | 'max_iterations' | 'early_termination';
+  terminationReason?: string;
+  // Accumulated insight state (passed between iterations)
+  accumulatedInsightId?: string;
+  accumulatedInsights?: AccumulatedInsightData[];
 }
 
 /**

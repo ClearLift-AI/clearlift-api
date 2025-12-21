@@ -147,7 +147,8 @@ import {
   UpdateMatrixSettings,
   GetAIDecisions,
   AcceptAIDecision,
-  RejectAIDecision
+  RejectAIDecision,
+  RateAIDecision
 } from "./endpoints/v1/settings";
 import {
   ListConversionGoals,
@@ -496,6 +497,7 @@ openapi.post("/v1/tracking-config/snippet", auth, GenerateTrackingSnippet);
 openapi.get("/v1/settings/ai-decisions", auth, requireOrg, GetAIDecisions);
 openapi.post("/v1/settings/ai-decisions/:decision_id/accept", auth, requireOrg, requireOrgAdmin, AcceptAIDecision);
 openapi.post("/v1/settings/ai-decisions/:decision_id/reject", auth, requireOrg, requireOrgAdmin, RejectAIDecision);
+openapi.post("/v1/settings/ai-decisions/:decision_id/rate", auth, requireOrg, RateAIDecision);
 
 // Conversion Goals endpoints
 openapi.get("/v1/goals", auth, requireOrg, ListConversionGoals);
