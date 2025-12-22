@@ -28,7 +28,8 @@ export class GetUserProfile extends OpenAPIRoute {
                   name: z.string().nullable(),
                   created_at: z.string(),
                   last_login_at: z.string().nullable(),
-                  avatar_url: z.string().nullable()
+                  avatar_url: z.string().nullable(),
+                  is_admin: z.boolean()
                 })
               })
             })
@@ -51,7 +52,13 @@ export class GetUserProfile extends OpenAPIRoute {
       return error(c, "USER_NOT_FOUND", "User not found", 404);
     }
 
-    return success(c, { user });
+    // Convert is_admin from integer (0/1) to boolean
+    return success(c, {
+      user: {
+        ...user,
+        is_admin: Boolean(user.is_admin)
+      }
+    });
   }
 }
 

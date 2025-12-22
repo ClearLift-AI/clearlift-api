@@ -10,6 +10,7 @@ export interface User {
   last_login_at: string | null;
   avatar_url: string | null;
   updated_at?: string;
+  is_admin: boolean;
 }
 
 export interface Organization {

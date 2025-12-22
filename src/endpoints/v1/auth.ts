@@ -87,10 +87,12 @@ export class Register extends OpenAPIRoute {
     // Start transaction
     try {
       // Create user - include issuer and access_sub with default values, email_verified as 0 (false)
+      // Auto-grant admin to @clearlift.ai emails
+      const isAdmin = email.toLowerCase().endsWith('@clearlift.ai') ? 1 : 0;
       await c.env.DB.prepare(`
-        INSERT INTO users (id, email, name, password_hash, created_at, updated_at, issuer, access_sub, email_verified)
-        VALUES (?, ?, ?, ?, ?, ?, 'password', ?, 0)
-      `).bind(userId, email, name, passwordHash, now, now, userId).run();
+        INSERT INTO users (id, email, name, password_hash, created_at, updated_at, issuer, access_sub, email_verified, is_admin)
+        VALUES (?, ?, ?, ?, ?, ?, 'password', ?, 0, ?)
+      `).bind(userId, email, name, passwordHash, now, now, userId, isAdmin).run();
 
       // Generate email verification token
       const verificationToken = crypto.randomUUID();

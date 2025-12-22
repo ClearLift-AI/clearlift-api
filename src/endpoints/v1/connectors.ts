@@ -851,7 +851,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
           account_name: z.string(),
           selectedAccounts: z.array(z.string()).optional(), // For Google Ads manager accounts
           sync_config: z.object({
-            timeframe: z.enum(['default', 'all_time', 'custom']),
+            timeframe: z.enum(['7_days', '90_days', 'all_time', 'custom']),
             custom_start: z.string().optional(),
             custom_end: z.string().optional()
           }).optional()
@@ -967,25 +967,28 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
 
       // Calculate sync window based on user's selection
       const calculateSyncWindow = () => {
-        const defaultWindow = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-        const twoYearsAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString();
+        const TIMEFRAME_DAYS: Record<string, number> = {
+          '7_days': 7,
+          '90_days': 90,
+          'all_time': 730
+        };
 
-        if (!sync_config || sync_config.timeframe === 'default') {
-          return { type: 'full', start: defaultWindow, end: now };
-        }
-
-        if (sync_config.timeframe === 'all_time') {
-          return { type: 'full', start: twoYearsAgo, end: now };
+        // Default to 90 days if no sync_config provided
+        if (!sync_config) {
+          const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+          return { type: 'full', start: ninetyDaysAgo, end: now };
         }
 
         if (sync_config.timeframe === 'custom') {
+          const defaultWindow = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
           const customStart = sync_config.custom_start || defaultWindow;
           const customEnd = sync_config.custom_end || now;
           return { type: 'full', start: customStart, end: customEnd };
         }
 
-        // Fallback to default
-        return { type: 'full', start: defaultWindow, end: now };
+        const days = TIMEFRAME_DAYS[sync_config.timeframe] || 90;
+        const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        return { type: 'full', start: startDate, end: now };
       };
 
       const syncWindow = calculateSyncWindow();
