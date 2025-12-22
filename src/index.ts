@@ -151,6 +151,10 @@ import {
   RateAIDecision
 } from "./endpoints/v1/settings";
 import {
+  AcceptTerms,
+  GetTermsStatus
+} from "./endpoints/v1/terms";
+import {
   ListConversionGoals,
   CreateConversionGoal,
   UpdateConversionGoal,
@@ -177,6 +181,12 @@ import {
   GenerateTrackingSnippet
 } from "./endpoints/v1/tracking-config";
 import { SeedFacebookDemoRecommendations } from "./endpoints/v1/recommendations";
+import {
+  ListTrackingLinks,
+  CreateTrackingLink,
+  DeleteTrackingLink,
+  GetTrackingLink
+} from "./endpoints/v1/tracking-links";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -487,11 +497,21 @@ openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
 openapi.get("/v1/settings/matrix", auth, requireOrg, GetMatrixSettings);
 openapi.post("/v1/settings/matrix", auth, requireOrg, requireOrgAdmin, UpdateMatrixSettings);
 
+// Terms acceptance endpoints (for onboarding clickwrap)
+openapi.post("/v1/terms/accept", auth, AcceptTerms);
+openapi.get("/v1/terms/status", auth, GetTermsStatus);
+
 // Tracking config endpoints
 openapi.get("/v1/config", GetTagConfig); // Public endpoint for tracking tag
 openapi.get("/v1/tracking-config", auth, GetTrackingConfig);
 openapi.put("/v1/tracking-config", auth, UpdateTrackingConfig);
 openapi.post("/v1/tracking-config/snippet", auth, GenerateTrackingSnippet);
+
+// Email tracking links endpoints
+openapi.get("/v1/tracking-links", auth, requireOrg, ListTrackingLinks);
+openapi.post("/v1/tracking-links", auth, requireOrg, CreateTrackingLink);
+openapi.get("/v1/tracking-links/:id", auth, requireOrg, GetTrackingLink);
+openapi.delete("/v1/tracking-links/:id", auth, requireOrg, DeleteTrackingLink);
 
 // AI Decisions endpoints
 openapi.get("/v1/settings/ai-decisions", auth, requireOrg, GetAIDecisions);
