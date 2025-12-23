@@ -24,6 +24,8 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
         'ads_management',
         'read_insights',       // Required for reading ad insights/metrics
         'business_management', // Required for managing business assets
+        'pages_show_list',     // Required for listing connected pages
+        'pages_read_engagement', // Required for reading page content & insights
         'email',
         'public_profile'
       ],

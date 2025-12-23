@@ -1105,6 +1105,54 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
 
       console.log('Connection created:', { connectionId });
 
+      // For Facebook, fetch connected pages (demonstrates pages_read_engagement usage)
+      if (provider === 'facebook') {
+        try {
+          console.log('Fetching Facebook connected pages for pages_read_engagement compliance...');
+          const pagesResponse = await fetch(
+            `https://graph.facebook.com/v24.0/me/accounts?fields=id,name,access_token,fan_count,category&access_token=${accessToken}`
+          );
+
+          if (pagesResponse.ok) {
+            const pagesData = await pagesResponse.json() as any;
+            const pages = pagesData.data || [];
+
+            if (pages.length > 0) {
+              console.log(`Found ${pages.length} connected Facebook pages`);
+
+              // Store pages in Supabase
+              const { SupabaseClient } = await import("../../services/supabase");
+              const supabase = new SupabaseClient({
+                url: c.env.SUPABASE_URL,
+                serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
+              });
+
+              for (const page of pages) {
+                await supabase.upsertWithSchema('pages', {
+                  page_id: page.id,
+                  organization_id: oauthState.organization_id,
+                  page_name: page.name,
+                  access_token: page.access_token,
+                  fan_count: page.fan_count || 0,
+                  category: page.category || null,
+                  updated_at: new Date().toISOString()
+                }, 'organization_id,page_id', 'facebook_ads');
+              }
+              console.log('Stored Facebook pages in Supabase');
+            } else {
+              console.log('No Facebook pages connected to this account');
+            }
+          } else {
+            const errorText = await pagesResponse.text();
+            console.warn('Failed to fetch Facebook pages:', errorText);
+            // Don't fail the connection - pages are optional
+          }
+        } catch (pagesErr) {
+          console.error('Error fetching Facebook pages:', pagesErr);
+          // Don't fail the connection - pages are optional
+        }
+      }
+
       // For Shopify, also store shop domain in dedicated column
       if (provider === 'shopify' && shopDomain) {
         await c.env.DB.prepare(`

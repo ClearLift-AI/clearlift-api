@@ -271,6 +271,46 @@ export class SupabaseClient {
   }
 
   /**
+   * Upsert records with a specific schema (e.g., 'facebook_ads', 'google_ads')
+   */
+  async upsertWithSchema<T = any>(
+    table: string,
+    records: any | any[],
+    onConflict: string,
+    schema: string,
+    returning: boolean = false
+  ): Promise<T> {
+    const url = `${this.config.url}/rest/v1/${table}?on_conflict=${onConflict}`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': this.config.serviceKey,
+        'Authorization': `Bearer ${this.config.serviceKey}`,
+        'Prefer': `resolution=merge-duplicates,return=${returning ? 'representation' : 'minimal'}`,
+        'Accept-Profile': schema,
+        'Content-Profile': schema
+      },
+      body: JSON.stringify(records)
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Supabase upsert failed: ${response.status} - ${error}`);
+    }
+
+    if (returning) {
+      const contentType = response.headers.get('content-type');
+      if (contentType?.includes('application/json')) {
+        return await response.json();
+      }
+    }
+
+    return {} as T;
+  }
+
+  /**
    * Query with JSONB filters
    */
   async queryJsonb<T = any>(
