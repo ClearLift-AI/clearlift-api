@@ -141,6 +141,38 @@ export class D1Adapter {
   }
 
   /**
+   * Get ALL organizations in the system (for admin users)
+   * Returns orgs with 'admin' role since admin has access to all
+   */
+  async getAllOrganizations(): Promise<any[]> {
+    const result = await this.db
+      .prepare(`
+        SELECT
+          o.id,
+          o.name,
+          o.slug,
+          o.created_at,
+          o.updated_at,
+          o.subscription_tier,
+          'admin' as role,
+          o.created_at as joined_at,
+          otm.short_tag as org_tag,
+          COALESCE(o.default_attribution_model, 'last_touch') as default_attribution_model,
+          COALESCE(o.attribution_window_days, 30) as attribution_window_days,
+          COALESCE(o.time_decay_half_life_days, 7) as time_decay_half_life_days,
+          COALESCE(o.conversion_source, 'tag') as conversion_source,
+          (SELECT COUNT(*) FROM organization_members WHERE organization_id = o.id) as members_count,
+          (SELECT COUNT(*) FROM platform_connections WHERE organization_id = o.id AND is_active = 1) as platforms_count
+        FROM organizations o
+        LEFT JOIN org_tag_mappings otm ON o.id = otm.organization_id
+        ORDER BY o.created_at DESC
+      `)
+      .all();
+
+    return result.results || [];
+  }
+
+  /**
    * Get organization by ID
    */
   async getOrganization(orgId: string): Promise<Organization | null> {

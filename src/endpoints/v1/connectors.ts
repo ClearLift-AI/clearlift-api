@@ -5,6 +5,7 @@ import { ConnectorService } from "../../services/connectors";
 import { OnboardingService } from "../../services/onboarding";
 import { GoogleAdsOAuthProvider } from "../../services/oauth/google";
 import { FacebookAdsOAuthProvider } from "../../services/oauth/facebook";
+import { ShopifyOAuthProvider } from "../../services/oauth/shopify";
 import { success, error } from "../../utils/response";
 import { getSecret } from "../../utils/secrets";
 
@@ -100,12 +101,13 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify'])
       }),
       body: contentJson(
         z.object({
           organization_id: z.string(),
-          redirect_uri: z.string().optional()
+          redirect_uri: z.string().optional(),
+          shop_domain: z.string().optional() // Required for Shopify
         })
       )
     },
@@ -131,7 +133,17 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
     const { provider } = data.params;
-    const { organization_id, redirect_uri } = data.body;
+    const { organization_id, redirect_uri, shop_domain } = data.body;
+
+    // Shopify requires shop_domain
+    if (provider === 'shopify') {
+      if (!shop_domain) {
+        return error(c, "MISSING_SHOP_DOMAIN", "Shopify requires a shop domain (e.g., your-store.myshopify.com)", 400);
+      }
+      if (!ShopifyOAuthProvider.isValidShopDomain(shop_domain)) {
+        return error(c, "INVALID_SHOP_DOMAIN", "Invalid Shopify shop domain. Must end with .myshopify.com", 400);
+      }
+    }
 
     // Verify user has access to org
     const { D1Adapter } = await import("../../adapters/d1");
@@ -142,19 +154,26 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "No access to this organization", 403);
     }
 
-    // Get OAuth provider and generate PKCE challenge
-    const oauthProvider = await this.getOAuthProvider(provider, c);
+    // Get OAuth provider and generate PKCE challenge (Shopify doesn't use PKCE)
+    const oauthProvider = await this.getOAuthProvider(provider, c, shop_domain);
     const pkce = await oauthProvider.generatePKCEChallenge();
 
     // Create OAuth state with PKCE verifier stored in metadata
     const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
     const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+
+    // Store metadata including shop_domain for Shopify
+    const stateMetadata: Record<string, any> = { code_verifier: pkce.codeVerifier };
+    if (provider === 'shopify' && shop_domain) {
+      stateMetadata.shop_domain = ShopifyOAuthProvider.normalizeShopDomain(shop_domain);
+    }
+
     const state = await connectorService.createOAuthState(
       session.user_id,
       organization_id,
       provider,
       redirect_uri,
-      { code_verifier: pkce.codeVerifier }  // Store verifier as object property
+      stateMetadata
     );
 
     // Generate authorization URL with PKCE challenge
@@ -179,7 +198,7 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     });
   }
 
-  private async getOAuthProvider(provider: string, c: AppContext) {
+  private async getOAuthProvider(provider: string, c: AppContext, shopDomain?: string) {
     // Use OAUTH_CALLBACK_BASE env var for local tunnel testing, otherwise production URL
     const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
     const redirectUri = `${callbackBase}/v1/connectors/${provider}/callback`;
@@ -209,6 +228,22 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
           redirectUri
         );
       }
+      case 'shopify': {
+        if (!shopDomain) {
+          throw new Error('Shopify requires a shop domain');
+        }
+        const clientId = await getSecret(c.env.SHOPIFY_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
+          throw new Error('Shopify OAuth credentials not configured');
+        }
+        return new ShopifyOAuthProvider(
+          clientId,
+          clientSecret,
+          redirectUri,
+          shopDomain
+        );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -225,12 +260,17 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     operationId: "handle-oauth-callback",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify'])
       }),
       query: z.object({
         code: z.string(),
         state: z.string(),
-        error: z.string().optional()
+        error: z.string().optional(),
+        // Shopify-specific params
+        hmac: z.string().optional(),
+        shop: z.string().optional(),
+        timestamp: z.string().optional(),
+        host: z.string().optional()
       })
     },
     responses: {
@@ -243,7 +283,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>();
     const { provider } = data.params;
-    const { code, state, error: oauthError } = data.query;
+    const { code, state, error: oauthError, shop, hmac } = data.query;
 
     // Clean up expired OAuth states (based on expires_at, not created_at)
     try {
@@ -285,20 +325,56 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       // Set organization_id in context for audit middleware
       c.set("org_id" as any, oauthState.organization_id);
 
-      // Get PKCE code verifier from state metadata
+      // Get metadata from state
       const stateMetadata = typeof oauthState.metadata === 'string'
         ? JSON.parse(oauthState.metadata)
         : oauthState.metadata;
 
+      // Shopify-specific handling
+      let shopDomain: string | undefined;
+      if (provider === 'shopify') {
+        // Get shop domain from query params (Shopify sends it) or state metadata
+        shopDomain = shop || stateMetadata?.shop_domain;
+        if (!shopDomain) {
+          console.error('Shopify shop domain not found');
+          return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_state&error_description=Shop+domain+missing`);
+        }
+
+        // Validate shop domain format
+        if (!ShopifyOAuthProvider.isValidShopDomain(shopDomain)) {
+          console.error('Invalid Shopify shop domain:', shopDomain);
+          return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_shop&error_description=Invalid+shop+domain`);
+        }
+
+        // Validate HMAC signature if present
+        if (hmac) {
+          const clientSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+          if (clientSecret) {
+            const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+            const redirectUri = `${callbackBase}/v1/connectors/shopify/callback`;
+            const shopifyProvider = new ShopifyOAuthProvider('', clientSecret, redirectUri, shopDomain);
+            const queryParams = new URL(c.req.url).searchParams;
+            const isValidHmac = await shopifyProvider.validateHmac(queryParams);
+            if (!isValidHmac) {
+              console.error('Shopify HMAC validation failed');
+              return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_hmac&error_description=HMAC+validation+failed`);
+            }
+            console.log('Shopify HMAC validation passed');
+          }
+        }
+      }
+
+      // Get PKCE code verifier from state metadata (not used for Shopify)
       const codeVerifier = stateMetadata?.code_verifier;
-      if (!codeVerifier || typeof codeVerifier !== 'string') {
+      if (provider !== 'shopify' && (!codeVerifier || typeof codeVerifier !== 'string')) {
         console.error('PKCE code verifier not found in OAuth state', { hasMetadata: !!stateMetadata, metadataType: typeof stateMetadata });
         return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_state&error_description=PKCE+verifier+missing`);
       }
 
-      // Exchange code for token with PKCE verification
-      const oauthProvider = await this.getOAuthProvider(provider, c);
-      const tokens = await oauthProvider.exchangeCodeForToken(code, codeVerifier);
+      // Exchange code for token
+      const oauthProvider = await this.getOAuthProvider(provider, c, shopDomain);
+      // Shopify doesn't use PKCE, pass undefined for code verifier
+      const tokens = await oauthProvider.exchangeCodeForToken(code, provider === 'shopify' ? undefined : codeVerifier);
 
       // For Facebook, convert short-lived token to long-lived token (60 days)
       if (provider === 'facebook') {
@@ -314,7 +390,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       const userInfo = await oauthProvider.getUserInfo(tokens.access_token);
 
       // Store token and user info in oauth_states (keep code_verifier, add tokens)
-      const metadata = {
+      const metadata: Record<string, any> = {
         code_verifier: codeVerifier,  // Preserve PKCE verifier
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
@@ -322,6 +398,11 @@ export class HandleOAuthCallback extends OpenAPIRoute {
         scope: tokens.scope,
         user_info: userInfo
       };
+
+      // For Shopify, store the shop domain
+      if (provider === 'shopify' && shopDomain) {
+        metadata.shop_domain = shopDomain;
+      }
 
       await c.env.DB.prepare(`
         UPDATE oauth_states
@@ -349,7 +430,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     }
   }
 
-  private async getOAuthProvider(provider: string, c: AppContext) {
+  private async getOAuthProvider(provider: string, c: AppContext, shopDomain?: string) {
     // Use OAUTH_CALLBACK_BASE env var for local tunnel testing, otherwise production URL
     const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
     const redirectUri = `${callbackBase}/v1/connectors/${provider}/callback`;
@@ -379,6 +460,22 @@ export class HandleOAuthCallback extends OpenAPIRoute {
           redirectUri
         );
       }
+      case 'shopify': {
+        if (!shopDomain) {
+          throw new Error('Shopify requires a shop domain');
+        }
+        const clientId = await getSecret(c.env.SHOPIFY_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
+          throw new Error('Shopify OAuth credentials not configured');
+        }
+        return new ShopifyOAuthProvider(
+          clientId,
+          clientSecret,
+          redirectUri,
+          shopDomain
+        );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -397,7 +494,7 @@ export class MockOAuthCallback extends OpenAPIRoute {
     operationId: "mock-oauth-callback",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify'])
       }),
       query: z.object({
         state: z.string()
@@ -510,6 +607,18 @@ export class MockOAuthCallback extends OpenAPIRoute {
             name: 'Test TikTok User'
           }
         };
+      case 'shopify':
+        return {
+          access_token: `mock_shopify_token_${now}`,
+          refresh_token: null,  // Shopify tokens don't expire
+          expires_in: null,
+          scope: 'read_orders,read_customers',
+          user_info: {
+            id: 'gid://shopify/Shop/12345678',
+            name: 'Test Shopify Store',
+            email: 'shop@example.com'
+          }
+        };
       default:
         return {
           access_token: `mock_token_${now}`,
@@ -532,7 +641,7 @@ export class GetOAuthAccounts extends OpenAPIRoute {
     operationId: "get-oauth-accounts",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify'])
       }),
       query: z.object({
         state: z.string()
@@ -658,6 +767,27 @@ export class GetOAuthAccounts extends OpenAPIRoute {
           accounts = await tiktokProvider.getAdAccounts(accessToken);
           break;
         }
+        case 'shopify': {
+          // For Shopify, the "account" is the shop itself
+          // Get shop info from user_info stored in metadata
+          const userInfo = metadata?.user_info;
+          const shopDomain = metadata?.shop_domain;
+
+          if (!userInfo || !shopDomain) {
+            return error(c, "NO_SHOP_INFO", "Shopify shop info not found", 400);
+          }
+
+          // Return the shop as the single "account"
+          accounts = [{
+            id: shopDomain,
+            name: userInfo.name || shopDomain,
+            domain: shopDomain,
+            email: userInfo.email,
+            currency: userInfo.raw?.currencyCode || 'USD',
+            timezone: userInfo.raw?.ianaTimezone || 'America/New_York'
+          }];
+          break;
+        }
       }
 
       return success(c, { accounts });
@@ -722,6 +852,17 @@ export class GetOAuthAccounts extends OpenAPIRoute {
             id: 'tt_adv_001',
             name: 'Test TikTok Advertiser',
             status: 'ACTIVE'
+          }
+        ];
+      case 'shopify':
+        return [
+          {
+            id: 'test-store.myshopify.com',
+            name: 'Test Shopify Store',
+            domain: 'test-store.myshopify.com',
+            email: 'shop@example.com',
+            currency: 'USD',
+            timezone: 'America/New_York'
           }
         ];
       default:
@@ -842,7 +983,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
     operationId: "finalize-oauth-connection",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify'])
       }),
       body: contentJson(
         z.object({
@@ -929,6 +1070,16 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         console.log('Google Ads manager account - storing selected accounts:', selectedAccounts);
       }
 
+      // Shopify: store shop_domain in settings
+      const shopDomain = metadata?.shop_domain;
+      if (provider === 'shopify' && shopDomain) {
+        initialSettings = {
+          ...initialSettings,
+          shop_domain: shopDomain
+        };
+        console.log('Shopify - storing shop domain:', shopDomain);
+      }
+
       // Store sync_config for cron scheduler to use if initial sync fails
       if (sync_config) {
         initialSettings = {
@@ -953,6 +1104,16 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       });
 
       console.log('Connection created:', { connectionId });
+
+      // For Shopify, also store shop domain in dedicated column
+      if (provider === 'shopify' && shopDomain) {
+        await c.env.DB.prepare(`
+          UPDATE platform_connections
+          SET shopify_shop_domain = ?, shopify_shop_id = ?
+          WHERE id = ?
+        `).bind(shopDomain, metadata?.user_info?.id || null, connectionId).run();
+        console.log('Shopify shop domain stored in connection:', shopDomain);
+      }
 
       // Update onboarding progress
       const onboarding = new OnboardingService(c.env.DB);
@@ -1632,6 +1793,20 @@ export class DisconnectPlatform extends OpenAPIRoute {
           }, filter, 'facebook_ads')
         ]);
         console.log(`Soft-deleted Facebook Ads records for connection ${connection_id}`);
+      } else if (connection.platform === 'shopify') {
+        // Soft-delete Shopify records from orders and customers tables
+        const filter = `connection_id.eq.${connection_id}&deleted_at.is.null`;
+        await Promise.all([
+          supabase.updateWithSchema('orders', {
+            deleted_at: now,
+            updated_at: now
+          }, filter, 'shopify'),
+          supabase.updateWithSchema('customers', {
+            deleted_at: now,
+            updated_at: now
+          }, filter, 'shopify')
+        ]);
+        console.log(`Soft-deleted Shopify records for connection ${connection_id}`);
       }
       // Add tiktok as needed
     } catch (supabaseError) {

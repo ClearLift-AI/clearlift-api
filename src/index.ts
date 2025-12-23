@@ -106,8 +106,6 @@ import {
   GetConnectorSettings,
   UpdateConnectorSettings,
   TriggerResync,
-  ListGoogleAdsAccounts,
-  UpdateGoogleAdsSettings,
   DisconnectPlatform
 } from "./endpoints/v1/connectors";
 import { GetSyncStatus } from "./endpoints/v1/connectors/syncStatus";
@@ -136,12 +134,19 @@ import {
   GetQueueStatus,
   GetDeadLetterQueue,
   TestConnectionToken,
-  TriggerSync
+  TriggerSync,
+  TriggerEventsSync
 } from "./endpoints/v1/workers";
 import {
   JoinWaitlist,
   GetWaitlistStats
 } from "./endpoints/v1/waitlist";
+import {
+  SendAdminInvite,
+  ListAdminInvites,
+  GetEventsSyncStatus,
+  AdminTriggerEventsSync
+} from "./endpoints/v1/admin";
 import {
   GetMatrixSettings,
   UpdateMatrixSettings,
@@ -299,6 +304,12 @@ openapi.get("/v1/health", HealthEndpoint);
 // Waitlist endpoints (no auth - public endpoints for marketing site)
 openapi.post("/v1/waitlist", JoinWaitlist);
 openapi.get("/v1/waitlist/stats", GetWaitlistStats);
+
+// Admin endpoints (requires auth + is_admin check in handler)
+openapi.post("/v1/admin/invites", auth, SendAdminInvite);
+openapi.get("/v1/admin/invites", auth, ListAdminInvites);
+openapi.get("/v1/admin/events-sync/status", auth, GetEventsSyncStatus);
+openapi.post("/v1/admin/events-sync/trigger", auth, AdminTriggerEventsSync);
 
 // Debug SendGrid endpoint removed for production security
 
@@ -474,10 +485,6 @@ openapi.get("/v1/connectors/:connection_id/settings", auth, GetConnectorSettings
 openapi.patch("/v1/connectors/:connection_id/settings", auth, UpdateConnectorSettings);
 openapi.post("/v1/connectors/:connection_id/resync", auth, TriggerResync);
 
-// Google Ads-specific connector endpoints (deprecated - use general settings endpoints instead)
-openapi.get("/v1/connectors/:connection_id/google-ads/accounts", auth, ListGoogleAdsAccounts);
-openapi.put("/v1/connectors/:connection_id/google-ads/settings", auth, UpdateGoogleAdsSettings);
-
 // Filter management endpoints
 openapi.post("/v1/connectors/:connection_id/filters", auth, CreateFilterRule);
 openapi.get("/v1/connectors/:connection_id/filters", auth, ListFilterRules);
@@ -492,6 +499,7 @@ openapi.get("/v1/workers/queue/status", auth, GetQueueStatus);
 openapi.get("/v1/workers/dlq", auth, GetDeadLetterQueue);
 openapi.get("/v1/workers/test-token/:connection_id", auth, TestConnectionToken);
 openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
+openapi.post("/v1/workers/events-sync/trigger", auth, TriggerEventsSync);
 
 // Settings endpoints
 openapi.get("/v1/settings/matrix", auth, requireOrg, GetMatrixSettings);

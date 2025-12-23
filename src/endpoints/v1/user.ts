@@ -180,7 +180,12 @@ export class GetUserOrganizations extends OpenAPIRoute {
     const session = c.get("session");
 
     const d1 = new D1Adapter(c.env.DB);
-    const organizations = await d1.getUserOrganizations(session.user_id);
+
+    // Check if user is admin - if so, return ALL organizations
+    const user = await d1.getUser(session.user_id);
+    const organizations = user?.is_admin
+      ? await d1.getAllOrganizations()
+      : await d1.getUserOrganizations(session.user_id);
 
     return success(c, {
       organizations

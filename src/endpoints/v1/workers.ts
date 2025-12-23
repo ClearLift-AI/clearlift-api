@@ -442,6 +442,159 @@ export class TestConnectionToken extends OpenAPIRoute {
 }
 
 /**
+ * POST /v1/workers/events-sync/trigger - Manually trigger events sync for an organization
+ */
+export class TriggerEventsSync extends OpenAPIRoute {
+  public schema = {
+    tags: ["Workers"],
+    summary: "Trigger events sync",
+    description: "Manually triggers an events sync workflow for the specified organization. Syncs events from R2 Datalake to Supabase.",
+    operationId: "trigger-events-sync",
+    security: [{ bearerAuth: [] }],
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              org_id: z.string().describe("Organization ID"),
+              lookback_hours: z.number().optional().default(3).describe("Hours to look back for events (default: 3)")
+            })
+          }
+        }
+      }
+    },
+    responses: {
+      "200": {
+        description: "Events sync triggered",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                job_id: z.string(),
+                org_tag: z.string(),
+                status: z.string(),
+                message: z.string(),
+                sync_window: z.object({
+                  start: z.string(),
+                  end: z.string()
+                })
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { org_id, lookback_hours } = data.body;
+
+    try {
+      // Verify user has access to this organization
+      const access = await c.env.DB.prepare(`
+        SELECT om.role FROM organization_members om
+        WHERE om.organization_id = ? AND om.user_id = ?
+      `).bind(org_id, session.user_id).first();
+
+      if (!access) {
+        return error(c, "FORBIDDEN", "Access denied to this organization", 403);
+      }
+
+      // Get org_tag for this organization
+      const tagMapping = await c.env.DB.prepare(`
+        SELECT short_tag FROM org_tag_mappings
+        WHERE organization_id = ? AND is_active = 1
+      `).bind(org_id).first<{ short_tag: string }>();
+
+      if (!tagMapping) {
+        return error(c, "NOT_FOUND", "Organization does not have an event tracking tag configured", 404);
+      }
+
+      const orgTag = tagMapping.short_tag;
+
+      // Clear any stuck workflow record
+      await c.env.DB.prepare(`
+        DELETE FROM active_event_workflows WHERE org_tag = ?
+      `).bind(orgTag).run();
+
+      // Calculate sync window
+      const now = new Date();
+      const lookbackMs = (lookback_hours || 3) * 60 * 60 * 1000;
+      const startTime = new Date(now.getTime() - lookbackMs);
+
+      // Create a sync job and send to queue
+      const jobId = crypto.randomUUID();
+      const nowStr = now.toISOString();
+
+      await c.env.DB.prepare(`
+        INSERT INTO sync_jobs (
+          id,
+          organization_id,
+          connection_id,
+          status,
+          job_type,
+          created_at,
+          metadata
+        ) VALUES (?, ?, ?, 'pending', 'events', ?, ?)
+      `).bind(
+        jobId,
+        org_id,
+        orgTag, // Use org_tag as connection_id for events
+        nowStr,
+        JSON.stringify({
+          triggered_by: session.user_id,
+          manual: true,
+          org_tag: orgTag,
+          sync_window: {
+            start: startTime.toISOString(),
+            end: now.toISOString()
+          }
+        })
+      ).run();
+
+      // Send to queue with events platform
+      const queueMessage = {
+        job_id: jobId,
+        organization_id: org_id,
+        connection_id: orgTag,
+        platform: 'events',
+        account_id: orgTag,
+        job_type: 'events',
+        sync_window: {
+          start: startTime.toISOString(),
+          end: now.toISOString(),
+          type: 'events'
+        },
+        metadata: {
+          triggered_by: session.user_id,
+          manual: true,
+          created_at: nowStr
+        }
+      };
+
+      await c.env.SYNC_QUEUE.send(queueMessage);
+
+      return success(c, {
+        job_id: jobId,
+        org_tag: orgTag,
+        status: 'queued',
+        message: `Events sync triggered for org_tag "${orgTag}". Workflow will sync events from last ${lookback_hours || 3} hours.`,
+        sync_window: {
+          start: startTime.toISOString(),
+          end: now.toISOString()
+        }
+      });
+    } catch (err) {
+      console.error("Trigger events sync error:", err);
+      return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue events sync", 500);
+    }
+  }
+}
+
+/**
  * POST /v1/workers/sync/trigger - Manually trigger a sync job
  */
 export class TriggerSync extends OpenAPIRoute {

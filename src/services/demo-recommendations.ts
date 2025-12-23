@@ -35,151 +35,158 @@ export async function generateFacebookDemoRecommendations(
   console.log(`[DemoRec] Generating Facebook demo recommendations for org ${orgId}`);
 
   try {
-    // Check if we already have demo recommendations for this org (avoid duplicates)
-    const existingCheck = await aiDb.prepare(`
-      SELECT COUNT(*) as count FROM ai_decisions
+    // Delete any existing demo recommendations to regenerate fresh ones
+    // This ensures recommendations always reflect current entity state
+    await aiDb.prepare(`
+      DELETE FROM ai_decisions
       WHERE organization_id = ?
         AND platform = 'facebook'
-        AND status = 'pending'
         AND reason LIKE '%[Demo]%'
-    `).bind(orgId).first<{ count: number }>();
-
-    if (existingCheck && existingCheck.count >= 6) {
-      console.log(`[DemoRec] Org ${orgId} already has ${existingCheck.count} demo recommendations, skipping`);
-      return { success: true, recommendations_created: 0 };
-    }
+    `).bind(orgId).run();
+    console.log(`[DemoRec] Cleared existing demo recommendations for org ${orgId}`);
 
     // Fetch Facebook entities from Supabase
     const adapter = new FacebookSupabaseAdapter(supabase);
 
-    // Get first ACTIVE campaign
-    const campaigns = await adapter.getCampaigns(orgId, { status: 'ACTIVE', limit: 1 });
+    // Get first campaign (required - can't generate any recommendations without at least one campaign)
+    const campaigns = await adapter.getCampaigns(orgId, { limit: 1 });
     if (!campaigns || campaigns.length === 0) {
-      console.log(`[DemoRec] No active campaigns found for org ${orgId}`);
-      return { success: false, recommendations_created: 0, error: 'No active campaigns found' };
+      console.log(`[DemoRec] No campaigns found for org ${orgId}`);
+      return { success: false, recommendations_created: 0, error: 'No campaigns found' };
     }
     const campaign = campaigns[0];
     console.log(`[DemoRec] Found campaign: ${campaign.campaign_name} (${campaign.campaign_id})`);
 
-    // Get first ACTIVE ad set
-    const adSets = await adapter.getAdSets(orgId, { status: 'ACTIVE', limit: 1 });
-    if (!adSets || adSets.length === 0) {
-      console.log(`[DemoRec] No active ad sets found for org ${orgId}`);
-      return { success: false, recommendations_created: 0, error: 'No active ad sets found' };
+    // Get first ad set (optional - we'll still generate campaign recommendations if missing)
+    const adSets = await adapter.getAdSets(orgId, { limit: 1 });
+    const adSet = adSets && adSets.length > 0 ? adSets[0] : null;
+    if (adSet) {
+      console.log(`[DemoRec] Found ad set: ${adSet.ad_set_name} (${adSet.ad_set_id})`);
+    } else {
+      console.log(`[DemoRec] No ad sets found for org ${orgId} - will generate campaign recommendations only`);
     }
-    const adSet = adSets[0];
-    console.log(`[DemoRec] Found ad set: ${adSet.ad_set_name} (${adSet.ad_set_id})`);
 
-    // Get first ACTIVE ad
-    const ads = await adapter.getAds(orgId, { status: 'ACTIVE', limit: 1 });
-    if (!ads || ads.length === 0) {
-      console.log(`[DemoRec] No active ads found for org ${orgId}`);
-      return { success: false, recommendations_created: 0, error: 'No active ads found' };
+    // Get first ad (optional - we'll still generate campaign + ad set recommendations if missing)
+    const ads = await adapter.getAds(orgId, { limit: 1 });
+    const ad = ads && ads.length > 0 ? ads[0] : null;
+    if (ad) {
+      console.log(`[DemoRec] Found ad: ${ad.ad_name} (${ad.ad_id})`);
+    } else {
+      console.log(`[DemoRec] No ads found for org ${orgId} - will skip ad recommendations`);
     }
-    const ad = ads[0];
-    console.log(`[DemoRec] Found ad: ${ad.ad_name} (${ad.ad_id})`);
 
-    // Build 6 demo recommendations
-    const recommendations: DemoRecommendation[] = [
-      // 1. Campaign Status (Pause)
-      {
-        tool: 'set_status',
-        platform: 'facebook',
-        entity_type: 'campaign',
-        entity_id: campaign.campaign_id,
-        entity_name: campaign.campaign_name,
-        parameters: { status: 'PAUSED' },
-        current_state: { status: campaign.campaign_status },
-        reason: '[Demo] Campaign performance review - pause to evaluate strategy and prevent unnecessary spend.',
-        predicted_impact: -15.0,
-        confidence: 'medium'
+    // Build demo recommendations based on available entities
+    const recommendations: DemoRecommendation[] = [];
+
+    // Campaign recommendations (always included - we require at least 1 campaign)
+    // 1. Campaign Status
+    recommendations.push({
+      tool: 'set_status',
+      platform: 'facebook',
+      entity_type: 'campaign',
+      entity_id: campaign.campaign_id,
+      entity_name: campaign.campaign_name,
+      parameters: { status: campaign.campaign_status },
+      current_state: { status: campaign.campaign_status },
+      reason: '[Demo] Verify campaign status control - confirms API write access for Meta App Review.',
+      predicted_impact: 0,
+      confidence: 'high'
+    });
+
+    // 2. Campaign Budget
+    recommendations.push({
+      tool: 'set_budget',
+      platform: 'facebook',
+      entity_type: 'campaign',
+      entity_id: campaign.campaign_id,
+      entity_name: campaign.campaign_name,
+      parameters: {
+        amount_cents: campaign.daily_budget_cents || campaign.lifetime_budget_cents || 0,
+        budget_type: campaign.daily_budget_cents ? 'daily' : 'lifetime'
       },
-
-      // 2. Campaign Budget (Increase)
-      {
-        tool: 'set_budget',
-        platform: 'facebook',
-        entity_type: 'campaign',
-        entity_id: campaign.campaign_id,
-        entity_name: campaign.campaign_name,
-        parameters: {
-          amount_cents: Math.max((campaign.daily_budget_cents || 1000) + 500, 1500),
-          budget_type: 'daily'
-        },
-        current_state: {
-          daily_budget_cents: campaign.daily_budget_cents || 1000
-        },
-        reason: '[Demo] Increase campaign budget to capture additional conversion opportunities.',
-        predicted_impact: 20.0,
-        confidence: 'high'
+      current_state: {
+        daily_budget_cents: campaign.daily_budget_cents,
+        lifetime_budget_cents: campaign.lifetime_budget_cents
       },
+      reason: '[Demo] Verify campaign budget control - confirms API write access for Meta App Review.',
+      predicted_impact: 0,
+      confidence: 'high'
+    });
 
-      // 3. Ad Set Status (Pause)
-      {
+    // Ad Set recommendations (only if ad sets exist)
+    if (adSet) {
+      // 3. Ad Set Status
+      recommendations.push({
         tool: 'set_status',
         platform: 'facebook',
         entity_type: 'ad_set',
         entity_id: adSet.ad_set_id,
         entity_name: adSet.ad_set_name,
-        parameters: { status: 'PAUSED' },
+        parameters: { status: adSet.ad_set_status },
         current_state: { status: adSet.ad_set_status },
-        reason: '[Demo] Pause ad set for audience optimization and budget reallocation.',
-        predicted_impact: -10.0,
-        confidence: 'medium'
-      },
+        reason: '[Demo] Verify ad set status control - confirms API write access for Meta App Review.',
+        predicted_impact: 0,
+        confidence: 'high'
+      });
 
       // 4. Ad Set Budget
-      {
+      recommendations.push({
         tool: 'set_budget',
         platform: 'facebook',
         entity_type: 'ad_set',
         entity_id: adSet.ad_set_id,
         entity_name: adSet.ad_set_name,
         parameters: {
-          amount_cents: Math.max((adSet.daily_budget_cents || 500) + 300, 800),
-          budget_type: 'daily'
+          amount_cents: adSet.daily_budget_cents || adSet.lifetime_budget_cents || 0,
+          budget_type: adSet.daily_budget_cents ? 'daily' : 'lifetime'
         },
         current_state: {
-          daily_budget_cents: adSet.daily_budget_cents || 500
+          daily_budget_cents: adSet.daily_budget_cents,
+          lifetime_budget_cents: adSet.lifetime_budget_cents
         },
-        reason: '[Demo] Optimize ad set budget allocation based on performance potential.',
-        predicted_impact: 10.0,
-        confidence: 'medium'
-      },
+        reason: '[Demo] Verify ad set budget control - confirms API write access for Meta App Review.',
+        predicted_impact: 0,
+        confidence: 'high'
+      });
 
-      // 5. Ad Set Targeting (Age Range)
-      {
+      // 5. Ad Set Targeting
+      recommendations.push({
         tool: 'set_age_range',
         platform: 'facebook',
         entity_type: 'ad_set',
         entity_id: adSet.ad_set_id,
         entity_name: adSet.ad_set_name,
         parameters: {
-          min_age: 25,
-          max_age: 54
+          min_age: adSet.targeting?.age_min || 18,
+          max_age: adSet.targeting?.age_max || 65
         },
         current_state: {
           targeting: adSet.targeting || {}
         },
-        reason: '[Demo] Expand audience targeting to reach high-converting 25-54 demographic.',
-        predicted_impact: 15.0,
-        confidence: 'medium'
-      },
+        reason: '[Demo] Verify ad set targeting control - confirms API write access for Meta App Review.',
+        predicted_impact: 0,
+        confidence: 'high'
+      });
+    }
 
-      // 6. Ad Status (Pause)
-      {
+    // Ad recommendations (only if ads exist)
+    if (ad) {
+      // 6. Ad Status
+      recommendations.push({
         tool: 'set_status',
         platform: 'facebook',
         entity_type: 'ad',
         entity_id: ad.ad_id,
         entity_name: ad.ad_name,
-        parameters: { status: 'PAUSED' },
+        parameters: { status: ad.ad_status },
         current_state: { status: ad.ad_status },
-        reason: '[Demo] Pause ad creative to test new variations and improve overall performance.',
-        predicted_impact: -5.0,
-        confidence: 'low'
-      }
-    ];
+        reason: '[Demo] Verify ad status control - confirms API write access for Meta App Review.',
+        predicted_impact: 0,
+        confidence: 'high'
+      });
+    }
+
+    console.log(`[DemoRec] Building ${recommendations.length} recommendations (campaigns: 2, ad sets: ${adSet ? 3 : 0}, ads: ${ad ? 1 : 0})`);
 
     // Insert recommendations into ai_decisions
     const expiresAt = new Date();

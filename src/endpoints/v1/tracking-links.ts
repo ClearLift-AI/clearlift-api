@@ -1,4 +1,4 @@
-import { OpenAPIRoute } from "chanfana";
+import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import { AppContext } from "../../types";
@@ -41,6 +41,11 @@ export class ListTrackingLinks extends OpenAPIRoute {
     summary: "List email tracking links for an organization",
     operationId: "list-tracking-links",
     security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().optional()
+      })
+    },
     responses: {
       "200": {
         description: "List of tracking links",
@@ -117,13 +122,10 @@ export class CreateTrackingLink extends OpenAPIRoute {
     operationId: "create-tracking-link",
     security: [{ bearerAuth: [] }],
     request: {
-      body: {
-        content: {
-          "application/json": {
-            schema: TrackingLinkSchema.omit({ id: true })
-          }
-        }
-      }
+      query: z.object({
+        org_id: z.string().optional()
+      }),
+      body: contentJson(TrackingLinkSchema.omit({ id: true }))
     },
     responses: {
       "201": {
@@ -226,6 +228,9 @@ export class DeleteTrackingLink extends OpenAPIRoute {
     operationId: "delete-tracking-link",
     security: [{ bearerAuth: [] }],
     request: {
+      query: z.object({
+        org_id: z.string().optional()
+      }),
       params: z.object({
         id: z.string()
       })
@@ -279,6 +284,9 @@ export class GetTrackingLink extends OpenAPIRoute {
     operationId: "get-tracking-link",
     security: [{ bearerAuth: [] }],
     request: {
+      query: z.object({
+        org_id: z.string().optional()
+      }),
       params: z.object({
         id: z.string()
       })

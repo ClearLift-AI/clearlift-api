@@ -398,6 +398,157 @@ export class EmailService {
   }
 
   /**
+   * Send admin welcome invite email (static template)
+   */
+  async sendAdminWelcomeInvite(email: string): Promise<SendGridResponse> {
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to ClearLift</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: #f5f5f5;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+
+    .email-container {
+      max-width: 600px;
+      width: 100%;
+      background: #fff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    }
+
+    .header {
+      padding: 32px 40px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-icon {
+      width: 24px;
+      height: 24px;
+    }
+
+    .logo-text {
+      font-size: 20px;
+      font-weight: 700;
+      color: #111;
+      letter-spacing: -0.3px;
+    }
+
+    .content {
+      padding: 48px 40px;
+    }
+
+    .headline {
+      font-size: 32px;
+      font-weight: 800;
+      color: #111;
+      text-align: center;
+      line-height: 1.2;
+      margin-bottom: 16px;
+      letter-spacing: -0.5px;
+    }
+
+    .subheadline {
+      font-size: 16px;
+      line-height: 1.6;
+      color: #555;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+
+    .cta-section {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .cta-button-primary {
+      display: inline-block;
+      background: #1e3a5f;
+      color: #fff;
+      text-decoration: none;
+      padding: 14px 28px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+
+    .footer {
+      text-align: center;
+      padding: 24px 40px;
+      background: #fafafa;
+      border-top: 1px solid #eee;
+    }
+
+    .footer-text {
+      font-size: 12px;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <div class="email-container">
+    <div class="header">
+      <div class="logo">
+        <svg class="logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M16 4L28 28H4L16 4Z" stroke="#111" stroke-width="2.5" fill="none"/>
+        </svg>
+        <span class="logo-text">ClearLift</span>
+      </div>
+    </div>
+
+    <div class="content">
+      <h1 class="headline">Welcome to ClearLift!</h1>
+
+      <p class="subheadline">
+        You've been invited to join ClearLift. Your dashboard is ready — just complete your registration to start seeing your ad performance across all your channels in one place.
+      </p>
+
+      <div class="cta-section">
+        <a href="https://app.clearlift.ai/register?utm_source=email&utm_medium=welcome&utm_campaign=onboarding" class="cta-button-primary">
+          Complete Registration
+        </a>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p class="footer-text">&copy; 2025 ClearLift</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    return this.sendEmail({
+      to: email,
+      subject: 'Welcome to ClearLift',
+      html
+    });
+  }
+
+  /**
    * Convert HTML to plain text (basic implementation)
    */
   private htmlToText(html: string): string {
