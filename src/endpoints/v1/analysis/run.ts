@@ -12,6 +12,8 @@ import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { getSecret } from "../../../utils/secrets";
 import { JobManager, AnalysisConfig } from "../../../services/analysis";
+import { generateFacebookDemoRecommendations } from "../../../services/demo-recommendations";
+import { SupabaseClient } from "../../../services/supabase";
 
 export class RunAnalysis extends OpenAPIRoute {
   public schema = {
@@ -109,11 +111,48 @@ export class RunAnalysis extends OpenAPIRoute {
     };
 
     // Expire any pending recommendations from previous analysis runs
+    // Note: Demo recommendations are preserved (they have [Demo] in reason)
     await c.env.AI_DB.prepare(`
       UPDATE ai_decisions
       SET status = 'expired'
-      WHERE organization_id = ? AND status = 'pending'
+      WHERE organization_id = ? AND status = 'pending' AND reason NOT LIKE '%[Demo]%'
     `).bind(orgId).run();
+
+    // Seed Facebook demo recommendations if org has a Facebook connection
+    // This ensures demo recommendations are always available for Meta App Review
+    try {
+      const fbConnection = await c.env.DB.prepare(`
+        SELECT id FROM platform_connections
+        WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first<{ id: string }>();
+
+      if (fbConnection) {
+        const supabaseUrl = c.env.SUPABASE_URL;
+        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+
+        if (supabaseUrl && supabaseKey) {
+          const supabase = new SupabaseClient({
+            url: supabaseUrl,
+            serviceKey: supabaseKey
+          });
+
+          const result = await generateFacebookDemoRecommendations(
+            c.env.AI_DB,
+            supabase,
+            orgId,
+            fbConnection.id
+          );
+
+          if (result.success && result.recommendations_created > 0) {
+            console.log(`[RunAnalysis] Seeded ${result.recommendations_created} Facebook demo recommendations for org ${orgId}`);
+          }
+        }
+      }
+    } catch (demoError) {
+      // Non-critical - don't fail the analysis if demo seeding fails
+      console.warn(`[RunAnalysis] Failed to seed demo recommendations (non-critical):`, demoError);
+    }
 
     // Create job in D1 (for status polling)
     const jobs = new JobManager(c.env.AI_DB);

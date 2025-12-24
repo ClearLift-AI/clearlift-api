@@ -144,7 +144,7 @@ import {
 import {
   SendAdminInvite,
   ListAdminInvites,
-  GetEventsSyncStatus,
+  AdminGetEventsSyncStatus,
   AdminTriggerEventsSync
 } from "./endpoints/v1/admin";
 import {
@@ -308,7 +308,7 @@ openapi.get("/v1/waitlist/stats", GetWaitlistStats);
 // Admin endpoints (requires auth + is_admin check in handler)
 openapi.post("/v1/admin/invites", auth, SendAdminInvite);
 openapi.get("/v1/admin/invites", auth, ListAdminInvites);
-openapi.get("/v1/admin/events-sync/status", auth, GetEventsSyncStatus);
+openapi.get("/v1/admin/events-sync/status", auth, AdminGetEventsSyncStatus);
 openapi.post("/v1/admin/events-sync/trigger", auth, AdminTriggerEventsSync);
 
 // Debug SendGrid endpoint removed for production security

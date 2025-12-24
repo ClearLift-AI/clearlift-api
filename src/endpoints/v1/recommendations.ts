@@ -20,8 +20,9 @@ import { SupabaseClient } from "../../services/supabase";
  */
 async function verifyInternalAuth(c: AppContext): Promise<boolean> {
   // Service binding calls come with CF-Worker header
+  // Accept both clearlift-queue-consumer (actual worker name) and clearlift-cron (legacy)
   const cfWorker = c.req.header("CF-Worker");
-  if (cfWorker === "clearlift-cron") {
+  if (cfWorker === "clearlift-queue-consumer" || cfWorker === "clearlift-cron") {
     return true;
   }
 

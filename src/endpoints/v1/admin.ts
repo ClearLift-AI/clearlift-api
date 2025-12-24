@@ -200,10 +200,10 @@ export class ListAdminInvites extends OpenAPIRoute {
 /**
  * GET /v1/admin/events-sync/status - Get events sync status across all orgs
  */
-export class GetEventsSyncStatus extends OpenAPIRoute {
+export class AdminGetEventsSyncStatus extends OpenAPIRoute {
   public schema = {
     tags: ['Admin'],
-    summary: 'Get events sync status',
+    summary: 'Get events sync status (admin)',
     description: 'Get events sync status across all organizations (admin only)',
     security: [{ bearerAuth: [] }],
     responses: {
