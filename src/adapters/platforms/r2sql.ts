@@ -139,11 +139,13 @@ export class R2SQLAdapter {
   private readonly accountId: string;
   private readonly bucketName: string;
   private readonly token: string;
+  private readonly tableName: string;
 
-  constructor(accountId: string, bucketName: string, token: string) {
+  constructor(accountId: string, bucketName: string, token: string, tableName: string = "clearlift.event_data_v4_1") {
     this.accountId = accountId;
     this.bucketName = bucketName;
     this.token = token;
+    this.tableName = tableName;
     this.baseUrl = `https://api.sql.cloudflarestorage.com/api/v1/accounts/${accountId}/r2-sql/query/${bucketName}`;
   }
 
@@ -293,8 +295,7 @@ export class R2SQLAdapter {
     const offset = options.offset || 0;
 
     // Start with SELECT
-    // Note: Table is clearlift.event_stream (namespace.table)
-    let sql = `SELECT ${select} FROM clearlift.event_stream`;
+    let sql = `SELECT ${select} FROM ${this.tableName}`;
 
     // Build WHERE clauses
     const whereClauses: string[] = [];

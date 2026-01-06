@@ -17,6 +17,7 @@ import {
   GetUserOrganizations
 } from "./endpoints/v1/user";
 import { GetEvents } from "./endpoints/v1/analytics/events";
+import { GetEventsHistorical } from "./endpoints/v1/analytics/events-historical";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
 import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
@@ -391,6 +392,7 @@ openapi.post("/v1/organizations/:org_id/tracking-domains/:domain_id/resync", aut
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, requireOrg, GetEvents);
 openapi.get("/v1/analytics/events/sync-status", auth, requireOrg, GetEventsSyncStatus);
+openapi.get("/v1/analytics/events/historical", auth, requireOrg, GetEventsHistorical);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributionComparison);

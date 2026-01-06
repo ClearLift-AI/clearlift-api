@@ -11,7 +11,8 @@
   "vars": {
     "SUPABASE_URL": "https://jwosqxmfezmnhrbbjlbx.supabase.co",
     "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
-    "R2_BUCKET_NAME": "clearlift-db"
+    "R2_BUCKET_NAME": "clearlift-db",
+    "R2_SQL_TABLE": "clearlift.event_data_v4_1"
   },
 
   // Secrets Store bindings - required for Supabase and OAuth
@@ -140,7 +141,8 @@
       "vars": {
         "SUPABASE_URL": "http://127.0.0.1:54321",
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
-        "R2_BUCKET_NAME": "clearlift-db"
+        "R2_BUCKET_NAME": "clearlift-db",
+        "R2_SQL_TABLE": "clearlift.event_data_v4_1"
       },
       "d1_databases": [
         {
@@ -182,7 +184,8 @@
       "vars": {
         "SUPABASE_URL": "https://jwosqxmfezmnhrbbjlbx.supabase.co",
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
-        "R2_BUCKET_NAME": "clearlift-db"
+        "R2_BUCKET_NAME": "clearlift-db",
+        "R2_SQL_TABLE": "clearlift.event_data_v4_1"
       },
       "d1_databases": [
         {
