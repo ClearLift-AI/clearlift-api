@@ -20,6 +20,7 @@ import { GetEvents } from "./endpoints/v1/analytics/events";
 import { GetEventsHistorical } from "./endpoints/v1/analytics/events-historical";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
+import { GetJobberRevenue, GetJobberInvoices } from "./endpoints/v1/analytics/jobber";
 import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
 import { GetAttribution, GetAttributionComparison } from "./endpoints/v1/analytics/attribution";
 import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-campaigns";
@@ -146,7 +147,9 @@ import {
   SendAdminInvite,
   ListAdminInvites,
   AdminGetEventsSyncStatus,
-  AdminTriggerEventsSync
+  AdminTriggerEventsSync,
+  AdminGetWaitlist,
+  AdminUpdateWaitlistStatus
 } from "./endpoints/v1/admin";
 import {
   GetMatrixSettings,
@@ -311,6 +314,8 @@ openapi.post("/v1/admin/invites", auth, SendAdminInvite);
 openapi.get("/v1/admin/invites", auth, ListAdminInvites);
 openapi.get("/v1/admin/events-sync/status", auth, AdminGetEventsSyncStatus);
 openapi.post("/v1/admin/events-sync/trigger", auth, AdminTriggerEventsSync);
+openapi.get("/v1/admin/waitlist", auth, AdminGetWaitlist);
+openapi.patch("/v1/admin/waitlist/:id/status", auth, AdminUpdateWaitlistStatus);
 
 // Debug SendGrid endpoint removed for production security
 
@@ -398,6 +403,8 @@ openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributionComparison);
 openapi.get("/v1/analytics/stripe", auth, requireOrg, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, requireOrg, GetStripeDailyAggregates);
+openapi.get("/v1/analytics/jobber/revenue", auth, requireOrg, GetJobberRevenue);
+openapi.get("/v1/analytics/jobber/invoices", auth, requireOrg, GetJobberInvoices);
 openapi.get("/v1/analytics/platforms/unified", auth, requireOrg, GetUnifiedPlatformData);
 openapi.get("/v1/analytics/utm-campaigns", auth, requireOrg, GetUtmCampaigns);
 openapi.get("/v1/analytics/utm-campaigns/time-series", auth, requireOrg, GetUtmTimeSeries);

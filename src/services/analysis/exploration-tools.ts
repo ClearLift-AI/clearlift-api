@@ -202,9 +202,39 @@ export const EXPLORATION_TOOLS = {
     }
   },
 
+  query_jobber_revenue: {
+    name: 'query_jobber_revenue',
+    description: 'Query revenue from Jobber completed jobs. Returns time-series data and summary statistics for field service/contractor revenue. Use this for service businesses that track revenue through Jobber.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days: {
+          type: 'number',
+          minimum: 1,
+          maximum: 90,
+          description: 'Number of days of historical data'
+        },
+        group_by: {
+          type: 'string',
+          enum: ['day', 'week', 'month'],
+          description: 'Time grouping for aggregation'
+        },
+        filters: {
+          type: 'object',
+          properties: {
+            min_amount_cents: { type: 'number' },
+            max_amount_cents: { type: 'number' }
+          },
+          description: 'Basic filters for Jobber data'
+        }
+      },
+      required: ['days']
+    }
+  },
+
   compare_spend_to_revenue: {
     name: 'compare_spend_to_revenue',
-    description: 'Compare ad platform spend against actual Stripe revenue for a date range. Calculates true ROAS and shows discrepancy between platform-reported and verified conversions. Essential for understanding real campaign profitability.',
+    description: 'Compare ad platform spend against actual revenue from connected platforms (Stripe, Jobber, etc.). Calculates true ROAS and shows discrepancy between platform-reported and verified conversions. Essential for understanding real campaign profitability.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -434,6 +464,15 @@ interface QueryStripeRevenueInput {
   breakdown_by_metadata_key?: string;
 }
 
+interface QueryJobberRevenueInput {
+  days: number;
+  group_by?: 'day' | 'week' | 'month';
+  filters?: {
+    min_amount_cents?: number;
+    max_amount_cents?: number;
+  };
+}
+
 interface CompareSpendToRevenueInput {
   days: number;
   platforms?: Array<'facebook' | 'google' | 'tiktok' | 'all'>;
@@ -500,6 +539,8 @@ export class ExplorationToolExecutor {
           return await this.getAudienceBreakdown(input as GetAudienceBreakdownInput, orgId);
         case 'query_stripe_revenue':
           return await this.queryStripeRevenue(input as QueryStripeRevenueInput, orgId);
+        case 'query_jobber_revenue':
+          return await this.queryJobberRevenue(input as QueryJobberRevenueInput, orgId);
         case 'compare_spend_to_revenue':
           return await this.compareSpendToRevenue(input as CompareSpendToRevenueInput, orgId);
         case 'query_attribution_quality':
@@ -873,6 +914,114 @@ export class ExplorationToolExecutor {
       return { success: true, data: response };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+    }
+  }
+
+  /**
+   * Query Jobber completed jobs as revenue
+   */
+  private async queryJobberRevenue(
+    input: QueryJobberRevenueInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { days, group_by = 'day', filters } = input;
+
+    // Build date range
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+
+    try {
+      // Query jobber.jobs for completed jobs
+      let query = `jobs?organization_id=eq.${orgId}&job_status=eq.COMPLETED&completed_at=gte.${startStr}&completed_at=lte.${endStr}T23:59:59Z&deleted_at=is.null&order=completed_at.asc`;
+
+      const data = await this.supabase.queryWithSchema<any[]>(query, 'jobber');
+
+      if (!data || data.length === 0) {
+        return { success: true, data: { time_series: [], summary: { total_revenue: '$0.00', total_jobs: 0 } } };
+      }
+
+      // Apply filters
+      let filteredData = data;
+      if (filters?.min_amount_cents) {
+        filteredData = filteredData.filter(r => (r.total_amount_cents || 0) >= filters.min_amount_cents!);
+      }
+      if (filters?.max_amount_cents) {
+        filteredData = filteredData.filter(r => (r.total_amount_cents || 0) <= filters.max_amount_cents!);
+      }
+
+      // Group by time period
+      const grouped: Record<string, { revenue_cents: number; count: number; unique_clients: Set<string> }> = {};
+
+      for (const job of filteredData) {
+        if (!job.completed_at) continue;
+        const dateKey = this.getGroupedDateKey(job.completed_at.split('T')[0], group_by);
+
+        if (!grouped[dateKey]) {
+          grouped[dateKey] = { revenue_cents: 0, count: 0, unique_clients: new Set() };
+        }
+
+        grouped[dateKey].revenue_cents += job.total_amount_cents || 0;
+        grouped[dateKey].count += 1;
+        if (job.client_id) {
+          grouped[dateKey].unique_clients.add(job.client_id);
+        }
+      }
+
+      // Calculate summary
+      const totalRevenue = filteredData.reduce((sum, r) => sum + (r.total_amount_cents || 0), 0);
+      const uniqueClients = new Set(filteredData.map(r => r.client_id).filter(Boolean)).size;
+
+      // Build response
+      const timeSeries = Object.entries(grouped)
+        .map(([date, data]) => ({
+          date,
+          revenue_cents: data.revenue_cents,
+          revenue: '$' + (data.revenue_cents / 100).toFixed(2),
+          jobs: data.count,
+          unique_clients: data.unique_clients.size
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      return {
+        success: true,
+        data: {
+          time_series: timeSeries,
+          summary: {
+            total_revenue: '$' + (totalRevenue / 100).toFixed(2),
+            total_jobs: filteredData.length,
+            unique_clients: uniqueClients,
+            avg_job_value: filteredData.length > 0
+              ? '$' + ((totalRevenue / 100) / filteredData.length).toFixed(2)
+              : '$0.00'
+          }
+        }
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+    }
+  }
+
+  /**
+   * Get grouped date key for time series
+   */
+  private getGroupedDateKey(date: string, groupBy: 'day' | 'week' | 'month'): string {
+    const d = new Date(date);
+
+    switch (groupBy) {
+      case 'week':
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff);
+        return d.toISOString().split('T')[0];
+
+      case 'month':
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+
+      default:
+        return date;
     }
   }
 

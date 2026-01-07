@@ -6,6 +6,7 @@ import { OnboardingService } from "../../services/onboarding";
 import { GoogleAdsOAuthProvider } from "../../services/oauth/google";
 import { FacebookAdsOAuthProvider } from "../../services/oauth/facebook";
 import { ShopifyOAuthProvider } from "../../services/oauth/shopify";
+import { JobberOAuthProvider } from "../../services/oauth/jobber";
 import { success, error } from "../../utils/response";
 import { getSecret } from "../../utils/secrets";
 
@@ -101,7 +102,7 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber'])
       }),
       body: contentJson(
         z.object({
@@ -244,6 +245,18 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
           shopDomain
         );
       }
+      case 'jobber': {
+        const clientId = await getSecret(c.env.JOBBER_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.JOBBER_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
+          throw new Error('Jobber OAuth credentials not configured');
+        }
+        return new JobberOAuthProvider(
+          clientId,
+          clientSecret,
+          redirectUri
+        );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -260,7 +273,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     operationId: "handle-oauth-callback",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber'])
       }),
       query: z.object({
         code: z.string(),
@@ -476,6 +489,18 @@ export class HandleOAuthCallback extends OpenAPIRoute {
           shopDomain
         );
       }
+      case 'jobber': {
+        const clientId = await getSecret(c.env.JOBBER_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.JOBBER_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
+          throw new Error('Jobber OAuth credentials not configured');
+        }
+        return new JobberOAuthProvider(
+          clientId,
+          clientSecret,
+          redirectUri
+        );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -494,7 +519,7 @@ export class MockOAuthCallback extends OpenAPIRoute {
     operationId: "mock-oauth-callback",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber'])
       }),
       query: z.object({
         state: z.string()
@@ -641,7 +666,7 @@ export class GetOAuthAccounts extends OpenAPIRoute {
     operationId: "get-oauth-accounts",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify', 'jobber'])
       }),
       query: z.object({
         state: z.string()
@@ -865,6 +890,17 @@ export class GetOAuthAccounts extends OpenAPIRoute {
             timezone: 'America/New_York'
           }
         ];
+      case 'jobber':
+        return [
+          {
+            id: 'jobber_test_123',
+            name: 'Test Jobber Account',
+            companyName: 'Test Home Services LLC',
+            email: 'admin@testhomeservices.com',
+            timezone: 'America/Denver',
+            country: 'US'
+          }
+        ];
       default:
         return [];
     }
@@ -983,7 +1019,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
     operationId: "finalize-oauth-connection",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify', 'jobber'])
       }),
       body: contentJson(
         z.object({

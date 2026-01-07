@@ -288,6 +288,210 @@ export class AdminGetEventsSyncStatus extends OpenAPIRoute {
 }
 
 /**
+ * GET /v1/admin/waitlist - Get waitlist entries
+ */
+export class AdminGetWaitlist extends OpenAPIRoute {
+  public schema = {
+    tags: ['Admin'],
+    summary: 'Get waitlist entries',
+    description: 'Get all waitlist signups with filtering and pagination (admin only)',
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        limit: z.string().optional().default('50'),
+        offset: z.string().optional().default('0'),
+        status: z.string().optional().describe('Filter by status: pending, contacted, converted, rejected'),
+      })
+    },
+    responses: {
+      '200': {
+        description: 'Waitlist entries',
+        content: {
+          'application/json': {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                entries: z.array(z.object({
+                  id: z.string(),
+                  email: z.string(),
+                  name: z.string().nullable(),
+                  phone: z.string().nullable(),
+                  source: z.string().nullable(),
+                  utm: z.string().nullable(),
+                  status: z.string(),
+                  attempt_count: z.number(),
+                  created_at: z.string(),
+                  updated_at: z.string(),
+                })),
+                total: z.number(),
+                stats: z.object({
+                  pending: z.number(),
+                  contacted: z.number(),
+                  converted: z.number(),
+                  rejected: z.number(),
+                }),
+              }),
+            }),
+          },
+        },
+      },
+      '401': {
+        description: 'Unauthorized',
+      },
+      '403': {
+        description: 'Forbidden - not an admin',
+      },
+    },
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get('session');
+    const data = await this.getValidatedData<typeof this.schema>();
+    const limit = parseInt(data.query.limit) || 50;
+    const offset = parseInt(data.query.offset) || 0;
+    const statusFilter = data.query.status;
+
+    // Check if user is admin
+    const d1 = new D1Adapter(c.env.DB);
+    const user = await d1.getUser(session.user_id);
+
+    if (!user || !user.is_admin) {
+      return error(c, 'FORBIDDEN', 'Admin access required', 403);
+    }
+
+    // Build query with optional status filter
+    let entriesQuery = `
+      SELECT id, email, name, phone, source, utm, status,
+             COALESCE(attempt_count, 1) as attempt_count, created_at, updated_at
+      FROM waitlist
+    `;
+    const params: any[] = [];
+
+    if (statusFilter) {
+      entriesQuery += ' WHERE status = ?';
+      params.push(statusFilter);
+    }
+
+    entriesQuery += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+
+    const entries = await c.env.DB.prepare(entriesQuery).bind(...params).all();
+
+    // Get total count
+    let countQuery = 'SELECT COUNT(*) as count FROM waitlist';
+    if (statusFilter) {
+      countQuery += ' WHERE status = ?';
+    }
+    const totalResult = await c.env.DB.prepare(countQuery)
+      .bind(...(statusFilter ? [statusFilter] : []))
+      .first<{ count: number }>();
+
+    // Get stats by status
+    const statsResult = await c.env.DB.prepare(`
+      SELECT status, COUNT(*) as count
+      FROM waitlist
+      GROUP BY status
+    `).all<{ status: string; count: number }>();
+
+    const stats = {
+      pending: 0,
+      contacted: 0,
+      converted: 0,
+      rejected: 0,
+    };
+    for (const row of statsResult.results || []) {
+      if (row.status in stats) {
+        stats[row.status as keyof typeof stats] = row.count;
+      }
+    }
+
+    return success(c, {
+      entries: entries.results || [],
+      total: totalResult?.count || 0,
+      stats,
+    });
+  }
+}
+
+/**
+ * PATCH /v1/admin/waitlist/:id/status - Update waitlist entry status
+ */
+export class AdminUpdateWaitlistStatus extends OpenAPIRoute {
+  public schema = {
+    tags: ['Admin'],
+    summary: 'Update waitlist entry status',
+    description: 'Update the status of a waitlist entry (admin only)',
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        id: z.string().describe('Waitlist entry ID'),
+      }),
+      body: contentJson(
+        z.object({
+          status: z.enum(['pending', 'contacted', 'converted', 'rejected']),
+        })
+      )
+    },
+    responses: {
+      '200': {
+        description: 'Status updated',
+        content: {
+          'application/json': {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                id: z.string(),
+                status: z.string(),
+                updated_at: z.string(),
+              }),
+            }),
+          },
+        },
+      },
+      '401': {
+        description: 'Unauthorized',
+      },
+      '403': {
+        description: 'Forbidden - not an admin',
+      },
+      '404': {
+        description: 'Entry not found',
+      },
+    },
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get('session');
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { id } = data.params;
+    const { status } = data.body;
+
+    // Check if user is admin
+    const d1 = new D1Adapter(c.env.DB);
+    const user = await d1.getUser(session.user_id);
+
+    if (!user || !user.is_admin) {
+      return error(c, 'FORBIDDEN', 'Admin access required', 403);
+    }
+
+    const now = new Date().toISOString();
+
+    const result = await c.env.DB.prepare(`
+      UPDATE waitlist
+      SET status = ?, updated_at = ?
+      WHERE id = ?
+      RETURNING id, status, updated_at
+    `).bind(status, now, id).first();
+
+    if (!result) {
+      return error(c, 'NOT_FOUND', 'Waitlist entry not found', 404);
+    }
+
+    return success(c, result);
+  }
+}
+
+/**
  * POST /v1/admin/events-sync/trigger - Trigger events sync for an org
  */
 export class AdminTriggerEventsSync extends OpenAPIRoute {

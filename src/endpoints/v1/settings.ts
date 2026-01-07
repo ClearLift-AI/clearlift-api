@@ -11,6 +11,8 @@ const MatrixSettingsSchema = z.object({
   monthly_cap_cents: z.number().int().positive().optional().nullable(),
   pause_threshold_percent: z.number().int().min(0).max(100).optional().nullable(),
   conversion_source: z.enum(['ad_platforms', 'tag', 'connectors']).optional(),
+  // Platforms to exclude from conversion display (e.g., ['stripe', 'jobber'])
+  disabled_conversion_sources: z.array(z.string()).optional(),
   custom_instructions: z.string().max(5000).optional().nullable(),
   // LLM provider settings
   llm_default_provider: z.enum(['auto', 'claude', 'gemini']).optional(),
@@ -80,6 +82,7 @@ export class GetMatrixSettings extends OpenAPIRoute {
         monthly_cap_cents,
         pause_threshold_percent,
         conversion_source,
+        disabled_conversion_sources,
         custom_instructions,
         llm_default_provider,
         llm_claude_model,
@@ -100,6 +103,7 @@ export class GetMatrixSettings extends OpenAPIRoute {
         monthly_cap_cents: null,
         pause_threshold_percent: null,
         conversion_source: 'tag',
+        disabled_conversion_sources: [],
         custom_instructions: null,
         // LLM defaults
         llm_default_provider: 'auto',
@@ -110,6 +114,17 @@ export class GetMatrixSettings extends OpenAPIRoute {
       });
     }
 
+    // Parse disabled_conversion_sources from JSON string
+    let disabledSources: string[] = [];
+    try {
+      const raw = (settings as any).disabled_conversion_sources;
+      if (raw) {
+        disabledSources = JSON.parse(raw);
+      }
+    } catch {
+      disabledSources = [];
+    }
+
     return success(c, {
       growth_strategy: settings.growth_strategy,
       budget_optimization: settings.budget_optimization,
@@ -118,6 +133,7 @@ export class GetMatrixSettings extends OpenAPIRoute {
       monthly_cap_cents: settings.monthly_cap_cents,
       pause_threshold_percent: settings.pause_threshold_percent,
       conversion_source: settings.conversion_source,
+      disabled_conversion_sources: disabledSources,
       custom_instructions: settings.custom_instructions,
       // LLM settings
       llm_default_provider: (settings as any).llm_default_provider || 'auto',
@@ -185,6 +201,9 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
 
     const body = data.body;
 
+    // Serialize disabled_conversion_sources to JSON
+    const disabledSourcesJson = JSON.stringify(body.disabled_conversion_sources || []);
+
     // Upsert settings (insert or update if exists)
     await c.env.DB.prepare(`
       INSERT INTO ai_optimization_settings (
@@ -196,6 +215,7 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         monthly_cap_cents,
         pause_threshold_percent,
         conversion_source,
+        disabled_conversion_sources,
         custom_instructions,
         llm_default_provider,
         llm_claude_model,
@@ -203,7 +223,7 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         llm_max_recommendations,
         llm_enable_exploration,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(org_id) DO UPDATE SET
         growth_strategy = excluded.growth_strategy,
         budget_optimization = excluded.budget_optimization,
@@ -212,6 +232,7 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         monthly_cap_cents = excluded.monthly_cap_cents,
         pause_threshold_percent = excluded.pause_threshold_percent,
         conversion_source = excluded.conversion_source,
+        disabled_conversion_sources = excluded.disabled_conversion_sources,
         custom_instructions = excluded.custom_instructions,
         llm_default_provider = excluded.llm_default_provider,
         llm_claude_model = excluded.llm_claude_model,
@@ -228,6 +249,7 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
       body.monthly_cap_cents || null,
       body.pause_threshold_percent || null,
       body.conversion_source || 'tag',
+      disabledSourcesJson,
       body.custom_instructions || null,
       body.llm_default_provider || 'auto',
       body.llm_claude_model || 'haiku',
