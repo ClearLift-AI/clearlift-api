@@ -25,6 +25,7 @@ import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
 import { GetAttribution, GetAttributionComparison } from "./endpoints/v1/analytics/attribution";
 import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-campaigns";
 import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
+import { GetTrackingLinkPerformance } from "./endpoints/v1/analytics/tracking-links";
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
 import { GetEventsSyncStatus } from "./endpoints/v1/analytics/events-sync";
@@ -409,6 +410,7 @@ openapi.get("/v1/analytics/platforms/unified", auth, requireOrg, GetUnifiedPlatf
 openapi.get("/v1/analytics/utm-campaigns", auth, requireOrg, GetUtmCampaigns);
 openapi.get("/v1/analytics/utm-campaigns/time-series", auth, requireOrg, GetUtmTimeSeries);
 openapi.get("/v1/analytics/click-attribution", auth, requireOrg, GetClickAttribution);
+openapi.get("/v1/analytics/tracking-links", auth, requireOrg, GetTrackingLinkPerformance);
 
 // Identity resolution endpoints
 openapi.post("/v1/analytics/identify", PostIdentify); // Internal - uses service binding or API key auth
