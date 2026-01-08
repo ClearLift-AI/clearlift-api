@@ -1124,7 +1124,7 @@ export class GetTrackingDomains extends OpenAPIRoute {
         if (supabaseKey) {
           const supabase = new SupabaseClient({
             url: c.env.SUPABASE_URL,
-            serviceKey: supabaseKey
+            secretKey: supabaseKey
           });
           const backfillService = new EventsBackfillService(supabase);
 
@@ -1257,7 +1257,7 @@ export class AddTrackingDomain extends OpenAPIRoute {
         if (supabaseKey) {
           const supabase = new SupabaseClient({
             url: c.env.SUPABASE_URL,
-            serviceKey: supabaseKey
+            secretKey: supabaseKey
           });
           const backfillService = new EventsBackfillService(supabase);
 
@@ -1358,7 +1358,7 @@ export class RemoveTrackingDomain extends OpenAPIRoute {
         if (supabaseKey) {
           const supabase = new SupabaseClient({
             url: c.env.SUPABASE_URL,
-            serviceKey: supabaseKey
+            secretKey: supabaseKey
           });
           const backfillService = new EventsBackfillService(supabase);
 
@@ -1455,7 +1455,7 @@ export class ResyncTrackingDomain extends OpenAPIRoute {
         if (supabaseKey) {
           const supabase = new SupabaseClient({
             url: c.env.SUPABASE_URL,
-            serviceKey: supabaseKey
+            secretKey: supabaseKey
           });
           const backfillService = new EventsBackfillService(supabase);
 

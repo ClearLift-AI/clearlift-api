@@ -106,7 +106,7 @@ export class GetTikTokCampaigns extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new TikTokAdsSupabaseAdapter(supabase);
@@ -224,7 +224,7 @@ export class GetTikTokAdGroups extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new TikTokAdsSupabaseAdapter(supabase);
@@ -287,7 +287,7 @@ export class GetTikTokAds extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new TikTokAdsSupabaseAdapter(supabase);
@@ -380,7 +380,7 @@ export class GetTikTokMetrics extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new TikTokAdsSupabaseAdapter(supabase);

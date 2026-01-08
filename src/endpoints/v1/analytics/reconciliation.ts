@@ -160,7 +160,7 @@ Compare ad platform claims against actual verified revenue from payment platform
 
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: supabaseKey
+        secretKey: supabaseKey
       });
 
       // Fetch platform claims from Supabase
@@ -367,7 +367,7 @@ export class GetReconciliationInsights extends OpenAPIRoute {
 
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: supabaseKey
+        secretKey: supabaseKey
       });
 
       // Get reconciliation results for each platform
@@ -546,7 +546,7 @@ export class ImportPlatformClaims extends OpenAPIRoute {
 
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: supabaseKey
+        secretKey: supabaseKey
       });
 
       // Transform inputs to claims

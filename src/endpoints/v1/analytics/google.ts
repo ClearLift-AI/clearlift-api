@@ -105,7 +105,7 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new GoogleAdsSupabaseAdapter(supabase);
@@ -223,7 +223,7 @@ export class GetGoogleAdGroups extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new GoogleAdsSupabaseAdapter(supabase);
@@ -286,7 +286,7 @@ export class GetGoogleAds extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new GoogleAdsSupabaseAdapter(supabase);
@@ -353,7 +353,7 @@ export class GetGoogleMetrics extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new GoogleAdsSupabaseAdapter(supabase);

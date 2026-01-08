@@ -134,7 +134,7 @@ export class RunAnalysis extends OpenAPIRoute {
         if (supabaseUrl && supabaseKey) {
           const supabase = new SupabaseClient({
             url: supabaseUrl,
-            serviceKey: supabaseKey
+            secretKey: supabaseKey
           });
 
           const result = await generateFacebookDemoRecommendations(

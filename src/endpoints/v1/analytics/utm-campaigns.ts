@@ -125,7 +125,7 @@ Fetches aggregated UTM campaign performance data including:
 
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: supabaseKey,
+        secretKey: supabaseKey,
       });
 
       // Build query for utm_campaign_performance table
@@ -337,7 +337,7 @@ Fetches daily UTM traffic metrics as a time series:
 
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: supabaseKey,
+        secretKey: supabaseKey,
       });
 
       // Query utm_campaign_performance with date included

@@ -114,7 +114,7 @@ export class SeedFacebookDemoRecommendations extends OpenAPIRoute {
 
       const supabase = new SupabaseClient({
         url: supabaseUrl,
-        serviceKey: supabaseKey
+        secretKey: supabaseKey
       });
 
       // Generate demo recommendations

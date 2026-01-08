@@ -98,7 +98,7 @@ export class GetJobberRevenue extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
+      secretKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
     });
 
     // Query completed jobs from Supabase (jobber schema)
@@ -267,7 +267,7 @@ export class GetJobberInvoices extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
+      secretKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
     });
 
     // Query paid invoices from Supabase (jobber schema)

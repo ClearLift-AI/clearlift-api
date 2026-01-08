@@ -427,7 +427,7 @@ Returns the complete journey for an identified user, including:
 
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: supabaseKey
+        secretKey: supabaseKey
       });
 
       // Build query for events
@@ -724,7 +724,7 @@ export class GetJourneysOverview extends OpenAPIRoute {
 
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: supabaseKey
+        secretKey: supabaseKey
       });
 
       // Get identity mappings count

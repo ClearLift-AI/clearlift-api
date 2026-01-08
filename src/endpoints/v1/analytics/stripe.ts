@@ -105,7 +105,7 @@ export class GetStripeAnalytics extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
+      secretKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
     });
     const adapter = new StripeSupabaseAdapter(supabase);
 
@@ -407,7 +407,7 @@ export class GetStripeDailyAggregates extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
+      secretKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
     });
     const adapter = new StripeSupabaseAdapter(supabase);
 

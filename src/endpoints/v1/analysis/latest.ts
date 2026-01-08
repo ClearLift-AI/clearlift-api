@@ -68,7 +68,7 @@ export class GetLatestAnalysis extends OpenAPIRoute {
     }
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const entityTree = new EntityTreeBuilder(supabase);

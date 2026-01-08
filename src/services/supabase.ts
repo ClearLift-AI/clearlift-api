@@ -2,11 +2,15 @@
  * Supabase Client Service
  *
  * Handles all interactions with Supabase database for connector data
+ *
+ * Note: Supabase renamed their keys:
+ * - 'anon' is now 'publishable_key' (client-side, limited access)
+ * - 'service_role' is now 'secret_key' (server-side, full access)
  */
 
 export interface SupabaseConfig {
   url: string;
-  serviceKey: string;
+  secretKey: string;  // The privileged server-side key (formerly service_role)
 }
 
 export class SupabaseClient {
@@ -15,8 +19,8 @@ export class SupabaseClient {
   constructor(private config: SupabaseConfig) {
     this.headers = {
       'Content-Type': 'application/json',
-      'apikey': config.serviceKey,
-      'Authorization': `Bearer ${config.serviceKey}`,
+      'apikey': config.secretKey,
+      'Authorization': `Bearer ${config.secretKey}`,
       'Prefer': 'return=representation',
       'Accept-Profile': 'clearlift',
       'Content-Profile': 'clearlift'
@@ -67,8 +71,8 @@ export class SupabaseClient {
       ...options,
       headers: {
         'Content-Type': 'application/json',
-        'apikey': this.config.serviceKey,
-        'Authorization': `Bearer ${this.config.serviceKey}`,
+        'apikey': this.config.secretKey,
+        'Authorization': `Bearer ${this.config.secretKey}`,
         'Prefer': 'return=representation',
         'Accept-Profile': schema,
         'Content-Profile': schema,
@@ -286,8 +290,8 @@ export class SupabaseClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'apikey': this.config.serviceKey,
-        'Authorization': `Bearer ${this.config.serviceKey}`,
+        'apikey': this.config.secretKey,
+        'Authorization': `Bearer ${this.config.secretKey}`,
         'Prefer': `resolution=merge-duplicates,return=${returning ? 'representation' : 'minimal'}`,
         'Accept-Profile': schema,
         'Content-Profile': schema

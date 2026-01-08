@@ -421,7 +421,7 @@ export class TestFilterRule extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
     const adapter = new StripeSupabaseAdapter(supabase);
 
@@ -538,7 +538,7 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
     }
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
     const adapter = new StripeSupabaseAdapter(supabase);
 

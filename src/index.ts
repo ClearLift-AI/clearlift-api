@@ -153,6 +153,15 @@ import {
   AdminUpdateWaitlistStatus
 } from "./endpoints/v1/admin";
 import {
+  GetRolloutStats,
+  GetOrgRoutingConfig,
+  EnableDualWrite,
+  EnableD1Reads,
+  EnableD1Only,
+  RollbackToSupabase,
+  ListOrgsByRoutingStatus
+} from "./endpoints/v1/admin/data-routing";
+import {
   GetMatrixSettings,
   UpdateMatrixSettings,
   GetAIDecisions,
@@ -317,6 +326,15 @@ openapi.get("/v1/admin/events-sync/status", auth, AdminGetEventsSyncStatus);
 openapi.post("/v1/admin/events-sync/trigger", auth, AdminTriggerEventsSync);
 openapi.get("/v1/admin/waitlist", auth, AdminGetWaitlist);
 openapi.patch("/v1/admin/waitlist/:id/status", auth, AdminUpdateWaitlistStatus);
+
+// D1 rollout admin endpoints
+openapi.get("/v1/admin/d1-rollout/stats", auth, GetRolloutStats);
+openapi.get("/v1/admin/d1-rollout/orgs", auth, ListOrgsByRoutingStatus);
+openapi.get("/v1/admin/d1-rollout/orgs/:org_id", auth, GetOrgRoutingConfig);
+openapi.post("/v1/admin/d1-rollout/orgs/:org_id/dual-write", auth, EnableDualWrite);
+openapi.post("/v1/admin/d1-rollout/orgs/:org_id/enable-d1-reads", auth, EnableD1Reads);
+openapi.post("/v1/admin/d1-rollout/orgs/:org_id/enable-d1-only", auth, EnableD1Only);
+openapi.post("/v1/admin/d1-rollout/orgs/:org_id/rollback", auth, RollbackToSupabase);
 
 // Debug SendGrid endpoint removed for production security
 
@@ -561,8 +579,47 @@ openapi.get("/v1/analysis/latest", auth, requireOrg, GetLatestAnalysis);
 openapi.get("/v1/analysis/entity/:level/:entity_id", auth, requireOrg, GetEntityAnalysis);
 
 
-// Export the Hono app
-export default app;
+// Import aggregation service for scheduled tasks
+import { AggregationService } from './services/aggregation-service';
+
+// Export the Hono app with scheduled handler
+export default {
+  fetch: app.fetch,
+
+  // Scheduled handler for cron jobs
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    console.log(`[Cron] Triggered at ${new Date(event.scheduledTime).toISOString()}, cron: ${event.cron}`);
+
+    // Daily aggregation cron (runs at 5 AM UTC)
+    if (event.cron === '0 5 * * *') {
+      console.log('[Cron] Running daily aggregation...');
+
+      // Build array of shard databases
+      const shards = [env.SHARD_0, env.SHARD_1, env.SHARD_2, env.SHARD_3].filter(Boolean);
+
+      if (shards.length === 0) {
+        console.error('[Cron] No shard databases configured');
+        return;
+      }
+
+      const aggregator = new AggregationService(shards);
+      const result = await aggregator.runFullAggregation();
+
+      console.log(`[Cron] Aggregation completed: ${result.success ? 'SUCCESS' : 'FAILED'}`);
+      console.log(`[Cron] Total duration: ${result.totalDuration_ms}ms`);
+      console.log(`[Cron] Shards processed: ${result.shards.length}`);
+
+      if (result.errors.length > 0) {
+        console.error(`[Cron] Errors: ${result.errors.join(', ')}`);
+      }
+
+      // Log summary per shard
+      for (const shard of result.shards) {
+        console.log(`[Cron] Shard ${shard.shardId}: ${shard.success ? 'OK' : 'FAILED'} (${shard.duration_ms}ms)`);
+      }
+    }
+  }
+};
 
 // Export the workflow class for Cloudflare Workflows binding
 export { AnalysisWorkflow } from './workflows/analysis-workflow';

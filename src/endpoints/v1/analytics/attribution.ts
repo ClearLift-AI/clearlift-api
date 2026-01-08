@@ -637,7 +637,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         if (supabaseKey) {
           const supabase = new SupabaseClient({
             url: c.env.SUPABASE_URL,
-            serviceKey: supabaseKey
+            secretKey: supabaseKey
           });
 
           // Define buildPlatformFallback inline for this early return path
@@ -750,7 +750,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         if (supabaseKey) {
           const supabase = new SupabaseClient({
             url: c.env.SUPABASE_URL,
-            serviceKey: supabaseKey
+            secretKey: supabaseKey
           });
 
           // Query connector conversions
@@ -1085,7 +1085,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         if (supabaseKey) {
           const supabase = new SupabaseClient({
             url: c.env.SUPABASE_URL,
-            serviceKey: supabaseKey
+            secretKey: supabaseKey
           });
           const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
 
@@ -1155,7 +1155,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
 
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: supabaseKey
+        secretKey: supabaseKey
       });
 
       // Build identity map if stitching is enabled
@@ -1332,7 +1332,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         if (supabaseKey) {
           const supabase = new SupabaseClient({
             url: c.env.SUPABASE_URL,
-            serviceKey: supabaseKey
+            secretKey: supabaseKey
           });
           const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
 
@@ -1479,7 +1479,7 @@ export class GetAttributionComparison extends OpenAPIRoute {
 
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: supabaseKey
+        secretKey: supabaseKey
       });
 
       // Get identity map

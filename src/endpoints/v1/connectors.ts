@@ -813,6 +813,26 @@ export class GetOAuthAccounts extends OpenAPIRoute {
           }];
           break;
         }
+        case 'jobber': {
+          // For Jobber, the "account" is the Jobber account itself (single account per OAuth)
+          // Get account info from user_info stored in metadata
+          const userInfo = metadata?.user_info;
+
+          if (!userInfo) {
+            return error(c, "NO_ACCOUNT_INFO", "Jobber account info not found", 400);
+          }
+
+          // Return the Jobber account as the single "account"
+          accounts = [{
+            id: userInfo.id || userInfo.raw?.id,
+            name: userInfo.name || userInfo.raw?.companyName || 'Jobber Account',
+            companyName: userInfo.raw?.companyName,
+            email: userInfo.email || userInfo.raw?.email,
+            timezone: userInfo.raw?.timezone,
+            country: userInfo.raw?.country
+          }];
+          break;
+        }
       }
 
       return success(c, { accounts });
@@ -1160,7 +1180,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
               const { SupabaseClient } = await import("../../services/supabase");
               const supabase = new SupabaseClient({
                 url: c.env.SUPABASE_URL,
-                serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
+                secretKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
               });
 
               for (const page of pages) {
@@ -1830,7 +1850,7 @@ export class DisconnectPlatform extends OpenAPIRoute {
       const { SupabaseClient } = await import("../../services/supabase");
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
+        secretKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
       });
 
       const now = new Date().toISOString();

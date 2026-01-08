@@ -105,7 +105,7 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new FacebookSupabaseAdapter(supabase);
@@ -223,7 +223,7 @@ export class GetFacebookAdSets extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new FacebookSupabaseAdapter(supabase);
@@ -283,7 +283,7 @@ export class GetFacebookCreatives extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new FacebookSupabaseAdapter(supabase);
@@ -344,7 +344,7 @@ export class GetFacebookAds extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new FacebookSupabaseAdapter(supabase);
@@ -411,7 +411,7 @@ export class GetFacebookMetrics extends OpenAPIRoute {
 
     const supabase = new SupabaseClient({
       url: c.env.SUPABASE_URL,
-      serviceKey: supabaseKey
+      secretKey: supabaseKey
     });
 
     const adapter = new FacebookSupabaseAdapter(supabase);

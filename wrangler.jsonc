@@ -121,6 +121,27 @@
       "database_name": "clearlift-ai-prod",
       "database_id": "3fb300f4-4523-4a29-9efc-955d1684f392",
       "migrations_dir": "migrations-ai"
+    },
+    // Platform data shards (for campaign/metrics storage)
+    {
+      "binding": "SHARD_0",
+      "database_name": "clearlift-shard-0",
+      "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0"
+    },
+    {
+      "binding": "SHARD_1",
+      "database_name": "clearlift-shard-1",
+      "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6"
+    },
+    {
+      "binding": "SHARD_2",
+      "database_name": "clearlift-shard-2",
+      "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8"
+    },
+    {
+      "binding": "SHARD_3",
+      "database_name": "clearlift-shard-3",
+      "database_id": "ff763599-df7b-4041-b766-b574e7b3415b"
     }
   ],
 
@@ -140,6 +161,13 @@
       "class_name": "AnalysisWorkflow"
     }
   ],
+
+  // Cron triggers for scheduled tasks
+  "triggers": {
+    "crons": [
+      "0 5 * * *"  // Daily aggregation at 5 AM UTC
+    ]
+  },
 
   // ============================================================================
   // LOCAL DEVELOPMENT ENVIRONMENT
@@ -166,6 +194,27 @@
           "database_name": "clearlift-ai-prod",
           "database_id": "3fb300f4-4523-4a29-9efc-955d1684f392",
           "migrations_dir": "migrations-ai"
+        },
+        // Platform data shards
+        {
+          "binding": "SHARD_0",
+          "database_name": "clearlift-shard-0",
+          "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0"
+        },
+        {
+          "binding": "SHARD_1",
+          "database_name": "clearlift-shard-1",
+          "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6"
+        },
+        {
+          "binding": "SHARD_2",
+          "database_name": "clearlift-shard-2",
+          "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8"
+        },
+        {
+          "binding": "SHARD_3",
+          "database_name": "clearlift-shard-3",
+          "database_id": "ff763599-df7b-4041-b766-b574e7b3415b"
         }
       ],
       "queues": {

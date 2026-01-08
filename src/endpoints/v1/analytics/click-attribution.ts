@@ -117,7 +117,7 @@ Fetches conversion data grouped by click ID platform:
 
       const supabase = new SupabaseClient({
         url: c.env.SUPABASE_URL,
-        serviceKey: supabaseKey,
+        secretKey: supabaseKey,
       });
 
       // Query conversion_attribution table for all conversions in date range
