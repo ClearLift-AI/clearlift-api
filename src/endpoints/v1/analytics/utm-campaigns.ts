@@ -1,16 +1,14 @@
 /**
  * UTM Campaign Performance Endpoint
  *
- * Fetches aggregated UTM campaign performance data from the events.utm_campaign_performance table.
+ * Fetches aggregated UTM campaign performance data from D1 utm_performance table.
  * Provides sessions, users, page views, conversions, and bounce rate by UTM parameters.
  */
 
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
-import { success, error, getDateRange } from "../../../utils/response";
-import { SupabaseClient } from "../../../services/supabase";
-import { getSecret } from "../../../utils/secrets";
+import { success, error } from "../../../utils/response";
 
 const UtmCampaignSchema = z.object({
   utm_source: z.string(),
@@ -41,7 +39,7 @@ const UtmCampaignSummarySchema = z.object({
 /**
  * GET /v1/analytics/utm-campaigns
  *
- * Fetches UTM campaign performance data from Supabase events.utm_campaign_performance table.
+ * Fetches UTM campaign performance data from D1 utm_performance table.
  */
 export class GetUtmCampaigns extends OpenAPIRoute {
   schema = {
@@ -95,13 +93,12 @@ Fetches aggregated UTM campaign performance data including:
     const utmSourceFilter = query.utm_source;
     const limit = parseInt(query.limit || "100", 10);
 
-    // Get org_tag for querying events schema
+    // Get org_tag for querying analytics
     const tagMapping = await c.env.DB.prepare(`
       SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
     `).bind(orgId).first<{ short_tag: string }>();
 
     if (!tagMapping) {
-      // No tracking configured - return empty data
       return success(c, {
         campaigns: [],
         summary: {
@@ -117,92 +114,70 @@ Fetches aggregated UTM campaign performance data including:
       });
     }
 
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
+    }
+
     try {
-      const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-      if (!supabaseKey) {
-        return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
-      }
-
-      const supabase = new SupabaseClient({
-        url: c.env.SUPABASE_URL,
-        secretKey: supabaseKey,
-      });
-
-      // Build query for utm_campaign_performance table
-      const params = new URLSearchParams();
-      params.append("org_tag", `eq.${tagMapping.short_tag}`);
-      params.append("date", `gte.${dateFrom}`);
-      params.append("date", `lte.${dateTo}`);
-      params.append("select", "utm_source,utm_medium,utm_campaign,utm_term,utm_content,sessions,users,page_views,conversions,conversion_value_cents,conversion_rate,bounce_rate,avg_session_duration_seconds");
-      params.append("order", "sessions.desc");
-      params.append("limit", String(limit));
+      // Query utm_performance table from D1
+      let sql = `
+        SELECT
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          utm_term,
+          utm_content,
+          SUM(sessions) as sessions,
+          SUM(users) as users,
+          SUM(page_views) as page_views,
+          SUM(conversions) as conversions,
+          SUM(revenue_cents) as conversion_value_cents,
+          AVG(conversion_rate) as conversion_rate,
+          AVG(bounce_rate) as bounce_rate,
+          AVG(avg_session_duration_seconds) as avg_session_duration_seconds
+        FROM utm_performance
+        WHERE org_tag = ?
+        AND date >= ? AND date <= ?
+      `;
+      const params: any[] = [tagMapping.short_tag, dateFrom, dateTo];
 
       if (utmSourceFilter) {
-        params.append("utm_source", `eq.${utmSourceFilter}`);
+        sql += ' AND utm_source = ?';
+        params.push(utmSourceFilter);
       }
 
-      const records = await supabase.queryWithSchema<any[]>(
-        `utm_campaign_performance?${params.toString()}`,
-        "events",
-        { method: "GET" }
-      ) || [];
+      sql += ` GROUP BY utm_source, utm_medium, utm_campaign, utm_term, utm_content
+               ORDER BY sessions DESC
+               LIMIT ${limit}`;
 
-      // Aggregate data by utm_source + utm_medium + utm_campaign
-      const aggregatedMap = new Map<string, any>();
-      const uniqueSources = new Set<string>();
+      const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
+      const records = result.results || [];
 
-      for (const record of records) {
-        const key = `${record.utm_source || ""}|${record.utm_medium || ""}|${record.utm_campaign || ""}`;
+      // Get unique sources
+      const sourcesResult = await c.env.ANALYTICS_DB.prepare(`
+        SELECT DISTINCT utm_source
+        FROM utm_performance
+        WHERE org_tag = ? AND date >= ? AND date <= ? AND utm_source IS NOT NULL
+        ORDER BY utm_source
+      `).bind(tagMapping.short_tag, dateFrom, dateTo).all<{ utm_source: string }>();
+      const uniqueSources = (sourcesResult.results || []).map(r => r.utm_source);
 
-        if (record.utm_source) {
-          uniqueSources.add(record.utm_source);
-        }
-
-        if (aggregatedMap.has(key)) {
-          const existing = aggregatedMap.get(key);
-          existing.sessions += record.sessions || 0;
-          existing.users += record.users || 0;
-          existing.page_views += record.page_views || 0;
-          existing.conversions += record.conversions || 0;
-          existing.conversion_value_cents += record.conversion_value_cents || 0;
-          existing._bounce_rate_sum += (record.bounce_rate || 0) * (record.sessions || 0);
-          existing._session_duration_sum += (record.avg_session_duration_seconds || 0) * (record.sessions || 0);
-          existing._count++;
-        } else {
-          aggregatedMap.set(key, {
-            utm_source: record.utm_source,
-            utm_medium: record.utm_medium || null,
-            utm_campaign: record.utm_campaign || null,
-            utm_term: record.utm_term || null,
-            utm_content: record.utm_content || null,
-            sessions: record.sessions || 0,
-            users: record.users || 0,
-            page_views: record.page_views || 0,
-            conversions: record.conversions || 0,
-            conversion_value_cents: record.conversion_value_cents || 0,
-            _bounce_rate_sum: (record.bounce_rate || 0) * (record.sessions || 0),
-            _session_duration_sum: (record.avg_session_duration_seconds || 0) * (record.sessions || 0),
-            _count: 1,
-          });
-        }
-      }
-
-      // Calculate final metrics
-      const campaigns = Array.from(aggregatedMap.values()).map(row => ({
-        utm_source: row.utm_source,
-        utm_medium: row.utm_medium,
-        utm_campaign: row.utm_campaign,
-        utm_term: row.utm_term,
-        utm_content: row.utm_content,
-        sessions: row.sessions,
-        users: row.users,
-        page_views: row.page_views,
-        conversions: row.conversions,
-        conversion_value_cents: row.conversion_value_cents,
+      // Transform to response format
+      const campaigns = records.map(row => ({
+        utm_source: row.utm_source || "direct",
+        utm_medium: row.utm_medium || null,
+        utm_campaign: row.utm_campaign || null,
+        utm_term: row.utm_term || null,
+        utm_content: row.utm_content || null,
+        sessions: row.sessions || 0,
+        users: row.users || 0,
+        page_views: row.page_views || 0,
+        conversions: row.conversions || 0,
+        conversion_value_cents: row.conversion_value_cents || 0,
         conversion_rate: row.sessions > 0 ? Math.round((row.conversions / row.sessions) * 10000) / 100 : 0,
-        bounce_rate: row.sessions > 0 ? Math.round((row._bounce_rate_sum / row.sessions) * 100) / 100 : 0,
-        avg_session_duration_seconds: row.sessions > 0 ? Math.round(row._session_duration_sum / row.sessions) : null,
-      })).sort((a, b) => b.sessions - a.sessions);
+        bounce_rate: row.bounce_rate || 0,
+        avg_session_duration_seconds: row.avg_session_duration_seconds || null,
+      }));
 
       // Calculate summary
       const totalSessions = campaigns.reduce((sum, c) => sum + c.sessions, 0);
@@ -212,7 +187,7 @@ Fetches aggregated UTM campaign performance data including:
       const totalRevenueCents = campaigns.reduce((sum, c) => sum + c.conversion_value_cents, 0);
       const avgConversionRate = totalSessions > 0 ? Math.round((totalConversions / totalSessions) * 10000) / 100 : 0;
       const avgBounceRate = campaigns.length > 0
-        ? Math.round(campaigns.reduce((sum, c) => sum + c.bounce_rate * c.sessions, 0) / totalSessions * 100) / 100
+        ? Math.round(campaigns.reduce((sum, c) => sum + (c.bounce_rate || 0) * c.sessions, 0) / totalSessions * 100) / 100
         : 0;
 
       return success(c, {
@@ -226,7 +201,7 @@ Fetches aggregated UTM campaign performance data including:
           avg_conversion_rate: avgConversionRate,
           avg_bounce_rate: avgBounceRate,
         },
-        sources: Array.from(uniqueSources).sort(),
+        sources: uniqueSources,
       });
     } catch (err: any) {
       console.error("UTM campaigns error:", err);
@@ -238,9 +213,7 @@ Fetches aggregated UTM campaign performance data including:
 /**
  * GET /v1/analytics/utm-campaigns/time-series
  *
- * Fetches UTM traffic data as a time series - daily sessions, conversions, and users
- * grouped by date and optionally by source. This powers the unified "reality" view
- * in the CAC timeline, showing actual traffic regardless of platform spend availability.
+ * Fetches UTM traffic data as a time series from D1.
  */
 export class GetUtmTimeSeries extends OpenAPIRoute {
   schema = {
@@ -310,7 +283,7 @@ Fetches daily UTM traffic metrics as a time series:
     const dateTo = query.date_to;
     const groupBy = query.group_by || "date";
 
-    // Get org_tag for querying events schema
+    // Get org_tag for querying analytics
     const tagMapping = await c.env.DB.prepare(`
       SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
     `).bind(orgId).first<{ short_tag: string }>();
@@ -329,47 +302,28 @@ Fetches daily UTM traffic metrics as a time series:
       });
     }
 
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
+    }
+
     try {
-      const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-      if (!supabaseKey) {
-        return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
-      }
+      // Query utm_performance table from D1
+      const result = await c.env.ANALYTICS_DB.prepare(`
+        SELECT
+          date,
+          utm_source,
+          SUM(sessions) as sessions,
+          SUM(users) as users,
+          SUM(conversions) as conversions,
+          SUM(revenue_cents) as conversion_value_cents
+        FROM utm_performance
+        WHERE org_tag = ?
+        AND date >= ? AND date <= ?
+        GROUP BY date, utm_source
+        ORDER BY date ASC
+      `).bind(tagMapping.short_tag, dateFrom, dateTo).all<any>();
 
-      const supabase = new SupabaseClient({
-        url: c.env.SUPABASE_URL,
-        secretKey: supabaseKey,
-      });
-
-      // Query utm_campaign_performance with date included
-      const params = new URLSearchParams();
-      params.append("org_tag", `eq.${tagMapping.short_tag}`);
-      params.append("date", `gte.${dateFrom}`);
-      params.append("date", `lte.${dateTo}`);
-      params.append("select", "date,utm_source,sessions,users,conversions,conversion_value_cents");
-      params.append("order", "date.asc");
-
-      let records: any[] = [];
-      try {
-        records = await supabase.queryWithSchema<any[]>(
-          `utm_campaign_performance?${params.toString()}`,
-          "events",
-          { method: "GET" }
-        ) || [];
-      } catch (queryErr: any) {
-        // Table might not exist in local dev - return empty data gracefully
-        console.warn("UTM time series query failed (table may not exist):", queryErr.message);
-        return success(c, {
-          time_series: [],
-          summary: {
-            total_sessions: 0,
-            total_users: 0,
-            total_conversions: 0,
-            total_revenue_cents: 0,
-            avg_conversion_rate: 0,
-            sources: [],
-          },
-        });
-      }
+      const records = result.results || [];
 
       // Aggregate by date (and optionally by source within each date)
       const dateMap = new Map<string, {
@@ -402,46 +356,30 @@ Fetches daily UTM traffic metrics as a time series:
         dayData.conversions += record.conversions || 0;
         dayData.conversion_value_cents += record.conversion_value_cents || 0;
 
-        // Track by source
-        if (!dayData.by_source.has(source)) {
-          dayData.by_source.set(source, { sessions: 0, users: 0, conversions: 0, conversion_value_cents: 0 });
+        if (groupBy === "source") {
+          if (!dayData.by_source.has(source)) {
+            dayData.by_source.set(source, { sessions: 0, users: 0, conversions: 0, conversion_value_cents: 0 });
+          }
+          const sourceData = dayData.by_source.get(source)!;
+          sourceData.sessions += record.sessions || 0;
+          sourceData.users += record.users || 0;
+          sourceData.conversions += record.conversions || 0;
+          sourceData.conversion_value_cents += record.conversion_value_cents || 0;
         }
-        const sourceData = dayData.by_source.get(source)!;
-        sourceData.sessions += record.sessions || 0;
-        sourceData.users += record.users || 0;
-        sourceData.conversions += record.conversions || 0;
-        sourceData.conversion_value_cents += record.conversion_value_cents || 0;
       }
 
-      // Convert to array
-      const timeSeries = Array.from(dateMap.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([date, data]) => {
-          const base: any = {
-            date,
-            sessions: data.sessions,
-            users: data.users,
-            conversions: data.conversions,
-            conversion_value_cents: data.conversion_value_cents,
-            conversion_rate: data.sessions > 0 ? Math.round((data.conversions / data.sessions) * 10000) / 100 : 0,
-          };
-
-          // Include source breakdown if requested
-          if (groupBy === "source") {
-            const bySource: Record<string, any> = {};
-            data.by_source.forEach((sourceData, source) => {
-              bySource[source] = {
-                sessions: sourceData.sessions,
-                users: sourceData.users,
-                conversions: sourceData.conversions,
-                conversion_value_cents: sourceData.conversion_value_cents,
-              };
-            });
-            base.by_source = bySource;
-          }
-
-          return base;
-        });
+      // Build time series array
+      const timeSeries = Array.from(dateMap.entries()).map(([date, data]) => ({
+        date,
+        sessions: data.sessions,
+        users: data.users,
+        conversions: data.conversions,
+        conversion_value_cents: data.conversion_value_cents,
+        conversion_rate: data.sessions > 0 ? Math.round((data.conversions / data.sessions) * 10000) / 100 : 0,
+        ...(groupBy === "source" ? {
+          by_source: Object.fromEntries(data.by_source)
+        } : {})
+      }));
 
       // Calculate summary
       const totalSessions = timeSeries.reduce((sum, d) => sum + d.sessions, 0);
