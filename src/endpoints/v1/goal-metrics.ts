@@ -2,8 +2,6 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { success, error, getDateRange } from "../../utils/response";
-import { createClient } from "@supabase/supabase-js";
-import { getSecret } from "../../utils/secrets";
 
 // ============== Schema Definitions ==============
 
@@ -36,6 +34,8 @@ const GoalConversionSchema = z.object({
 
 /**
  * GET /v1/goals/:id/metrics - Get aggregated metrics for a goal
+ *
+ * NOTE: Requires goal_metrics_daily table to be populated in D1 ANALYTICS_DB
  */
 export class GetGoalMetrics extends OpenAPIRoute {
   public schema = {
@@ -105,59 +105,32 @@ export class GetGoalMetrics extends OpenAPIRoute {
       return error(c, "NOT_FOUND", "Goal not found", 404);
     }
 
-    // Get Supabase secret key
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase key not configured", 500);
-    }
+    // TODO: Query goal_metrics_daily from D1 when table is available
+    // For now, return empty results as this table needs to be created
+    // and populated in D1 ANALYTICS_DB.
 
-    const supabase = createClient(c.env.SUPABASE_URL, supabaseKey);
+    console.log(`[GoalMetrics] Query for goal ${goalId} - returning empty (D1 table not yet populated)`);
 
-    try {
-      const { data: metrics, error: queryError } = await supabase
-        .from("goal_metrics_daily")
-        .select("*")
-        .eq("organization_id", orgId)
-        .eq("goal_id", goalId)
-        .gte("date", dateRange.start_date)
-        .lte("date", dateRange.end_date)
-        .order("date", { ascending: true });
-
-      if (queryError) {
-        console.error("Supabase query error:", queryError);
-        return error(c, "QUERY_FAILED", queryError.message, 500);
-      }
-
-      // Calculate totals
-      const totals = (metrics || []).reduce((acc, m) => ({
-        conversions: acc.conversions + (m.conversions || 0),
-        conversion_value_cents: acc.conversion_value_cents + (m.conversion_value_cents || 0),
-        conversions_platform: acc.conversions_platform + (m.conversions_platform || 0),
-        conversions_tag: acc.conversions_tag + (m.conversions_tag || 0),
-      }), {
+    return success(c, [], {
+      goal_id: goalId,
+      date_range: {
+        start: dateRange.start_date,
+        end: dateRange.end_date
+      },
+      totals: {
         conversions: 0,
         conversion_value_cents: 0,
         conversions_platform: 0,
         conversions_tag: 0,
-      });
-
-      return success(c, metrics || [], {
-        goal_id: goalId,
-        date_range: {
-          start: dateRange.start_date,
-          end: dateRange.end_date
-        },
-        totals
-      });
-    } catch (err: any) {
-      console.error("Goal metrics query error:", err);
-      return error(c, "QUERY_FAILED", err.message || "Failed to fetch goal metrics", 500);
-    }
+      }
+    });
   }
 }
 
 /**
  * GET /v1/goals/:id/conversions - Get individual conversion events for a goal
+ *
+ * NOTE: Requires goal_conversions table to be populated in D1 ANALYTICS_DB
  */
 export class GetGoalConversions extends OpenAPIRoute {
   public schema = {
@@ -206,7 +179,6 @@ export class GetGoalConversions extends OpenAPIRoute {
     const goalId = c.req.param("id");
     const limit = parseInt(c.req.query("limit") || "100");
     const offset = parseInt(c.req.query("offset") || "0");
-    const source = c.req.query("source");
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
@@ -221,44 +193,17 @@ export class GetGoalConversions extends OpenAPIRoute {
       return error(c, "NOT_FOUND", "Goal not found", 404);
     }
 
-    // Get Supabase secret key
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase key not configured", 500);
-    }
+    // TODO: Query goal_conversions from D1 when table is available
+    // For now, return empty results as this table needs to be created
+    // and populated in D1 ANALYTICS_DB.
 
-    const supabase = createClient(c.env.SUPABASE_URL, supabaseKey);
+    console.log(`[GoalConversions] Query for goal ${goalId} - returning empty (D1 table not yet populated)`);
 
-    try {
-      let query = supabase
-        .from("goal_conversions")
-        .select("*", { count: "exact" })
-        .eq("organization_id", orgId)
-        .eq("goal_id", goalId)
-        .order("conversion_timestamp", { ascending: false })
-        .range(offset, offset + limit - 1);
-
-      // Filter by source if specified
-      if (source) {
-        query = query.eq("conversion_source", source);
-      }
-
-      const { data: conversions, count, error: queryError } = await query;
-
-      if (queryError) {
-        console.error("Supabase query error:", queryError);
-        return error(c, "QUERY_FAILED", queryError.message, 500);
-      }
-
-      return success(c, conversions || [], {
-        goal_id: goalId,
-        count: count || 0,
-        limit,
-        offset
-      });
-    } catch (err: any) {
-      console.error("Goal conversions query error:", err);
-      return error(c, "QUERY_FAILED", err.message || "Failed to fetch goal conversions", 500);
-    }
+    return success(c, [], {
+      goal_id: goalId,
+      count: 0,
+      limit,
+      offset
+    });
   }
 }

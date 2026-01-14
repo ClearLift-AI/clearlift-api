@@ -5,7 +5,6 @@ import { success, error } from "../../../utils/response";
 import { EventResponseSchema } from "../../../schemas/analytics";
 import { getSecret } from "../../../utils/secrets";
 import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
-import { createClient } from "@supabase/supabase-js";
 
 /**
  * GET /v1/analytics/events/historical - Get historical events from R2 SQL
@@ -122,26 +121,18 @@ export class GetEventsHistorical extends OpenAPIRoute {
       return error(c, "CONFIGURATION_ERROR", "R2 SQL token not configured", 500);
     }
 
-    // Get domain patterns for this org (same logic as events.ts)
+    // Get domain patterns for this org from D1
     let domainPatterns: string[] = [];
     try {
-      const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-      if (supabaseKey) {
-        const supabase = createClient(c.env.SUPABASE_URL, supabaseKey, {
-          db: { schema: 'events' }
-        });
+      const domainClaimsResult = await c.env.DB.prepare(`
+        SELECT domain_pattern FROM domain_claims
+        WHERE claimed_org_tag = ? AND released_at IS NULL
+      `).bind(orgTag).all<{ domain_pattern: string }>();
 
-        const { data: domainClaims } = await supabase
-          .from("domain_claims")
-          .select("domain_pattern")
-          .eq("claimed_org_tag", orgTag)
-          .is("released_at", null);
-
-        domainPatterns = (domainClaims?.map(d => d.domain_pattern) || []);
-      }
+      domainPatterns = (domainClaimsResult.results || []).map(d => d.domain_pattern);
     } catch (err) {
-      // Non-fatal: proceed without domain patterns
-      console.warn("Failed to fetch domain patterns:", err);
+      // Non-fatal: proceed without domain patterns (table may not exist)
+      console.warn("Failed to fetch domain patterns from D1:", err);
     }
 
     try {
