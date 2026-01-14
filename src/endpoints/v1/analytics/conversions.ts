@@ -2,16 +2,16 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error, getDateRange } from "../../../utils/response";
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import {
   ConversionRecordSchema,
   ConversionResponseSchema,
   type ConversionRecord
 } from "../../../schemas/analytics";
-import { getSecret } from "../../../utils/secrets";
+import { D1AnalyticsService } from "../../../services/d1-analytics";
 
 /**
- * GET /v1/analytics/conversions - Get conversion data from Supabase
+ * GET /v1/analytics/conversions - Get conversion data from D1
+ * Primary source: stripe_charges table in ANALYTICS_DB
  */
 export class GetConversions extends OpenAPIRoute {
   public schema = {
@@ -65,66 +65,22 @@ export class GetConversions extends OpenAPIRoute {
     const channel = c.req.query("channel");
     const groupBy = c.req.query("group_by") || "none";
 
-    // Get Supabase secret key from Secrets Store
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase key not configured", 500);
+    // Use D1 ANALYTICS_DB
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    // Use conversions schema for conversions table
-    const supabase = createClient(c.env.SUPABASE_URL, supabaseKey, {
-      db: { schema: 'conversions' }
-    });
+    const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
 
     try {
-      // Build base query using correct column names from conversions.conversions
-      let query = supabase
-        .from("conversions")
-        .select("id, organization_id, source_platform, revenue_cents, conversion_timestamp, conversion_type")
-        .eq("organization_id", orgId)
-        .gte("conversion_timestamp", `${dateRange.start_date}T00:00:00Z`)
-        .lte("conversion_timestamp", `${dateRange.end_date}T23:59:59Z`);
+      // Get all Stripe connections for this org
+      const connections = await c.env.DB.prepare(`
+        SELECT id FROM platform_connections
+        WHERE organization_id = ? AND platform = 'stripe' AND is_active = 1
+      `).bind(orgId).all<{ id: string }>();
 
-      // Filter by source_platform (was "channel")
-      if (channel) {
-        query = query.eq("source_platform", channel);
-      }
-
-      // Order by conversion_timestamp
-      query = query.order("conversion_timestamp", { ascending: true });
-
-      const { data: rawData, error: queryError } = await query;
-
-      if (queryError) {
-        console.error("Supabase query error:", queryError);
-        return error(c, "QUERY_FAILED", queryError.message, 500);
-      }
-
-      if (!rawData || rawData.length === 0) {
-        // No data in conversions.conversions - check conversion_source setting
-        const conversionSourceSetting = await c.env.DB.prepare(`
-          SELECT conversion_source FROM ai_optimization_settings WHERE org_id = ?
-        `).bind(orgId).first<{ conversion_source: string | null }>();
-
-        const conversionSource = conversionSourceSetting?.conversion_source || 'tag';
-
-        // If conversion_source is 'connectors', fallback to Stripe data
-        if (conversionSource === 'connectors') {
-          const stripeData = await this.fetchStripeConversionsFallback(
-            c.env.SUPABASE_URL,
-            supabaseKey,
-            orgId,
-            dateRange,
-            c.env.DB
-          );
-
-          if (stripeData && stripeData.length > 0) {
-            const result = this.aggregateData(stripeData, groupBy);
-            return success(c, { ...result, data_source: 'stripe_fallback' }, { date_range: dateRange });
-          }
-        }
-
-        // Return empty result structure
+      if (!connections.results || connections.results.length === 0) {
+        // No Stripe connections - return empty
         return success(
           c,
           this.formatEmptyResponse(groupBy),
@@ -132,24 +88,48 @@ export class GetConversions extends OpenAPIRoute {
         );
       }
 
-      // Transform raw data from conversions.conversions schema to expected format
-      // - source_platform -> channel
-      // - revenue_cents -> revenue (convert to dollars)
-      // - conversion_timestamp -> date (extract date part)
-      // - Each row = 1 conversion (no conversion_count column)
-      const transformedData = rawData.map(row => ({
-        id: row.id,
-        channel: row.source_platform,
-        date: row.conversion_timestamp?.split('T')[0] || row.conversion_timestamp,
-        conversion_count: 1, // Each row is one conversion
-        revenue: (row.revenue_cents || 0) / 100, // Convert cents to dollars
-        conversion_type: row.conversion_type
-      }));
+      // Query stripe_charges from D1 for all connections
+      const allConversions: any[] = [];
+      for (const conn of connections.results) {
+        const charges = await d1Analytics.getStripeCharges(
+          orgId,
+          conn.id,
+          dateRange.start_date,
+          dateRange.end_date,
+          {
+            status: 'succeeded', // Only successful charges count as conversions
+            limit: 1000,
+          }
+        );
+
+        // Transform charges to conversion format
+        const conversions = charges.map(charge => ({
+          id: charge.id,
+          channel: channel || 'stripe',
+          date: charge.stripe_created_at.split('T')[0],
+          conversion_count: 1,
+          revenue: charge.amount_cents / 100,
+          conversion_type: 'purchase'
+        }));
+
+        allConversions.push(...conversions);
+      }
+
+      if (allConversions.length === 0) {
+        return success(
+          c,
+          this.formatEmptyResponse(groupBy),
+          { date_range: dateRange }
+        );
+      }
+
+      // Sort by date
+      allConversions.sort((a, b) => a.date.localeCompare(b.date));
 
       // Aggregate data based on group_by parameter
-      const result = this.aggregateData(transformedData, groupBy);
+      const result = this.aggregateData(allConversions, groupBy);
 
-      return success(c, result, { date_range: dateRange });
+      return success(c, { ...result, data_source: 'd1_stripe' }, { date_range: dateRange });
     } catch (err) {
       console.error("Failed to fetch conversions:", err);
       return error(c, "QUERY_FAILED", "Failed to fetch conversion data", 500);
@@ -276,53 +256,4 @@ export class GetConversions extends OpenAPIRoute {
     }
   }
 
-  /**
-   * Fallback to Stripe data when conversions table is empty
-   * Queries stripe.all_conversions view and transforms to conversion format
-   */
-  private async fetchStripeConversionsFallback(
-    supabaseUrl: string,
-    supabaseKey: string,
-    orgId: string,
-    dateRange: { start_date: string; end_date: string },
-    db: D1Database
-  ): Promise<any[]> {
-    try {
-      // Create Supabase client for stripe schema
-      const stripeSupabase = createClient(supabaseUrl, supabaseKey, {
-        db: { schema: 'stripe' }
-      });
-
-      // Query all_conversions view with filters
-      const { data, error: queryError } = await stripeSupabase
-        .from("all_conversions")
-        .select("id, organization_id, amount_cents, stripe_created_at, payment_status, stripe_type, deleted_at")
-        .eq("organization_id", orgId)
-        .gte("stripe_created_at", `${dateRange.start_date}T00:00:00Z`)
-        .lte("stripe_created_at", `${dateRange.end_date}T23:59:59Z`)
-        .not("payment_status", "in", "(incomplete,incomplete_expired)")
-        .is("deleted_at", null)
-        .order("stripe_created_at", { ascending: true });
-
-      if (queryError) {
-        console.error("Stripe fallback query error:", queryError);
-        return [];
-      }
-
-      if (!data || data.length === 0) {
-        return [];
-      }
-
-      // Transform Stripe records to conversion format
-      return data.map(row => ({
-        channel: 'stripe',
-        date: row.stripe_created_at?.split('T')[0] || '',
-        conversion_count: 1,
-        revenue: (row.amount_cents || 0) / 100
-      }));
-    } catch (err) {
-      console.error("Failed to fetch Stripe fallback data:", err);
-      return [];
-    }
-  }
 }

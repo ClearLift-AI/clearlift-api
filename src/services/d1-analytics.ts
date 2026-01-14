@@ -138,6 +138,121 @@ export interface AttributionResultRow {
   period_end: string;
 }
 
+// =============================================================================
+// PLATFORM DATA INTERFACES
+// =============================================================================
+
+export interface GoogleCampaignRow {
+  id: string;
+  organization_id: string;
+  customer_id: string;
+  campaign_id: string;
+  campaign_name: string;
+  campaign_status: string;
+  campaign_type: string | null;
+  budget_amount_cents: number | null;
+  budget_type: string | null;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GoogleCampaignMetricsRow {
+  campaign_ref: string;
+  metric_date: string;
+  impressions: number;
+  clicks: number;
+  spend_cents: number;
+  conversions: number;
+  conversion_value_cents: number;
+  ctr: number;
+  cpc_cents: number;
+  cpm_cents: number;
+}
+
+export interface FacebookCampaignRow {
+  id: string;
+  organization_id: string;
+  account_id: string;
+  campaign_id: string;
+  campaign_name: string;
+  campaign_status: string;
+  objective: string | null;
+  daily_budget_cents: number | null;
+  lifetime_budget_cents: number | null;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FacebookCampaignMetricsRow {
+  campaign_ref: string;
+  metric_date: string;
+  impressions: number;
+  clicks: number;
+  spend_cents: number;
+  reach: number;
+  frequency: number;
+  conversions: number;
+  ctr: number;
+  cpc_cents: number;
+  cpm_cents: number;
+}
+
+export interface TikTokCampaignRow {
+  id: string;
+  organization_id: string;
+  advertiser_id: string;
+  campaign_id: string;
+  campaign_name: string;
+  campaign_status: string;
+  objective: string | null;
+  budget_mode: string | null;
+  budget_cents: number | null;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TikTokCampaignMetricsRow {
+  campaign_ref: string;
+  metric_date: string;
+  impressions: number;
+  clicks: number;
+  spend_cents: number;
+  reach: number;
+  conversions: number;
+  video_views: number;
+  ctr: number;
+  cpc_cents: number;
+  cpm_cents: number;
+}
+
+export interface CampaignWithMetrics {
+  campaign_id: string;
+  campaign_name: string;
+  status: string;
+  last_synced_at: string | null;
+  metrics: {
+    impressions: number;
+    clicks: number;
+    spend: number;
+    conversions: number;
+    revenue: number;
+    ctr: number;
+    cpc: number;
+  };
+}
+
+export interface PlatformSummary {
+  spend_cents: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  conversion_value_cents: number;
+  campaigns: number;
+}
+
 /**
  * D1 Analytics Service
  */
@@ -368,4 +483,610 @@ export class D1AnalyticsService {
 
     return result.results;
   }
+
+  // =============================================================================
+  // GOOGLE ADS PLATFORM DATA
+  // =============================================================================
+
+  /**
+   * Get Google Ads campaigns for an organization
+   */
+  async getGoogleCampaigns(
+    orgId: string,
+    options: { status?: string; limit?: number; offset?: number } = {}
+  ): Promise<GoogleCampaignRow[]> {
+    let query = `
+      SELECT * FROM google_campaigns
+      WHERE organization_id = ?
+    `;
+    const params: unknown[] = [orgId];
+
+    if (options.status) {
+      query += ` AND campaign_status = ?`;
+      params.push(options.status);
+    }
+
+    query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    params.push(options.limit || 100, options.offset || 0);
+
+    const result = await this.db.prepare(query).bind(...params).all<GoogleCampaignRow>();
+    return result.results;
+  }
+
+  /**
+   * Get Google Ads campaign metrics for a date range
+   */
+  async getGoogleCampaignMetrics(
+    orgId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<GoogleCampaignMetricsRow[]> {
+    const result = await this.db.prepare(`
+      SELECT m.*
+      FROM google_campaign_daily_metrics m
+      WHERE m.organization_id = ?
+        AND m.metric_date >= ?
+        AND m.metric_date <= ?
+      ORDER BY m.metric_date DESC
+    `).bind(orgId, startDate, endDate).all<GoogleCampaignMetricsRow>();
+
+    return result.results;
+  }
+
+  /**
+   * Get Google Ads campaigns with aggregated metrics
+   */
+  async getGoogleCampaignsWithMetrics(
+    orgId: string,
+    startDate: string,
+    endDate: string,
+    options: { status?: string; limit?: number; offset?: number } = {}
+  ): Promise<CampaignWithMetrics[]> {
+    let query = `
+      SELECT
+        c.id,
+        c.campaign_id,
+        c.campaign_name,
+        c.campaign_status as status,
+        c.last_synced_at,
+        COALESCE(SUM(m.impressions), 0) as impressions,
+        COALESCE(SUM(m.clicks), 0) as clicks,
+        COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+        COALESCE(SUM(m.conversions), 0) as conversions,
+        COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents
+      FROM google_campaigns c
+      LEFT JOIN google_campaign_daily_metrics m
+        ON c.id = m.campaign_ref
+        AND m.metric_date >= ?
+        AND m.metric_date <= ?
+      WHERE c.organization_id = ?
+    `;
+    const params: unknown[] = [startDate, endDate, orgId];
+
+    if (options.status) {
+      query += ` AND c.campaign_status = ?`;
+      params.push(options.status);
+    }
+
+    query += ` GROUP BY c.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
+    params.push(options.limit || 100, options.offset || 0);
+
+    const result = await this.db.prepare(query).bind(...params).all<any>();
+
+    return result.results.map((row: any) => ({
+      campaign_id: row.campaign_id,
+      campaign_name: row.campaign_name,
+      status: row.status,
+      last_synced_at: row.last_synced_at,
+      metrics: {
+        impressions: row.impressions || 0,
+        clicks: row.clicks || 0,
+        spend: (row.spend_cents || 0) / 100,
+        conversions: row.conversions || 0,
+        revenue: (row.conversion_value_cents || 0) / 100,
+        ctr: row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0,
+        cpc: row.clicks > 0 ? (row.spend_cents / row.clicks) / 100 : 0,
+      },
+    }));
+  }
+
+  /**
+   * Get Google Ads summary for an organization
+   */
+  async getGoogleSummary(orgId: string, startDate: string, endDate: string): Promise<PlatformSummary> {
+    const result = await this.db.prepare(`
+      SELECT
+        COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+        COALESCE(SUM(m.impressions), 0) as impressions,
+        COALESCE(SUM(m.clicks), 0) as clicks,
+        COALESCE(SUM(m.conversions), 0) as conversions,
+        COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents,
+        COUNT(DISTINCT c.id) as campaigns
+      FROM google_campaigns c
+      LEFT JOIN google_campaign_daily_metrics m
+        ON c.id = m.campaign_ref
+        AND m.metric_date >= ?
+        AND m.metric_date <= ?
+      WHERE c.organization_id = ?
+    `).bind(startDate, endDate, orgId).first<PlatformSummary>();
+
+    return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+  }
+
+  // =============================================================================
+  // FACEBOOK ADS PLATFORM DATA
+  // =============================================================================
+
+  /**
+   * Get Facebook Ads campaigns for an organization
+   */
+  async getFacebookCampaigns(
+    orgId: string,
+    options: { status?: string; limit?: number; offset?: number } = {}
+  ): Promise<FacebookCampaignRow[]> {
+    let query = `
+      SELECT * FROM facebook_campaigns
+      WHERE organization_id = ?
+    `;
+    const params: unknown[] = [orgId];
+
+    if (options.status) {
+      query += ` AND campaign_status = ?`;
+      params.push(options.status);
+    }
+
+    query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    params.push(options.limit || 100, options.offset || 0);
+
+    const result = await this.db.prepare(query).bind(...params).all<FacebookCampaignRow>();
+    return result.results;
+  }
+
+  /**
+   * Get Facebook Ads campaigns with aggregated metrics
+   */
+  async getFacebookCampaignsWithMetrics(
+    orgId: string,
+    startDate: string,
+    endDate: string,
+    options: { status?: string; limit?: number; offset?: number } = {}
+  ): Promise<CampaignWithMetrics[]> {
+    let query = `
+      SELECT
+        c.id,
+        c.campaign_id,
+        c.campaign_name,
+        c.campaign_status as status,
+        c.last_synced_at,
+        COALESCE(SUM(m.impressions), 0) as impressions,
+        COALESCE(SUM(m.clicks), 0) as clicks,
+        COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+        COALESCE(SUM(m.conversions), 0) as conversions,
+        0 as conversion_value_cents
+      FROM facebook_campaigns c
+      LEFT JOIN facebook_campaign_daily_metrics m
+        ON c.id = m.campaign_ref
+        AND m.metric_date >= ?
+        AND m.metric_date <= ?
+      WHERE c.organization_id = ?
+    `;
+    const params: unknown[] = [startDate, endDate, orgId];
+
+    if (options.status) {
+      query += ` AND c.campaign_status = ?`;
+      params.push(options.status);
+    }
+
+    query += ` GROUP BY c.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
+    params.push(options.limit || 100, options.offset || 0);
+
+    const result = await this.db.prepare(query).bind(...params).all<any>();
+
+    return result.results.map((row: any) => ({
+      campaign_id: row.campaign_id,
+      campaign_name: row.campaign_name,
+      status: row.status,
+      last_synced_at: row.last_synced_at,
+      metrics: {
+        impressions: row.impressions || 0,
+        clicks: row.clicks || 0,
+        spend: (row.spend_cents || 0) / 100,
+        conversions: row.conversions || 0,
+        revenue: (row.conversion_value_cents || 0) / 100,
+        ctr: row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0,
+        cpc: row.clicks > 0 ? (row.spend_cents / row.clicks) / 100 : 0,
+      },
+    }));
+  }
+
+  /**
+   * Get Facebook Ads summary for an organization
+   */
+  async getFacebookSummary(orgId: string, startDate: string, endDate: string): Promise<PlatformSummary> {
+    const result = await this.db.prepare(`
+      SELECT
+        COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+        COALESCE(SUM(m.impressions), 0) as impressions,
+        COALESCE(SUM(m.clicks), 0) as clicks,
+        COALESCE(SUM(m.conversions), 0) as conversions,
+        0 as conversion_value_cents,
+        COUNT(DISTINCT c.id) as campaigns
+      FROM facebook_campaigns c
+      LEFT JOIN facebook_campaign_daily_metrics m
+        ON c.id = m.campaign_ref
+        AND m.metric_date >= ?
+        AND m.metric_date <= ?
+      WHERE c.organization_id = ?
+    `).bind(startDate, endDate, orgId).first<PlatformSummary>();
+
+    return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+  }
+
+  // =============================================================================
+  // TIKTOK ADS PLATFORM DATA
+  // =============================================================================
+
+  /**
+   * Get TikTok Ads campaigns for an organization
+   */
+  async getTikTokCampaigns(
+    orgId: string,
+    options: { status?: string; limit?: number; offset?: number } = {}
+  ): Promise<TikTokCampaignRow[]> {
+    let query = `
+      SELECT * FROM tiktok_campaigns
+      WHERE organization_id = ?
+    `;
+    const params: unknown[] = [orgId];
+
+    if (options.status) {
+      query += ` AND campaign_status = ?`;
+      params.push(options.status);
+    }
+
+    query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    params.push(options.limit || 100, options.offset || 0);
+
+    const result = await this.db.prepare(query).bind(...params).all<TikTokCampaignRow>();
+    return result.results;
+  }
+
+  /**
+   * Get TikTok Ads campaigns with aggregated metrics
+   */
+  async getTikTokCampaignsWithMetrics(
+    orgId: string,
+    startDate: string,
+    endDate: string,
+    options: { status?: string; limit?: number; offset?: number } = {}
+  ): Promise<CampaignWithMetrics[]> {
+    let query = `
+      SELECT
+        c.id,
+        c.campaign_id,
+        c.campaign_name,
+        c.campaign_status as status,
+        c.last_synced_at,
+        COALESCE(SUM(m.impressions), 0) as impressions,
+        COALESCE(SUM(m.clicks), 0) as clicks,
+        COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+        COALESCE(SUM(m.conversions), 0) as conversions,
+        0 as conversion_value_cents
+      FROM tiktok_campaigns c
+      LEFT JOIN tiktok_campaign_daily_metrics m
+        ON c.id = m.campaign_ref
+        AND m.metric_date >= ?
+        AND m.metric_date <= ?
+      WHERE c.organization_id = ?
+    `;
+    const params: unknown[] = [startDate, endDate, orgId];
+
+    if (options.status) {
+      query += ` AND c.campaign_status = ?`;
+      params.push(options.status);
+    }
+
+    query += ` GROUP BY c.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
+    params.push(options.limit || 100, options.offset || 0);
+
+    const result = await this.db.prepare(query).bind(...params).all<any>();
+
+    return result.results.map((row: any) => ({
+      campaign_id: row.campaign_id,
+      campaign_name: row.campaign_name,
+      status: row.status,
+      last_synced_at: row.last_synced_at,
+      metrics: {
+        impressions: row.impressions || 0,
+        clicks: row.clicks || 0,
+        spend: (row.spend_cents || 0) / 100,
+        conversions: row.conversions || 0,
+        revenue: (row.conversion_value_cents || 0) / 100,
+        ctr: row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0,
+        cpc: row.clicks > 0 ? (row.spend_cents / row.clicks) / 100 : 0,
+      },
+    }));
+  }
+
+  /**
+   * Get TikTok Ads summary for an organization
+   */
+  async getTikTokSummary(orgId: string, startDate: string, endDate: string): Promise<PlatformSummary> {
+    const result = await this.db.prepare(`
+      SELECT
+        COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+        COALESCE(SUM(m.impressions), 0) as impressions,
+        COALESCE(SUM(m.clicks), 0) as clicks,
+        COALESCE(SUM(m.conversions), 0) as conversions,
+        0 as conversion_value_cents,
+        COUNT(DISTINCT c.id) as campaigns
+      FROM tiktok_campaigns c
+      LEFT JOIN tiktok_campaign_daily_metrics m
+        ON c.id = m.campaign_ref
+        AND m.metric_date >= ?
+        AND m.metric_date <= ?
+      WHERE c.organization_id = ?
+    `).bind(startDate, endDate, orgId).first<PlatformSummary>();
+
+    return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+  }
+
+  // =============================================================================
+  // UNIFIED PLATFORM DATA
+  // =============================================================================
+
+  /**
+   * Get unified platform summary across all ad platforms
+   */
+  async getUnifiedPlatformSummary(
+    orgId: string,
+    startDate: string,
+    endDate: string,
+    platforms: string[]
+  ): Promise<{ summary: PlatformSummary; by_platform: Record<string, PlatformSummary> }> {
+    const by_platform: Record<string, PlatformSummary> = {};
+    let totalSummary: PlatformSummary = {
+      spend_cents: 0,
+      impressions: 0,
+      clicks: 0,
+      conversions: 0,
+      conversion_value_cents: 0,
+      campaigns: 0,
+    };
+
+    for (const platform of platforms) {
+      let summary: PlatformSummary;
+
+      switch (platform) {
+        case 'google':
+          summary = await this.getGoogleSummary(orgId, startDate, endDate);
+          break;
+        case 'facebook':
+        case 'meta':
+          summary = await this.getFacebookSummary(orgId, startDate, endDate);
+          break;
+        case 'tiktok':
+          summary = await this.getTikTokSummary(orgId, startDate, endDate);
+          break;
+        default:
+          continue;
+      }
+
+      by_platform[platform] = summary;
+      totalSummary.spend_cents += summary.spend_cents;
+      totalSummary.impressions += summary.impressions;
+      totalSummary.clicks += summary.clicks;
+      totalSummary.conversions += summary.conversions;
+      totalSummary.conversion_value_cents += summary.conversion_value_cents;
+      totalSummary.campaigns += summary.campaigns;
+    }
+
+    return { summary: totalSummary, by_platform };
+  }
+
+  // =============================================================================
+  // STRIPE DATA
+  // =============================================================================
+
+  /**
+   * Get Stripe charges for an organization
+   */
+  async getStripeCharges(
+    orgId: string,
+    connectionId: string,
+    startDate: string,
+    endDate: string,
+    options: { status?: string; currency?: string; minAmount?: number; maxAmount?: number; limit?: number; offset?: number } = {}
+  ): Promise<StripeChargeRow[]> {
+    let query = `
+      SELECT *
+      FROM stripe_charges
+      WHERE organization_id = ?
+        AND connection_id = ?
+        AND stripe_created_at >= ?
+        AND stripe_created_at <= ?
+    `;
+    const params: unknown[] = [orgId, connectionId, startDate, endDate + 'T23:59:59Z'];
+
+    if (options.status) {
+      query += ` AND status = ?`;
+      params.push(options.status);
+    }
+    if (options.currency) {
+      query += ` AND currency = ?`;
+      params.push(options.currency);
+    }
+    if (options.minAmount !== undefined) {
+      query += ` AND amount_cents >= ?`;
+      params.push(options.minAmount * 100);
+    }
+    if (options.maxAmount !== undefined) {
+      query += ` AND amount_cents <= ?`;
+      params.push(options.maxAmount * 100);
+    }
+
+    query += ` ORDER BY stripe_created_at DESC LIMIT ? OFFSET ?`;
+    params.push(options.limit || 100, options.offset || 0);
+
+    const result = await this.db.prepare(query).bind(...params).all<StripeChargeRow>();
+    return result.results;
+  }
+
+  /**
+   * Get Stripe daily summary for an organization
+   */
+  async getStripeDailySummary(
+    orgId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<StripeDailySummaryRow[]> {
+    const result = await this.db.prepare(`
+      SELECT *
+      FROM stripe_daily_summary
+      WHERE organization_id = ?
+        AND summary_date >= ?
+        AND summary_date <= ?
+      ORDER BY summary_date DESC
+    `).bind(orgId, startDate, endDate).all<StripeDailySummaryRow>();
+
+    return result.results;
+  }
+
+  /**
+   * Get Stripe revenue summary for an organization (computed from charges if daily summary missing)
+   */
+  async getStripeSummary(
+    orgId: string,
+    connectionId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<StripeSummary> {
+    const result = await this.db.prepare(`
+      SELECT
+        COUNT(*) as total_transactions,
+        COALESCE(SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END), 0) as total_revenue_cents,
+        COALESCE(SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END), 0) as successful_count,
+        COUNT(DISTINCT customer_id) as unique_customers
+      FROM stripe_charges
+      WHERE organization_id = ?
+        AND connection_id = ?
+        AND stripe_created_at >= ?
+        AND stripe_created_at <= ?
+    `).bind(orgId, connectionId, startDate, endDate + 'T23:59:59Z').first<{
+      total_transactions: number;
+      total_revenue_cents: number;
+      successful_count: number;
+      unique_customers: number;
+    }>();
+
+    return {
+      total_revenue: (result?.total_revenue_cents || 0) / 100,
+      total_units: result?.total_transactions || 0,
+      transaction_count: result?.successful_count || 0,
+      unique_customers: result?.unique_customers || 0,
+      average_order_value: result?.successful_count
+        ? ((result?.total_revenue_cents || 0) / result.successful_count) / 100
+        : 0,
+    };
+  }
+
+  /**
+   * Get Stripe charges with time series aggregation
+   */
+  async getStripeTimeSeries(
+    orgId: string,
+    connectionId: string,
+    startDate: string,
+    endDate: string,
+    groupBy: 'day' | 'week' | 'month' = 'day'
+  ): Promise<StripeTimeSeriesRow[]> {
+    let dateFormat: string;
+    switch (groupBy) {
+      case 'week':
+        dateFormat = "strftime('%Y-W%W', stripe_created_at)";
+        break;
+      case 'month':
+        dateFormat = "strftime('%Y-%m', stripe_created_at)";
+        break;
+      default:
+        dateFormat = "date(stripe_created_at)";
+    }
+
+    const result = await this.db.prepare(`
+      SELECT
+        ${dateFormat} as date,
+        SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as revenue_cents,
+        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as transactions,
+        COUNT(DISTINCT customer_id) as unique_customers
+      FROM stripe_charges
+      WHERE organization_id = ?
+        AND connection_id = ?
+        AND stripe_created_at >= ?
+        AND stripe_created_at <= ?
+      GROUP BY ${dateFormat}
+      ORDER BY date ASC
+    `).bind(orgId, connectionId, startDate, endDate + 'T23:59:59Z').all<{
+      date: string;
+      revenue_cents: number;
+      transactions: number;
+      unique_customers: number;
+    }>();
+
+    return result.results.map(row => ({
+      date: row.date,
+      revenue: row.revenue_cents / 100,
+      transactions: row.transactions,
+      unique_customers: row.unique_customers,
+    }));
+  }
+}
+
+// =============================================================================
+// STRIPE INTERFACES
+// =============================================================================
+
+export interface StripeChargeRow {
+  id: string;
+  organization_id: string;
+  connection_id: string;
+  charge_id: string;
+  customer_id: string | null;
+  customer_email_hash: string | null;
+  has_invoice: number;
+  amount_cents: number;
+  currency: string;
+  status: string;
+  payment_method_type: string | null;
+  stripe_created_at: string;
+  metadata: string | null;
+  raw_data: string | null;
+  created_at: string;
+}
+
+export interface StripeDailySummaryRow {
+  id: number;
+  organization_id: string;
+  summary_date: string;
+  total_charges: number;
+  total_amount_cents: number;
+  successful_charges: number;
+  failed_charges: number;
+  refunded_amount_cents: number;
+  unique_customers: number;
+  created_at: string;
+}
+
+export interface StripeSummary {
+  total_revenue: number;
+  total_units: number;
+  transaction_count: number;
+  unique_customers: number;
+  average_order_value: number;
+}
+
+export interface StripeTimeSeriesRow {
+  date: string;
+  revenue: number;
+  transactions: number;
+  unique_customers: number;
 }

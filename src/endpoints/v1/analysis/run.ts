@@ -13,7 +13,6 @@ import { success, error } from "../../../utils/response";
 import { getSecret } from "../../../utils/secrets";
 import { JobManager, AnalysisConfig } from "../../../services/analysis";
 import { generateFacebookDemoRecommendations } from "../../../services/demo-recommendations";
-import { SupabaseClient } from "../../../services/supabase";
 
 export class RunAnalysis extends OpenAPIRoute {
   public schema = {
@@ -127,26 +126,16 @@ export class RunAnalysis extends OpenAPIRoute {
         LIMIT 1
       `).bind(orgId).first<{ id: string }>();
 
-      if (fbConnection) {
-        const supabaseUrl = c.env.SUPABASE_URL;
-        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+      if (fbConnection && c.env.ANALYTICS_DB) {
+        const result = await generateFacebookDemoRecommendations(
+          c.env.AI_DB,
+          c.env.ANALYTICS_DB,
+          orgId,
+          fbConnection.id
+        );
 
-        if (supabaseUrl && supabaseKey) {
-          const supabase = new SupabaseClient({
-            url: supabaseUrl,
-            secretKey: supabaseKey
-          });
-
-          const result = await generateFacebookDemoRecommendations(
-            c.env.AI_DB,
-            supabase,
-            orgId,
-            fbConnection.id
-          );
-
-          if (result.success && result.recommendations_created > 0) {
-            console.log(`[RunAnalysis] Seeded ${result.recommendations_created} Facebook demo recommendations for org ${orgId}`);
-          }
+        if (result.success && result.recommendations_created > 0) {
+          console.log(`[RunAnalysis] Seeded ${result.recommendations_created} Facebook demo recommendations for org ${orgId}`);
         }
       }
     } catch (demoError) {

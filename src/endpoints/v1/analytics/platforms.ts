@@ -7,6 +7,14 @@ import { getSecret } from "../../../utils/secrets";
 import { GoogleAdsSupabaseAdapter } from "../../../adapters/platforms/google-supabase";
 import { FacebookSupabaseAdapter } from "../../../adapters/platforms/facebook-supabase";
 import { TikTokAdsSupabaseAdapter } from "../../../adapters/platforms/tiktok-supabase";
+import { D1AnalyticsService } from "../../../services/d1-analytics";
+
+/**
+ * Check if D1 analytics should be used
+ */
+function useD1Analytics(env: any): boolean {
+  return env.USE_D1_ANALYTICS === 'true' && !!env.ANALYTICS_DB;
+}
 
 /**
  * DEPRECATED: GetPlatformData class removed - broken table naming
@@ -100,6 +108,55 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       });
     }
 
+    // Build effective date range (default: last 30 days)
+    const effectiveDateRange = startDate && endDate
+      ? { start: startDate, end: endDate }
+      : {
+          start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          end: new Date().toISOString().split('T')[0]
+        };
+
+    console.log(`[Unified] Fetching data for org ${orgId}, date range: ${effectiveDateRange.start} to ${effectiveDateRange.end}`);
+
+    // Use D1 for analytics when enabled (new path)
+    if (useD1Analytics(c.env)) {
+      console.log('[Unified] Using D1 ANALYTICS_DB for platform data');
+      try {
+        const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
+        const { summary: d1Summary, by_platform } = await d1Analytics.getUnifiedPlatformSummary(
+          orgId,
+          effectiveDateRange.start,
+          effectiveDateRange.end,
+          activePlatforms
+        );
+
+        const summary = {
+          total_spend_cents: d1Summary.spend_cents,
+          total_impressions: d1Summary.impressions,
+          total_clicks: d1Summary.clicks,
+          total_conversions: d1Summary.conversions,
+          total_conversion_value_cents: d1Summary.conversion_value_cents,
+          average_ctr: d1Summary.impressions > 0
+            ? (d1Summary.clicks / d1Summary.impressions) * 100
+            : 0,
+          average_cpc_cents: d1Summary.clicks > 0
+            ? Math.round(d1Summary.spend_cents / d1Summary.clicks)
+            : 0,
+          platforms_active: Object.keys(by_platform).filter(p => by_platform[p].campaigns > 0)
+        };
+
+        return success(c, {
+          summary,
+          by_platform,
+          time_series: [] // TODO: Add time series from D1 if needed
+        });
+      } catch (d1Error) {
+        console.error('[Unified] D1 query failed, falling back to Supabase:', d1Error);
+        // Fall through to Supabase path
+      }
+    }
+
+    // Fallback to Supabase (legacy path)
     // Get Supabase secret key from Secrets Store
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
     if (!supabaseKey) {
@@ -112,16 +169,6 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     });
 
     try {
-      // Build effective date range (default: last 30 days)
-      const effectiveDateRange = startDate && endDate
-        ? { start: startDate, end: endDate }
-        : {
-            start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            end: new Date().toISOString().split('T')[0]
-          };
-
-      console.log(`[Unified] Fetching data for org ${orgId}, date range: ${effectiveDateRange.start} to ${effectiveDateRange.end}`);
-
       // Fetch platform data and time series in parallel
       const [platformData, platformTimeSeries] = await Promise.all([
         this.fetchPlatformData(supabase, orgId, activePlatforms, effectiveDateRange),

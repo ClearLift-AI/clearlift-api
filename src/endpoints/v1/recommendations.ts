@@ -13,7 +13,6 @@ import { AppContext } from "../../types";
 import { success, error } from "../../utils/response";
 import { getSecret } from "../../utils/secrets";
 import { generateFacebookDemoRecommendations } from "../../services/demo-recommendations";
-import { SupabaseClient } from "../../services/supabase";
 
 /**
  * Verify internal auth (service binding or API key)
@@ -103,24 +102,16 @@ export class SeedFacebookDemoRecommendations extends OpenAPIRoute {
 
       console.log(`[SeedDemoRec] Received seed request for org ${organization_id}, connection ${connection_id}`);
 
-      // Initialize Supabase client
-      const supabaseUrl = c.env.SUPABASE_URL;
-      const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-
-      if (!supabaseUrl || !supabaseKey) {
-        console.error("[SeedDemoRec] Missing Supabase configuration");
-        return error(c, "MISSING_CONFIG", "Supabase not configured", 500);
+      // Ensure ANALYTICS_DB is configured
+      if (!c.env.ANALYTICS_DB) {
+        console.error("[SeedDemoRec] Missing ANALYTICS_DB configuration");
+        return error(c, "MISSING_CONFIG", "ANALYTICS_DB not configured", 500);
       }
 
-      const supabase = new SupabaseClient({
-        url: supabaseUrl,
-        secretKey: supabaseKey
-      });
-
-      // Generate demo recommendations
+      // Generate demo recommendations using D1
       const result = await generateFacebookDemoRecommendations(
         c.env.AI_DB,
-        supabase,
+        c.env.ANALYTICS_DB,
         organization_id,
         connection_id
       );

@@ -1,15 +1,14 @@
 /**
  * Stripe Analytics Endpoint
  *
- * Retrieve and analyze Stripe revenue data with flexible metadata filtering
+ * Retrieve and analyze Stripe revenue data from D1 ANALYTICS_DB
  */
 
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
-import { MetadataFilter } from "../../../adapters/platforms/stripe-supabase";
-import { getSecret } from "../../../utils/secrets";
+import { D1AnalyticsService } from "../../../services/d1-analytics";
 
 /**
  * GET /v1/analytics/stripe
@@ -88,135 +87,100 @@ export class GetStripeAnalytics extends OpenAPIRoute {
 
     // Verify connection exists and user has access
     const connection = await c.env.DB.prepare(`
-      SELECT pc.*
+      SELECT pc.*, pc.organization_id
       FROM platform_connections pc
       INNER JOIN organization_members om
         ON pc.organization_id = om.organization_id
       WHERE pc.id = ? AND pc.platform = 'stripe' AND om.user_id = ?
-    `).bind(query.query.connection_id, session.user_id).first();
+    `).bind(query.query.connection_id, session.user_id).first<{ id: string; organization_id: string }>();
 
     if (!connection) {
       return error(c, "NOT_FOUND", "Stripe connection not found or access denied", 404);
     }
 
-    // Initialize Supabase adapter
-    const { SupabaseClient } = await import("../../../services/supabase");
-    const { StripeSupabaseAdapter } = await import("../../../adapters/platforms/stripe-supabase");
-
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
-    });
-    const adapter = new StripeSupabaseAdapter(supabase);
-
-    // Parse metadata filters if provided
-    let metadataFilters: MetadataFilter[] = [];
-    if (query.query.metadata_filters) {
-      try {
-        metadataFilters = JSON.parse(query.query.metadata_filters);
-      } catch {
-        return error(c, "INVALID_FILTERS", "Invalid metadata_filters JSON", 400);
-      }
+    // Use D1 ANALYTICS_DB
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    // Add standard filters as metadata filters
-    if (query.query.status) {
-      metadataFilters.push({
-        source: 'charge',
-        key: 'status',
-        operator: 'equals',
-        value: query.query.status
-      });
-    }
+    const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
 
-    // Query data with filters
-    let records: any[];
     try {
-      records = await adapter.queryByMetadata(
+      // Get charges from D1
+      const charges = await d1Analytics.getStripeCharges(
+        connection.organization_id,
         query.query.connection_id,
-        metadataFilters,
+        query.query.date_from,
+        query.query.date_to,
         {
-          start: query.query.date_from,
-          end: query.query.date_to
+          status: query.query.status,
+          currency: query.query.currency,
+          minAmount: query.query.min_amount,
+          maxAmount: query.query.max_amount,
+          limit: 1000, // Get all for aggregation
+          offset: 0,
         }
       );
-    } catch (err) {
-      console.error("Stripe query failed:", err);
-      // Return empty data instead of error - sync may not have run yet
+
+      if (charges.length === 0) {
+        return success(c, {
+          summary: {
+            total_revenue: 0,
+            total_units: 0,
+            transaction_count: 0,
+            unique_customers: 0,
+            average_order_value: 0
+          },
+          time_series: [],
+          by_product: {},
+          records: [],
+          total_records: 0,
+          sync_status: "No data synced yet. Please wait for the sync to complete."
+        });
+      }
+
+      // Transform charges to records format
+      const records = charges.map(charge => ({
+        date: charge.stripe_created_at.split('T')[0],
+        charge_id: charge.charge_id,
+        amount: charge.amount_cents,
+        currency: charge.currency,
+        status: charge.status,
+        customer_id: charge.customer_id,
+        metadata: charge.metadata ? JSON.parse(charge.metadata) : {}
+      }));
+
+      // Calculate summary metrics
+      const summary = this.calculateSummary(records);
+
+      // Generate time series based on group_by
+      const timeSeries = this.generateTimeSeries(
+        records,
+        query.query.group_by || 'day'
+      );
+
+      // Apply pagination
+      const paginatedRecords = records.slice(
+        query.query.offset || 0,
+        (query.query.offset || 0) + (query.query.limit || 100)
+      );
+
       return success(c, {
-        summary: {
-          total_revenue: 0,
-          total_units: 0,
-          transaction_count: 0,
-          unique_customers: 0,
-          average_order_value: 0
-        },
-        time_series: [],
-        by_product: {},
-        records: [],
-        total_records: 0,
-        metadata_keys_available: { charge: [], product: [], price: [], customer: [] },
-        sync_status: "No data synced yet. Please wait for the sync to complete."
+        summary,
+        time_series: timeSeries,
+        records: paginatedRecords.map(r => ({
+          date: r.date,
+          charge_id: r.charge_id,
+          amount: r.amount / 100, // Convert cents to dollars
+          currency: r.currency,
+          status: r.status
+        })),
+        total_records: records.length
       });
+    } catch (err) {
+      console.error("D1 Stripe query failed:", err);
+      return error(c, "QUERY_FAILED", "Failed to fetch Stripe data", 500);
     }
-
-    // Apply amount filters if provided
-    let filteredRecords = records;
-    if (query.query.min_amount !== undefined) {
-      filteredRecords = filteredRecords.filter(r => r.amount >= query.query.min_amount!);
-    }
-    if (query.query.max_amount !== undefined) {
-      filteredRecords = filteredRecords.filter(r => r.amount <= query.query.max_amount!);
-    }
-    if (query.query.currency) {
-      filteredRecords = filteredRecords.filter(r => r.currency === query.query.currency);
-    }
-
-    // Calculate summary metrics
-    const summary = this.calculateSummary(filteredRecords);
-
-    // Generate time series based on group_by
-    const timeSeries = this.generateTimeSeries(
-      filteredRecords,
-      query.query.group_by || 'day'
-    );
-
-    // Group by product if requested
-    const byProduct = this.groupByProduct(filteredRecords);
-
-    // Group by metadata if requested
-    let byMetadata: Record<string, Record<string, number>> = {};
-    if (query.query.group_by_metadata) {
-      const metadataKeys = query.query.group_by_metadata.split(',');
-      byMetadata = this.groupByMetadata(filteredRecords, metadataKeys);
-    }
-
-    // Get available metadata keys
-    const metadataKeys = await adapter.getMetadataKeys(query.query.connection_id);
-
-    // Apply pagination
-    const paginatedRecords = filteredRecords.slice(
-      query.query.offset || 0,
-      (query.query.offset || 0) + (query.query.limit || 100)
-    );
-
-    return success(c, {
-      summary,
-      time_series: timeSeries,
-      by_product: byProduct,
-      by_metadata: Object.keys(byMetadata).length > 0 ? byMetadata : undefined,
-      records: paginatedRecords.map(r => ({
-        date: r.date,
-        charge_id: r.charge_id,
-        amount: r.amount,
-        currency: r.currency,
-        status: r.status,
-        product_id: r.product_id,
-        units: r.units
-      })),
-      total_records: filteredRecords.length,
-      metadata_keys_available: metadataKeys
-    });
   }
 
   private calculateSummary(records: any[]): any {
@@ -389,67 +353,66 @@ export class GetStripeDailyAggregates extends OpenAPIRoute {
     const session = c.get("session");
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Verify access
-    const hasAccess = await c.env.DB.prepare(`
-      SELECT 1 FROM platform_connections pc
+    // Verify access and get org_id
+    const connection = await c.env.DB.prepare(`
+      SELECT pc.organization_id FROM platform_connections pc
       INNER JOIN organization_members om
         ON pc.organization_id = om.organization_id
       WHERE pc.id = ? AND pc.platform = 'stripe' AND om.user_id = ?
-    `).bind(query.query.connection_id, session.user_id).first();
+    `).bind(query.query.connection_id, session.user_id).first<{ organization_id: string }>();
 
-    if (!hasAccess) {
+    if (!connection) {
       return error(c, "FORBIDDEN", "Access denied", 403);
     }
 
-    // Initialize Supabase client
-    const { SupabaseClient } = await import("../../../services/supabase");
-    const { StripeSupabaseAdapter } = await import("../../../adapters/platforms/stripe-supabase");
+    // Use D1 ANALYTICS_DB
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
+    }
 
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
-    });
-    const adapter = new StripeSupabaseAdapter(supabase);
+    const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
 
-    // Query aggregates from Supabase
-    const aggregates = await adapter.getDailyAggregates(
-      query.query.connection_id,
-      {
-        start: query.query.date_from,
-        end: query.query.date_to
-      },
-      query.query.currency
-    );
+    try {
+      // Get time series data from D1
+      const timeSeries = await d1Analytics.getStripeTimeSeries(
+        connection.organization_id,
+        query.query.connection_id,
+        query.query.date_from,
+        query.query.date_to,
+        'day'
+      );
 
-    const formattedAggregates = aggregates.map(row => ({
-      date: row.date,
-      currency: row.currency,
-      total_revenue: row.total_revenue / 100,
-      total_units: row.total_units,
-      transaction_count: row.transaction_count,
-      unique_customers: row.unique_customers,
-      revenue_by_product: row.revenue_by_product ? JSON.parse(row.revenue_by_product as string) : {},
-      revenue_by_status: row.revenue_by_status ? JSON.parse(row.revenue_by_status as string) : {},
-      top_metadata_values: row.top_metadata_values ? JSON.parse(row.top_metadata_values as string) : {}
-    }));
+      // Format as daily aggregates
+      const formattedAggregates = timeSeries.map(row => ({
+        date: row.date,
+        currency: query.query.currency || 'usd',
+        total_revenue: row.revenue,
+        total_units: row.transactions,
+        transaction_count: row.transactions,
+        unique_customers: row.unique_customers
+      }));
 
-    // Calculate totals
-    const totals = formattedAggregates.reduce((sum, day) => ({
-      total_revenue: sum.total_revenue + day.total_revenue,
-      total_units: sum.total_units + day.total_units,
-      transaction_count: sum.transaction_count + day.transaction_count,
-      unique_customers: Math.max(sum.unique_customers, day.unique_customers) // Approximate
-    }), {
-      total_revenue: 0,
-      total_units: 0,
-      transaction_count: 0,
-      unique_customers: 0
-    });
+      // Calculate totals
+      const totals = formattedAggregates.reduce((sum, day) => ({
+        total_revenue: sum.total_revenue + day.total_revenue,
+        total_units: sum.total_units + day.total_units,
+        transaction_count: sum.transaction_count + day.transaction_count,
+        unique_customers: Math.max(sum.unique_customers, day.unique_customers)
+      }), {
+        total_revenue: 0,
+        total_units: 0,
+        transaction_count: 0,
+        unique_customers: 0
+      });
 
-    return success(c, {
-      aggregates: formattedAggregates,
-      totals,
-      days: formattedAggregates.length
-    });
+      return success(c, {
+        aggregates: formattedAggregates,
+        totals,
+        days: formattedAggregates.length
+      });
+    } catch (err) {
+      console.error("D1 Stripe aggregates query failed:", err);
+      return error(c, "QUERY_FAILED", "Failed to fetch Stripe aggregates", 500);
+    }
   }
 }

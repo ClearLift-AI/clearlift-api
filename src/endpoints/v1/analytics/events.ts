@@ -1,15 +1,14 @@
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
-import { createClient } from "@supabase/supabase-js";
 import { success, error } from "../../../utils/response";
 import { EventResponseSchema } from "../../../schemas/analytics";
 import { getSecret } from "../../../utils/secrets";
+import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
 
 /**
- * GET /v1/analytics/events - Get raw events from Supabase
- * Fetches events by org_tag using the org_events view which handles
- * domain_xxx event resolution automatically via effective_org_tag.
+ * GET /v1/analytics/events - Get raw events from R2 SQL
+ * Fetches events by org_tag using R2 SQL Data Catalog.
  */
 export class GetEvents extends OpenAPIRoute {
   public schema = {
@@ -58,14 +57,8 @@ export class GetEvents extends OpenAPIRoute {
     const lookback = c.req.query("lookback") || "24h";
     const limit = parseInt(c.req.query("limit") || "100");
 
-    // Cap limit at 999 so we can request 1000 and detect if more exist
-    // (Supabase PostgREST caps at 1000 rows by default)
-    // Clients should use cursor pagination for larger datasets
-    const cappedLimit = Math.min(limit, 999);
-
-    // Get cursor parameters for pagination
-    const cursor = c.req.query("cursor");
-    const direction = c.req.query("direction") || "next";
+    // Cap limit at 500 for R2 SQL (it's slower than Supabase)
+    const cappedLimit = Math.min(limit, 500);
 
     // Look up the org_tag for this organization
     const orgTagMapping = await c.env.DB.prepare(`
@@ -78,100 +71,53 @@ export class GetEvents extends OpenAPIRoute {
 
     const orgTag = orgTagMapping.short_tag;
 
-    // Get Supabase secret key from Secrets Store
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase key not configured", 500);
+    // Get R2 SQL configuration
+    const r2ApiToken = await getSecret(c.env.R2_SQL_TOKEN);
+    if (!r2ApiToken) {
+      return error(c, "CONFIGURATION_ERROR", "R2 SQL token not configured", 500);
     }
 
-    // Calculate timestamp threshold from lookback period
-    const now = new Date();
-    let startTime: Date;
+    // Look up domain patterns claimed by this org (from D1)
+    let domainPatterns: string[] = [];
+    try {
+      const domainClaimsResult = await c.env.DB.prepare(`
+        SELECT domain_pattern FROM domain_claims
+        WHERE claimed_org_tag = ? AND released_at IS NULL
+      `).bind(orgTag).all<{ domain_pattern: string }>();
 
-    switch (lookback) {
-      case "1h":
-        startTime = new Date(now.getTime() - 60 * 60 * 1000);
-        break;
-      case "6h":
-        startTime = new Date(now.getTime() - 6 * 60 * 60 * 1000);
-        break;
-      case "7d":
-        startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        break;
-      case "30d":
-        startTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        break;
-      case "24h":
-      default:
-        startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        break;
+      domainPatterns = (domainClaimsResult.results || []).map(d => d.domain_pattern);
+    } catch {
+      // Domain claims table may not exist in all envs
     }
-
-    // Use events schema
-    const supabase = createClient(c.env.SUPABASE_URL, supabaseKey, {
-      db: { schema: 'events' }
-    });
 
     try {
-      // First, get any domain patterns claimed by this org
-      // This allows us to also fetch domain_xxx events that belong to this org
-      const { data: domainClaims } = await supabase
-        .from("domain_claims")
-        .select("domain_pattern")
-        .eq("claimed_org_tag", orgTag)
-        .is("released_at", null);
+      // Initialize R2 SQL adapter
+      const r2sql = new R2SQLAdapter(
+        c.env.CLOUDFLARE_ACCOUNT_ID || '',
+        c.env.R2_BUCKET_NAME || 'clearlift-events-lake',
+        r2ApiToken
+      );
 
-      // Convert SQL LIKE patterns (%) to PostgREST patterns (*)
-      const domainPatterns = (domainClaims?.map(d => d.domain_pattern) || [])
-        .map(p => p.replace(/%/g, '*'));
+      // Query events from R2 SQL
+      const result = await r2sql.getEvents(orgTag, {
+        lookback,
+        limit: cappedLimit + 1, // Fetch one extra to detect if more exist
+        domainPatterns
+      });
 
-      // Query events_slim directly - optimized table with only essential fields
-      // We filter on org_tag = orgTag OR org_tag matches any domain pattern
-      // Fetch one extra to determine if there are more results (cursor pagination)
-      let query = supabase
-        .from("events_slim")
-        .select("*")
-        .gte("timestamp", startTime.toISOString())
-        .order("timestamp", { ascending: false })
-        .limit(cappedLimit + 1);
-
-      // Apply cursor-based pagination if cursor is provided
-      if (cursor) {
-        if (direction === "next") {
-          // Get events older than cursor (going back in time)
-          query = query.lt("timestamp", cursor);
-        } else {
-          // Get events newer than cursor (going forward in time)
-          query = query.gt("timestamp", cursor);
-        }
+      if (result.error) {
+        console.error("R2 SQL query error:", result.error);
+        return error(c, "QUERY_FAILED", result.error, 500);
       }
 
-      if (domainPatterns.length > 0) {
-        // Build OR filter: org_tag = orgTag OR org_tag LIKE pattern1 OR ...
-        // PostgREST uses * as wildcard (not %), and ilike for case-insensitive
-        const likeFilters = domainPatterns.map(p => `org_tag.ilike.${p}`).join(',');
-        query = query.or(`org_tag.eq.${orgTag},${likeFilters}`);
-      } else {
-        // No domain claims, just filter by exact org_tag
-        query = query.eq("org_tag", orgTag);
-      }
-
-      const { data: events, error: queryError } = await query;
-
-      if (queryError) {
-        console.error("Supabase query error:", queryError);
-        return error(c, "QUERY_FAILED", queryError.message, 500);
-      }
-
-      // Determine if there are more results (we fetched cappedLimit + 1)
-      const hasMore = events && events.length > cappedLimit;
-      const returnedEvents = hasMore ? events.slice(0, cappedLimit) : (events || []);
+      // Determine if there are more results
+      const hasMore = result.events.length > cappedLimit;
+      const returnedEvents = hasMore ? result.events.slice(0, cappedLimit) : result.events;
       const nextCursor = returnedEvents.length > 0
         ? returnedEvents[returnedEvents.length - 1].timestamp
         : null;
 
       // Set cache headers based on lookback period
-      // Shorter lookbacks = more real-time = shorter cache
       const cacheSeconds: Record<string, number> = {
         '1h': 30,
         '6h': 30,

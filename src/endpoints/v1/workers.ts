@@ -92,35 +92,43 @@ export class GetWorkersHealth extends OpenAPIRoute {
 
   private async checkWorkerHealth(url: string, workerName: string): Promise<any> {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
       const response = await fetch(url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(5000) // 5 second timeout
+        signal: controller.signal
       });
 
+      clearTimeout(timeoutId);
+
       if (response.ok) {
-        const data = await response.json() as { message?: string; [key: string]: any };
+        const data = await response.json() as { status?: string; message?: string; [key: string]: any };
         return {
           worker: workerName,
-          status: 'healthy',
+          status: data.status === 'healthy' ? 'healthy' : 'degraded',
           lastCheck: new Date().toISOString(),
-          message: data.message || 'Worker is healthy',
+          message: data.status === 'healthy' ? 'Worker is healthy' : (data.message || 'Worker status check passed'),
           metadata: data
         };
       } else {
+        const text = await response.text().catch(() => '');
         return {
           worker: workerName,
           status: 'degraded',
           lastCheck: new Date().toISOString(),
-          message: `Worker returned status ${response.status}`
+          message: `Worker returned status ${response.status}: ${text.slice(0, 100)}`
         };
       }
     } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      console.error(`[WorkerHealth] Failed to check ${workerName} at ${url}:`, errorMsg);
       return {
         worker: workerName,
         status: 'unhealthy',
         lastCheck: new Date().toISOString(),
-        message: err instanceof Error ? err.message : 'Failed to contact worker'
+        message: `Failed to contact worker: ${errorMsg}`
       };
     }
   }

@@ -7,9 +7,44 @@
  * - Compare multiple entities side-by-side
  * - Get creative details
  * - Get audience/targeting breakdowns
+ *
+ * Updated to use D1 ANALYTICS_DB instead of Supabase
  */
 
-import { SupabaseClient } from '../../services/supabase';
+// D1Database type from Cloudflare Workers (matches worker-configuration.d.ts)
+type D1Database = {
+  prepare(query: string): D1PreparedStatement;
+  dump(): Promise<ArrayBuffer>;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+  exec(query: string): Promise<D1ExecResult>;
+};
+
+interface D1PreparedStatement {
+  bind(...values: unknown[]): D1PreparedStatement;
+  first<T = unknown>(colName?: string): Promise<T | null>;
+  run(): Promise<D1Result>;
+  all<T = unknown>(): Promise<D1Result<T>>;
+  raw<T = unknown[]>(): Promise<T[]>;
+}
+
+interface D1Result<T = unknown> {
+  results: T[];
+  success: boolean;
+  error?: string;
+  meta?: {
+    changed_db: boolean;
+    changes: number;
+    last_row_id: number;
+    duration: number;
+    rows_read: number;
+    rows_written: number;
+  };
+}
+
+interface D1ExecResult {
+  count: number;
+  duration: number;
+}
 
 // Tool definitions for Anthropic API
 export const EXPLORATION_TOOLS = {
@@ -515,9 +550,10 @@ interface GetEntityBudgetInput {
 
 /**
  * Exploration Tool Executor
+ * Uses D1 ANALYTICS_DB for all queries
  */
 export class ExplorationToolExecutor {
-  constructor(private supabase: SupabaseClient) {}
+  constructor(private db: D1Database) {}
 
   /**
    * Execute an exploration tool and return results
@@ -563,7 +599,7 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Query metrics for a specific entity
+   * Query metrics for a specific entity (D1 version)
    */
   private async queryMetrics(
     input: QueryMetricsInput,
@@ -583,13 +619,25 @@ export class ExplorationToolExecutor {
     const startStr = startDate.toISOString().split('T')[0];
     const endStr = endDate.toISOString().split('T')[0];
 
-    // Build query string for Supabase REST API
-    const columns = ['metric_date', 'spend_cents', 'impressions', 'clicks', 'conversions', 'conversion_value_cents'].join(',');
-    const filters = `${tableInfo.idColumn}=eq.${entity_id}&organization_id=eq.${orgId}&metric_date=gte.${startStr}&metric_date=lte.${endStr}`;
-    const endpoint = `${tableInfo.table}?select=${columns}&${filters}&order=metric_date.asc`;
+    // D1 SQL query
+    const sql = `
+      SELECT metric_date, spend_cents, impressions, clicks, conversions, conversion_value_cents
+      FROM ${tableInfo.table}
+      WHERE ${tableInfo.idColumn} = ? AND organization_id = ?
+        AND metric_date >= ? AND metric_date <= ?
+      ORDER BY metric_date ASC
+    `;
 
     try {
-      const data = await this.supabase.queryWithSchema<any[]>(endpoint, tableInfo.schema);
+      const result = await this.db.prepare(sql).bind(entity_id, orgId, startStr, endStr).all<{
+        metric_date: string;
+        spend_cents: number;
+        impressions: number;
+        clicks: number;
+        conversions: number;
+        conversion_value_cents: number;
+      }>();
+      const data = result.results || [];
 
       // Enrich with derived metrics
       const enrichedData = this.enrichMetrics(data || [], metrics);
@@ -634,7 +682,7 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Get verified Stripe revenue for a date range
+   * Get verified Stripe revenue for a date range (D1 version)
    */
   private async getVerifiedRevenueForDateRange(
     orgId: string,
@@ -642,16 +690,21 @@ export class ExplorationToolExecutor {
     endStr: string
   ): Promise<{ revenue_cents: number; conversions: number }> {
     try {
-      const query = `all_conversions?organization_id=eq.${orgId}&stripe_created_at=gte.${startStr}&stripe_created_at=lte.${endStr}&deleted_at=is.null&payment_status=in.(succeeded,active,trialing)`;
-      const data = await this.supabase.queryWithSchema<any[]>(query, 'stripe');
-
-      if (!data || data.length === 0) {
-        return { revenue_cents: 0, conversions: 0 };
-      }
+      const sql = `
+        SELECT SUM(amount_cents) as total_cents, COUNT(*) as count
+        FROM stripe_charges
+        WHERE organization_id = ?
+          AND created_at >= ? AND created_at <= ?
+          AND status IN ('succeeded', 'active', 'trialing')
+      `;
+      const result = await this.db.prepare(sql).bind(orgId, startStr, endStr + 'T23:59:59Z').first<{
+        total_cents: number | null;
+        count: number;
+      }>();
 
       return {
-        revenue_cents: data.reduce((sum, row) => sum + (row.amount_cents || 0), 0),
-        conversions: data.length
+        revenue_cents: result?.total_cents || 0,
+        conversions: result?.count || 0
       };
     } catch {
       return { revenue_cents: 0, conversions: 0 };
@@ -669,7 +722,7 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Compare multiple entities
+   * Compare multiple entities (D1 version)
    */
   private async compareEntities(
     input: CompareEntitiesInput,
@@ -694,13 +747,17 @@ export class ExplorationToolExecutor {
 
     const comparisons = await Promise.all(
       entity_ids.map(async (entityId) => {
-        const columns = ['metric_date', 'spend_cents', 'impressions', 'clicks', 'conversions', 'conversion_value_cents'].join(',');
-        const filters = `${tableInfo.idColumn}=eq.${entityId}&organization_id=eq.${orgId}&metric_date=gte.${startStr}&metric_date=lte.${endStr}`;
-        const endpoint = `${tableInfo.table}?select=${columns}&${filters}`;
+        const sql = `
+          SELECT metric_date, spend_cents, impressions, clicks, conversions, conversion_value_cents
+          FROM ${tableInfo.table}
+          WHERE ${tableInfo.idColumn} = ? AND organization_id = ?
+            AND metric_date >= ? AND metric_date <= ?
+        `;
 
         try {
-          const data = await this.supabase.queryWithSchema<any[]>(endpoint, tableInfo.schema);
-          const enrichedData = this.enrichMetrics(data || [], metrics);
+          const result = await this.db.prepare(sql).bind(entityId, orgId, startStr, endStr).all<any>();
+          const data = result.results || [];
+          const enrichedData = this.enrichMetrics(data, metrics);
           const summary = this.summarizeMetrics(enrichedData);
 
           return { entity_id: entityId, name: entityId, summary };
@@ -719,7 +776,7 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Get creative details for an ad
+   * Get creative details for an ad (D1 version)
    */
   private async getCreativeDetails(
     input: GetCreativeDetailsInput,
@@ -732,17 +789,15 @@ export class ExplorationToolExecutor {
       return { success: false, error: `Unsupported platform` };
     }
 
-    const filters = `${tableInfo.idColumn}=eq.${ad_id}&organization_id=eq.${orgId}`;
-    const endpoint = `${tableInfo.table}?${filters}&limit=1`;
+    const sql = `SELECT * FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
 
     try {
-      const data = await this.supabase.queryWithSchema<any[]>(endpoint, tableInfo.schema);
+      const ad = await this.db.prepare(sql).bind(ad_id, orgId).first<any>();
 
-      if (!data || data.length === 0) {
+      if (!ad) {
         return { success: false, error: `Ad not found: ${ad_id}` };
       }
 
-      const ad = data[0];
       const creativeInfo = this.extractCreativeInfo(ad, platform);
 
       return {
@@ -750,8 +805,8 @@ export class ExplorationToolExecutor {
         data: {
           ad_id,
           platform,
-          name: ad.name,
-          status: ad.status,
+          name: ad.ad_name || ad.name,
+          status: ad.ad_status || ad.status,
           ...creativeInfo
         }
       };
@@ -761,7 +816,7 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Get audience breakdown
+   * Get audience breakdown (D1 version)
    */
   private async getAudienceBreakdown(
     input: GetAudienceBreakdownInput,
@@ -774,17 +829,17 @@ export class ExplorationToolExecutor {
       return { success: false, error: 'Unsupported platform/entity' };
     }
 
-    const filters = `${tableInfo.idColumn}=eq.${entity_id}&organization_id=eq.${orgId}`;
-    const endpoint = `${tableInfo.table}?select=name,targeting&${filters}&limit=1`;
+    // Get name column based on platform and entity type
+    const nameCol = this.getNameColumn(platform, entity_type);
+    const sql = `SELECT ${nameCol} as name, targeting FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
 
     try {
-      const data = await this.supabase.queryWithSchema<any[]>(endpoint, tableInfo.schema);
+      const entity = await this.db.prepare(sql).bind(entity_id, orgId).first<{ name: string; targeting: string }>();
 
-      if (!data || data.length === 0) {
+      if (!entity) {
         return { success: false, error: `Entity not found: ${entity_id}` };
       }
 
-      const entity = data[0];
       const targeting = this.parseTargeting(entity.targeting);
 
       return {
@@ -805,7 +860,19 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Query Stripe revenue with metadata filtering
+   * Get the name column for an entity based on platform and type
+   */
+  private getNameColumn(platform: string, entityType: string): string {
+    const columns: Record<string, Record<string, string>> = {
+      google: { ad: 'ad_name', adset: 'ad_group_name', campaign: 'campaign_name' },
+      facebook: { ad: 'ad_name', adset: 'ad_set_name', campaign: 'campaign_name' },
+      tiktok: { ad: 'ad_name', adset: 'ad_group_name', campaign: 'campaign_name' }
+    };
+    return columns[platform]?.[entityType] || 'name';
+  }
+
+  /**
+   * Query Stripe revenue with metadata filtering (D1 version)
    */
   private async queryStripeRevenue(
     input: QueryStripeRevenueInput,
@@ -821,37 +888,56 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // Query stripe.all_conversions view
-      let query = `all_conversions?organization_id=eq.${orgId}&stripe_created_at=gte.${startStr}&stripe_created_at=lte.${endStr}&deleted_at=is.null`;
+      // Build D1 SQL query for stripe_charges table
+      let sql = `
+        SELECT charge_id, amount_cents, currency, status, customer_id, created_at, metadata
+        FROM stripe_charges
+        WHERE organization_id = ?
+          AND created_at >= ? AND created_at <= ?
+      `;
+      const params: any[] = [orgId, startStr, endStr + 'T23:59:59Z'];
 
-      // Filter by conversion type
-      if (conversion_type === 'charges') {
-        query += `&stripe_type=eq.charge`;
-      } else if (conversion_type === 'subscriptions') {
-        query += `&stripe_type=eq.subscription`;
-      }
-
-      // Apply basic filters
+      // Apply status filter
       if (filters?.status) {
-        query += `&payment_status=eq.${filters.status}`;
+        sql += ` AND status = ?`;
+        params.push(filters.status);
       }
       if (filters?.min_amount_cents) {
-        query += `&amount_cents=gte.${filters.min_amount_cents}`;
+        sql += ` AND amount_cents >= ?`;
+        params.push(filters.min_amount_cents);
       }
       if (filters?.max_amount_cents) {
-        query += `&amount_cents=lte.${filters.max_amount_cents}`;
+        sql += ` AND amount_cents <= ?`;
+        params.push(filters.max_amount_cents);
       }
       if (filters?.currency) {
-        query += `&currency=eq.${filters.currency}`;
+        sql += ` AND currency = ?`;
+        params.push(filters.currency);
       }
 
-      const data = await this.supabase.queryWithSchema<any[]>(query, 'stripe');
+      sql += ` ORDER BY created_at ASC`;
 
-      if (!data) {
+      const result = await this.db.prepare(sql).bind(...params).all<{
+        charge_id: string;
+        amount_cents: number;
+        currency: string;
+        status: string;
+        customer_id: string;
+        created_at: string;
+        metadata: string;
+      }>();
+
+      let data = (result.results || []).map(row => ({
+        ...row,
+        metadata: row.metadata ? JSON.parse(row.metadata) : {},
+        stripe_created_at: row.created_at
+      }));
+
+      if (data.length === 0) {
         return { success: true, data: { time_series: [], summary: { total_revenue: '$0.00', total_transactions: 0 } } };
       }
 
-      // Apply metadata filters in memory (JSONB filtering)
+      // Apply metadata filters in memory (JSON filtering)
       let filteredData = data;
       if (metadata_filters && metadata_filters.length > 0) {
         filteredData = data.filter(row => {
@@ -918,7 +1004,8 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Query Jobber completed jobs as revenue
+   * Query Jobber completed jobs as revenue (D1 version)
+   * Note: Requires jobber_jobs table in ANALYTICS_DB
    */
   private async queryJobberRevenue(
     input: QueryJobberRevenueInput,
@@ -934,12 +1021,27 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // Query jobber.jobs for completed jobs
-      let query = `jobs?organization_id=eq.${orgId}&job_status=eq.COMPLETED&completed_at=gte.${startStr}&completed_at=lte.${endStr}T23:59:59Z&deleted_at=is.null&order=completed_at.asc`;
+      // D1 SQL query for jobber_jobs table
+      let sql = `
+        SELECT job_id, total_amount_cents, client_id, completed_at
+        FROM jobber_jobs
+        WHERE organization_id = ?
+          AND job_status = 'COMPLETED'
+          AND completed_at >= ? AND completed_at <= ?
+        ORDER BY completed_at ASC
+      `;
+      const params: any[] = [orgId, startStr, endStr + 'T23:59:59Z'];
 
-      const data = await this.supabase.queryWithSchema<any[]>(query, 'jobber');
+      const result = await this.db.prepare(sql).bind(...params).all<{
+        job_id: string;
+        total_amount_cents: number;
+        client_id: string;
+        completed_at: string;
+      }>();
 
-      if (!data || data.length === 0) {
+      const data = result.results || [];
+
+      if (data.length === 0) {
         return { success: true, data: { time_series: [], summary: { total_revenue: '$0.00', total_jobs: 0 } } };
       }
 
@@ -976,12 +1078,12 @@ export class ExplorationToolExecutor {
 
       // Build response
       const timeSeries = Object.entries(grouped)
-        .map(([date, data]) => ({
+        .map(([date, groupData]) => ({
           date,
-          revenue_cents: data.revenue_cents,
-          revenue: '$' + (data.revenue_cents / 100).toFixed(2),
-          jobs: data.count,
-          unique_clients: data.unique_clients.size
+          revenue_cents: groupData.revenue_cents,
+          revenue: '$' + (groupData.revenue_cents / 100).toFixed(2),
+          jobs: groupData.count,
+          unique_clients: groupData.unique_clients.size
         }))
         .sort((a, b) => a.date.localeCompare(b.date));
 
@@ -1000,7 +1102,12 @@ export class ExplorationToolExecutor {
         }
       };
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+      // If jobber_jobs table doesn't exist yet, return empty result
+      const errorMessage = err instanceof Error ? err.message : 'Query failed';
+      if (errorMessage.includes('no such table')) {
+        return { success: true, data: { time_series: [], summary: { total_revenue: '$0.00', total_jobs: 0 }, note: 'Jobber data not yet synced to D1' } };
+      }
+      return { success: false, error: errorMessage };
     }
   }
 
@@ -1026,7 +1133,7 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Compare ad platform spend to actual Stripe revenue
+   * Compare ad platform spend to actual Stripe revenue (D1 version)
    */
   private async compareSpendToRevenue(
     input: CompareSpendToRevenueInput,
@@ -1046,31 +1153,47 @@ export class ExplorationToolExecutor {
         ? ['facebook', 'google', 'tiktok']
         : platforms.filter(p => p !== 'all');
 
-      // Fetch ad platform spend and conversions
+      // Fetch ad platform spend and conversions using D1
       const platformData = await Promise.all(
         platformsToQuery.map(async (platform) => {
           const tableInfo = this.getMetricsTableInfo(platform, 'campaign');
           if (!tableInfo) return { platform, spend_cents: 0, platform_conversions: 0, platform_conversion_value_cents: 0 };
 
-          const query = `${tableInfo.table}?select=spend_cents,conversions,conversion_value_cents&organization_id=eq.${orgId}&metric_date=gte.${startStr}&metric_date=lte.${endStr}`;
-          const data = await this.supabase.queryWithSchema<any[]>(query, tableInfo.schema);
+          const sql = `
+            SELECT SUM(spend_cents) as spend_cents, SUM(conversions) as conversions, SUM(conversion_value_cents) as conversion_value_cents
+            FROM ${tableInfo.table}
+            WHERE organization_id = ? AND metric_date >= ? AND metric_date <= ?
+          `;
+          const result = await this.db.prepare(sql).bind(orgId, startStr, endStr).first<{
+            spend_cents: number | null;
+            conversions: number | null;
+            conversion_value_cents: number | null;
+          }>();
 
-          const totals = (data || []).reduce((acc, row) => ({
-            spend_cents: acc.spend_cents + (row.spend_cents || 0),
-            platform_conversions: acc.platform_conversions + (row.conversions || 0),
-            platform_conversion_value_cents: acc.platform_conversion_value_cents + (row.conversion_value_cents || 0)
-          }), { spend_cents: 0, platform_conversions: 0, platform_conversion_value_cents: 0 });
-
-          return { platform, ...totals };
+          return {
+            platform,
+            spend_cents: result?.spend_cents || 0,
+            platform_conversions: result?.conversions || 0,
+            platform_conversion_value_cents: result?.conversion_value_cents || 0
+          };
         })
       );
 
-      // Fetch verified Stripe revenue
-      const stripeQuery = `all_conversions?organization_id=eq.${orgId}&stripe_created_at=gte.${startStr}&stripe_created_at=lte.${endStr}&deleted_at=is.null&payment_status=in.(succeeded,active,trialing)`;
-      const stripeData = await this.supabase.queryWithSchema<any[]>(stripeQuery, 'stripe');
+      // Fetch verified Stripe revenue using D1
+      const stripeSql = `
+        SELECT SUM(amount_cents) as total_cents, COUNT(*) as count
+        FROM stripe_charges
+        WHERE organization_id = ?
+          AND created_at >= ? AND created_at <= ?
+          AND status IN ('succeeded', 'active', 'trialing')
+      `;
+      const stripeResult = await this.db.prepare(stripeSql).bind(orgId, startStr, endStr + 'T23:59:59Z').first<{
+        total_cents: number | null;
+        count: number;
+      }>();
 
-      const verifiedRevenue = (stripeData || []).reduce((sum, row) => sum + (row.amount_cents || 0), 0);
-      const verifiedConversions = (stripeData || []).length;
+      const verifiedRevenue = stripeResult?.total_cents || 0;
+      const verifiedConversions = stripeResult?.count || 0;
 
       // Calculate totals
       const totalSpend = platformData.reduce((sum, p) => sum + p.spend_cents, 0);
@@ -1114,7 +1237,8 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Query attribution quality across multiple models
+   * Query attribution quality across multiple models (D1 version)
+   * Note: Requires attribution_results table in ANALYTICS_DB
    */
   private async queryAttributionQuality(
     input: QueryAttributionQualityInput,
@@ -1129,11 +1253,18 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // Query conversions with attribution data
-      const conversionsQuery = `conversions?organization_id=eq.${orgId}&conversion_timestamp=gte.${startStr}&conversion_timestamp=lte.${endStr}&source_platform=eq.stripe`;
-      const conversions = await this.supabase.queryWithSchema<any[]>(conversionsQuery, 'conversions');
+      // Query attribution_results from D1
+      const sql = `
+        SELECT *
+        FROM attribution_results
+        WHERE organization_id = ?
+          AND conversion_timestamp >= ? AND conversion_timestamp <= ?
+          AND source_platform = 'stripe'
+      `;
+      const result = await this.db.prepare(sql).bind(orgId, startStr, endStr + 'T23:59:59Z').all<any>();
+      const conversions = result.results || [];
 
-      if (!conversions || conversions.length === 0) {
+      if (conversions.length === 0) {
         return {
           success: true,
           data: {
@@ -1188,12 +1319,17 @@ export class ExplorationToolExecutor {
         }
       };
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+      const errorMessage = err instanceof Error ? err.message : 'Query failed';
+      if (errorMessage.includes('no such table')) {
+        return { success: true, data: { summary: { note: 'Attribution data not yet synced to D1' }, by_model: {}, platform_match_rates: [] } };
+      }
+      return { success: false, error: errorMessage };
     }
   }
 
   /**
-   * Query subscription cohort metrics (MRR, LTV, churn, retention)
+   * Query subscription cohort metrics (MRR, LTV, churn, retention) (D1 version)
+   * Note: Requires stripe_subscriptions table in ANALYTICS_DB
    */
   private async querySubscriptionCohorts(
     input: QuerySubscriptionCohortsInput,
@@ -1207,22 +1343,27 @@ export class ExplorationToolExecutor {
     const startStr = startDate.toISOString().split('T')[0];
 
     try {
-      // Query subscriptions
-      let query = `subscriptions?organization_id=eq.${orgId}&deleted_at=is.null`;
+      // Build D1 SQL query for stripe_subscriptions
+      let sql = `SELECT * FROM stripe_subscriptions WHERE organization_id = ?`;
+      const params: any[] = [orgId];
 
       // Apply status filters
       if (filters?.status && filters.status.length > 0) {
-        query += `&status=in.(${filters.status.join(',')})`;
+        const placeholders = filters.status.map(() => '?').join(',');
+        sql += ` AND status IN (${placeholders})`;
+        params.push(...filters.status);
       }
 
       // Apply interval filter
       if (filters?.plan_interval) {
-        query += `&interval=eq.${filters.plan_interval}`;
+        sql += ` AND interval = ?`;
+        params.push(filters.plan_interval);
       }
 
-      const subscriptions = await this.supabase.queryWithSchema<any[]>(query, 'stripe');
+      const result = await this.db.prepare(sql).bind(...params).all<any>();
+      const subscriptions = result.results || [];
 
-      if (!subscriptions || subscriptions.length === 0) {
+      if (subscriptions.length === 0) {
         return {
           success: true,
           data: {
@@ -1255,7 +1396,7 @@ export class ExplorationToolExecutor {
       // Calculate average subscription age
       const now = new Date();
       const avgAgeDays = activeSubscriptions.reduce((sum, s) => {
-        const created = new Date(s.stripe_created_at);
+        const created = new Date(s.created_at || s.stripe_created_at);
         const ageDays = (now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);
         return sum + ageDays;
       }, 0) / (activeSubscriptions.length || 1);
@@ -1300,7 +1441,11 @@ export class ExplorationToolExecutor {
         }
       };
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+      const errorMessage = err instanceof Error ? err.message : 'Query failed';
+      if (errorMessage.includes('no such table')) {
+        return { success: true, data: { summary: { total_mrr: '$0.00', active_subscriptions: 0, note: 'Subscription data not yet synced to D1' }, by_breakdown: [] } };
+      }
+      return { success: false, error: errorMessage };
     }
   }
 
@@ -1401,7 +1546,7 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Get current budget for an entity from platform tables
+   * Get current budget for an entity from platform tables (D1 version)
    */
   private async getEntityBudget(
     input: GetEntityBudgetInput,
@@ -1417,37 +1562,15 @@ export class ExplorationToolExecutor {
       return { success: false, error: `Unsupported platform/entity for budget: ${platform}/${entity_type}` };
     }
 
-    // Build columns based on platform
-    let budgetColumns: string;
-    if (platform === 'google') {
-      budgetColumns = 'campaign_id,name,status,budget_amount_cents,budget_type';
-    } else if (platform === 'facebook') {
-      if (normalizedEntityType === 'campaign') {
-        budgetColumns = 'campaign_id,name,status,daily_budget_cents,lifetime_budget_cents';
-      } else {
-        budgetColumns = 'ad_set_id,name,status,daily_budget_cents,lifetime_budget_cents,budget_remaining_cents';
-      }
-    } else if (platform === 'tiktok') {
-      if (normalizedEntityType === 'campaign') {
-        budgetColumns = 'campaign_id,campaign_name,status,budget_cents,budget_mode';
-      } else {
-        budgetColumns = 'ad_group_id,ad_group_name,status,budget_cents';
-      }
-    } else {
-      return { success: false, error: `Unknown platform: ${platform}` };
-    }
-
-    const filters = `${tableInfo.idColumn}=eq.${entity_id}&organization_id=eq.${orgId}`;
-    const endpoint = `${tableInfo.table}?select=${budgetColumns}&${filters}&limit=1`;
+    // Build D1 SQL query
+    const sql = `SELECT * FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
 
     try {
-      const data = await this.supabase.queryWithSchema<any[]>(endpoint, tableInfo.schema);
+      const entity = await this.db.prepare(sql).bind(entity_id, orgId).first<any>();
 
-      if (!data || data.length === 0) {
+      if (!entity) {
         return { success: false, error: `Entity not found: ${entity_id}` };
       }
-
-      const entity = data[0];
 
       // Normalize budget response
       let budget_cents: number | null = null;
@@ -1505,23 +1628,25 @@ export class ExplorationToolExecutor {
   /**
    * Get METRICS table info (for queryMetrics, compareEntities)
    * These tables have daily performance data with metric_date column
+   * Updated for D1 ANALYTICS_DB table naming
    */
-  private getMetricsTableInfo(platform: string, entityType: string): { table: string; idColumn: string; schema: string } | null {
-    const tables: Record<string, Record<string, { table: string; idColumn: string; schema: string }>> = {
+  private getMetricsTableInfo(platform: string, entityType: string): { table: string; idColumn: string } | null {
+    // D1 table names use platform prefix: {platform}_{entity}_daily_metrics
+    const tables: Record<string, Record<string, { table: string; idColumn: string }>> = {
       facebook: {
-        ad: { table: 'ad_daily_metrics', idColumn: 'ad_ref', schema: 'facebook_ads' },
-        adset: { table: 'ad_set_daily_metrics', idColumn: 'ad_set_ref', schema: 'facebook_ads' },
-        campaign: { table: 'campaign_daily_metrics', idColumn: 'campaign_ref', schema: 'facebook_ads' }
+        ad: { table: 'facebook_ad_daily_metrics', idColumn: 'ad_ref' },
+        adset: { table: 'facebook_ad_set_daily_metrics', idColumn: 'ad_set_ref' },
+        campaign: { table: 'facebook_campaign_daily_metrics', idColumn: 'campaign_ref' }
       },
       google: {
-        ad: { table: 'ad_daily_metrics', idColumn: 'ad_ref', schema: 'google_ads' },
-        adset: { table: 'ad_group_daily_metrics', idColumn: 'ad_group_ref', schema: 'google_ads' },
-        campaign: { table: 'campaign_daily_metrics', idColumn: 'campaign_ref', schema: 'google_ads' }
+        ad: { table: 'google_ad_daily_metrics', idColumn: 'ad_ref' },
+        adset: { table: 'google_ad_group_daily_metrics', idColumn: 'ad_group_ref' },
+        campaign: { table: 'google_campaign_daily_metrics', idColumn: 'campaign_ref' }
       },
       tiktok: {
-        ad: { table: 'ad_daily_metrics', idColumn: 'ad_ref', schema: 'tiktok_ads' },
-        adset: { table: 'ad_group_daily_metrics', idColumn: 'ad_group_ref', schema: 'tiktok_ads' },
-        campaign: { table: 'campaign_daily_metrics', idColumn: 'campaign_ref', schema: 'tiktok_ads' }
+        ad: { table: 'tiktok_ad_daily_metrics', idColumn: 'ad_ref' },
+        adset: { table: 'tiktok_ad_group_daily_metrics', idColumn: 'ad_group_ref' },
+        campaign: { table: 'tiktok_campaign_daily_metrics', idColumn: 'campaign_ref' }
       }
     };
 
@@ -1531,26 +1656,28 @@ export class ExplorationToolExecutor {
   /**
    * Get ENTITY table info (for getCreativeDetails, getAudienceBreakdown)
    * These tables have entity metadata like name, status, targeting
+   * Updated for D1 ANALYTICS_DB table naming
    */
-  private getEntityTableInfo(platform: string, entityType: string): { table: string; idColumn: string; schema: string } | null {
-    const tables: Record<string, Record<string, { table: string; idColumn: string; schema: string }>> = {
+  private getEntityTableInfo(platform: string, entityType: string): { table: string; idColumn: string } | null {
+    // D1 table names use platform prefix: {platform}_{entity_type}s
+    const tables: Record<string, Record<string, { table: string; idColumn: string }>> = {
       facebook: {
-        ad: { table: 'ads', idColumn: 'ad_id', schema: 'facebook_ads' },
-        adset: { table: 'ad_sets', idColumn: 'ad_set_id', schema: 'facebook_ads' },
-        campaign: { table: 'campaigns', idColumn: 'campaign_id', schema: 'facebook_ads' },
-        account: { table: 'accounts', idColumn: 'account_id', schema: 'facebook_ads' }
+        ad: { table: 'facebook_ads', idColumn: 'ad_id' },
+        adset: { table: 'facebook_ad_sets', idColumn: 'ad_set_id' },
+        campaign: { table: 'facebook_campaigns', idColumn: 'campaign_id' },
+        account: { table: 'facebook_accounts', idColumn: 'account_id' }
       },
       google: {
-        ad: { table: 'ads', idColumn: 'ad_id', schema: 'google_ads' },
-        adset: { table: 'ad_groups', idColumn: 'ad_group_id', schema: 'google_ads' },
-        campaign: { table: 'campaigns', idColumn: 'campaign_id', schema: 'google_ads' },
-        account: { table: 'accounts', idColumn: 'customer_id', schema: 'google_ads' }
+        ad: { table: 'google_ads', idColumn: 'ad_id' },
+        adset: { table: 'google_ad_groups', idColumn: 'ad_group_id' },
+        campaign: { table: 'google_campaigns', idColumn: 'campaign_id' },
+        account: { table: 'google_accounts', idColumn: 'customer_id' }
       },
       tiktok: {
-        ad: { table: 'ads', idColumn: 'ad_id', schema: 'tiktok_ads' },
-        adset: { table: 'ad_groups', idColumn: 'ad_group_id', schema: 'tiktok_ads' },
-        campaign: { table: 'campaigns', idColumn: 'campaign_id', schema: 'tiktok_ads' },
-        account: { table: 'advertisers', idColumn: 'advertiser_id', schema: 'tiktok_ads' }
+        ad: { table: 'tiktok_ads', idColumn: 'ad_id' },
+        adset: { table: 'tiktok_ad_groups', idColumn: 'ad_group_id' },
+        campaign: { table: 'tiktok_campaigns', idColumn: 'campaign_id' },
+        account: { table: 'tiktok_advertisers', idColumn: 'advertiser_id' }
       }
     };
 

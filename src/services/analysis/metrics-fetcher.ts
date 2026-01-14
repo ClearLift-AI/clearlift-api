@@ -1,11 +1,45 @@
 /**
  * Metrics Fetcher
  *
- * Fetches and aggregates metrics from Supabase for analysis
+ * Fetches and aggregates metrics from D1 ANALYTICS_DB for analysis
  */
 
-import { SupabaseClient } from '../supabase';
 import { Platform, EntityLevel } from './entity-tree';
+
+// D1Database type from Cloudflare Workers (matches worker-configuration.d.ts)
+type D1Database = {
+  prepare(query: string): D1PreparedStatement;
+  dump(): Promise<ArrayBuffer>;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+  exec(query: string): Promise<D1ExecResult>;
+};
+
+interface D1PreparedStatement {
+  bind(...values: unknown[]): D1PreparedStatement;
+  first<T = unknown>(colName?: string): Promise<T | null>;
+  run(): Promise<D1Result>;
+  all<T = unknown>(): Promise<D1Result<T>>;
+  raw<T = unknown[]>(): Promise<T[]>;
+}
+
+interface D1Result<T = unknown> {
+  results: T[];
+  success: boolean;
+  error?: string;
+  meta?: {
+    changed_db: boolean;
+    changes: number;
+    last_row_id: number;
+    duration: number;
+    rows_read: number;
+    rows_written: number;
+  };
+}
+
+interface D1ExecResult {
+  count: number;
+  duration: number;
+}
 
 export interface TimeseriesMetric {
   date: string;
@@ -30,10 +64,10 @@ export interface DateRange {
 }
 
 export class MetricsFetcher {
-  constructor(private supabase: SupabaseClient) {}
+  constructor(private db: D1Database) {}
 
   /**
-   * Fetch metrics for a specific entity
+   * Fetch metrics for a specific entity from D1 ANALYTICS_DB
    */
   async fetchMetrics(
     platform: Platform,
@@ -41,7 +75,6 @@ export class MetricsFetcher {
     entityId: string,
     dateRange: DateRange
   ): Promise<TimeseriesMetric[]> {
-    const schema = platform === 'google' ? 'google_ads' : 'facebook_ads';
     const table = this.getMetricsTable(platform, level);
     const refColumn = this.getRefColumn(platform, level);
 
@@ -49,32 +82,41 @@ export class MetricsFetcher {
       return [];
     }
 
-    const filters = [
-      `${refColumn}=eq.${entityId}`,
-      `metric_date=gte.${dateRange.start}`,
-      `metric_date=lte.${dateRange.end}`
-    ].join('&');
+    try {
+      const result = await this.db.prepare(`
+        SELECT
+          metric_date,
+          COALESCE(impressions, 0) as impressions,
+          COALESCE(clicks, 0) as clicks,
+          COALESCE(spend_cents, 0) as spend_cents,
+          COALESCE(conversions, 0) as conversions,
+          COALESCE(conversion_value_cents, 0) as conversion_value_cents
+        FROM ${table}
+        WHERE ${refColumn} = ?
+          AND metric_date >= ?
+          AND metric_date <= ?
+        ORDER BY metric_date ASC
+      `).bind(entityId, dateRange.start, dateRange.end).all<{
+        metric_date: string;
+        impressions: number;
+        clicks: number;
+        spend_cents: number;
+        conversions: number;
+        conversion_value_cents: number;
+      }>();
 
-    const result = await this.supabase.select<{
-      metric_date: string;
-      impressions: number;
-      clicks: number;
-      spend_cents: number;
-      conversions: number;
-      conversion_value_cents: number;
-    }>(table, filters, {
-      schema,
-      order: 'metric_date.asc'
-    });
-
-    return result.map(r => ({
-      date: r.metric_date,
-      impressions: r.impressions || 0,
-      clicks: r.clicks || 0,
-      spend_cents: r.spend_cents || 0,
-      conversions: r.conversions || 0,
-      conversion_value_cents: r.conversion_value_cents || 0
-    }));
+      return (result.results || []).map(r => ({
+        date: r.metric_date,
+        impressions: r.impressions || 0,
+        clicks: r.clicks || 0,
+        spend_cents: r.spend_cents || 0,
+        conversions: r.conversions || 0,
+        conversion_value_cents: r.conversion_value_cents || 0
+      }));
+    } catch (err) {
+      console.error(`D1 metrics query failed for ${table}:`, err);
+      return [];
+    }
   }
 
   /**
@@ -151,26 +193,27 @@ export class MetricsFetcher {
   }
 
   /**
-   * Get metrics table name for platform/level
+   * Get metrics table name for platform/level (D1 ANALYTICS_DB)
    */
   private getMetricsTable(platform: Platform, level: EntityLevel): string | null {
+    // D1 table names use platform prefix
     const tables: Record<Platform, Record<EntityLevel, string | null>> = {
       google: {
-        ad: 'ad_daily_metrics',
-        adset: 'ad_group_daily_metrics',
-        campaign: 'campaign_daily_metrics',
+        ad: 'google_ad_daily_metrics',
+        adset: 'google_ad_group_daily_metrics',
+        campaign: 'google_campaign_daily_metrics',
         account: null  // Aggregate from campaigns
       },
       facebook: {
-        ad: 'ad_daily_metrics',
-        adset: 'ad_set_daily_metrics',
-        campaign: 'campaign_daily_metrics',
+        ad: 'facebook_ad_daily_metrics',
+        adset: 'facebook_ad_set_daily_metrics',
+        campaign: 'facebook_campaign_daily_metrics',
         account: null  // Aggregate from campaigns
       },
       tiktok: {
-        ad: 'ad_daily_metrics',
-        adset: 'ad_group_daily_metrics',
-        campaign: 'campaign_daily_metrics',
+        ad: null, // TikTok ad-level metrics not yet implemented
+        adset: null, // TikTok ad group metrics not yet implemented
+        campaign: 'tiktok_campaign_daily_metrics',
         account: null
       }
     };

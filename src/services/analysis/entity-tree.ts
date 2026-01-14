@@ -1,11 +1,44 @@
 /**
  * Entity Tree Builder
  *
- * Builds hierarchical tree of ad entities from Supabase data
+ * Builds hierarchical tree of ad entities from D1 ANALYTICS_DB
  * Normalizes platform differences (Meta adset = Google ad_group)
  */
 
-import { SupabaseClient } from '../supabase';
+// D1Database type from Cloudflare Workers (matches worker-configuration.d.ts)
+type D1Database = {
+  prepare(query: string): D1PreparedStatement;
+  dump(): Promise<ArrayBuffer>;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+  exec(query: string): Promise<D1ExecResult>;
+};
+
+interface D1PreparedStatement {
+  bind(...values: unknown[]): D1PreparedStatement;
+  first<T = unknown>(colName?: string): Promise<T | null>;
+  run(): Promise<D1Result>;
+  all<T = unknown>(): Promise<D1Result<T>>;
+  raw<T = unknown[]>(): Promise<T[]>;
+}
+
+interface D1Result<T = unknown> {
+  results: T[];
+  success: boolean;
+  error?: string;
+  meta?: {
+    changed_db: boolean;
+    changes: number;
+    last_row_id: number;
+    duration: number;
+    rows_read: number;
+    rows_written: number;
+  };
+}
+
+interface D1ExecResult {
+  count: number;
+  duration: number;
+}
 
 export type Platform = 'google' | 'facebook' | 'tiktok';
 export type EntityLevel = 'ad' | 'adset' | 'campaign' | 'account';
@@ -36,7 +69,7 @@ export interface EntityTree {
 }
 
 export class EntityTreeBuilder {
-  constructor(private supabase: SupabaseClient) {}
+  constructor(private db: D1Database) {}
 
   /**
    * Build complete entity tree for an organization
@@ -69,36 +102,46 @@ export class EntityTreeBuilder {
   }
 
   /**
-   * Build Google Ads entity tree
+   * Build Google Ads entity tree from D1 ANALYTICS_DB
    */
   private async buildGoogleTree(orgId: string): Promise<Map<string, AccountEntity>> {
     const accounts = new Map<string, AccountEntity>();
 
-    // Fetch all campaigns
-    const campaigns = await this.supabase.select<{
+    // Fetch all campaigns from D1
+    const campaignsResult = await this.db.prepare(`
+      SELECT id, customer_id, campaign_id, campaign_name, campaign_status
+      FROM google_campaigns
+      WHERE organization_id = ?
+    `).bind(orgId).all<{
       id: string;
       customer_id: string;
       campaign_id: string;
       campaign_name: string;
       campaign_status: string;
-    }>('campaigns', `organization_id=eq.${orgId}&deleted_at=is.null`, {
-      schema: 'google_ads'
-    });
+    }>();
+    const campaigns = campaignsResult.results || [];
 
-    // Fetch all ad groups
-    const adGroups = await this.supabase.select<{
+    // Fetch all ad groups from D1
+    const adGroupsResult = await this.db.prepare(`
+      SELECT id, customer_id, campaign_id, ad_group_id, ad_group_name, ad_group_status
+      FROM google_ad_groups
+      WHERE organization_id = ?
+    `).bind(orgId).all<{
       id: string;
       customer_id: string;
       campaign_id: string;
       ad_group_id: string;
       ad_group_name: string;
       ad_group_status: string;
-    }>('ad_groups', `organization_id=eq.${orgId}&deleted_at=is.null`, {
-      schema: 'google_ads'
-    });
+    }>();
+    const adGroups = adGroupsResult.results || [];
 
-    // Fetch all ads
-    const ads = await this.supabase.select<{
+    // Fetch all ads from D1
+    const adsResult = await this.db.prepare(`
+      SELECT id, customer_id, campaign_id, ad_group_id, ad_id, ad_name, ad_status
+      FROM google_ads
+      WHERE organization_id = ?
+    `).bind(orgId).all<{
       id: string;
       customer_id: string;
       campaign_id: string;
@@ -106,9 +149,8 @@ export class EntityTreeBuilder {
       ad_id: string;
       ad_name: string;
       ad_status: string;
-    }>('ads', `organization_id=eq.${orgId}&deleted_at=is.null`, {
-      schema: 'google_ads'
-    });
+    }>();
+    const ads = adsResult.results || [];
 
     // Group by customer_id (account)
     const customerIds = new Set<string>();
@@ -189,46 +231,64 @@ export class EntityTreeBuilder {
   }
 
   /**
-   * Build Facebook Ads entity tree
+   * Build Facebook Ads entity tree from D1 ANALYTICS_DB
    */
   private async buildFacebookTree(orgId: string): Promise<Map<string, AccountEntity>> {
     const accounts = new Map<string, AccountEntity>();
 
-    // Fetch all campaigns
-    const campaigns = await this.supabase.select<{
+    // Fetch all campaigns from D1
+    const campaignsResult = await this.db.prepare(`
+      SELECT id, account_id, campaign_id, campaign_name as name, campaign_status as status
+      FROM facebook_campaigns
+      WHERE organization_id = ?
+    `).bind(orgId).all<{
       id: string;
-      ad_account_id: string;
+      account_id: string;
       campaign_id: string;
       name: string;
       status: string;
-    }>('campaigns', `organization_id=eq.${orgId}&deleted_at=is.null`, {
-      schema: 'facebook_ads'
-    });
+    }>();
+    const campaigns = (campaignsResult.results || []).map(c => ({
+      ...c,
+      ad_account_id: c.account_id  // Normalize to old naming
+    }));
 
-    // Fetch all ad sets
-    const adSets = await this.supabase.select<{
+    // Fetch all ad sets from D1
+    const adSetsResult = await this.db.prepare(`
+      SELECT id, account_id, campaign_id, ad_set_id as adset_id, ad_set_name as name, ad_set_status as status
+      FROM facebook_ad_sets
+      WHERE organization_id = ?
+    `).bind(orgId).all<{
       id: string;
-      ad_account_id: string;
+      account_id: string;
       campaign_id: string;
       adset_id: string;
       name: string;
       status: string;
-    }>('ad_sets', `organization_id=eq.${orgId}&deleted_at=is.null`, {
-      schema: 'facebook_ads'
-    });
+    }>();
+    const adSets = (adSetsResult.results || []).map(as => ({
+      ...as,
+      ad_account_id: as.account_id
+    }));
 
-    // Fetch all ads
-    const ads = await this.supabase.select<{
+    // Fetch all ads from D1
+    const adsResult = await this.db.prepare(`
+      SELECT id, account_id, campaign_id, ad_set_id as adset_id, ad_id, ad_name as name, ad_status as status
+      FROM facebook_ads
+      WHERE organization_id = ?
+    `).bind(orgId).all<{
       id: string;
-      ad_account_id: string;
+      account_id: string;
       campaign_id: string;
       adset_id: string;
       ad_id: string;
       name: string;
       status: string;
-    }>('ads', `organization_id=eq.${orgId}&deleted_at=is.null`, {
-      schema: 'facebook_ads'
-    });
+    }>();
+    const ads = (adsResult.results || []).map(a => ({
+      ...a,
+      ad_account_id: a.account_id
+    }));
 
     // Group by ad_account_id
     const adAccountIds = new Set<string>();

@@ -21,7 +21,41 @@ import {
   ExplorationToolExecutor
 } from './exploration-tools';
 import { CLAUDE_MODELS } from './llm-provider';
-import { SupabaseClient } from '../../services/supabase';
+
+// D1Database type from Cloudflare Workers (matches worker-configuration.d.ts)
+type D1Database = {
+  prepare(query: string): D1PreparedStatement;
+  dump(): Promise<ArrayBuffer>;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+  exec(query: string): Promise<D1ExecResult>;
+};
+
+interface D1PreparedStatement {
+  bind(...values: unknown[]): D1PreparedStatement;
+  first<T = unknown>(colName?: string): Promise<T | null>;
+  run(): Promise<D1Result>;
+  all<T = unknown>(): Promise<D1Result<T>>;
+  raw<T = unknown[]>(): Promise<T[]>;
+}
+
+interface D1Result<T = unknown> {
+  results: T[];
+  success: boolean;
+  error?: string;
+  meta?: {
+    changed_db: boolean;
+    changes: number;
+    last_row_id: number;
+    duration: number;
+    rows_read: number;
+    rows_written: number;
+  };
+}
+
+interface D1ExecResult {
+  count: number;
+  duration: number;
+}
 
 interface AnthropicToolUse {
   type: 'tool_use';
@@ -69,16 +103,14 @@ export class AgenticLoop {
   private readonly maxIterations = 200;  // Allow extensive exploration before recommendations
   private readonly baseUrl = 'https://api.anthropic.com/v1';
   private readonly apiVersion = '2023-06-01';
-  private explorationExecutor: ExplorationToolExecutor | null = null;
+  private explorationExecutor: ExplorationToolExecutor;
 
   constructor(
     private anthropicApiKey: string,
     private db: D1Database,
-    private supabase?: SupabaseClient
+    private analyticsDb: D1Database
   ) {
-    if (supabase) {
-      this.explorationExecutor = new ExplorationToolExecutor(supabase);
-    }
+    this.explorationExecutor = new ExplorationToolExecutor(analyticsDb);
   }
 
   /**
@@ -196,7 +228,7 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
 
       for (const toolUse of toolUses) {
         // Handle exploration tools (unlimited use)
-        if (isExplorationTool(toolUse.name) && this.explorationExecutor) {
+        if (isExplorationTool(toolUse.name)) {
           const result = await this.explorationExecutor.execute(toolUse.name, toolUse.input, orgId);
           toolResults.push({
             type: 'tool_result',

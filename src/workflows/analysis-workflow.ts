@@ -36,7 +36,6 @@ import { PromptManager } from '../services/analysis/prompt-manager';
 import { AnalysisLogger } from '../services/analysis/analysis-logger';
 import { JobManager } from '../services/analysis/job-manager';
 import { AnalysisLevel, CLAUDE_MODELS } from '../services/analysis/llm-provider';
-import { SupabaseClient } from '../services/supabase';
 import {
   getAnthropicTools,
   isRecommendationTool,
@@ -84,13 +83,12 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       end: endDate.toISOString().split('T')[0]
     };
 
-    // Step 1: Build entity tree
+    // Step 1: Build entity tree (using D1 ANALYTICS_DB)
     const entityTree = await step.do('build_entity_tree', {
       retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' },
       timeout: '2 minutes'
     }, async () => {
-      const supabase = await this.createSupabaseClient();
-      const treeBuilder = new EntityTreeBuilder(supabase);
+      const treeBuilder = new EntityTreeBuilder(this.env.ANALYTICS_DB);
       const tree = await treeBuilder.buildTree(orgId);
 
       // Update job with total entities (+2 for cross_platform and recommendations)
@@ -271,19 +269,6 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     };
   }
 
-  /**
-   * Create Supabase client from env bindings
-   */
-  private async createSupabaseClient(): Promise<SupabaseClient> {
-    const supabaseKey = await getSecret(this.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      throw new Error('Supabase secret key not configured');
-    }
-    return new SupabaseClient({
-      url: this.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-  }
 
   /**
    * Analyze all entities at a specific level
@@ -300,8 +285,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     startingCount: number,
     llmConfig?: LLMRuntimeConfig
   ): Promise<LevelAnalysisResult> {
-    const supabase = await this.createSupabaseClient();
-    const metrics = new MetricsFetcher(supabase);
+    // Use D1 ANALYTICS_DB for metrics
+    const metrics = new MetricsFetcher(this.env.ANALYTICS_DB);
     const anthropicKey = await getSecret(this.env.ANTHROPIC_API_KEY);
     const geminiKey = await getSecret(this.env.GEMINI_API_KEY);
     const llm = new LLMRouter({
@@ -470,8 +455,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     startingCount: number,
     llmConfig?: LLMRuntimeConfig
   ): Promise<{ crossPlatformSummary: string; platformSummaries: Record<string, string>; processedCount: number }> {
-    const supabase = await this.createSupabaseClient();
-    const metrics = new MetricsFetcher(supabase);
+    // Use D1 ANALYTICS_DB for metrics
+    const metrics = new MetricsFetcher(this.env.ANALYTICS_DB);
     const anthropicKey = await getSecret(this.env.ANTHROPIC_API_KEY);
     const geminiKey = await getSecret(this.env.GEMINI_API_KEY);
     const llm = new LLMRouter({
@@ -772,8 +757,7 @@ WHEN TO USE terminate_analysis:
     // Clone accumulated insights array to avoid mutation
     let accumulatedInsightId = existingAccumulatedInsightId;
     let accumulatedInsights = [...existingAccumulatedInsights];
-    const supabase = await this.createSupabaseClient();
-    const explorationExecutor = new ExplorationToolExecutor(supabase);
+    const explorationExecutor = new ExplorationToolExecutor(this.env.ANALYTICS_DB);
 
     const tools = enableExploration
       ? [...getAnthropicTools(), ...getExplorationTools()]

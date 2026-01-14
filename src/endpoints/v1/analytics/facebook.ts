@@ -1,18 +1,19 @@
 /**
  * Facebook Ads Analytics Endpoints
  *
- * Provides clean access to Facebook Ads data from Supabase facebook_ads schema
+ * Provides clean access to Facebook Ads data from D1 ANALYTICS_DB
  * All endpoints use auth + requireOrg middleware for access control
+ *
+ * Updated: Removed all Supabase dependencies, uses D1 only
  */
 
 import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
-import { FacebookSupabaseAdapter, DateRange } from "../../../adapters/platforms/facebook-supabase";
-import { SupabaseClient } from "../../../services/supabase";
 import { getSecret } from "../../../utils/secrets";
 import { AGE_LIMITS, BUDGET_LIMITS } from "../../../constants/facebook";
+import { D1AnalyticsService } from "../../../services/d1-analytics";
 
 /**
  * GET /v1/analytics/facebook/campaigns
@@ -71,12 +72,10 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
     const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
 
     // Check if org has an active Facebook connection
-    // Prevents returning orphaned data for orgs without active connections
     const hasConnection = await c.env.DB.prepare(`
       SELECT 1 FROM platform_connections
       WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
@@ -97,32 +96,21 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
       });
     }
 
-    // Initialize Supabase client
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    // Default date range: last 30 days if not provided
+    const endDate = query.query.end_date || new Date().toISOString().split('T')[0];
+    const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
-    const adapter = new FacebookSupabaseAdapter(supabase);
-
+    console.log('[Facebook Campaigns] Using D1 ANALYTICS_DB');
     try {
-      // Default date range: last 30 days if not provided
-      const endDate = query.query.end_date || new Date().toISOString().split('T')[0];
-      const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-      const dateRange: DateRange = { start: startDate, end: endDate };
-
-      console.log('[Facebook Campaigns] Date range requested:', { startDate, endDate });
-
-      // Fetch campaigns WITH metrics using the new method
-      const campaignsWithMetrics = await adapter.getCampaignsWithMetrics(
+      const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
+      const campaigns = await d1Analytics.getFacebookCampaignsWithMetrics(
         orgId,
-        dateRange,
+        startDate,
+        endDate,
         {
           status: query.query.status,
           limit: query.query.limit,
@@ -130,31 +118,20 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
         }
       );
 
-      console.log('[Facebook Campaigns] Campaigns with metrics returned:', campaignsWithMetrics.length);
-
       // Transform to frontend expected format
-      const results = campaignsWithMetrics.map(c => ({
-        campaign_id: c.campaign_id,
-        campaign_name: c.campaign_name,
-        status: c.campaign_status,
-        last_updated: c.last_synced_at || c.updated_at,
+      const results = campaigns.map(camp => ({
+        campaign_id: camp.campaign_id,
+        campaign_name: camp.campaign_name,
+        status: camp.status,
+        last_updated: new Date().toISOString(),
         metrics: {
-          impressions: c.metrics.impressions,
-          clicks: c.metrics.clicks,
-          spend: c.metrics.spend_cents / 100, // Convert cents to dollars for frontend
-          conversions: c.metrics.conversions,
-          revenue: 0 // Revenue comes from Stripe, not ad platforms
+          impressions: camp.metrics.impressions,
+          clicks: camp.metrics.clicks,
+          spend: camp.metrics.spend,
+          conversions: camp.metrics.conversions,
+          revenue: camp.metrics.revenue
         }
       }));
-
-      // Debug: Log first campaign's metrics to verify date filtering
-      if (results.length > 0) {
-        console.log('[Facebook Campaigns] Sample campaign metrics:', {
-          name: results[0].campaign_name,
-          spend: results[0].metrics.spend,
-          impressions: results[0].metrics.impressions
-        });
-      }
 
       // Calculate summary from results
       const summary = results.reduce(
@@ -163,16 +140,16 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
           total_clicks: acc.total_clicks + campaign.metrics.clicks,
           total_spend: acc.total_spend + campaign.metrics.spend,
           total_conversions: acc.total_conversions + campaign.metrics.conversions,
-          average_ctr: 0 // Calculate after
+          average_ctr: 0
         }),
         { total_impressions: 0, total_clicks: 0, total_spend: 0, total_conversions: 0, average_ctr: 0 }
       );
 
-      // Calculate average CTR
       if (summary.total_impressions > 0) {
         summary.average_ctr = (summary.total_clicks / summary.total_impressions) * 100;
       }
 
+      console.log(`[Facebook Campaigns] D1 returned ${results.length} campaigns`);
       return success(c, {
         platform: 'facebook',
         results,
@@ -198,6 +175,8 @@ export class GetFacebookAdSets extends OpenAPIRoute {
       query: z.object({
         org_id: z.string().describe("Organization ID"),
         campaign_id: z.string().optional().describe("Filter by campaign ID"),
+        start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         status: z.enum(['ACTIVE', 'PAUSED', 'DELETED', 'ARCHIVED']).optional(),
         limit: z.coerce.number().min(1).max(1000).optional().default(100),
         offset: z.coerce.number().min(0).optional().default(0)
@@ -211,33 +190,50 @@ export class GetFacebookAdSets extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
     const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Initialize Supabase client
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
-    const adapter = new FacebookSupabaseAdapter(supabase);
-
     try {
-      const adSets = await adapter.getAdSets(orgId, {
-        campaignId: query.query.campaign_id,
-        status: query.query.status,
-        limit: query.query.limit,
-        offset: query.query.offset
-      });
+      // Query ad sets from D1
+      let sql = `
+        SELECT ad_set_id, ad_set_name, ad_set_status, campaign_id,
+               daily_budget_cents, lifetime_budget_cents, targeting, updated_at
+        FROM facebook_ad_sets
+        WHERE organization_id = ?
+      `;
+      const params: any[] = [orgId];
+
+      if (query.query.campaign_id) {
+        sql += ` AND campaign_id = ?`;
+        params.push(query.query.campaign_id);
+      }
+
+      if (query.query.status) {
+        sql += ` AND ad_set_status = ?`;
+        params.push(query.query.status);
+      }
+
+      sql += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+      params.push(query.query.limit, query.query.offset);
+
+      const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
+      const adSets = result.results || [];
 
       return success(c, {
-        ad_sets: adSets,
+        ad_sets: adSets.map((as: any) => ({
+          ad_set_id: as.ad_set_id,
+          ad_set_name: as.ad_set_name,
+          ad_set_status: as.ad_set_status,
+          campaign_id: as.campaign_id,
+          daily_budget_cents: as.daily_budget_cents,
+          lifetime_budget_cents: as.lifetime_budget_cents,
+          targeting: as.targeting ? JSON.parse(as.targeting) : null,
+          updated_at: as.updated_at
+        })),
         total: adSets.length
       });
     } catch (err: any) {
@@ -271,28 +267,39 @@ export class GetFacebookCreatives extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
     const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Initialize Supabase client
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
-    const adapter = new FacebookSupabaseAdapter(supabase);
-
     try {
-      const creatives = await adapter.getCreatives(orgId, {
-        limit: query.query.limit,
-        offset: query.query.offset
-      });
+      // Query creatives from D1 (creatives are stored in facebook_ads table)
+      const sql = `
+        SELECT ad_id, ad_name, creative_id, creative_type, headline, body,
+               call_to_action, image_url, video_url, updated_at
+        FROM facebook_ads
+        WHERE organization_id = ?
+        ORDER BY updated_at DESC
+        LIMIT ? OFFSET ?
+      `;
+      const result = await c.env.ANALYTICS_DB.prepare(sql)
+        .bind(orgId, query.query.limit, query.query.offset)
+        .all<any>();
+
+      const creatives = (result.results || []).map((ad: any) => ({
+        ad_id: ad.ad_id,
+        ad_name: ad.ad_name,
+        creative_id: ad.creative_id,
+        creative_type: ad.creative_type,
+        headline: ad.headline,
+        body: ad.body,
+        call_to_action: ad.call_to_action,
+        image_url: ad.image_url,
+        video_url: ad.video_url,
+        updated_at: ad.updated_at
+      }));
 
       return success(c, {
         creatives,
@@ -319,6 +326,8 @@ export class GetFacebookAds extends OpenAPIRoute {
         org_id: z.string().describe("Organization ID"),
         campaign_id: z.string().optional().describe("Filter by campaign ID"),
         ad_set_id: z.string().optional().describe("Filter by ad set ID"),
+        start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         status: z.enum(['ACTIVE', 'PAUSED', 'DELETED', 'ARCHIVED']).optional(),
         limit: z.coerce.number().min(1).max(1000).optional().default(100),
         offset: z.coerce.number().min(0).optional().default(0)
@@ -332,34 +341,57 @@ export class GetFacebookAds extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
     const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Initialize Supabase client
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
-    const adapter = new FacebookSupabaseAdapter(supabase);
-
     try {
-      const ads = await adapter.getAds(orgId, {
-        campaignId: query.query.campaign_id,
-        adSetId: query.query.ad_set_id,
-        status: query.query.status,
-        limit: query.query.limit,
-        offset: query.query.offset
-      });
+      // Query ads from D1
+      let sql = `
+        SELECT ad_id, ad_name, ad_status, campaign_id, ad_set_id,
+               creative_type, headline, body, call_to_action, updated_at
+        FROM facebook_ads
+        WHERE organization_id = ?
+      `;
+      const params: any[] = [orgId];
+
+      if (query.query.campaign_id) {
+        sql += ` AND campaign_id = ?`;
+        params.push(query.query.campaign_id);
+      }
+
+      if (query.query.ad_set_id) {
+        sql += ` AND ad_set_id = ?`;
+        params.push(query.query.ad_set_id);
+      }
+
+      if (query.query.status) {
+        sql += ` AND ad_status = ?`;
+        params.push(query.query.status);
+      }
+
+      sql += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+      params.push(query.query.limit, query.query.offset);
+
+      const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
+      const ads = result.results || [];
 
       return success(c, {
-        ads,
+        ads: ads.map((ad: any) => ({
+          ad_id: ad.ad_id,
+          ad_name: ad.ad_name,
+          ad_status: ad.ad_status,
+          campaign_id: ad.campaign_id,
+          ad_set_id: ad.ad_set_id,
+          creative_type: ad.creative_type,
+          headline: ad.headline,
+          body: ad.body,
+          call_to_action: ad.call_to_action,
+          updated_at: ad.updated_at
+        })),
         total: ads.length
       });
     } catch (err: any) {
@@ -399,62 +431,86 @@ export class GetFacebookMetrics extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
     const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Initialize Supabase client
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
-    const adapter = new FacebookSupabaseAdapter(supabase);
-
-    const dateRange: DateRange = {
-      start: query.query.start_date,
-      end: query.query.end_date
-    };
+    const { start_date, end_date, level, limit, offset } = query.query;
 
     try {
-      let metrics;
-      let summary;
+      // Determine table based on level
+      const tableMap: Record<string, { table: string; refColumn: string; idFilter?: string }> = {
+        campaign: { table: 'facebook_campaign_daily_metrics', refColumn: 'campaign_ref' },
+        ad_set: { table: 'facebook_ad_set_daily_metrics', refColumn: 'ad_set_ref' },
+        ad: { table: 'facebook_ad_daily_metrics', refColumn: 'ad_ref' }
+      };
 
-      // Fetch metrics based on level
-      if (query.query.level === 'campaign') {
-        metrics = await adapter.getCampaignDailyMetrics(orgId, dateRange, {
-          campaignId: query.query.campaign_id,
-          limit: query.query.limit,
-          offset: query.query.offset
-        });
-        summary = await adapter.getMetricsSummary(orgId, dateRange, 'campaign');
-      } else if (query.query.level === 'ad_set') {
-        metrics = await adapter.getAdSetDailyMetrics(orgId, dateRange, {
-          adSetId: query.query.ad_set_id,
-          limit: query.query.limit,
-          offset: query.query.offset
-        });
-        summary = await adapter.getMetricsSummary(orgId, dateRange, 'ad_set');
-      } else {
-        metrics = await adapter.getAdDailyMetrics(orgId, dateRange, {
-          adId: query.query.ad_id,
-          limit: query.query.limit,
-          offset: query.query.offset
-        });
-        summary = await adapter.getMetricsSummary(orgId, dateRange, 'ad');
+      const tableInfo = tableMap[level];
+
+      let sql = `
+        SELECT metric_date, ${tableInfo.refColumn} as entity_ref,
+               impressions, clicks, spend_cents, conversions, conversion_value_cents
+        FROM ${tableInfo.table}
+        WHERE organization_id = ?
+          AND metric_date >= ? AND metric_date <= ?
+      `;
+      const params: any[] = [orgId, start_date, end_date];
+
+      // Add entity filters
+      if (level === 'campaign' && query.query.campaign_id) {
+        sql += ` AND ${tableInfo.refColumn} = ?`;
+        params.push(query.query.campaign_id);
+      } else if (level === 'ad_set' && query.query.ad_set_id) {
+        sql += ` AND ${tableInfo.refColumn} = ?`;
+        params.push(query.query.ad_set_id);
+      } else if (level === 'ad' && query.query.ad_id) {
+        sql += ` AND ${tableInfo.refColumn} = ?`;
+        params.push(query.query.ad_id);
       }
 
+      sql += ` ORDER BY metric_date DESC LIMIT ? OFFSET ?`;
+      params.push(limit, offset);
+
+      const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
+      const metrics = result.results || [];
+
+      // Calculate summary
+      const summary = metrics.reduce((acc: any, m: any) => ({
+        total_impressions: acc.total_impressions + (m.impressions || 0),
+        total_clicks: acc.total_clicks + (m.clicks || 0),
+        total_spend_cents: acc.total_spend_cents + (m.spend_cents || 0),
+        total_conversions: acc.total_conversions + (m.conversions || 0),
+        total_conversion_value_cents: acc.total_conversion_value_cents + (m.conversion_value_cents || 0)
+      }), {
+        total_impressions: 0,
+        total_clicks: 0,
+        total_spend_cents: 0,
+        total_conversions: 0,
+        total_conversion_value_cents: 0
+      });
+
       return success(c, {
-        metrics,
-        summary,
+        metrics: metrics.map((m: any) => ({
+          metric_date: m.metric_date,
+          entity_ref: m.entity_ref,
+          impressions: m.impressions || 0,
+          clicks: m.clicks || 0,
+          spend_cents: m.spend_cents || 0,
+          conversions: m.conversions || 0,
+          conversion_value_cents: m.conversion_value_cents || 0
+        })),
+        summary: {
+          ...summary,
+          total_spend: summary.total_spend_cents / 100,
+          total_conversion_value: summary.total_conversion_value_cents / 100,
+          ctr: summary.total_impressions > 0 ? (summary.total_clicks / summary.total_impressions) * 100 : 0
+        },
         total: metrics.length,
-        date_range: dateRange,
-        level: query.query.level
+        date_range: { start: start_date, end: end_date },
+        level
       });
     } catch (err: any) {
       console.error("Get Facebook metrics error:", err);
@@ -493,13 +549,10 @@ export class UpdateFacebookCampaignStatus extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
     const orgId = c.get("org_id" as any) as string;
     const data = await this.getValidatedData<typeof this.schema>();
     const { campaign_id } = data.params;
     const { status } = data.body;
-
-    // Authorization check handled by requireOrgAdmin middleware
 
     try {
       // Get Facebook connection for this org
@@ -580,13 +633,10 @@ export class UpdateFacebookAdSetStatus extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
     const orgId = c.get("org_id" as any) as string;
     const data = await this.getValidatedData<typeof this.schema>();
     const { ad_set_id } = data.params;
     const { status } = data.body;
-
-    // Authorization check handled by requireOrgAdmin middleware
 
     try {
       // Get Facebook connection for this org
@@ -667,13 +717,10 @@ export class UpdateFacebookAdStatus extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
     const orgId = c.get("org_id" as any) as string;
     const data = await this.getValidatedData<typeof this.schema>();
     const { ad_id } = data.params;
     const { status } = data.body;
-
-    // Authorization check handled by requireOrgAdmin middleware
 
     try {
       // Get Facebook connection for this org
@@ -759,13 +806,10 @@ export class UpdateFacebookCampaignBudget extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
     const orgId = c.get("org_id" as any) as string;
     const data = await this.getValidatedData<typeof this.schema>();
     const { campaign_id } = data.params;
     const budget = data.body;
-
-    // Authorization check handled by requireOrgAdmin middleware
 
     try {
       // Get Facebook connection for this org
@@ -850,13 +894,10 @@ export class UpdateFacebookAdSetBudget extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
     const orgId = c.get("org_id" as any) as string;
     const data = await this.getValidatedData<typeof this.schema>();
     const { ad_set_id } = data.params;
     const budget = data.body;
-
-    // Authorization check handled by requireOrgAdmin middleware
 
     try {
       // Get Facebook connection for this org
@@ -984,13 +1025,10 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const session = c.get("session");
     const orgId = c.get("org_id" as any) as string;
     const data = await this.getValidatedData<typeof this.schema>();
     const { ad_set_id } = data.params;
     const { targeting, placement_soft_opt_out } = data.body;
-
-    // Authorization check handled by requireOrgAdmin middleware
 
     try {
       // Get Facebook connection for this org
@@ -1048,14 +1086,14 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
 /**
  * GET /v1/analytics/facebook/pages
  *
- * Retrieves Facebook Pages connected to the user's account.
- * Demonstrates usage of pages_show_list permission for Meta App Review.
+ * Retrieves Facebook Pages connected to the user's account from D1.
+ * Note: Pages table may not exist yet in D1 - returns empty if not found.
  */
 export class GetFacebookPages extends OpenAPIRoute {
   schema = {
     tags: ["Facebook Pages"],
     summary: "Get connected Facebook Pages",
-    description: "Retrieves Facebook Pages connected via OAuth. Demonstrates pages_show_list permission usage.",
+    description: "Retrieves Facebook Pages connected via OAuth from D1.",
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
@@ -1106,32 +1144,25 @@ export class GetFacebookPages extends OpenAPIRoute {
       });
     }
 
-    // Initialize Supabase client to read pages from facebook_ads.pages
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    if (!c.env.ANALYTICS_DB) {
+      return success(c, {
+        pages: [],
+        total: 0,
+        message: "ANALYTICS_DB not configured"
+      });
     }
 
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
     try {
-      // Query pages from Supabase facebook_ads.pages table
-      const pagesResult = await supabase.query(
-        'pages',
-        {
-          select: 'page_id,page_name,category,fan_count,access_token,created_at',
-          organization_id: `eq.${orgId}`,
-          deleted_at: 'is.null',
-          limit: query.query.limit,
-          order: 'fan_count.desc'
-        },
-        'facebook_ads'
-      );
+      // Query pages from D1 (facebook_pages table)
+      const result = await c.env.ANALYTICS_DB.prepare(`
+        SELECT page_id, page_name, category, fan_count, access_token
+        FROM facebook_pages
+        WHERE organization_id = ?
+        ORDER BY fan_count DESC
+        LIMIT ?
+      `).bind(orgId, query.query.limit).all<any>();
 
-      const pages = (pagesResult || []).map((p: any) => ({
+      const pages = (result.results || []).map((p: any) => ({
         page_id: p.page_id,
         page_name: p.page_name,
         category: p.category || null,
@@ -1144,6 +1175,14 @@ export class GetFacebookPages extends OpenAPIRoute {
         total: pages.length
       });
     } catch (err: any) {
+      // If facebook_pages table doesn't exist, return empty
+      if (err.message?.includes('no such table')) {
+        return success(c, {
+          pages: [],
+          total: 0,
+          note: "Facebook pages not yet synced to D1"
+        });
+      }
       console.error("Get Facebook pages error:", err);
       return error(c, "QUERY_FAILED", `Failed to fetch pages: ${err.message}`, 500);
     }
@@ -1153,16 +1192,13 @@ export class GetFacebookPages extends OpenAPIRoute {
 /**
  * GET /v1/analytics/facebook/pages/:page_id/insights
  *
- * Retrieves insights for a specific Facebook Page.
- * Demonstrates usage of pages_read_engagement permission for Meta App Review.
- *
- * Note: As of November 2025, 'impressions' is deprecated in favor of 'views'.
+ * Retrieves insights for a specific Facebook Page via Graph API.
  */
 export class GetFacebookPageInsights extends OpenAPIRoute {
   schema = {
     tags: ["Facebook Pages"],
     summary: "Get Facebook Page insights",
-    description: "Retrieves engagement insights for a connected Facebook Page. Demonstrates pages_read_engagement permission usage.",
+    description: "Retrieves engagement insights for a connected Facebook Page via Graph API.",
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({
@@ -1176,26 +1212,7 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
     },
     responses: {
       "200": {
-        description: "Facebook Page insights data",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                page_id: z.string(),
-                page_name: z.string(),
-                period: z.string(),
-                insights: z.object({
-                  page_views: z.number().describe("Total page views (replaces deprecated impressions)"),
-                  page_engaged_users: z.number().describe("Unique users who engaged with the page"),
-                  page_post_engagements: z.number().describe("Total post engagements"),
-                  page_fan_adds: z.number().describe("New page likes/follows"),
-                  page_fan_removes: z.number().describe("Page unlikes/unfollows")
-                })
-              })
-            })
-          }
-        }
+        description: "Facebook Page insights data"
       }
     }
   };
@@ -1218,39 +1235,30 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
       return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
     }
 
-    // Get the page-specific access token from Supabase
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
-    }
-
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
     try {
-      // Get page record with access token
-      const pageResult = await supabase.query(
-        'pages',
-        {
-          select: 'page_id,page_name,access_token',
-          organization_id: `eq.${orgId}`,
-          page_id: `eq.${page_id}`,
-          deleted_at: 'is.null',
-          limit: 1
-        },
-        'facebook_ads'
-      );
+      // Try to get page-specific access token from D1
+      let accessToken: string | null = null;
+      let pageName = page_id;
 
-      if (!pageResult || pageResult.length === 0) {
-        return error(c, "PAGE_NOT_FOUND", "Page not found or not connected to this organization", 404);
+      if (c.env.ANALYTICS_DB) {
+        try {
+          const pageResult = await c.env.ANALYTICS_DB.prepare(`
+            SELECT page_name, access_token
+            FROM facebook_pages
+            WHERE organization_id = ? AND page_id = ?
+            LIMIT 1
+          `).bind(orgId, page_id).first<{ page_name: string; access_token: string }>();
+
+          if (pageResult) {
+            pageName = pageResult.page_name;
+            accessToken = pageResult.access_token;
+          }
+        } catch {
+          // facebook_pages table might not exist yet
+        }
       }
 
-      const page = pageResult[0];
-
-      // If no page access token, fall back to user access token
-      let accessToken = page.access_token;
+      // Fall back to user access token if no page token
       if (!accessToken) {
         const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
         if (!encryptionKey) {
@@ -1266,13 +1274,12 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
       }
 
       // Fetch page insights from Facebook Graph API
-      // Using metrics that are NOT deprecated as of November 2025
       const metrics = [
-        'page_views_total',          // Replaces deprecated page_impressions
-        'page_engaged_users',        // Unique users who engaged
-        'page_post_engagements',     // Total engagements on posts
-        'page_fan_adds',             // New followers
-        'page_fan_removes'           // Lost followers
+        'page_views_total',
+        'page_engaged_users',
+        'page_post_engagements',
+        'page_fan_adds',
+        'page_fan_removes'
       ].join(',');
 
       const insightsUrl = new URL(`https://graph.facebook.com/v24.0/${page_id}/insights`);
@@ -1286,13 +1293,10 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
       const response = await fetch(insightsUrl.toString());
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Facebook Page Insights API error:', errorText);
-
-        // Return empty insights rather than failing - page may not have insights yet
+        // Return empty insights rather than failing
         return success(c, {
           page_id,
-          page_name: page.page_name,
+          page_name: pageName,
           period,
           insights: {
             page_views: 0,
@@ -1307,7 +1311,7 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
 
       const insightsData = await response.json() as any;
 
-      // Parse insights response into structured format
+      // Parse insights response
       const insights: Record<string, number> = {
         page_views: 0,
         page_engaged_users: 0,
@@ -1319,7 +1323,6 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
       if (insightsData.data) {
         for (const metric of insightsData.data) {
           const name = metric.name;
-          // Get the most recent value from the values array
           const values = metric.values || [];
           const latestValue = values.length > 0 ? values[values.length - 1].value : 0;
 
@@ -1345,7 +1348,7 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
 
       return success(c, {
         page_id,
-        page_name: page.page_name,
+        page_name: pageName,
         period,
         insights
       });

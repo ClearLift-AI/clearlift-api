@@ -13,6 +13,14 @@ import { GoogleAdsSupabaseAdapter, DateRange } from "../../../adapters/platforms
 import { SupabaseClient } from "../../../services/supabase";
 import { getSecret } from "../../../utils/secrets";
 import { GoogleAdsOAuthProvider } from "../../../services/oauth/google";
+import { D1AnalyticsService } from "../../../services/d1-analytics";
+
+/**
+ * Check if D1 analytics should be used
+ */
+function useD1Analytics(env: any): boolean {
+  return env.USE_D1_ANALYTICS === 'true' && !!env.ANALYTICS_DB;
+}
 
 /**
  * GET /v1/analytics/google/campaigns
@@ -97,6 +105,69 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
       });
     }
 
+    // Default date range: last 30 days if not provided
+    const endDate = query.query.end_date || new Date().toISOString().split('T')[0];
+    const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    // Try D1 first if enabled
+    if (useD1Analytics(c.env)) {
+      console.log('[Google Campaigns] Using D1 ANALYTICS_DB');
+      try {
+        const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
+        const campaigns = await d1Analytics.getGoogleCampaignsWithMetrics(
+          orgId,
+          startDate,
+          endDate,
+          {
+            status: query.query.status,
+            limit: query.query.limit,
+            offset: query.query.offset
+          }
+        );
+
+        // Transform to frontend expected format
+        const results = campaigns.map(c => ({
+          campaign_id: c.campaign_id,
+          campaign_name: c.campaign_name,
+          status: c.status,
+          last_updated: new Date().toISOString(),
+          metrics: {
+            impressions: c.metrics.impressions,
+            clicks: c.metrics.clicks,
+            spend: c.metrics.spend, // Already in dollars from D1 service
+            conversions: c.metrics.conversions,
+            revenue: c.metrics.revenue
+          }
+        }));
+
+        // Calculate summary from results
+        const summary = results.reduce(
+          (acc, campaign) => ({
+            total_impressions: acc.total_impressions + campaign.metrics.impressions,
+            total_clicks: acc.total_clicks + campaign.metrics.clicks,
+            total_spend: acc.total_spend + campaign.metrics.spend,
+            total_conversions: acc.total_conversions + campaign.metrics.conversions,
+            average_ctr: 0
+          }),
+          { total_impressions: 0, total_clicks: 0, total_spend: 0, total_conversions: 0, average_ctr: 0 }
+        );
+
+        if (summary.total_impressions > 0) {
+          summary.average_ctr = (summary.total_clicks / summary.total_impressions) * 100;
+        }
+
+        console.log(`[Google Campaigns] D1 returned ${results.length} campaigns`);
+        return success(c, {
+          platform: 'google',
+          results,
+          summary
+        });
+      } catch (d1Error) {
+        console.error('[Google Campaigns] D1 query failed, falling back to Supabase:', d1Error);
+      }
+    }
+
+    // Fallback to Supabase
     // Initialize Supabase client
     const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
     if (!supabaseKey) {
@@ -109,15 +180,10 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
     });
 
     const adapter = new GoogleAdsSupabaseAdapter(supabase);
+    const dateRange: DateRange = { start: startDate, end: endDate };
 
     try {
-      // Default date range: last 30 days if not provided
-      const endDate = query.query.end_date || new Date().toISOString().split('T')[0];
-      const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-      const dateRange: DateRange = { start: startDate, end: endDate };
-
-      console.log('[Google Campaigns] Date range requested:', { startDate, endDate });
+      console.log('[Google Campaigns] Using Supabase fallback, date range:', { startDate, endDate });
 
       // Fetch campaigns WITH metrics using the new method
       const campaignsWithMetrics = await adapter.getCampaignsWithMetrics(

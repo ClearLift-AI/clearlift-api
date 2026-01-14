@@ -9,8 +9,6 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
-import { getSecret } from "../../../utils/secrets";
-import { SupabaseClient } from "../../../services/supabase";
 import {
   EntityTreeBuilder,
   MetricsFetcher,
@@ -69,18 +67,13 @@ export class GetEntityAnalysis extends OpenAPIRoute {
 
     const { level, entity_id } = c.req.param();
 
-    // Initialize minimal services
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    // Initialize minimal services using D1
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
 
-    const entityTree = new EntityTreeBuilder(supabase);
-    const metrics = new MetricsFetcher(supabase);
+    const entityTree = new EntityTreeBuilder(c.env.ANALYTICS_DB);
+    const metrics = new MetricsFetcher(c.env.ANALYTICS_DB);
     const llm = new LLMRouter({
       anthropicApiKey: "dummy",
       geminiApiKey: "dummy"
@@ -97,6 +90,7 @@ export class GetEntityAnalysis extends OpenAPIRoute {
       logger,
       jobs,
       c.env.AI_DB,
+      c.env.ANALYTICS_DB,
       "dummy"  // Not used for read-only operations
     );
 
