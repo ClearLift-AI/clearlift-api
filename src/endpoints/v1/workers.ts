@@ -595,6 +595,212 @@ export class TriggerEventsSync extends OpenAPIRoute {
 }
 
 /**
+ * GET /v1/workers/d1/stats - Get D1 database statistics
+ */
+export class GetD1Stats extends OpenAPIRoute {
+  public schema = {
+    tags: ["Workers"],
+    summary: "Get D1 database statistics",
+    description: "Returns size, performance, and usage statistics for all D1 databases",
+    operationId: "get-d1-stats",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      "200": {
+        description: "D1 database statistics",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                databases: z.array(z.object({
+                  name: z.string(),
+                  size_bytes: z.number(),
+                  size_formatted: z.string(),
+                  tables: z.number(),
+                  storage_limit_gb: z.number(),
+                  storage_used_percent: z.number(),
+                  last_query_ms: z.number().optional(),
+                  status: z.enum(['healthy', 'warning', 'critical'])
+                })),
+                total_size_bytes: z.number(),
+                total_size_formatted: z.string(),
+                timestamp: z.string()
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const STORAGE_LIMIT_GB = 10; // D1 limit per database
+    const STORAGE_LIMIT_BYTES = STORAGE_LIMIT_GB * 1024 * 1024 * 1024;
+
+    const formatBytes = (bytes: number): string => {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    };
+
+    const getStatus = (usedPercent: number): 'healthy' | 'warning' | 'critical' => {
+      if (usedPercent > 90) return 'critical';
+      if (usedPercent > 70) return 'warning';
+      return 'healthy';
+    };
+
+    const databases: any[] = [];
+    let totalSizeBytes = 0;
+
+    // Query Main DB (DB)
+    try {
+      const start = Date.now();
+      const result = await c.env.DB.prepare(`
+        SELECT
+          (SELECT COUNT(*) FROM sqlite_master WHERE type='table') as table_count
+      `).first<{ table_count: number }>();
+      const queryMs = Date.now() - start;
+
+      // Get database size - D1 doesn't support pragma functions in queries
+      // Use a simpler estimation based on table count (rough estimate: 1MB per table average)
+      // This is a fallback since D1 doesn't expose direct size metrics via SQL
+      let sizeBytes = 0;
+      try {
+        const pageCount = await c.env.DB.prepare(`PRAGMA page_count`).first<{ page_count: number }>();
+        const pageSize = await c.env.DB.prepare(`PRAGMA page_size`).first<{ page_size: number }>();
+        if (pageCount?.page_count && pageSize?.page_size) {
+          sizeBytes = pageCount.page_count * pageSize.page_size;
+        }
+      } catch (pragmaErr) {
+        // Fallback: estimate based on table count
+        sizeBytes = (result?.table_count || 0) * 1024 * 1024; // ~1MB per table estimate
+      }
+      totalSizeBytes += sizeBytes;
+
+      databases.push({
+        name: 'Main DB (clearlift-db-prod)',
+        size_bytes: sizeBytes,
+        size_formatted: formatBytes(sizeBytes),
+        tables: result?.table_count || 0,
+        storage_limit_gb: STORAGE_LIMIT_GB,
+        storage_used_percent: (sizeBytes / STORAGE_LIMIT_BYTES) * 100,
+        last_query_ms: queryMs,
+        status: getStatus((sizeBytes / STORAGE_LIMIT_BYTES) * 100)
+      });
+    } catch (err) {
+      console.error('DB stats error:', err);
+      databases.push({
+        name: 'Main DB (clearlift-db-prod)',
+        size_bytes: 0,
+        size_formatted: 'Error',
+        tables: 0,
+        storage_limit_gb: STORAGE_LIMIT_GB,
+        storage_used_percent: 0,
+        status: 'critical'
+      });
+    }
+
+    // Query AI DB (AI_DB)
+    if (c.env.AI_DB) {
+      try {
+        const start = Date.now();
+        const result = await c.env.AI_DB.prepare(`
+          SELECT
+            (SELECT COUNT(*) FROM sqlite_master WHERE type='table') as table_count
+        `).first<{ table_count: number }>();
+        const queryMs = Date.now() - start;
+
+        let sizeBytes = 0;
+        try {
+          const pageCount = await c.env.AI_DB.prepare(`PRAGMA page_count`).first<{ page_count: number }>();
+          const pageSize = await c.env.AI_DB.prepare(`PRAGMA page_size`).first<{ page_size: number }>();
+          if (pageCount?.page_count && pageSize?.page_size) {
+            sizeBytes = pageCount.page_count * pageSize.page_size;
+          }
+        } catch (pragmaErr) {
+          sizeBytes = (result?.table_count || 0) * 1024 * 1024;
+        }
+        totalSizeBytes += sizeBytes;
+
+        databases.push({
+          name: 'AI DB (clearlift-ai-prod)',
+          size_bytes: sizeBytes,
+          size_formatted: formatBytes(sizeBytes),
+          tables: result?.table_count || 0,
+          storage_limit_gb: STORAGE_LIMIT_GB,
+          storage_used_percent: (sizeBytes / STORAGE_LIMIT_BYTES) * 100,
+          last_query_ms: queryMs,
+          status: getStatus((sizeBytes / STORAGE_LIMIT_BYTES) * 100)
+        });
+      } catch (err) {
+        console.error('AI_DB stats error:', err);
+      }
+    }
+
+    // Query Analytics DB (ANALYTICS_DB)
+    if (c.env.ANALYTICS_DB) {
+      try {
+        const start = Date.now();
+        const result = await c.env.ANALYTICS_DB.prepare(`
+          SELECT
+            (SELECT COUNT(*) FROM sqlite_master WHERE type='table') as table_count
+        `).first<{ table_count: number }>();
+        const queryMs = Date.now() - start;
+
+        let sizeBytes = 0;
+        try {
+          const pageCount = await c.env.ANALYTICS_DB.prepare(`PRAGMA page_count`).first<{ page_count: number }>();
+          const pageSize = await c.env.ANALYTICS_DB.prepare(`PRAGMA page_size`).first<{ page_size: number }>();
+          if (pageCount?.page_count && pageSize?.page_size) {
+            sizeBytes = pageCount.page_count * pageSize.page_size;
+          }
+        } catch (pragmaErr) {
+          sizeBytes = (result?.table_count || 0) * 1024 * 1024;
+        }
+        totalSizeBytes += sizeBytes;
+
+        // Also get row counts for key tables
+        let dailyMetricsCount = 0;
+        let hourlyMetricsCount = 0;
+        try {
+          const dailyResult = await c.env.ANALYTICS_DB.prepare(`SELECT COUNT(*) as count FROM daily_metrics`).first<{ count: number }>();
+          const hourlyResult = await c.env.ANALYTICS_DB.prepare(`SELECT COUNT(*) as count FROM hourly_metrics`).first<{ count: number }>();
+          dailyMetricsCount = dailyResult?.count || 0;
+          hourlyMetricsCount = hourlyResult?.count || 0;
+        } catch (e) {
+          // Tables might not exist
+        }
+
+        databases.push({
+          name: 'Analytics DB (clearlift-analytics-dev)',
+          size_bytes: sizeBytes,
+          size_formatted: formatBytes(sizeBytes),
+          tables: result?.table_count || 0,
+          storage_limit_gb: STORAGE_LIMIT_GB,
+          storage_used_percent: (sizeBytes / STORAGE_LIMIT_BYTES) * 100,
+          last_query_ms: queryMs,
+          status: getStatus((sizeBytes / STORAGE_LIMIT_BYTES) * 100),
+          metrics: {
+            daily_metrics_rows: dailyMetricsCount,
+            hourly_metrics_rows: hourlyMetricsCount
+          }
+        });
+      } catch (err) {
+        console.error('ANALYTICS_DB stats error:', err);
+      }
+    }
+
+    return success(c, {
+      databases,
+      total_size_bytes: totalSizeBytes,
+      total_size_formatted: formatBytes(totalSizeBytes),
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
+/**
  * POST /v1/workers/sync/trigger - Manually trigger a sync job
  */
 export class TriggerSync extends OpenAPIRoute {

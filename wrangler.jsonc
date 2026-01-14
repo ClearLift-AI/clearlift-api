@@ -12,7 +12,8 @@
     "SUPABASE_URL": "https://jwosqxmfezmnhrbbjlbx.supabase.co",
     "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
     "R2_BUCKET_NAME": "clearlift-db",
-    "R2_SQL_TABLE": "clearlift.event_data_v4_1"
+    "R2_SQL_TABLE": "clearlift.event_data_v4_1",
+    "USE_D1_ANALYTICS": "true"
   },
 
   // Secrets Store bindings - required for Supabase and OAuth
@@ -121,6 +122,11 @@
       "database_name": "clearlift-ai-prod",
       "database_id": "3fb300f4-4523-4a29-9efc-955d1684f392",
       "migrations_dir": "migrations-ai"
+    },
+    {
+      "binding": "ANALYTICS_DB",
+      "database_name": "clearlift-analytics-dev",
+      "database_id": "57a7e42f-3a52-4b15-b237-bc1338e5fb61"
     },
     // Platform data shards (for campaign/metrics storage)
     {
@@ -246,6 +252,13 @@
         "R2_BUCKET_NAME": "clearlift-db",
         "R2_SQL_TABLE": "clearlift.event_data_v4_1"
       },
+      "vars": {
+        "SUPABASE_URL": "https://jwosqxmfezmnhrbbjlbx.supabase.co",
+        "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
+        "R2_BUCKET_NAME": "clearlift-db",
+        "R2_SQL_TABLE": "clearlift.event_data_v4_1",
+        "USE_D1_ANALYTICS": "true"
+      },
       "d1_databases": [
         {
           "binding": "DB",
@@ -258,6 +271,11 @@
           "database_name": "clearlift-ai-prod",
           "database_id": "3fb300f4-4523-4a29-9efc-955d1684f392",
           "migrations_dir": "migrations-ai"
+        },
+        {
+          "binding": "ANALYTICS_DB",
+          "database_name": "clearlift-analytics-dev",
+          "database_id": "57a7e42f-3a52-4b15-b237-bc1338e5fb61"
         }
       ],
       "queues": {
@@ -290,6 +308,139 @@
           "binding": "SUPABASE_PUBLISHABLE_KEY",
           "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
           "secret_name": "SUPABASE_PUBLISHABLE_KEY"
+        },
+        {
+          "binding": "R2_SQL_TOKEN",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "R2_ADMIN_TOKEN"
+        },
+        {
+          "binding": "GOOGLE_CLIENT_ID",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "GOOGLE_CLIENT_ID"
+        },
+        {
+          "binding": "GOOGLE_CLIENT_SECRET",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "GOOGLE_CLIENT_SECRET"
+        },
+        {
+          "binding": "GOOGLE_ADS_DEVELOPER_TOKEN",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "GOOGLE_ADS_DEVELOPER_TOKEN"
+        },
+        {
+          "binding": "FACEBOOK_APP_ID",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "FB_APP_ID"
+        },
+        {
+          "binding": "FACEBOOK_APP_SECRET",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "FB_APP_SECRET"
+        },
+        {
+          "binding": "SENDGRID_API_KEY",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "SENDGRID_API_KEY"
+        },
+        {
+          "binding": "ANTHROPIC_API_KEY",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "ANTHROPIC_API_KEY"
+        },
+        {
+          "binding": "GEMINI_API_KEY",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "GEMINI_API_KEY"
+        },
+        {
+          "binding": "TIKTOK_APP_ID",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "TIKTOK_APP_ID"
+        },
+        {
+          "binding": "TIKTOK_APP_SECRET",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "TIKTOK_APP_SECRET"
+        },
+        {
+          "binding": "SHOPIFY_CLIENT_ID",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "SHOPIFY_CLIENT_ID"
+        },
+        {
+          "binding": "SHOPIFY_CLIENT_SECRET",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "SHOPIFY_CLIENT_SECRET"
+        },
+        {
+          "binding": "JOBBER_CLIENT_ID",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "JOBBER_CLIENT_ID"
+        },
+        {
+          "binding": "JOBBER_CLIENT_SECRET",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "JOBBER_CLIENT_SECRET"
+        }
+      ]
+    },
+
+    // ========================================================================
+    // DEV ENVIRONMENT (Pure Cloudflare - No Supabase)
+    // ========================================================================
+    // Deploy with: npx wrangler deploy --env dev
+    // Accessible at: dev.clearlift.ai (via api-dev.clearlift.ai)
+    // Uses D1 ANALYTICS_DB instead of Supabase for events/touchpoints/metrics
+    "dev": {
+      "name": "clearlift-api-dev",
+      "vars": {
+        "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
+        "R2_BUCKET_NAME": "clearlift-db",
+        "R2_SQL_TABLE": "clearlift.event_data_v4_1",
+        "USE_D1_ANALYTICS": "true"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "clearlift-db-prod",
+          "database_id": "8e55bba7-4b54-4992-b5e5-050611499c18",
+          "migrations_dir": "migrations"
+        },
+        {
+          "binding": "AI_DB",
+          "database_name": "clearlift-ai-prod",
+          "database_id": "3fb300f4-4523-4a29-9efc-955d1684f392",
+          "migrations_dir": "migrations-ai"
+        },
+        {
+          "binding": "ANALYTICS_DB",
+          "database_name": "clearlift-analytics-dev",
+          "database_id": "57a7e42f-3a52-4b15-b237-bc1338e5fb61",
+          "migrations_dir": "migrations-analytics"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "SYNC_QUEUE",
+            "queue": "sync-jobs-dev"
+          }
+        ]
+      },
+      "workflows": [
+        {
+          "name": "analysis-workflow-dev",
+          "binding": "ANALYSIS_WORKFLOW",
+          "class_name": "AnalysisWorkflow"
+        }
+      ],
+      "secrets_store_secrets": [
+        {
+          "binding": "ENCRYPTION_KEY",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "ENCRYPTION_KEY"
         },
         {
           "binding": "R2_SQL_TOKEN",

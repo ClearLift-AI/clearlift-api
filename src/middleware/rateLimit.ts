@@ -147,6 +147,9 @@ export function rateLimitMiddleware(config: RateLimitConfig) {
     const windowStart = new Date(now.getTime() - config.windowMs);
     const windowEnd = now;
 
+    // Track if next() was already called to prevent double invocation
+    let nextCalled = false;
+
     try {
       // Get current rate limit entry
       const entry = await db.prepare(`
@@ -175,27 +178,32 @@ export function rateLimitMiddleware(config: RateLimitConfig) {
         // Calculate retry after (in seconds)
         const retryAfter = Math.ceil((new Date(entry!.window_end).getTime() - now.getTime()) / 1000);
 
-        // Log security event
-        const auditLogger = createAuditLogger(c);
-        await auditLogger.logSecurityEvent({
-          severity: 'warning',
-          event_type: 'rate_limit_exceeded',
-          user_id: c.get("session")?.user_id,
-          organization_id: c.get("org_id" as any),
-          threat_indicator: `Rate limit exceeded: ${count}/${config.maxRequests}`,
-          threat_source: key,
-          automated_response: 'blocked',
-          ip_address: c.req.header("CF-Connecting-IP") || "unknown",
-          user_agent: c.req.header("User-Agent") || "unknown",
-          request_id: c.get("request_id" as any),
-          metadata: {
-            path: new URL(c.req.url).pathname,
-            method: c.req.method,
-            rate_limit_key: key,
-            requests_made: count,
-            limit: config.maxRequests
-          }
-        });
+        // Log security event (non-blocking, ignore failures)
+        try {
+          const auditLogger = createAuditLogger(c);
+          await auditLogger.logSecurityEvent({
+            severity: 'warning',
+            event_type: 'rate_limit_exceeded',
+            user_id: c.get("session")?.user_id,
+            organization_id: c.get("org_id" as any),
+            threat_indicator: `Rate limit exceeded: ${count}/${config.maxRequests}`,
+            threat_source: key,
+            automated_response: 'blocked',
+            ip_address: c.req.header("CF-Connecting-IP") || "unknown",
+            user_agent: c.req.header("User-Agent") || "unknown",
+            request_id: c.get("request_id" as any),
+            metadata: {
+              path: new URL(c.req.url).pathname,
+              method: c.req.method,
+              rate_limit_key: key,
+              requests_made: count,
+              limit: config.maxRequests
+            }
+          });
+        } catch (logErr) {
+          // Ignore audit log failures - don't let them block the rate limit response
+          console.error("Failed to log rate limit event:", logErr);
+        }
 
         // Return rate limit error
         c.header("X-RateLimit-Limit", String(config.maxRequests));
@@ -214,51 +222,52 @@ export function rateLimitMiddleware(config: RateLimitConfig) {
       // Process request
       let requestSucceeded = false;
       try {
+        nextCalled = true;
         await next();
         requestSucceeded = c.res.status < 400;
       } catch (error) {
         requestSucceeded = false;
         throw error;
-      } finally {
-        // Update rate limit count based on configuration
-        const shouldCount = (
-          (!config.skipSuccessfulRequests || !requestSucceeded) &&
-          (!config.skipFailedRequests || requestSucceeded)
-        );
+      }
 
-        if (shouldCount) {
-          const newCount = count + 1;
-          const newWindowEnd = new Date(now.getTime() + config.windowMs).toISOString();
+      // Update rate limit count (after next() completes, non-blocking)
+      const shouldCount = (
+        (!config.skipSuccessfulRequests || !requestSucceeded) &&
+        (!config.skipFailedRequests || requestSucceeded)
+      );
 
-          // Upsert rate limit entry
-          await db.prepare(`
-            INSERT INTO rate_limits (key, count, window_start, window_end, last_request)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-              count = ?,
-              window_end = ?,
-              last_request = ?
-          `).bind(
-            key,
-            newCount,
-            windowStart.toISOString(),
-            newWindowEnd,
-            nowIso,
-            newCount,
-            newWindowEnd,
-            nowIso
-          ).run();
+      if (shouldCount) {
+        const newCount = count + 1;
+        const newWindowEnd = new Date(now.getTime() + config.windowMs).toISOString();
 
-          // Add rate limit headers
-          c.header("X-RateLimit-Limit", String(config.maxRequests));
-          c.header("X-RateLimit-Remaining", String(Math.max(0, config.maxRequests - newCount)));
-          c.header("X-RateLimit-Reset", newWindowEnd);
-        }
+        // Upsert rate limit entry - fire and forget, don't let D1 failures break the response
+        db.prepare(`
+          INSERT INTO rate_limits (key, count, window_start, window_end, last_request)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(key) DO UPDATE SET
+            count = ?,
+            window_end = ?,
+            last_request = ?
+        `).bind(
+          key,
+          newCount,
+          windowStart.toISOString(),
+          newWindowEnd,
+          nowIso,
+          newCount,
+          newWindowEnd,
+          nowIso
+        ).run().catch(err => console.error("Rate limit update failed:", err));
 
-        // Occasionally clean up expired entries (1% chance)
-        if (Math.random() < 0.01) {
-          cleanupExpiredEntries(db).catch(console.error);
-        }
+        // Add rate limit headers
+        c.header("X-RateLimit-Limit", String(config.maxRequests));
+        c.header("X-RateLimit-Remaining", String(Math.max(0, config.maxRequests - newCount)));
+        c.header("X-RateLimit-Reset", newWindowEnd);
+      }
+
+      // Occasionally clean up expired entries (1% chance)
+      if (Math.random() < 0.01) {
+        cleanupExpiredEntries(db).catch(console.error);
       }
     } catch (error) {
       // If rate limiting fails, log but don't block the request
@@ -269,8 +278,10 @@ export function rateLimitMiddleware(config: RateLimitConfig) {
         throw error;
       }
 
-      // Otherwise continue without rate limiting
-      await next();
+      // Only call next() if it hasn't been called already
+      if (!nextCalled) {
+        await next();
+      }
     }
   };
 }

@@ -1044,3 +1044,314 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
     }
   }
 }
+
+/**
+ * GET /v1/analytics/facebook/pages
+ *
+ * Retrieves Facebook Pages connected to the user's account.
+ * Demonstrates usage of pages_show_list permission for Meta App Review.
+ */
+export class GetFacebookPages extends OpenAPIRoute {
+  schema = {
+    tags: ["Facebook Pages"],
+    summary: "Get connected Facebook Pages",
+    description: "Retrieves Facebook Pages connected via OAuth. Demonstrates pages_show_list permission usage.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        limit: z.coerce.number().min(1).max(100).optional().default(25)
+      })
+    },
+    responses: {
+      "200": {
+        description: "Connected Facebook Pages",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                pages: z.array(z.object({
+                  page_id: z.string(),
+                  page_name: z.string(),
+                  category: z.string().nullable(),
+                  fan_count: z.number(),
+                  has_access_token: z.boolean()
+                })),
+                total: z.number()
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const query = await this.getValidatedData<typeof this.schema>();
+
+    // Check if org has an active Facebook connection
+    const hasConnection = await c.env.DB.prepare(`
+      SELECT 1 FROM platform_connections
+      WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
+      LIMIT 1
+    `).bind(orgId).first();
+
+    if (!hasConnection) {
+      return success(c, {
+        pages: [],
+        total: 0,
+        message: "No active Facebook connection found"
+      });
+    }
+
+    // Initialize Supabase client to read pages from facebook_ads.pages
+    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+    if (!supabaseKey) {
+      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    }
+
+    const supabase = new SupabaseClient({
+      url: c.env.SUPABASE_URL,
+      secretKey: supabaseKey
+    });
+
+    try {
+      // Query pages from Supabase facebook_ads.pages table
+      const pagesResult = await supabase.query(
+        'pages',
+        {
+          select: 'page_id,page_name,category,fan_count,access_token,created_at',
+          organization_id: `eq.${orgId}`,
+          deleted_at: 'is.null',
+          limit: query.query.limit,
+          order: 'fan_count.desc'
+        },
+        'facebook_ads'
+      );
+
+      const pages = (pagesResult || []).map((p: any) => ({
+        page_id: p.page_id,
+        page_name: p.page_name,
+        category: p.category || null,
+        fan_count: p.fan_count || 0,
+        has_access_token: !!p.access_token
+      }));
+
+      return success(c, {
+        pages,
+        total: pages.length
+      });
+    } catch (err: any) {
+      console.error("Get Facebook pages error:", err);
+      return error(c, "QUERY_FAILED", `Failed to fetch pages: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * GET /v1/analytics/facebook/pages/:page_id/insights
+ *
+ * Retrieves insights for a specific Facebook Page.
+ * Demonstrates usage of pages_read_engagement permission for Meta App Review.
+ *
+ * Note: As of November 2025, 'impressions' is deprecated in favor of 'views'.
+ */
+export class GetFacebookPageInsights extends OpenAPIRoute {
+  schema = {
+    tags: ["Facebook Pages"],
+    summary: "Get Facebook Page insights",
+    description: "Retrieves engagement insights for a connected Facebook Page. Demonstrates pages_read_engagement permission usage.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        page_id: z.string().describe("Facebook Page ID")
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        period: z.enum(['day', 'week', 'days_28']).optional().default('day').describe("Insight period"),
+        date_preset: z.enum(['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month']).optional()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Facebook Page insights data",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                page_id: z.string(),
+                page_name: z.string(),
+                period: z.string(),
+                insights: z.object({
+                  page_views: z.number().describe("Total page views (replaces deprecated impressions)"),
+                  page_engaged_users: z.number().describe("Unique users who engaged with the page"),
+                  page_post_engagements: z.number().describe("Total post engagements"),
+                  page_fan_adds: z.number().describe("New page likes/follows"),
+                  page_fan_removes: z.number().describe("Page unlikes/unfollows")
+                })
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { page_id } = data.params;
+    const { period, date_preset } = data.query;
+
+    // Get Facebook connection for this org
+    const connection = await c.env.DB.prepare(`
+      SELECT id, account_id
+      FROM platform_connections
+      WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
+      LIMIT 1
+    `).bind(orgId).first<{ id: string; account_id: string }>();
+
+    if (!connection) {
+      return error(c, "NO_CONNECTION", "No active Facebook connection found for this organization", 404);
+    }
+
+    // Get the page-specific access token from Supabase
+    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
+    if (!supabaseKey) {
+      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    }
+
+    const supabase = new SupabaseClient({
+      url: c.env.SUPABASE_URL,
+      secretKey: supabaseKey
+    });
+
+    try {
+      // Get page record with access token
+      const pageResult = await supabase.query(
+        'pages',
+        {
+          select: 'page_id,page_name,access_token',
+          organization_id: `eq.${orgId}`,
+          page_id: `eq.${page_id}`,
+          deleted_at: 'is.null',
+          limit: 1
+        },
+        'facebook_ads'
+      );
+
+      if (!pageResult || pageResult.length === 0) {
+        return error(c, "PAGE_NOT_FOUND", "Page not found or not connected to this organization", 404);
+      }
+
+      const page = pageResult[0];
+
+      // If no page access token, fall back to user access token
+      let accessToken = page.access_token;
+      if (!accessToken) {
+        const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+        if (!encryptionKey) {
+          return error(c, "CONFIG_ERROR", "Encryption key not configured", 500);
+        }
+        const { ConnectorService } = await import('../../../services/connectors');
+        const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+        accessToken = await connectorService.getAccessToken(connection.id);
+      }
+
+      if (!accessToken) {
+        return error(c, "NO_TOKEN", "No access token available for this page", 500);
+      }
+
+      // Fetch page insights from Facebook Graph API
+      // Using metrics that are NOT deprecated as of November 2025
+      const metrics = [
+        'page_views_total',          // Replaces deprecated page_impressions
+        'page_engaged_users',        // Unique users who engaged
+        'page_post_engagements',     // Total engagements on posts
+        'page_fan_adds',             // New followers
+        'page_fan_removes'           // Lost followers
+      ].join(',');
+
+      const insightsUrl = new URL(`https://graph.facebook.com/v24.0/${page_id}/insights`);
+      insightsUrl.searchParams.set('metric', metrics);
+      insightsUrl.searchParams.set('period', period);
+      insightsUrl.searchParams.set('access_token', accessToken);
+      if (date_preset) {
+        insightsUrl.searchParams.set('date_preset', date_preset);
+      }
+
+      const response = await fetch(insightsUrl.toString());
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Facebook Page Insights API error:', errorText);
+
+        // Return empty insights rather than failing - page may not have insights yet
+        return success(c, {
+          page_id,
+          page_name: page.page_name,
+          period,
+          insights: {
+            page_views: 0,
+            page_engaged_users: 0,
+            page_post_engagements: 0,
+            page_fan_adds: 0,
+            page_fan_removes: 0
+          },
+          note: "Page insights not available or insufficient data"
+        });
+      }
+
+      const insightsData = await response.json() as any;
+
+      // Parse insights response into structured format
+      const insights: Record<string, number> = {
+        page_views: 0,
+        page_engaged_users: 0,
+        page_post_engagements: 0,
+        page_fan_adds: 0,
+        page_fan_removes: 0
+      };
+
+      if (insightsData.data) {
+        for (const metric of insightsData.data) {
+          const name = metric.name;
+          // Get the most recent value from the values array
+          const values = metric.values || [];
+          const latestValue = values.length > 0 ? values[values.length - 1].value : 0;
+
+          switch (name) {
+            case 'page_views_total':
+              insights.page_views = latestValue;
+              break;
+            case 'page_engaged_users':
+              insights.page_engaged_users = latestValue;
+              break;
+            case 'page_post_engagements':
+              insights.page_post_engagements = latestValue;
+              break;
+            case 'page_fan_adds':
+              insights.page_fan_adds = latestValue;
+              break;
+            case 'page_fan_removes':
+              insights.page_fan_removes = latestValue;
+              break;
+          }
+        }
+      }
+
+      return success(c, {
+        page_id,
+        page_name: page.page_name,
+        period,
+        insights
+      });
+    } catch (err: any) {
+      console.error("Get Facebook page insights error:", err);
+      return error(c, "QUERY_FAILED", `Failed to fetch page insights: ${err.message}`, 500);
+    }
+  }
+}

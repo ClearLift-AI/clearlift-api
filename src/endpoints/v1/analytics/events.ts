@@ -125,11 +125,11 @@ export class GetEvents extends OpenAPIRoute {
       const domainPatterns = (domainClaims?.map(d => d.domain_pattern) || [])
         .map(p => p.replace(/%/g, '*'));
 
-      // Query events directly - much faster than filtering on computed column
+      // Query events_slim directly - optimized table with only essential fields
       // We filter on org_tag = orgTag OR org_tag matches any domain pattern
       // Fetch one extra to determine if there are more results (cursor pagination)
       let query = supabase
-        .from("events")
+        .from("events_slim")
         .select("*")
         .gte("timestamp", startTime.toISOString())
         .order("timestamp", { ascending: false })

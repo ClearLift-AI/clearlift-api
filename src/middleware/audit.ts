@@ -150,8 +150,8 @@ export async function auditMiddleware(c: AppContext, next: Next) {
     // Calculate response time
     const responseTime = Date.now() - startTime;
 
-    // Log successful request
-    await auditLogger.logApiRequest({
+    // Log successful request (fire-and-forget, don't block response)
+    auditLogger.logApiRequest({
       user_id: session?.user_id,
       organization_id: orgId,
       session_token_hash: session?.token,
@@ -169,13 +169,13 @@ export async function auditMiddleware(c: AppContext, next: Next) {
       metadata: {
         query_params: Object.fromEntries(new URL(c.req.url).searchParams)
       }
-    });
+    }).catch(err => console.error('Failed to write audit log:', err));
 
-    // Log data access for analytics endpoints
+    // Log data access for analytics endpoints (fire-and-forget)
     if (path.includes('/analytics') && session) {
       const queryParams = Object.fromEntries(new URL(c.req.url).searchParams);
 
-      await auditLogger.logDataAccess({
+      auditLogger.logDataAccess({
         user_id: session.user_id,
         organization_id: orgId || queryParams.org_id,
         access_type: 'api_fetch',
@@ -186,14 +186,14 @@ export async function auditMiddleware(c: AppContext, next: Next) {
         request_id: requestId,
         ip_address: ipAddress,
         data_classification: 'internal'
-      });
+      }).catch(err => console.error('Failed to write data access log:', err));
     }
 
   } catch (error) {
     const responseTime = Date.now() - startTime;
 
-    // Log failed request
-    await auditLogger.logApiRequest({
+    // Log failed request (fire-and-forget)
+    auditLogger.logApiRequest({
       user_id: session?.user_id,
       organization_id: orgId,
       session_token_hash: session?.token,
@@ -210,11 +210,11 @@ export async function auditMiddleware(c: AppContext, next: Next) {
       error_code: (error as any).code || 'INTERNAL_ERROR',
       error_message: (error as any).message || 'Unknown error',
       response_time_ms: responseTime
-    });
+    }).catch(err => console.error('Failed to write audit log:', err));
 
-    // Log security events for suspicious activity
+    // Log security events for suspicious activity (fire-and-forget)
     if (shouldLogSecurityEvent(error, path)) {
-      await auditLogger.logSecurityEvent({
+      auditLogger.logSecurityEvent({
         severity: getSecuritySeverity(error),
         event_type: getSecurityEventType(error, path),
         user_id: session?.user_id,
@@ -229,7 +229,7 @@ export async function auditMiddleware(c: AppContext, next: Next) {
           path,
           error_details: (error as any).details
         }
-      });
+      }).catch(err => console.error('Failed to write security log:', err));
     }
 
     throw error; // Re-throw to maintain normal error flow
@@ -261,9 +261,9 @@ export async function authAuditMiddleware(c: AppContext, next: Next) {
 
     const session = c.get("session");
 
-    // Log successful auth event
+    // Log successful auth event (fire-and-forget, don't block response)
     if (session) {
-      await auditLogger.logAuthEvent({
+      auditLogger.logAuthEvent({
         event_type: eventType,
         user_id: session.user_id,
         email: session.email,
@@ -274,11 +274,11 @@ export async function authAuditMiddleware(c: AppContext, next: Next) {
         success: true,
         session_id: session.token,
         session_created: eventType === 'login'
-      });
+      }).catch(err => console.error('Failed to write auth audit log:', err));
     }
   } catch (error) {
-    // Log failed auth attempt
-    await auditLogger.logAuthEvent({
+    // Log failed auth attempt (fire-and-forget, don't block error response)
+    auditLogger.logAuthEvent({
       event_type: 'failed_login',
       auth_method: 'session',
       provider: extractProvider(path),
@@ -290,7 +290,7 @@ export async function authAuditMiddleware(c: AppContext, next: Next) {
         path,
         error_code: (error as any).code
       }
-    });
+    }).catch(err => console.error('Failed to write auth audit log:', err));
 
     throw error;
   }

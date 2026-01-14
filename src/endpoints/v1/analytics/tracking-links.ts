@@ -160,14 +160,14 @@ export class GetTrackingLinkPerformance extends OpenAPIRoute {
         conversionsByLink.set(conv.email_link_id, existing);
       }
 
-      // 3. Query clicks from events.events table
+      // 3. Query clicks from events.events_slim table
       const eventsSupabase = createClient(c.env.SUPABASE_URL, supabaseKey, {
         db: { schema: "events" },
       });
 
       // Query email_click events with link_id in custom_dimensions
       const { data: clicksData, error: clicksError } = await eventsSupabase
-        .from("events")
+        .from("events_slim")
         .select("custom_dimensions")
         .eq("org_tag", orgTag)
         .eq("event_type", "email_click")

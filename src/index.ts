@@ -30,6 +30,15 @@ import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./end
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
 import { GetEventsSyncStatus } from "./endpoints/v1/analytics/events-sync";
 import {
+  GetD1MetricsSummary,
+  GetD1DailyMetrics,
+  GetD1HourlyMetrics,
+  GetD1UTMPerformance,
+  GetD1Attribution,
+  GetD1Journeys,
+  GetD1ChannelTransitions
+} from "./endpoints/v1/analytics/d1-metrics";
+import {
   GetFacebookCampaigns,
   GetFacebookAdSets,
   GetFacebookCreatives,
@@ -40,7 +49,9 @@ import {
   UpdateFacebookAdStatus,
   UpdateFacebookCampaignBudget,
   UpdateFacebookAdSetBudget,
-  UpdateFacebookAdSetTargeting
+  UpdateFacebookAdSetTargeting,
+  GetFacebookPages,
+  GetFacebookPageInsights
 } from "./endpoints/v1/analytics/facebook";
 import {
   GetGoogleCampaigns,
@@ -138,7 +149,8 @@ import {
   GetDeadLetterQueue,
   TestConnectionToken,
   TriggerSync,
-  TriggerEventsSync
+  TriggerEventsSync,
+  GetD1Stats
 } from "./endpoints/v1/workers";
 import {
   JoinWaitlist,
@@ -152,6 +164,26 @@ import {
   AdminGetWaitlist,
   AdminUpdateWaitlistStatus
 } from "./endpoints/v1/admin";
+import {
+  AdminListOrganizations,
+  AdminGetOrganization,
+  AdminUpdateOrganization,
+  AdminForceSync,
+  AdminResetConnection,
+  AdminDisconnect,
+  AdminListSyncJobs,
+  AdminRetrySyncJob
+} from "./endpoints/v1/admin/crm";
+import {
+  AdminListTasks,
+  AdminCreateTask,
+  AdminUpdateTask,
+  AdminDeleteTask,
+  AdminListTaskComments,
+  AdminAddTaskComment,
+  AdminStartImpersonation,
+  AdminEndImpersonation
+} from "./endpoints/v1/admin/tasks";
 import {
   GetRolloutStats,
   GetOrgRoutingConfig,
@@ -327,6 +359,28 @@ openapi.post("/v1/admin/events-sync/trigger", auth, AdminTriggerEventsSync);
 openapi.get("/v1/admin/waitlist", auth, AdminGetWaitlist);
 openapi.patch("/v1/admin/waitlist/:id/status", auth, AdminUpdateWaitlistStatus);
 
+// Admin CRM endpoints
+openapi.get("/v1/admin/organizations", auth, AdminListOrganizations);
+openapi.get("/v1/admin/organizations/:id", auth, AdminGetOrganization);
+openapi.patch("/v1/admin/organizations/:id", auth, AdminUpdateOrganization);
+openapi.post("/v1/admin/connections/:id/sync", auth, AdminForceSync);
+openapi.post("/v1/admin/connections/:id/reset", auth, AdminResetConnection);
+openapi.delete("/v1/admin/connections/:id", auth, AdminDisconnect);
+openapi.get("/v1/admin/sync-jobs", auth, AdminListSyncJobs);
+openapi.post("/v1/admin/sync-jobs/:id/retry", auth, AdminRetrySyncJob);
+
+// Admin Tasks endpoints
+openapi.get("/v1/admin/tasks", auth, AdminListTasks);
+openapi.post("/v1/admin/tasks", auth, AdminCreateTask);
+openapi.patch("/v1/admin/tasks/:id", auth, AdminUpdateTask);
+openapi.delete("/v1/admin/tasks/:id", auth, AdminDeleteTask);
+openapi.get("/v1/admin/tasks/:id/comments", auth, AdminListTaskComments);
+openapi.post("/v1/admin/tasks/:id/comments", auth, AdminAddTaskComment);
+
+// Admin impersonation endpoints
+openapi.post("/v1/admin/impersonate", auth, AdminStartImpersonation);
+openapi.post("/v1/admin/end-impersonation", auth, AdminEndImpersonation);
+
 // D1 rollout admin endpoints
 openapi.get("/v1/admin/d1-rollout/stats", auth, GetRolloutStats);
 openapi.get("/v1/admin/d1-rollout/orgs", auth, ListOrgsByRoutingStatus);
@@ -442,6 +496,15 @@ openapi.post("/v1/recommendations/seed", SeedFacebookDemoRecommendations); // In
 openapi.get("/v1/analytics/users/:userId/journey", auth, requireOrg, GetUserJourney);
 openapi.get("/v1/analytics/journeys/overview", auth, requireOrg, GetJourneysOverview);
 
+// D1 Analytics endpoints (dev environment - pure Cloudflare)
+openapi.get("/v1/analytics/metrics/summary", auth, requireOrg, GetD1MetricsSummary);
+openapi.get("/v1/analytics/metrics/daily", auth, requireOrg, GetD1DailyMetrics);
+openapi.get("/v1/analytics/metrics/hourly", auth, requireOrg, GetD1HourlyMetrics);
+openapi.get("/v1/analytics/metrics/utm", auth, requireOrg, GetD1UTMPerformance);
+openapi.get("/v1/analytics/metrics/attribution", auth, requireOrg, GetD1Attribution);
+openapi.get("/v1/analytics/metrics/journeys", auth, requireOrg, GetD1Journeys);
+openapi.get("/v1/analytics/metrics/transitions", auth, requireOrg, GetD1ChannelTransitions);
+
 // Facebook Ads endpoints
 openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);
 openapi.get("/v1/analytics/facebook/ad-sets", auth, requireOrg, GetFacebookAdSets);
@@ -454,6 +517,9 @@ openapi.patch("/v1/analytics/facebook/ads/:ad_id/status", auth, requireOrg, requ
 openapi.patch("/v1/analytics/facebook/campaigns/:campaign_id/budget", auth, requireOrg, requireOrgAdmin, UpdateFacebookCampaignBudget);
 openapi.patch("/v1/analytics/facebook/ad-sets/:ad_set_id/budget", auth, requireOrg, requireOrgAdmin, UpdateFacebookAdSetBudget);
 openapi.patch("/v1/analytics/facebook/ad-sets/:ad_set_id/targeting", auth, requireOrg, requireOrgAdmin, UpdateFacebookAdSetTargeting);
+// Facebook Pages endpoints (pages_show_list + pages_read_engagement permissions)
+openapi.get("/v1/analytics/facebook/pages", auth, requireOrg, GetFacebookPages);
+openapi.get("/v1/analytics/facebook/pages/:page_id/insights", auth, requireOrg, GetFacebookPageInsights);
 
 // Google Ads endpoints
 openapi.get("/v1/analytics/google/campaigns", auth, requireOrg, GetGoogleCampaigns);
@@ -526,6 +592,7 @@ openapi.get("/v1/connectors/:connection_id/filters/discover", auth, DiscoverMeta
 openapi.get("/v1/workers/health", auth, GetWorkersHealth);
 openapi.get("/v1/workers/queue/status", auth, GetQueueStatus);
 openapi.get("/v1/workers/dlq", auth, GetDeadLetterQueue);
+openapi.get("/v1/workers/d1/stats", auth, GetD1Stats);
 openapi.get("/v1/workers/test-token/:connection_id", auth, TestConnectionToken);
 openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
 openapi.post("/v1/workers/events-sync/trigger", auth, TriggerEventsSync);
