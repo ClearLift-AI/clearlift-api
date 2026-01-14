@@ -2,25 +2,14 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
-import { SupabaseClient } from "../../../services/supabase";
-import { getSecret } from "../../../utils/secrets";
-import { GoogleAdsSupabaseAdapter } from "../../../adapters/platforms/google-supabase";
-import { FacebookSupabaseAdapter } from "../../../adapters/platforms/facebook-supabase";
-import { TikTokAdsSupabaseAdapter } from "../../../adapters/platforms/tiktok-supabase";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
-
-/**
- * Check if D1 analytics should be used
- */
-function useD1Analytics(env: any): boolean {
-  return env.USE_D1_ANALYTICS === 'true' && !!env.ANALYTICS_DB;
-}
 
 /**
  * DEPRECATED: GetPlatformData class removed - broken table naming
  * Use platform-specific endpoints instead:
  * - /v1/analytics/facebook/* for Facebook Ads
- * - /v1/analytics/google/* for Google Ads (to be implemented)
+ * - /v1/analytics/google/* for Google Ads
+ * - /v1/analytics/tiktok/* for TikTok Ads
  */
 
 /**
@@ -75,15 +64,11 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
     const orgId = c.get("org_id" as any) as string;
     const startDate = c.req.query("start_date");
     const endDate = c.req.query("end_date");
 
-    // Access check already handled by requireOrg middleware
-
     // Check if org has any active platform connections
-    // Only return data for platforms with active connections (prevents orphaned data leakage)
     const activeConnections = await c.env.DB.prepare(`
       SELECT DISTINCT platform FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
@@ -99,6 +84,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           total_impressions: 0,
           total_clicks: 0,
           total_conversions: 0,
+          total_conversion_value_cents: 0,
           average_ctr: 0,
           average_cpc_cents: 0,
           platforms_active: []
@@ -118,128 +104,64 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
 
     console.log(`[Unified] Fetching data for org ${orgId}, date range: ${effectiveDateRange.start} to ${effectiveDateRange.end}`);
 
-    // Use D1 for analytics when enabled (new path)
-    if (useD1Analytics(c.env)) {
-      console.log('[Unified] Using D1 ANALYTICS_DB for platform data');
-      try {
-        const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
-        const { summary: d1Summary, by_platform } = await d1Analytics.getUnifiedPlatformSummary(
-          orgId,
-          effectiveDateRange.start,
-          effectiveDateRange.end,
-          activePlatforms
-        );
-
-        const summary = {
-          total_spend_cents: d1Summary.spend_cents,
-          total_impressions: d1Summary.impressions,
-          total_clicks: d1Summary.clicks,
-          total_conversions: d1Summary.conversions,
-          total_conversion_value_cents: d1Summary.conversion_value_cents,
-          average_ctr: d1Summary.impressions > 0
-            ? (d1Summary.clicks / d1Summary.impressions) * 100
-            : 0,
-          average_cpc_cents: d1Summary.clicks > 0
-            ? Math.round(d1Summary.spend_cents / d1Summary.clicks)
-            : 0,
-          platforms_active: Object.keys(by_platform).filter(p => by_platform[p].campaigns > 0)
-        };
-
-        return success(c, {
-          summary,
-          by_platform,
-          time_series: [] // TODO: Add time series from D1 if needed
-        });
-      } catch (d1Error) {
-        console.error('[Unified] D1 query failed, falling back to Supabase:', d1Error);
-        // Fall through to Supabase path
-      }
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
-
-    // Fallback to Supabase (legacy path)
-    // Get Supabase secret key from Secrets Store
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
-    }
-
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
 
     try {
-      // Fetch platform data and time series in parallel
-      const [platformData, platformTimeSeries] = await Promise.all([
-        this.fetchPlatformData(supabase, orgId, activePlatforms, effectiveDateRange),
-        this.fetchPlatformTimeSeries(supabase, orgId, activePlatforms, effectiveDateRange)
-      ]);
+      console.log('[Unified] Using D1 ANALYTICS_DB for platform data');
+      const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
+      const { summary: d1Summary, by_platform } = await d1Analytics.getUnifiedPlatformSummary(
+        orgId,
+        effectiveDateRange.start,
+        effectiveDateRange.end,
+        activePlatforms
+      );
 
-      console.log(`[Unified] Got ${platformTimeSeries.length} time series points from fetchPlatformTimeSeries`);
-
-      // Build summary from platform data
       const summary = {
-        total_spend_cents: platformData.total_spend_cents,
-        total_impressions: platformData.total_impressions,
-        total_clicks: platformData.total_clicks,
-        total_conversions: platformData.total_conversions,
-        total_conversion_value_cents: platformData.total_conversion_value_cents,
-        average_ctr: platformData.total_impressions > 0
-          ? (platformData.total_clicks / platformData.total_impressions) * 100
+        total_spend_cents: d1Summary.spend_cents,
+        total_impressions: d1Summary.impressions,
+        total_clicks: d1Summary.clicks,
+        total_conversions: d1Summary.conversions,
+        total_conversion_value_cents: d1Summary.conversion_value_cents,
+        average_ctr: d1Summary.impressions > 0
+          ? (d1Summary.clicks / d1Summary.impressions) * 100
           : 0,
-        average_cpc_cents: platformData.total_clicks > 0
-          ? Math.round(platformData.total_spend_cents / platformData.total_clicks)
+        average_cpc_cents: d1Summary.clicks > 0
+          ? Math.round(d1Summary.spend_cents / d1Summary.clicks)
           : 0,
-        platforms_active: Object.keys(platformData.by_platform)
+        platforms_active: Object.keys(by_platform).filter(p => by_platform[p].campaigns > 0)
       };
-      const byPlatform = platformData.by_platform;
-      let timeSeries: Array<any> = platformTimeSeries;
 
       // Get conversion source setting
       const conversionSettings = await c.env.DB.prepare(`
         SELECT conversion_source FROM ai_optimization_settings WHERE org_id = ?
-      `).bind(orgId).first();
+      `).bind(orgId).first<{ conversion_source: string }>();
       const conversionSource = conversionSettings?.conversion_source || 'tag';
 
       let totalConversions = summary.total_conversions;
 
-      // If using connectors (Stripe, etc.) for conversions, fetch from stripe_conversions
+      // If using connectors (Stripe, etc.) for conversions, fetch from D1 stripe_charges
       if (conversionSource === 'connectors') {
-        const stripeConversions = await this.fetchStripeConversions(
-          supabase,
+        const stripeConversions = await this.fetchStripeConversionsD1(
+          c.env.ANALYTICS_DB,
           orgId,
-          startDate,
-          endDate
+          effectiveDateRange.start,
+          effectiveDateRange.end
         );
 
         if (stripeConversions) {
           totalConversions = stripeConversions.total_conversions;
-
-          // Merge Stripe conversions into time series by date
-          for (const dayData of stripeConversions.by_date) {
-            const existingDay = timeSeries.find(ts => ts.date === dayData.date);
-            if (existingDay) {
-              existingDay.total_conversions += dayData.conversions;
-            } else {
-              timeSeries.push({
-                date: dayData.date,
-                total_spend_cents: 0,
-                total_impressions: 0,
-                total_clicks: 0,
-                total_conversions: dayData.conversions,
-                by_platform: {}
-              });
-            }
-          }
-          // Re-sort after adding Stripe data
-          timeSeries.sort((a, b) => a.date.localeCompare(b.date));
         }
       }
 
-      console.log(`[Unified] Returning time_series with ${timeSeries.length} data points`);
-      if (timeSeries.length > 0) {
-        console.log(`[Unified] First point: ${JSON.stringify(timeSeries[0])}`);
-      }
+      // Fetch time series from D1
+      const timeSeries = await this.fetchPlatformTimeSeriesD1(
+        c.env.ANALYTICS_DB,
+        orgId,
+        activePlatforms,
+        effectiveDateRange
+      );
 
       return success(c, {
         summary: {
@@ -252,263 +174,56 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           average_cpc_cents: summary.average_cpc_cents,
           platforms_active: summary.platforms_active
         },
-        by_platform: byPlatform,
+        by_platform,
         time_series: timeSeries
       });
     } catch (err) {
       console.error("Unified data fetch error:", err);
-      return error(c, "SUPABASE_ERROR", "Failed to fetch unified data", 500);
+      return error(c, "QUERY_FAILED", "Failed to fetch unified data", 500);
     }
   }
 
-
   /**
-   * Fetch conversions from Stripe (stripe.payment_intents table)
+   * Fetch conversions from D1 stripe_charges table
    */
-  private async fetchStripeConversions(
-    supabase: SupabaseClient,
+  private async fetchStripeConversionsD1(
+    db: any,
     orgId: string,
-    startDate?: string,
-    endDate?: string
+    startDate: string,
+    endDate: string
   ): Promise<{ total_conversions: number; by_date: any[] } | null> {
     try {
-      // Build query params for stripe.payment_intents table
-      const params = new URLSearchParams();
-      params.append('organization_id', `eq.${orgId}`);
-      params.append('status', 'eq.succeeded');
-      if (startDate && endDate) {
-        params.append('created', `gte.${startDate}T00:00:00Z`);
-        params.append('created', `lte.${endDate}T23:59:59Z`);
-      }
-      params.append('order', 'created.asc');
-      params.append('limit', '10000');
+      const result = await db.prepare(`
+        SELECT
+          DATE(created_at) as date,
+          COUNT(*) as conversions
+        FROM stripe_charges
+        WHERE organization_id = ?
+        AND status = 'succeeded'
+        AND DATE(created_at) >= ?
+        AND DATE(created_at) <= ?
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC
+      `).bind(orgId, startDate, endDate).all<{ date: string; conversions: number }>();
 
-      // Fetch Stripe payment intents from stripe schema
-      const conversions = await supabase.queryWithSchema<any[]>(
-        `payment_intents?${params.toString()}`,
-        'stripe',
-        { method: 'GET' }
-      ) || [];
-
-      if (conversions.length === 0) {
-        return null;
-      }
-
-      // Group conversions by date
-      const dailyData: Record<string, number> = {};
-      let totalConversions = 0;
-
-      for (const conversion of conversions) {
-        // Extract date from created timestamp (YYYY-MM-DD)
-        const timestamp = conversion.created;
-        const date = timestamp ? timestamp.split('T')[0] : null;
-
-        if (!date) continue;
-
-        if (!dailyData[date]) {
-          dailyData[date] = 0;
-        }
-
-        // Each row is a conversion (payment_intent)
-        dailyData[date] += 1;
-        totalConversions += 1;
-      }
-
-      // Convert to array
-      const byDate = Object.entries(dailyData)
-        .map(([date, conversions]) => ({ date, conversions }))
-        .sort((a, b) => a.date.localeCompare(b.date));
+      const byDate = result.results || [];
+      const totalConversions = byDate.reduce((sum: number, row: any) => sum + row.conversions, 0);
 
       return {
         total_conversions: totalConversions,
         by_date: byDate
       };
     } catch (err) {
-      console.error('Failed to fetch Stripe conversions:', err);
+      console.error('Failed to fetch Stripe conversions from D1:', err);
       return null;
     }
   }
 
   /**
-   * Fetch data from individual platform campaign tables using adapters
-   * Each adapter knows the correct schema (google_ads, facebook_ads, tiktok_ads)
+   * Fetch daily time series data from D1
    */
-  private async fetchPlatformData(
-    supabase: SupabaseClient,
-    orgId: string,
-    platforms: string[],
-    dateRange?: { start: string; end: string }
-  ): Promise<{
-    total_spend_cents: number;
-    total_impressions: number;
-    total_clicks: number;
-    total_conversions: number;
-    total_conversion_value_cents: number;
-    by_platform: Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number; conversion_value_cents: number; campaigns: number }>;
-  }> {
-    const result = {
-      total_spend_cents: 0,
-      total_impressions: 0,
-      total_clicks: 0,
-      total_conversions: 0,
-      total_conversion_value_cents: 0,
-      by_platform: {} as Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number; conversion_value_cents: number; campaigns: number }>
-    };
-
-    // Build date range for queries (default: last 30 days)
-    const effectiveDateRange = dateRange || {
-      start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      end: new Date().toISOString().split('T')[0]
-    };
-
-    for (const platform of platforms) {
-      try {
-        const normalizedPlatform = platform.toLowerCase().replace('_ads', '');
-
-        if (normalizedPlatform === 'google') {
-          // Use GoogleAdsSupabaseAdapter with google_ads schema
-          const adapter = new GoogleAdsSupabaseAdapter(supabase);
-          const campaigns = await adapter.getCampaignsWithMetrics(orgId, effectiveDateRange);
-
-          let platformSpend = 0;
-          let platformImpressions = 0;
-          let platformClicks = 0;
-          let platformConversions = 0;
-          let platformConversionValue = 0;
-
-          for (const campaign of campaigns) {
-            platformSpend += campaign.metrics.spend_cents || 0;
-            platformImpressions += campaign.metrics.impressions || 0;
-            platformClicks += campaign.metrics.clicks || 0;
-            platformConversions += campaign.metrics.conversions || 0;
-            platformConversionValue += campaign.metrics.conversion_value_cents || 0;
-          }
-
-          result.by_platform['google'] = {
-            spend_cents: platformSpend,
-            impressions: platformImpressions,
-            clicks: platformClicks,
-            conversions: platformConversions,
-            conversion_value_cents: platformConversionValue,
-            campaigns: campaigns.length
-          };
-
-          result.total_spend_cents += platformSpend;
-          result.total_impressions += platformImpressions;
-          result.total_clicks += platformClicks;
-          result.total_conversions += platformConversions;
-          result.total_conversion_value_cents += platformConversionValue;
-
-          console.log(`Google Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}, convValue=${platformConversionValue}`);
-
-        } else if (normalizedPlatform === 'facebook' || normalizedPlatform === 'meta') {
-          // Use FacebookSupabaseAdapter with facebook_ads schema
-          const adapter = new FacebookSupabaseAdapter(supabase);
-          const campaigns = await adapter.getCampaignsWithMetrics(orgId, effectiveDateRange);
-
-          let platformSpend = 0;
-          let platformImpressions = 0;
-          let platformClicks = 0;
-          let platformConversions = 0;
-          let platformConversionValue = 0;
-
-          for (const campaign of campaigns) {
-            platformSpend += campaign.metrics.spend_cents || 0;
-            platformImpressions += campaign.metrics.impressions || 0;
-            platformClicks += campaign.metrics.clicks || 0;
-            platformConversions += campaign.metrics.conversions || 0;
-            platformConversionValue += (campaign.metrics as any).conversion_value_cents || 0;
-          }
-
-          result.by_platform['facebook'] = {
-            spend_cents: platformSpend,
-            impressions: platformImpressions,
-            clicks: platformClicks,
-            conversions: platformConversions,
-            conversion_value_cents: platformConversionValue,
-            campaigns: campaigns.length
-          };
-
-          result.total_spend_cents += platformSpend;
-          result.total_impressions += platformImpressions;
-          result.total_clicks += platformClicks;
-          result.total_conversions += platformConversions;
-          result.total_conversion_value_cents += platformConversionValue;
-
-          console.log(`Facebook Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}, convValue=${platformConversionValue}`);
-
-        } else if (normalizedPlatform === 'tiktok') {
-          // Use TikTokAdsSupabaseAdapter with tiktok_ads schema
-          const adapter = new TikTokAdsSupabaseAdapter(supabase);
-          const campaigns = await adapter.getCampaigns(orgId);
-          const metrics = await adapter.getCampaignDailyMetrics(orgId, effectiveDateRange);
-
-          // Aggregate metrics by campaign
-          const metricsByCampaign: Record<string, { spend: number; impressions: number; clicks: number; conversions: number; conversionValue: number }> = {};
-          for (const m of metrics) {
-            const ref = (m as any).campaign_ref;
-            if (!metricsByCampaign[ref]) {
-              metricsByCampaign[ref] = { spend: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0 };
-            }
-            metricsByCampaign[ref].spend += m.spend_cents || 0;
-            metricsByCampaign[ref].impressions += m.impressions || 0;
-            metricsByCampaign[ref].clicks += m.clicks || 0;
-            metricsByCampaign[ref].conversions += m.conversions || 0;
-            metricsByCampaign[ref].conversionValue += (m as any).conversion_value_cents || 0;
-          }
-
-          let platformSpend = 0;
-          let platformImpressions = 0;
-          let platformClicks = 0;
-          let platformConversions = 0;
-          let platformConversionValue = 0;
-
-          for (const campaign of campaigns) {
-            const cm = metricsByCampaign[campaign.id] || { spend: 0, impressions: 0, clicks: 0, conversions: 0, conversionValue: 0 };
-            platformSpend += cm.spend;
-            platformImpressions += cm.impressions;
-            platformClicks += cm.clicks;
-            platformConversions += cm.conversions;
-            platformConversionValue += cm.conversionValue;
-          }
-
-          result.by_platform['tiktok'] = {
-            spend_cents: platformSpend,
-            impressions: platformImpressions,
-            clicks: platformClicks,
-            conversions: platformConversions,
-            conversion_value_cents: platformConversionValue,
-            campaigns: campaigns.length
-          };
-
-          result.total_spend_cents += platformSpend;
-          result.total_impressions += platformImpressions;
-          result.total_clicks += platformClicks;
-          result.total_conversions += platformConversions;
-          result.total_conversion_value_cents += platformConversionValue;
-
-          console.log(`TikTok Ads: ${campaigns.length} campaigns, spend=${platformSpend}, conv=${platformConversions}, convValue=${platformConversionValue}`);
-        } else {
-          // Skip non-ad platforms (stripe, etc.) - they're handled separately
-          const nonAdPlatforms = ['stripe'];
-          if (!nonAdPlatforms.includes(normalizedPlatform)) {
-            console.warn(`Unknown platform: ${platform}`);
-          }
-        }
-      } catch (err) {
-        console.warn(`Failed to fetch ${platform} campaigns:`, err);
-      }
-    }
-
-    return result;
-  }
-
-  /**
-   * Fetch daily time series data from all platforms
-   * Aggregates metrics by date across all platforms
-   */
-  private async fetchPlatformTimeSeries(
-    supabase: SupabaseClient,
+  private async fetchPlatformTimeSeriesD1(
+    db: any,
     orgId: string,
     platforms: string[],
     dateRange: { start: string; end: string }
@@ -520,7 +235,6 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     total_conversions: number;
     by_platform: Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number }>;
   }>> {
-    // Map to aggregate metrics by date
     const dailyData: Map<string, {
       date: string;
       total_spend_cents: number;
@@ -530,41 +244,45 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       by_platform: Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number }>;
     }> = new Map();
 
-    console.log(`[TimeSeries] Starting aggregation for platforms: ${JSON.stringify(platforms)}`);
+    console.log(`[TimeSeries] Starting D1 aggregation for platforms: ${JSON.stringify(platforms)}`);
+
+    const platformTableMap: Record<string, string> = {
+      google: 'google_campaign_daily_metrics',
+      facebook: 'facebook_campaign_daily_metrics',
+      meta: 'facebook_campaign_daily_metrics',
+      tiktok: 'tiktok_campaign_daily_metrics'
+    };
 
     for (const platform of platforms) {
       try {
         const normalizedPlatform = platform.toLowerCase().replace('_ads', '');
-        console.log(`[TimeSeries] Processing platform: ${platform} -> ${normalizedPlatform}`);
-        let dailyMetrics: any[] = [];
+        const tableName = platformTableMap[normalizedPlatform];
 
-        if (normalizedPlatform === 'google') {
-          const adapter = new GoogleAdsSupabaseAdapter(supabase);
-          dailyMetrics = await adapter.getCampaignDailyMetrics(orgId, dateRange);
-          console.log(`[TimeSeries] Google returned ${dailyMetrics.length} daily metrics`);
-          if (dailyMetrics.length > 0) {
-            console.log(`[TimeSeries] Sample metric keys: ${Object.keys(dailyMetrics[0]).join(', ')}`);
-          }
-        } else if (normalizedPlatform === 'facebook' || normalizedPlatform === 'meta') {
-          const adapter = new FacebookSupabaseAdapter(supabase);
-          dailyMetrics = await adapter.getCampaignDailyMetrics(orgId, dateRange);
-          console.log(`[TimeSeries] Facebook returned ${dailyMetrics.length} daily metrics`);
-        } else if (normalizedPlatform === 'tiktok') {
-          const adapter = new TikTokAdsSupabaseAdapter(supabase);
-          dailyMetrics = await adapter.getCampaignDailyMetrics(orgId, dateRange);
-          console.log(`[TimeSeries] TikTok returned ${dailyMetrics.length} daily metrics`);
+        if (!tableName) {
+          console.log(`[TimeSeries] Skipping unknown platform: ${platform}`);
+          continue;
         }
 
-        // Aggregate by date for this platform
-        // Note: Different adapters may use 'date' or 'metric_date' as the field name
-        let processedCount = 0;
+        const result = await db.prepare(`
+          SELECT
+            date,
+            SUM(impressions) as impressions,
+            SUM(clicks) as clicks,
+            SUM(spend_cents) as spend_cents,
+            SUM(conversions) as conversions
+          FROM ${tableName}
+          WHERE organization_id = ?
+          AND date >= ? AND date <= ?
+          GROUP BY date
+          ORDER BY date ASC
+        `).bind(orgId, dateRange.start, dateRange.end).all<any>();
+
+        const dailyMetrics = result.results || [];
+        console.log(`[TimeSeries] ${normalizedPlatform} returned ${dailyMetrics.length} daily metrics`);
+
         for (const metric of dailyMetrics) {
-          const date = metric.metric_date || metric.date;
-          if (!date) {
-            console.log(`[TimeSeries] Skipping metric - no date field`);
-            continue;
-          }
-          processedCount++;
+          const date = metric.date;
+          if (!date) continue;
 
           if (!dailyData.has(date)) {
             dailyData.set(date, {
@@ -599,15 +317,12 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           dayData.by_platform[platformKey].clicks += clicks;
           dayData.by_platform[platformKey].conversions += conversions;
         }
-        console.log(`[TimeSeries] Processed ${processedCount} metrics for ${normalizedPlatform}, dailyData now has ${dailyData.size} dates`);
       } catch (err) {
-        console.warn(`Failed to fetch ${platform} daily metrics:`, err);
+        console.warn(`Failed to fetch ${platform} daily metrics from D1:`, err);
       }
     }
 
     console.log(`[TimeSeries] Final dailyData has ${dailyData.size} dates`);
-
-    // Convert map to sorted array
     return Array.from(dailyData.values()).sort((a, b) => a.date.localeCompare(b.date));
   }
 }

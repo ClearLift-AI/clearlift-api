@@ -1,7 +1,7 @@
 /**
  * TikTok Ads Analytics Endpoints
  *
- * Provides clean access to TikTok Ads data from Supabase tiktok_ads schema
+ * Provides clean access to TikTok Ads data from D1 ANALYTICS_DB
  * All endpoints use auth + requireOrg middleware for access control
  */
 
@@ -9,19 +9,10 @@ import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
-import { TikTokAdsSupabaseAdapter, DateRange } from "../../../adapters/platforms/tiktok-supabase";
-import { SupabaseClient } from "../../../services/supabase";
 import { getSecret } from "../../../utils/secrets";
 import { BUDGET_LIMITS, AGE_GROUPS, STATUS } from "../../../constants/tiktok";
 import { TikTokAdsOAuthProvider, TikTokTargeting } from "../../../services/oauth/tiktok";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
-
-/**
- * Check if D1 analytics should be used
- */
-function useD1Analytics(env: any): boolean {
-  return env.USE_D1_ANALYTICS === 'true' && !!env.ANALYTICS_DB;
-}
 
 /**
  * GET /v1/analytics/tiktok/campaigns
@@ -110,86 +101,17 @@ export class GetTikTokCampaigns extends OpenAPIRoute {
     const endDate = query.query.end_date || new Date().toISOString().split('T')[0];
     const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    // Try D1 first if enabled
-    if (useD1Analytics(c.env)) {
-      console.log('[TikTok Campaigns] Using D1 ANALYTICS_DB');
-      try {
-        const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
-        const campaigns = await d1Analytics.getTikTokCampaignsWithMetrics(
-          orgId,
-          startDate,
-          endDate,
-          {
-            status: query.query.status,
-            limit: query.query.limit,
-            offset: query.query.offset
-          }
-        );
-
-        // Transform to frontend expected format
-        const results = campaigns.map(c => ({
-          campaign_id: c.campaign_id,
-          campaign_name: c.campaign_name,
-          status: c.status,
-          last_updated: new Date().toISOString(),
-          metrics: {
-            impressions: c.metrics.impressions,
-            clicks: c.metrics.clicks,
-            spend: c.metrics.spend, // Already in dollars from D1 service
-            conversions: c.metrics.conversions,
-            revenue: c.metrics.revenue
-          }
-        }));
-
-        // Calculate summary from results
-        const summary = results.reduce(
-          (acc, campaign) => ({
-            total_impressions: acc.total_impressions + campaign.metrics.impressions,
-            total_clicks: acc.total_clicks + campaign.metrics.clicks,
-            total_spend: acc.total_spend + campaign.metrics.spend,
-            total_conversions: acc.total_conversions + campaign.metrics.conversions,
-            average_ctr: 0
-          }),
-          { total_impressions: 0, total_clicks: 0, total_spend: 0, total_conversions: 0, average_ctr: 0 }
-        );
-
-        if (summary.total_impressions > 0) {
-          summary.average_ctr = (summary.total_clicks / summary.total_impressions) * 100;
-        }
-
-        console.log(`[TikTok Campaigns] D1 returned ${results.length} campaigns`);
-        return success(c, {
-          platform: 'tiktok',
-          results,
-          summary
-        });
-      } catch (d1Error) {
-        console.error('[TikTok Campaigns] D1 query failed, falling back to Supabase:', d1Error);
-      }
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
-
-    // Fallback to Supabase
-    // Initialize Supabase client
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
-    }
-
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
-    const adapter = new TikTokAdsSupabaseAdapter(supabase);
-    const dateRange: DateRange = { start: startDate, end: endDate };
 
     try {
-      console.log('[TikTok Campaigns] Using Supabase fallback, date range:', { startDate, endDate });
-
-      // Fetch campaigns WITH metrics using the new method
-      const campaignsWithMetrics = await adapter.getCampaignsWithMetrics(
+      console.log('[TikTok Campaigns] Using D1 ANALYTICS_DB');
+      const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
+      const campaigns = await d1Analytics.getTikTokCampaignsWithMetrics(
         orgId,
-        dateRange,
+        startDate,
+        endDate,
         {
           status: query.query.status,
           limit: query.query.limit,
@@ -197,31 +119,20 @@ export class GetTikTokCampaigns extends OpenAPIRoute {
         }
       );
 
-      console.log('[TikTok Campaigns] Campaigns with metrics returned:', campaignsWithMetrics.length);
-
       // Transform to frontend expected format
-      const results = campaignsWithMetrics.map(c => ({
+      const results = campaigns.map(c => ({
         campaign_id: c.campaign_id,
         campaign_name: c.campaign_name,
-        status: c.campaign_status,
-        last_updated: c.last_synced_at || c.updated_at,
+        status: c.status,
+        last_updated: new Date().toISOString(),
         metrics: {
           impressions: c.metrics.impressions,
           clicks: c.metrics.clicks,
-          spend: c.metrics.spend_cents / 100, // Convert cents to dollars for frontend
-          conversions: c.metrics.conversions || 0,
-          revenue: 0 // Revenue comes from Stripe, not ad platforms
+          spend: c.metrics.spend,
+          conversions: c.metrics.conversions,
+          revenue: c.metrics.revenue
         }
       }));
-
-      // Debug: Log first campaign's metrics to verify date filtering
-      if (results.length > 0) {
-        console.log('[TikTok Campaigns] Sample campaign metrics:', {
-          name: results[0].campaign_name,
-          spend: results[0].metrics.spend,
-          impressions: results[0].metrics.impressions
-        });
-      }
 
       // Calculate summary from results
       const summary = results.reduce(
@@ -230,16 +141,16 @@ export class GetTikTokCampaigns extends OpenAPIRoute {
           total_clicks: acc.total_clicks + campaign.metrics.clicks,
           total_spend: acc.total_spend + campaign.metrics.spend,
           total_conversions: acc.total_conversions + campaign.metrics.conversions,
-          average_ctr: 0 // Calculate after
+          average_ctr: 0
         }),
         { total_impressions: 0, total_clicks: 0, total_spend: 0, total_conversions: 0, average_ctr: 0 }
       );
 
-      // Calculate average CTR
       if (summary.total_impressions > 0) {
         summary.average_ctr = (summary.total_clicks / summary.total_impressions) * 100;
       }
 
+      console.log(`[TikTok Campaigns] D1 returned ${results.length} campaigns`);
       return success(c, {
         platform: 'tiktok',
         results,
@@ -278,33 +189,51 @@ export class GetTikTokAdGroups extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
     const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Initialize Supabase client
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
-    const adapter = new TikTokAdsSupabaseAdapter(supabase);
-
     try {
-      const adGroups = await adapter.getAdGroups(orgId, {
-        campaignId: query.query.campaign_id,
-        status: query.query.status,
-        limit: query.query.limit,
-        offset: query.query.offset
-      });
+      // Query ad groups from D1
+      let sql = `
+        SELECT
+          ag.ad_group_id,
+          ag.ad_group_name,
+          ag.campaign_id,
+          ag.status,
+          c.campaign_name
+        FROM tiktok_ad_groups ag
+        LEFT JOIN tiktok_campaigns c ON ag.campaign_id = c.campaign_id AND ag.organization_id = c.organization_id
+        WHERE ag.organization_id = ?
+      `;
+      const params: any[] = [orgId];
+
+      if (query.query.campaign_id) {
+        sql += ' AND ag.campaign_id = ?';
+        params.push(query.query.campaign_id);
+      }
+      if (query.query.status) {
+        sql += ' AND ag.status = ?';
+        params.push(query.query.status);
+      }
+
+      sql += ' ORDER BY ag.ad_group_name ASC';
+      sql += ` LIMIT ${query.query.limit} OFFSET ${query.query.offset}`;
+
+      const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
+      const adGroups = result.results || [];
 
       return success(c, {
-        ad_groups: adGroups,
+        ad_groups: adGroups.map((ag: any) => ({
+          ad_group_id: ag.ad_group_id,
+          ad_group_name: ag.ad_group_name,
+          campaign_id: ag.campaign_id,
+          campaign_name: ag.campaign_name,
+          status: ag.status
+        })),
         total: adGroups.length
       });
     } catch (err: any) {
@@ -341,34 +270,57 @@ export class GetTikTokAds extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    // Use resolved org_id from requireOrg middleware (handles both UUID and slug)
     const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Initialize Supabase client
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
-    const adapter = new TikTokAdsSupabaseAdapter(supabase);
-
     try {
-      const ads = await adapter.getAds(orgId, {
-        campaignId: query.query.campaign_id,
-        adGroupId: query.query.ad_group_id,
-        status: query.query.status,
-        limit: query.query.limit,
-        offset: query.query.offset
-      });
+      // Query ads from D1
+      let sql = `
+        SELECT
+          a.ad_id,
+          a.ad_name,
+          a.ad_group_id,
+          a.campaign_id,
+          a.status,
+          ag.ad_group_name
+        FROM tiktok_ads a
+        LEFT JOIN tiktok_ad_groups ag ON a.ad_group_id = ag.ad_group_id AND a.organization_id = ag.organization_id
+        WHERE a.organization_id = ?
+      `;
+      const params: any[] = [orgId];
+
+      if (query.query.campaign_id) {
+        sql += ' AND a.campaign_id = ?';
+        params.push(query.query.campaign_id);
+      }
+      if (query.query.ad_group_id) {
+        sql += ' AND a.ad_group_id = ?';
+        params.push(query.query.ad_group_id);
+      }
+      if (query.query.status) {
+        sql += ' AND a.status = ?';
+        params.push(query.query.status);
+      }
+
+      sql += ' ORDER BY a.ad_name ASC';
+      sql += ` LIMIT ${query.query.limit} OFFSET ${query.query.offset}`;
+
+      const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
+      const ads = result.results || [];
 
       return success(c, {
-        ads,
+        ads: ads.map((ad: any) => ({
+          ad_id: ad.ad_id,
+          ad_name: ad.ad_name,
+          ad_group_id: ad.ad_group_id,
+          ad_group_name: ad.ad_group_name,
+          campaign_id: ad.campaign_id,
+          status: ad.status
+        })),
         total: ads.length
       });
     } catch (err: any) {
@@ -438,51 +390,86 @@ export class GetTikTokMetrics extends OpenAPIRoute {
       });
     }
 
-    // Initialize Supabase client
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-
-    const adapter = new TikTokAdsSupabaseAdapter(supabase);
-
-    const dateRange: DateRange = {
+    const dateRange = {
       start: query.query.start_date,
       end: query.query.end_date
     };
 
     try {
-      let metrics;
-      let summary;
+      // Determine table and ID column based on level
+      const tableMap: Record<string, { table: string; idColumn: string; filterColumn?: string }> = {
+        campaign: {
+          table: 'tiktok_campaign_daily_metrics',
+          idColumn: 'campaign_ref',
+          filterColumn: 'campaign_ref'
+        },
+        ad_group: {
+          table: 'tiktok_ad_group_daily_metrics',
+          idColumn: 'ad_group_ref',
+          filterColumn: 'ad_group_ref'
+        },
+        ad: {
+          table: 'tiktok_ad_daily_metrics',
+          idColumn: 'ad_ref',
+          filterColumn: 'ad_ref'
+        }
+      };
 
-      // Fetch metrics based on level
-      if (query.query.level === 'campaign') {
-        metrics = await adapter.getCampaignDailyMetrics(orgId, dateRange, {
-          campaignId: query.query.campaign_id,
-          limit: query.query.limit,
-          offset: query.query.offset
-        });
-        summary = await adapter.getMetricsSummary(orgId, dateRange, 'campaign');
-      } else if (query.query.level === 'ad_group') {
-        metrics = await adapter.getAdGroupDailyMetrics(orgId, dateRange, {
-          adGroupId: query.query.ad_group_id,
-          limit: query.query.limit,
-          offset: query.query.offset
-        });
-        summary = await adapter.getMetricsSummary(orgId, dateRange, 'ad_group');
-      } else {
-        metrics = await adapter.getAdDailyMetrics(orgId, dateRange, {
-          adId: query.query.ad_id,
-          limit: query.query.limit,
-          offset: query.query.offset
-        });
-        summary = await adapter.getMetricsSummary(orgId, dateRange, 'ad');
+      const tableInfo = tableMap[query.query.level];
+
+      let sql = `
+        SELECT
+          ${tableInfo.idColumn} as entity_id,
+          date,
+          impressions,
+          clicks,
+          spend_cents,
+          conversions
+        FROM ${tableInfo.table}
+        WHERE organization_id = ?
+        AND date >= ? AND date <= ?
+      `;
+      const params: any[] = [orgId, dateRange.start, dateRange.end];
+
+      // Add entity-specific filter
+      if (query.query.level === 'campaign' && query.query.campaign_id) {
+        sql += ` AND ${tableInfo.filterColumn} = ?`;
+        params.push(query.query.campaign_id);
+      } else if (query.query.level === 'ad_group' && query.query.ad_group_id) {
+        sql += ` AND ${tableInfo.filterColumn} = ?`;
+        params.push(query.query.ad_group_id);
+      } else if (query.query.level === 'ad' && query.query.ad_id) {
+        sql += ` AND ${tableInfo.filterColumn} = ?`;
+        params.push(query.query.ad_id);
       }
+
+      sql += ' ORDER BY date DESC';
+      sql += ` LIMIT ${query.query.limit} OFFSET ${query.query.offset}`;
+
+      const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
+      const metrics = (result.results || []).map((row: any) => ({
+        entity_id: row.entity_id,
+        date: row.date,
+        impressions: row.impressions || 0,
+        clicks: row.clicks || 0,
+        spend: (row.spend_cents || 0) / 100,
+        conversions: row.conversions || 0
+      }));
+
+      // Calculate summary
+      const summary = metrics.reduce(
+        (acc: any, m: any) => ({
+          total_impressions: acc.total_impressions + m.impressions,
+          total_clicks: acc.total_clicks + m.clicks,
+          total_spend: acc.total_spend + m.spend,
+          total_conversions: acc.total_conversions + m.conversions
+        }),
+        { total_impressions: 0, total_clicks: 0, total_spend: 0, total_conversions: 0 }
+      );
 
       return success(c, {
         metrics,
