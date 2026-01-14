@@ -60,17 +60,33 @@ export class GetWorkersHealth extends OpenAPIRoute {
     );
 
     // Determine overall health
-    let overall: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+    let overall_status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
     if (cronHealth.status === 'unhealthy' || queueHealth.status === 'unhealthy') {
-      overall = 'unhealthy';
+      overall_status = 'unhealthy';
     } else if (cronHealth.status === 'degraded' || queueHealth.status === 'degraded') {
-      overall = 'degraded';
+      overall_status = 'degraded';
     }
 
+    // Transform to array format expected by dashboard
+    const workers = [
+      {
+        worker_name: 'cron',
+        status: cronHealth.status,
+        last_heartbeat: cronHealth.lastCheck,
+        messages: cronHealth.message ? [cronHealth.message] : []
+      },
+      {
+        worker_name: 'queue',
+        status: queueHealth.status,
+        last_heartbeat: queueHealth.lastCheck,
+        messages: queueHealth.message ? [queueHealth.message] : []
+      }
+    ];
+
     return success(c, {
-      cron: cronHealth,
-      queue: queueHealth,
-      overall
+      overall_status,
+      workers,
+      timestamp: new Date().toISOString()
     });
   }
 
