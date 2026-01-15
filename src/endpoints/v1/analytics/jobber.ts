@@ -109,45 +109,6 @@ export class GetJobberRevenue extends OpenAPIRoute {
       sync_status: "Jobber data migration to D1 in progress. Data will appear after sync completes."
     });
   }
-
-  private generateTimeSeries(
-    records: any[],
-    groupBy: string
-  ): { date: string; revenue: number; jobs: number }[] {
-    const grouped = new Map<string, { revenue: number; jobs: number }>();
-
-    for (const record of records) {
-      const completedAt = record.completed_at;
-      if (!completedAt) continue;
-
-      const date = this.getGroupKey(completedAt, groupBy);
-      const existing = grouped.get(date) || { revenue: 0, jobs: 0 };
-      existing.revenue += (record.total_amount_cents || 0) / 100;
-      existing.jobs += 1;
-      grouped.set(date, existing);
-    }
-
-    return Array.from(grouped.entries())
-      .map(([date, data]) => ({ date, ...data }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }
-
-  private getGroupKey(dateStr: string, groupBy: string): string {
-    const date = new Date(dateStr);
-
-    switch (groupBy) {
-      case 'week': {
-        const startOfWeek = new Date(date);
-        startOfWeek.setDate(date.getDate() - date.getDay());
-        return startOfWeek.toISOString().split('T')[0];
-      }
-      case 'month':
-        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`;
-      case 'day':
-      default:
-        return date.toISOString().split('T')[0];
-    }
-  }
 }
 
 /**

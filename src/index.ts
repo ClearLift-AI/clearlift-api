@@ -353,47 +353,6 @@ openapi.post("/v1/admin/tasks/:id/comments", auth, AdminAddTaskComment);
 openapi.post("/v1/admin/impersonate", auth, AdminStartImpersonation);
 openapi.post("/v1/admin/end-impersonation", auth, AdminEndImpersonation);
 
-// D1 rollout admin endpoints removed - Supabase fully deprecated
-
-// Debug SendGrid endpoint removed for production security
-
-// Diagnostic endpoint to test Secrets Store access
-app.get("/v1/debug/secrets", async (c) => {
-  const { getSecret } = await import("./utils/secrets");
-
-  try {
-    const googleClientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
-    const googleClientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
-    const googleDevToken = await getSecret(c.env.GOOGLE_ADS_DEVELOPER_TOKEN);
-
-    return c.json({
-      success: true,
-      secrets: {
-        GOOGLE_CLIENT_ID: {
-          exists: !!googleClientId,
-          length: googleClientId?.length || 0,
-          preview: googleClientId?.substring(0, 10) + "..."
-        },
-        GOOGLE_CLIENT_SECRET: {
-          exists: !!googleClientSecret,
-          length: googleClientSecret?.length || 0,
-          preview: "***REDACTED***"
-        },
-        GOOGLE_ADS_DEVELOPER_TOKEN: {
-          exists: !!googleDevToken,
-          length: googleDevToken?.length || 0,
-          preview: "***REDACTED***"
-        }
-      }
-    });
-  } catch (error) {
-    return c.json({
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error"
-    }, 500);
-  }
-});
-
 // Authentication endpoints (no auth required)
 openapi.post("/v1/auth/register", Register);
 openapi.post("/v1/auth/login", Login);
