@@ -125,8 +125,9 @@
     },
     {
       "binding": "ANALYTICS_DB",
-      "database_name": "clearlift-analytics-dev",
-      "database_id": "57a7e42f-3a52-4b15-b237-bc1338e5fb61"
+      "database_name": "clearlift-analytics-prod",
+      "database_id": "a69beb57-92c9-489c-8f55-86205b613010",
+      "migrations_dir": "migrations-analytics"
     },
     // Platform data shards (for campaign/metrics storage)
     {
@@ -148,6 +149,14 @@
       "binding": "SHARD_3",
       "database_name": "clearlift-shard-3",
       "database_id": "ff763599-df7b-4041-b766-b574e7b3415b"
+    }
+  ],
+
+  // KV namespace for caching hot data (org settings, user profiles)
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "5492358b37c14b7b935de58c8597e73f"
     }
   ],
 
@@ -246,12 +255,6 @@
     // ========================================================================
     // Deploy with: npx wrangler deploy (default) or npx wrangler deploy --env production
     "production": {
-      "vars": {
-        "SUPABASE_URL": "https://jwosqxmfezmnhrbbjlbx.supabase.co",
-        "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
-        "R2_BUCKET_NAME": "clearlift-db",
-        "R2_SQL_TABLE": "clearlift.event_data_v4_1"
-      },
       "vars": {
         "SUPABASE_URL": "https://jwosqxmfezmnhrbbjlbx.supabase.co",
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",

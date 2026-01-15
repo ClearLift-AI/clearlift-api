@@ -10,9 +10,6 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { StripeQueryBuilder } from "../../../services/filters/stripeQueryBuilder";
-import { StripeSupabaseAdapter } from "../../../adapters/platforms/stripe-supabase";
-import { SupabaseClient } from "../../../services/supabase";
-import { getSecret } from "../../../utils/secrets";
 
 // Zod schemas for validation
 const FilterConditionSchema = z.object({
@@ -413,37 +410,55 @@ export class TestFilterRule extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "Access denied", 403);
     }
 
-    // Get sample data from Supabase (Stripe data is stored there, not in D1)
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
-    }
-
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-    const adapter = new StripeSupabaseAdapter(supabase);
-
-    // Get recent data (last 30 days) to test filter against
+    // Get sample data from D1 ANALYTICS_DB (stripe_charges table)
     const endDate = new Date();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - 30);
 
     let sampleData: any[] = [];
     try {
-      sampleData = await adapter.queryByMetadata(
+      // Query stripe_charges from ANALYTICS_DB
+      const result = await c.env.ANALYTICS_DB.prepare(`
+        SELECT
+          id,
+          charge_id,
+          customer_id,
+          amount_cents,
+          currency,
+          status,
+          payment_method_type,
+          stripe_created_at,
+          metadata
+        FROM stripe_charges
+        WHERE connection_id = ?
+          AND stripe_created_at >= ?
+          AND stripe_created_at <= ?
+        ORDER BY stripe_created_at DESC
+        LIMIT ?
+      `).bind(
         connectionId,
-        [], // No pre-filtering, get all data
-        {
-          start: startDate.toISOString().split('T')[0],
-          end: endDate.toISOString().split('T')[0]
-        }
-      );
-      // Limit to sample size
-      sampleData = sampleData.slice(0, body.sample_size);
+        startDate.toISOString(),
+        endDate.toISOString(),
+        body.sample_size
+      ).all();
+
+      // Transform D1 results to match expected format
+      sampleData = (result.results || []).map((row: any) => {
+        const metadata = row.metadata ? JSON.parse(row.metadata) : {};
+        return {
+          charge_id: row.charge_id,
+          customer_id: row.customer_id,
+          amount: row.amount_cents / 100,
+          currency: row.currency,
+          status: row.status,
+          payment_method_type: row.payment_method_type,
+          date: row.stripe_created_at,
+          charge_metadata: metadata.charge || metadata,
+          product_metadata: metadata.product || {}
+        };
+      });
     } catch (err: any) {
-      console.error("Failed to get sample data from Supabase:", err);
+      console.error("Failed to get sample data from D1:", err);
       return success(c, {
         total_samples: 0,
         matched: 0,
@@ -482,7 +497,7 @@ export class TestFilterRule extends OpenAPIRoute {
         status: item.status,
         product_id: item.product_id,
         date: item.date,
-        // Include sample metadata (already objects from Supabase JSONB)
+        // Include sample metadata from D1
         metadata_sample: {
           charge: item.charge_metadata || {},
           product: item.product_metadata || {}
@@ -531,26 +546,57 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "Access denied", 403);
     }
 
-    // Get metadata keys
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-    if (!supabaseKey) {
-      return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
-    }
-    const supabase = new SupabaseClient({
-      url: c.env.SUPABASE_URL,
-      secretKey: supabaseKey
-    });
-    const adapter = new StripeSupabaseAdapter(supabase);
+    // Discover metadata keys from D1 ANALYTICS_DB by sampling recent charges
+    let keys: Record<string, string[]> = {
+      charge: [],
+      product: []
+    };
 
-    let keys: Record<string, string[]> = {};
     try {
-      keys = await adapter.getMetadataKeys(connectionId);
+      // Get recent charges with metadata from D1
+      const result = await c.env.ANALYTICS_DB.prepare(`
+        SELECT metadata
+        FROM stripe_charges
+        WHERE connection_id = ?
+          AND metadata IS NOT NULL
+          AND metadata != '{}'
+        ORDER BY stripe_created_at DESC
+        LIMIT 100
+      `).bind(connectionId).all();
+
+      // Extract unique keys from metadata JSON
+      const chargeKeys = new Set<string>();
+      const productKeys = new Set<string>();
+
+      for (const row of (result.results || []) as any[]) {
+        try {
+          const metadata = JSON.parse(row.metadata || '{}');
+
+          // Charge-level metadata keys
+          if (metadata.charge && typeof metadata.charge === 'object') {
+            Object.keys(metadata.charge).forEach(k => chargeKeys.add(k));
+          } else if (!metadata.product) {
+            // Top-level is charge metadata
+            Object.keys(metadata).forEach(k => chargeKeys.add(k));
+          }
+
+          // Product-level metadata keys
+          if (metadata.product && typeof metadata.product === 'object') {
+            Object.keys(metadata.product).forEach(k => productKeys.add(k));
+          }
+        } catch (parseErr) {
+          // Skip invalid JSON
+        }
+      }
+
+      keys.charge = Array.from(chargeKeys).sort();
+      keys.product = Array.from(productKeys).sort();
     } catch (err: any) {
-      console.error("Failed to get metadata keys from Supabase:", err);
-      // Return empty keys if Supabase query fails - don't block the response
+      console.error("Failed to discover metadata keys from D1:", err);
+      // Return empty keys if D1 query fails - don't block the response
     }
 
-    // Get cached metadata key info (table may not exist for new connections)
+    // Get cached metadata key info from main D1 DB (may not exist for new connections)
     let cachedKeys: any[] = [];
     try {
       const result = await c.env.DB.prepare(`
@@ -568,7 +614,7 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
     return success(c, {
       discovered_keys: keys,
       metadata_info: cachedKeys,
-      total_keys: Object.values(keys).reduce((sum, arr) => sum + arr.length, 0)
+      total_keys: keys.charge.length + keys.product.length
     });
   }
 }

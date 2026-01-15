@@ -1111,40 +1111,14 @@ export class GetTrackingDomains extends OpenAPIRoute {
       ORDER BY is_primary DESC, created_at DESC
     `).bind(orgId).all();
 
-    // Enrich domains with backfill status from Supabase
-    let enrichedDomains = domains.results || [];
-
-    if (enrichedDomains.length > 0 && c.env.SUPABASE_URL && c.env.SUPABASE_SECRET_KEY) {
-      try {
-        const { getSecret } = await import("../../utils/secrets");
-        const { SupabaseClient } = await import("../../services/supabase");
-        const { EventsBackfillService } = await import("../../services/events-backfill");
-
-        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-        if (supabaseKey) {
-          const supabase = new SupabaseClient({
-            url: c.env.SUPABASE_URL,
-            secretKey: supabaseKey
-          });
-          const backfillService = new EventsBackfillService(supabase);
-
-          enrichedDomains = await Promise.all(
-            enrichedDomains.map(async (d: any) => {
-              const backfillStatus = await backfillService.getDomainBackfillStatus(d.domain);
-              return {
-                ...d,
-                backfill_status: backfillStatus?.status || 'pending',
-                backfill_events_count: backfillStatus?.events_count || 0,
-                backfill_completed_at: backfillStatus?.completed_at || null
-              };
-            })
-          );
-        }
-      } catch (backfillError) {
-        // Log but continue - domains are still useful without backfill status
-        console.error('Failed to fetch backfill status:', backfillError);
-      }
-    }
+    // Return domains from D1 - backfill enrichment deprecated (was Supabase-based)
+    // Events are now in R2 SQL and associated with org_tag at ingestion time
+    const enrichedDomains = (domains.results || []).map((d: any) => ({
+      ...d,
+      backfill_status: 'completed', // Events are auto-associated via org_tag
+      backfill_events_count: 0,     // Not tracked in D1
+      backfill_completed_at: null
+    }));
 
     return success(c, {
       domains: enrichedDomains
@@ -1238,40 +1212,8 @@ export class AddTrackingDomain extends OpenAPIRoute {
       VALUES (?, ?, ?, FALSE, ?, ?)
     `).bind(domainId, orgId, normalizedDomain, is_primary, now).run();
 
-    // Get org_tag for Supabase backfill
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings
-      WHERE organization_id = ? AND is_active = 1
-      LIMIT 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    // Trigger Supabase events backfill (claims domain for historical event resolution)
-    let backfillResult: { events_found: number; claim_id: string } | undefined;
-    if (tagMapping && c.env.SUPABASE_URL && c.env.SUPABASE_SECRET_KEY) {
-      try {
-        const { getSecret } = await import("../../utils/secrets");
-        const { SupabaseClient } = await import("../../services/supabase");
-        const { EventsBackfillService } = await import("../../services/events-backfill");
-
-        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-        if (supabaseKey) {
-          const supabase = new SupabaseClient({
-            url: c.env.SUPABASE_URL,
-            secretKey: supabaseKey
-          });
-          const backfillService = new EventsBackfillService(supabase);
-
-          const result = await backfillService.claimDomain(normalizedDomain, tagMapping.short_tag);
-          backfillResult = {
-            events_found: result.events_updated,
-            claim_id: result.claim_id
-          };
-        }
-      } catch (backfillError) {
-        // Log but don't fail - D1 domain was already added successfully
-        console.error('Events backfill failed:', backfillError);
-      }
-    }
+    // Domain backfill is deprecated - events are now in R2 SQL and associated
+    // with org_tag at ingestion time. No need to retroactively claim domains.
 
     return success(c, {
       domain: {
@@ -1280,8 +1222,7 @@ export class AddTrackingDomain extends OpenAPIRoute {
         is_verified: false,
         is_primary: is_primary,
         created_at: now
-      },
-      backfill: backfillResult
+      }
     }, undefined, 201);
   }
 }
@@ -1340,42 +1281,11 @@ export class RemoveTrackingDomain extends OpenAPIRoute {
       DELETE FROM tracking_domains WHERE id = ?
     `).bind(domainId).run();
 
-    // Release domain claim in Supabase
-    let domainClaimReleased = false;
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings
-      WHERE organization_id = ? AND is_active = 1
-      LIMIT 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (tagMapping && c.env.SUPABASE_URL && c.env.SUPABASE_SECRET_KEY) {
-      try {
-        const { getSecret } = await import("../../utils/secrets");
-        const { SupabaseClient } = await import("../../services/supabase");
-        const { EventsBackfillService } = await import("../../services/events-backfill");
-
-        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-        if (supabaseKey) {
-          const supabase = new SupabaseClient({
-            url: c.env.SUPABASE_URL,
-            secretKey: supabaseKey
-          });
-          const backfillService = new EventsBackfillService(supabase);
-
-          domainClaimReleased = await backfillService.releaseDomain(
-            domainRecord.domain,
-            tagMapping.short_tag
-          );
-        }
-      } catch (releaseError) {
-        // Log but don't fail - D1 domain was already deleted successfully
-        console.error('Domain claim release failed:', releaseError);
-      }
-    }
+    // Domain claim release is deprecated - events in R2 SQL remain associated
+    // with their original org_tag. Removing the tracking domain from D1 is sufficient.
 
     return success(c, {
-      message: "Domain removed successfully",
-      domain_claim_released: domainClaimReleased
+      message: "Domain removed successfully"
     });
   }
 }
@@ -1441,44 +1351,16 @@ export class ResyncTrackingDomain extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization has no active org_tag mapping", 400);
     }
 
-    // Trigger resync
-    let eventsFound = 0;
-    let backfillStatus: 'pending' | 'syncing' | 'completed' | 'failed' = 'pending';
-
-    if (c.env.SUPABASE_URL && c.env.SUPABASE_SECRET_KEY) {
-      try {
-        const { getSecret } = await import("../../utils/secrets");
-        const { SupabaseClient } = await import("../../services/supabase");
-        const { EventsBackfillService } = await import("../../services/events-backfill");
-
-        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-        if (supabaseKey) {
-          const supabase = new SupabaseClient({
-            url: c.env.SUPABASE_URL,
-            secretKey: supabaseKey
-          });
-          const backfillService = new EventsBackfillService(supabase);
-
-          const result = await backfillService.resyncDomain(
-            domainRecord.domain,
-            tagMapping.short_tag
-          );
-          eventsFound = result.events_updated;
-          backfillStatus = 'completed';
-        }
-      } catch (resyncError) {
-        console.error('Domain resync failed:', resyncError);
-        backfillStatus = 'failed';
-        return error(c, "RESYNC_FAILED", resyncError instanceof Error ? resyncError.message : "Failed to resync domain", 500);
-      }
-    } else {
-      return error(c, "NO_SUPABASE", "Supabase not configured", 500);
-    }
+    // Domain resync is deprecated - events are now stored in R2 SQL and are
+    // automatically associated with the correct org_tag at ingestion time.
+    // There's nothing to resync - events are already attributed correctly.
+    //
+    // Return success with a note that the domain is already synced.
 
     return success(c, {
-      message: "Domain resync completed",
-      events_found: eventsFound,
-      backfill_status: backfillStatus
+      message: "Domain events are automatically synced via org_tag",
+      events_found: 0,
+      backfill_status: 'completed' as const
     });
   }
 }

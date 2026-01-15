@@ -4,6 +4,7 @@ import { AppContext } from "../../types";
 import { Session } from "../../middleware/auth";
 import { D1Adapter } from "../../adapters/d1";
 import { success, error } from "../../utils/response";
+import { CacheService } from "../../services/cache";
 
 /**
  * GET /v1/user/me - Get current user profile
@@ -45,20 +46,29 @@ export class GetUserProfile extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const session = c.get("session");
 
-    const d1 = new D1Adapter(c.env.DB);
-    const user = await d1.getUser(session.user_id);
+    // Use KV cache for user profile (5 min TTL)
+    const cache = new CacheService(c.env.CACHE);
+    const cacheKey = CacheService.userKey(session.user_id);
 
-    if (!user) {
+    const userData = await cache.getOrSet(cacheKey, async () => {
+      const d1 = new D1Adapter(c.env.DB);
+      const user = await d1.getUser(session.user_id);
+
+      if (!user) {
+        return null;
+      }
+
+      return {
+        ...user,
+        is_admin: Boolean(user.is_admin)
+      };
+    }, 300); // 5 min TTL
+
+    if (!userData) {
       return error(c, "USER_NOT_FOUND", "User not found", 404);
     }
 
-    // Convert is_admin from integer (0/1) to boolean
-    return success(c, {
-      user: {
-        ...user,
-        is_admin: Boolean(user.is_admin)
-      }
-    });
+    return success(c, { user: userData });
   }
 }
 
@@ -121,6 +131,10 @@ export class UpdateUserProfile extends OpenAPIRoute {
     if (!updated) {
       return error(c, "UPDATE_FAILED", "Failed to update user profile", 500);
     }
+
+    // Invalidate cache after update
+    const cache = new CacheService(c.env.CACHE);
+    await cache.invalidate(CacheService.userKey(session.user_id));
 
     return success(c, {
       user: {

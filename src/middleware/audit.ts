@@ -299,12 +299,12 @@ export async function authAuditMiddleware(c: AppContext, next: Next) {
 /**
  * Helper function to determine data source from path
  */
-function determineDataSource(path: string): 'r2_sql' | 'supabase' | 'd1' | 'external_api' {
+function determineDataSource(path: string): 'r2_sql' | 'd1' | 'external_api' {
   if (path.includes('/events')) {
     return 'r2_sql';
   }
   if (path.includes('/platforms') || path.includes('/conversions')) {
-    return 'supabase';
+    return 'd1'; // Platform data now served from D1 ANALYTICS_DB
   }
   if (path.includes('/user') || path.includes('/organizations')) {
     return 'd1';

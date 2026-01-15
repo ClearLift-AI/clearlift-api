@@ -46,7 +46,7 @@ export interface DataAccessEntry {
   user_id: string;
   organization_id: string;
   access_type: 'query' | 'export' | 'report' | 'api_fetch';
-  data_source: 'r2_sql' | 'supabase' | 'd1' | 'external_api';
+  data_source: 'r2_sql' | 'd1' | 'external_api';
   table_name?: string;
   query_hash?: string;
   filters_applied?: Record<string, any>;

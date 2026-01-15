@@ -286,8 +286,8 @@ export class ConnectStripe extends OpenAPIRoute {
         }
       };
 
-      // Check if running locally (Supabase URL points to localhost)
-      const isLocal = c.env.SUPABASE_URL?.includes('127.0.0.1') || c.env.SUPABASE_URL?.includes('localhost');
+      // Check if running locally (no queue binding means local dev)
+      const isLocal = !c.env.SYNC_QUEUE || c.req.url.includes('localhost') || c.req.url.includes('127.0.0.1');
 
       if (isLocal) {
         // LOCAL DEV: Call queue consumer directly via HTTP (queues don't work locally)
@@ -310,13 +310,30 @@ export class ConnectStripe extends OpenAPIRoute {
           console.error('[ConnectStripe] Failed to call queue consumer:', err);
         }
       } else if (c.env.SYNC_QUEUE) {
-        // PRODUCTION: Send to real Cloudflare Queue
-        try {
-          console.log('[ConnectStripe] Sending initial sync to queue:', JSON.stringify(queueMessage));
-          await c.env.SYNC_QUEUE.send(queueMessage);
-          console.log('[ConnectStripe] Successfully sent to queue');
-        } catch (queueError) {
-          console.error('[ConnectStripe] Queue send error:', queueError);
+        // PRODUCTION: Send to real Cloudflare Queue with retry
+        const MAX_RETRIES = 3;
+        let lastError: Error | null = null;
+
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+          try {
+            if (attempt > 0) {
+              // Exponential backoff: 1s, 2s, 4s
+              await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+              console.log(`[ConnectStripe] Retry attempt ${attempt + 1} for queue send`);
+            }
+            await c.env.SYNC_QUEUE.send(queueMessage);
+            console.log('[ConnectStripe] Successfully sent to queue');
+            lastError = null;
+            break;
+          } catch (err) {
+            lastError = err instanceof Error ? err : new Error(String(err));
+            console.error(`[ConnectStripe] Queue send error (attempt ${attempt + 1}):`, lastError.message);
+          }
+        }
+
+        if (lastError) {
+          console.error('[ConnectStripe] All queue send attempts failed:', lastError.message);
+          // Don't fail the request - connection was created successfully
         }
       }
 

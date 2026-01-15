@@ -6,7 +6,7 @@
  * without timing out during LLM call waits.
  *
  * Step Structure:
- * 1. build_entity_tree - Fetch from Supabase, return serialized tree
+ * 1. build_entity_tree - Fetch from D1, return serialized tree
  * 2. analyze_ads - Process all ads (2 concurrent LLM calls)
  * 3. analyze_adsets - Process all adsets with child summaries
  * 4. analyze_campaigns - Process all campaigns

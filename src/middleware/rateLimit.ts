@@ -85,10 +85,21 @@ function getDefaultKey(c: Context): string {
 }
 
 /**
+ * Flag to track if rate limit table has been initialized
+ * Prevents running DDL on every request
+ */
+let rateLimitTableInitialized = false;
+
+/**
  * Create rate limit table if not exists
  * This should be in a migration, but included here for safety
+ * Note: Only runs once per worker instance
  */
 async function ensureRateLimitTable(db: D1Database) {
+  if (rateLimitTableInitialized) {
+    return;
+  }
+
   try {
     await db.prepare(`
       CREATE TABLE IF NOT EXISTS rate_limits (
@@ -105,9 +116,13 @@ async function ensureRateLimitTable(db: D1Database) {
       CREATE INDEX IF NOT EXISTS idx_rate_limits_window_end
       ON rate_limits(window_end)
     `).run();
+
+    rateLimitTableInitialized = true;
+    console.log("[RateLimit] Table initialized successfully");
   } catch (error) {
-    // Table might already exist, ignore error
-    console.log("Rate limit table check:", error);
+    // Table might already exist, mark as initialized
+    rateLimitTableInitialized = true;
+    console.log("[RateLimit] Table check completed:", error);
   }
 }
 

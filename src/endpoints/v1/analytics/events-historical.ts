@@ -9,11 +9,11 @@ import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
 /**
  * GET /v1/analytics/events/historical - Get historical events from R2 SQL
  *
- * This endpoint queries R2 SQL directly for events beyond the 45-day
- * Supabase rolling window. Use this for historical analysis where
- * 15-25 second latency is acceptable.
+ * This endpoint queries R2 SQL directly for all historical event data.
+ * R2 SQL provides full data retention (no rolling window).
+ * Use 15-25 second latency is acceptable for these queries.
  *
- * For real-time queries (last 45 days), use GET /v1/analytics/events instead.
+ * For recent queries (optimized for speed), use GET /v1/analytics/events instead.
  */
 export class GetEventsHistorical extends OpenAPIRoute {
   public schema = {
@@ -21,10 +21,10 @@ export class GetEventsHistorical extends OpenAPIRoute {
     summary: "Get historical events from R2 SQL",
     description: `
       Fetches historical events directly from R2 SQL Data Catalog.
-      Use this for queries beyond the 45-day Supabase window.
+      Use this for deep historical analysis with full data retention.
 
       **Performance Note**: R2 SQL queries take 15-25 seconds.
-      For real-time queries, use GET /v1/analytics/events instead.
+      For faster queries on recent data, use GET /v1/analytics/events instead.
 
       **Limitations**:
       - Maximum 2000 events per request (use cursor pagination for more)

@@ -2,6 +2,7 @@ import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { success, error } from "../../utils/response";
+import { CacheService } from "../../services/cache";
 
 const MatrixSettingsSchema = z.object({
   growth_strategy: z.enum(['lean', 'balanced', 'bold']),
@@ -73,75 +74,81 @@ export class GetMatrixSettings extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
-    const settings = await c.env.DB.prepare(`
-      SELECT
-        growth_strategy,
-        budget_optimization,
-        ai_control,
-        daily_cap_cents,
-        monthly_cap_cents,
-        pause_threshold_percent,
-        conversion_source,
-        disabled_conversion_sources,
-        custom_instructions,
-        llm_default_provider,
-        llm_claude_model,
-        llm_gemini_model,
-        llm_max_recommendations,
-        llm_enable_exploration
-      FROM ai_optimization_settings
-      WHERE org_id = ?
-    `).bind(orgId).first();
+    // Use KV cache for settings (5 min TTL)
+    const cache = new CacheService(c.env.CACHE);
+    const cacheKey = CacheService.orgSettingsKey(orgId);
 
-    if (!settings) {
-      // Return defaults if no settings exist
-      return success(c, {
-        growth_strategy: 'balanced',
-        budget_optimization: 'moderate',
-        ai_control: 'copilot',
-        daily_cap_cents: null,
-        monthly_cap_cents: null,
-        pause_threshold_percent: null,
-        conversion_source: 'tag',
-        disabled_conversion_sources: [],
-        custom_instructions: null,
-        // LLM defaults
-        llm_default_provider: 'auto',
-        llm_claude_model: 'haiku',
-        llm_gemini_model: 'flash',
-        llm_max_recommendations: 3,
-        llm_enable_exploration: true
-      });
-    }
+    const settingsData = await cache.getOrSet(cacheKey, async () => {
+      const settings = await c.env.DB.prepare(`
+        SELECT
+          growth_strategy,
+          budget_optimization,
+          ai_control,
+          daily_cap_cents,
+          monthly_cap_cents,
+          pause_threshold_percent,
+          conversion_source,
+          disabled_conversion_sources,
+          custom_instructions,
+          llm_default_provider,
+          llm_claude_model,
+          llm_gemini_model,
+          llm_max_recommendations,
+          llm_enable_exploration
+        FROM ai_optimization_settings
+        WHERE org_id = ?
+      `).bind(orgId).first();
 
-    // Parse disabled_conversion_sources from JSON string
-    let disabledSources: string[] = [];
-    try {
-      const raw = (settings as any).disabled_conversion_sources;
-      if (raw) {
-        disabledSources = JSON.parse(raw);
+      if (!settings) {
+        // Return defaults if no settings exist
+        return {
+          growth_strategy: 'balanced',
+          budget_optimization: 'moderate',
+          ai_control: 'copilot',
+          daily_cap_cents: null,
+          monthly_cap_cents: null,
+          pause_threshold_percent: null,
+          conversion_source: 'tag',
+          disabled_conversion_sources: [],
+          custom_instructions: null,
+          llm_default_provider: 'auto',
+          llm_claude_model: 'haiku',
+          llm_gemini_model: 'flash',
+          llm_max_recommendations: 3,
+          llm_enable_exploration: true
+        };
       }
-    } catch {
-      disabledSources = [];
-    }
 
-    return success(c, {
-      growth_strategy: settings.growth_strategy,
-      budget_optimization: settings.budget_optimization,
-      ai_control: settings.ai_control,
-      daily_cap_cents: settings.daily_cap_cents,
-      monthly_cap_cents: settings.monthly_cap_cents,
-      pause_threshold_percent: settings.pause_threshold_percent,
-      conversion_source: settings.conversion_source,
-      disabled_conversion_sources: disabledSources,
-      custom_instructions: settings.custom_instructions,
-      // LLM settings
-      llm_default_provider: (settings as any).llm_default_provider || 'auto',
-      llm_claude_model: (settings as any).llm_claude_model || 'haiku',
-      llm_gemini_model: (settings as any).llm_gemini_model || 'flash',
-      llm_max_recommendations: (settings as any).llm_max_recommendations || 3,
-      llm_enable_exploration: (settings as any).llm_enable_exploration !== 0
-    });
+      // Parse disabled_conversion_sources from JSON string
+      let disabledSources: string[] = [];
+      try {
+        const raw = (settings as any).disabled_conversion_sources;
+        if (raw) {
+          disabledSources = JSON.parse(raw);
+        }
+      } catch {
+        disabledSources = [];
+      }
+
+      return {
+        growth_strategy: settings.growth_strategy,
+        budget_optimization: settings.budget_optimization,
+        ai_control: settings.ai_control,
+        daily_cap_cents: settings.daily_cap_cents,
+        monthly_cap_cents: settings.monthly_cap_cents,
+        pause_threshold_percent: settings.pause_threshold_percent,
+        conversion_source: settings.conversion_source,
+        disabled_conversion_sources: disabledSources,
+        custom_instructions: settings.custom_instructions,
+        llm_default_provider: (settings as any).llm_default_provider || 'auto',
+        llm_claude_model: (settings as any).llm_claude_model || 'haiku',
+        llm_gemini_model: (settings as any).llm_gemini_model || 'flash',
+        llm_max_recommendations: (settings as any).llm_max_recommendations || 3,
+        llm_enable_exploration: (settings as any).llm_enable_exploration !== 0
+      };
+    }, 300); // 5 min TTL
+
+    return success(c, settingsData);
   }
 }
 
@@ -257,6 +264,10 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
       body.llm_max_recommendations || 3,
       body.llm_enable_exploration !== false ? 1 : 0
     ).run();
+
+    // Invalidate cache after update
+    const cache = new CacheService(c.env.CACHE);
+    await cache.invalidate(CacheService.orgSettingsKey(orgId));
 
     return success(c, { message: "Settings updated successfully" });
   }

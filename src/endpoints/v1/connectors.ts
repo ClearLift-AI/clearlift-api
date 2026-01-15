@@ -1176,25 +1176,10 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
             if (pages.length > 0) {
               console.log(`Found ${pages.length} connected Facebook pages`);
 
-              // Store pages in Supabase
-              const { SupabaseClient } = await import("../../services/supabase");
-              const supabase = new SupabaseClient({
-                url: c.env.SUPABASE_URL,
-                secretKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
-              });
-
-              for (const page of pages) {
-                await supabase.upsertWithSchema('pages', {
-                  page_id: page.id,
-                  organization_id: oauthState.organization_id,
-                  page_name: page.name,
-                  access_token: page.access_token,
-                  fan_count: page.fan_count || 0,
-                  category: page.category || null,
-                  updated_at: new Date().toISOString()
-                }, 'organization_id,page_id', 'facebook_ads');
-              }
-              console.log('Stored Facebook pages in Supabase');
+              // TODO: Store pages in D1 when facebook_pages table is created
+              // For now, we skip storing pages - they can be fetched on demand
+              // from the Facebook API using the user access token.
+              console.log('Skipping Facebook pages storage (D1 migration pending)');
             } else {
               console.log('No Facebook pages connected to this account');
             }
@@ -1845,78 +1830,11 @@ export class DisconnectPlatform extends OpenAPIRoute {
 
     await connectorService.disconnectPlatform(connection_id);
 
-    // Soft-delete synced data in Supabase for this connection
-    try {
-      const { SupabaseClient } = await import("../../services/supabase");
-      const supabase = new SupabaseClient({
-        url: c.env.SUPABASE_URL,
-        secretKey: await getSecret(c.env.SUPABASE_SECRET_KEY) || ''
-      });
-
-      const now = new Date().toISOString();
-
-      if (connection.platform === 'stripe') {
-        // Soft-delete Stripe records from both charges and subscriptions tables
-        const filter = `connection_id.eq.${connection_id}&deleted_at.is.null`;
-
-        await Promise.all([
-          // Charges table has deletion_reason column
-          supabase.updateWithSchema('charges', {
-            deleted_at: now,
-            deletion_reason: 'connection_deleted'
-          }, filter, 'stripe'),
-          // Subscriptions table only has deleted_at
-          supabase.updateWithSchema('subscriptions', {
-            deleted_at: now
-          }, filter, 'stripe')
-        ]);
-        console.log(`Soft-deleted Stripe records for connection ${connection_id}`);
-      } else if (connection.platform === 'google') {
-        // Soft-delete Google Ads records
-        const filter = `connection_id.eq.${connection_id}&deleted_at.is.null`;
-        await supabase.updateWithSchema('campaigns', {
-          deleted_at: now,
-          updated_at: now
-        }, filter, 'google_ads');
-        console.log(`Soft-deleted Google Ads records for connection ${connection_id}`);
-      } else if (connection.platform === 'facebook') {
-        // Soft-delete Facebook Ads records
-        const filter = `connection_id.eq.${connection_id}&deleted_at.is.null`;
-        await Promise.all([
-          supabase.updateWithSchema('campaigns', {
-            deleted_at: now,
-            updated_at: now
-          }, filter, 'facebook_ads'),
-          supabase.updateWithSchema('ad_sets', {
-            deleted_at: now,
-            updated_at: now
-          }, filter, 'facebook_ads'),
-          supabase.updateWithSchema('ads', {
-            deleted_at: now,
-            updated_at: now
-          }, filter, 'facebook_ads')
-        ]);
-        console.log(`Soft-deleted Facebook Ads records for connection ${connection_id}`);
-      } else if (connection.platform === 'shopify') {
-        // Soft-delete Shopify records from orders and customers tables
-        const filter = `connection_id.eq.${connection_id}&deleted_at.is.null`;
-        await Promise.all([
-          supabase.updateWithSchema('orders', {
-            deleted_at: now,
-            updated_at: now
-          }, filter, 'shopify'),
-          supabase.updateWithSchema('customers', {
-            deleted_at: now,
-            updated_at: now
-          }, filter, 'shopify')
-        ]);
-        console.log(`Soft-deleted Shopify records for connection ${connection_id}`);
-      }
-      // Add tiktok as needed
-    } catch (supabaseError) {
-      console.error('Failed to soft-delete Supabase records:', supabaseError);
-      // Don't fail the disconnect, just log the error
-    }
+    // Clean up synced data in D1 ANALYTICS_DB for this connection
+    // Note: D1 analytics tables use organization_id, not connection_id
+    // For complete cleanup, we'd need to track which records came from which connection
+    // For now, we skip data cleanup - reconnecting will sync fresh data
+    console.log(`[Disconnect] Platform ${connection.platform} connection ${connection_id} disconnected. Data cleanup skipped (reconnect will sync fresh data).`);
 
     // Delete connector filter rules from D1
     try {

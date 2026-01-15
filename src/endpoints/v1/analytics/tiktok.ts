@@ -365,7 +365,7 @@ export class GetTikTokMetrics extends OpenAPIRoute {
     const query = await this.getValidatedData<typeof this.schema>();
 
     // Check if org has an active TikTok connection first
-    // Prevents timeout when querying Supabase for orgs without TikTok
+    // Prevents unnecessary D1 queries for orgs without TikTok
     const hasConnection = await c.env.DB.prepare(`
       SELECT 1 FROM platform_connections
       WHERE organization_id = ? AND platform = 'tiktok' AND is_active = 1

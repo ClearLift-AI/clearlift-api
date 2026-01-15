@@ -472,7 +472,7 @@ export class TriggerEventsSync extends OpenAPIRoute {
   public schema = {
     tags: ["Workers"],
     summary: "Trigger events sync",
-    description: "Manually triggers an events sync workflow for the specified organization. Syncs events from R2 Datalake to Supabase.",
+    description: "Manually triggers an events sync workflow for the specified organization. Processes events from R2 Datalake.",
     operationId: "trigger-events-sync",
     security: [{ bearerAuth: [] }],
     request: {

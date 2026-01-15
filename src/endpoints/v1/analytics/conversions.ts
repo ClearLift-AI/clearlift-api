@@ -17,7 +17,7 @@ export class GetConversions extends OpenAPIRoute {
   public schema = {
     tags: ["Analytics"],
     summary: "Get conversion data",
-    description: "Fetches conversion data from Supabase with intelligent aggregation",
+    description: "Fetches conversion data from D1 with intelligent aggregation",
     operationId: "get-conversions",
     security: [{ bearerAuth: [] }],
     request: {

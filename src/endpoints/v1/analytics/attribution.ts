@@ -3,18 +3,16 @@
  *
  * Multi-touch attribution with identity stitching support.
  * Supports: first_touch, last_touch, linear, time_decay, position_based
+ *
+ * NOTE: Currently returns platform-reported data from D1.
+ * Tag-based attribution requires conversion_attribution table to be populated in D1.
  */
 
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
-import { SupabaseClient } from "../../../services/supabase";
-import { getSecret } from "../../../utils/secrets";
 import { D1Adapter } from "../../../adapters/d1";
-import { GoogleAdsSupabaseAdapter } from "../../../adapters/platforms/google-supabase";
-import { FacebookSupabaseAdapter } from "../../../adapters/platforms/facebook-supabase";
-import { TikTokAdsSupabaseAdapter } from "../../../adapters/platforms/tiktok-supabase";
 import {
   AttributionModel,
   AttributionConfig,
@@ -275,36 +273,6 @@ function identifyConversions(events: any[], goals: ConversionGoal[]): any[] {
   return conversions;
 }
 
-// Helper: Query connector conversions from conversions.unified table
-async function queryConnectorConversions(
-  supabase: SupabaseClient,
-  orgId: string,
-  dateRange: { start: string; end: string }
-): Promise<ConnectorConversion[]> {
-  try {
-    // Query conversions.unified table via Supabase REST API
-    const params = new URLSearchParams();
-    params.append('organization_id', `eq.${orgId}`);
-    params.append('conversion_timestamp', `gte.${dateRange.start}T00:00:00Z`);
-    params.append('conversion_timestamp', `lte.${dateRange.end}T23:59:59Z`);
-    params.append('select', '*');
-    params.append('order', 'conversion_timestamp.desc');
-    params.append('limit', '10000');
-
-    const conversions = await supabase.queryWithSchema<ConnectorConversion[]>(
-      `unified?${params.toString()}`,
-      'conversions',
-      { method: 'GET' }
-    ) || [];
-
-    console.log(`[Attribution] queryConnectorConversions: ${conversions.length} conversions found for orgId=${orgId}`);
-    return conversions;
-  } catch (err) {
-    console.error('[Attribution] queryConnectorConversions error:', err);
-    return [];
-  }
-}
-
 // Helper: Map click ID type to platform
 function mapClickIdToPlatform(clickIdType: string | null): string | null {
   if (!clickIdType) return null;
@@ -504,9 +472,107 @@ interface DataQualityInfo {
 }
 
 /**
+ * Helper: Build platform fallback attributions from D1 ANALYTICS_DB
+ */
+async function buildPlatformFallbackD1(
+  analyticsDb: D1Database,
+  mainDb: D1Database,
+  orgId: string,
+  dateRange: { start: string; end: string }
+): Promise<{
+  attributions: any[];
+  summary: { total_conversions: number; total_revenue: number };
+}> {
+  try {
+    // Get active platform connections
+    const connections = await mainDb.prepare(`
+      SELECT DISTINCT platform FROM platform_connections
+      WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).all<{ platform: string }>();
+
+    const platforms = connections.results?.map(r => r.platform) || [];
+    console.log(`[Attribution D1 Fallback] orgId=${orgId}, platforms=${JSON.stringify(platforms)}`);
+
+    if (platforms.length === 0) {
+      return { attributions: [], summary: { total_conversions: 0, total_revenue: 0 } };
+    }
+
+    const allCampaigns: any[] = [];
+    let totalConversions = 0;
+    let totalRevenue = 0;
+
+    for (const platform of platforms) {
+      try {
+        const metricsTable = `${platform}_campaign_daily_metrics`;
+        const campaignsTable = `${platform}_campaigns`;
+
+        // Query aggregated metrics by campaign
+        const metricsResult = await analyticsDb.prepare(`
+          SELECT
+            m.campaign_ref,
+            c.name as campaign_name,
+            SUM(m.conversions) as conversions,
+            SUM(m.conversion_value_cents) as conversion_value_cents
+          FROM ${metricsTable} m
+          LEFT JOIN ${campaignsTable} c ON m.campaign_ref = c.id
+          WHERE m.org_id = ?
+            AND m.date >= ?
+            AND m.date <= ?
+          GROUP BY m.campaign_ref, c.name
+        `).bind(orgId, dateRange.start, dateRange.end).all<{
+          campaign_ref: string;
+          campaign_name: string | null;
+          conversions: number;
+          conversion_value_cents: number;
+        }>();
+
+        for (const row of metricsResult.results || []) {
+          const conversions = row.conversions || 0;
+          const revenue = (row.conversion_value_cents || 0) / 100;
+          const medium = platform === 'google' ? 'cpc' : 'paid';
+
+          allCampaigns.push({
+            utm_source: platform,
+            utm_medium: medium,
+            utm_campaign: row.campaign_name || row.campaign_ref,
+            touchpoints: 0,
+            conversions_in_path: 0,
+            attributed_conversions: conversions,
+            attributed_revenue: revenue,
+            avg_position_in_path: 0
+          });
+
+          totalConversions += conversions;
+          totalRevenue += revenue;
+        }
+      } catch (err) {
+        // Table might not exist for this platform
+        console.warn(`[Attribution D1 Fallback] Failed to query ${platform}:`, err);
+      }
+    }
+
+    // Sort by attributed_conversions descending
+    allCampaigns.sort((a, b) => b.attributed_conversions - a.attributed_conversions);
+
+    console.log(`[Attribution D1 Fallback] Returning ${allCampaigns.length} campaigns, ${totalConversions} conversions`);
+    return {
+      attributions: allCampaigns,
+      summary: { total_conversions: totalConversions, total_revenue: totalRevenue }
+    };
+  } catch (err) {
+    console.error('[Attribution D1 Fallback] Error:', err);
+    return { attributions: [], summary: { total_conversions: 0, total_revenue: 0 } };
+  }
+}
+
+/**
  * GET /v1/analytics/attribution
  *
  * Multi-touch attribution with identity stitching.
+ *
+ * NOTE: Currently returns platform-reported data from D1 ANALYTICS_DB.
+ * Tag-based multi-touch attribution requires the conversion_attribution
+ * table to be populated in D1.
  */
 export class GetAttribution extends OpenAPIRoute {
   schema = {
@@ -524,6 +590,8 @@ Analyze which marketing channels are driving conversions using multi-touch attri
 
 **Identity Stitching:**
 When enabled, links anonymous sessions to identified users for accurate cross-device attribution.
+
+**NOTE:** Currently returns platform-reported data. Tag-based attribution requires D1 tables to be populated.
     `.trim(),
     security: [{ bearerAuth: [] }],
     request: {
@@ -620,254 +688,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       : settingsSource;
     console.log(`[Attribution] source override: ${sourceOverride}, settings: ${settingsSource}, using: ${conversionSource}`);
 
-    // Handle 'all' source - combine data from all available sources
-    if (conversionSource === 'all') {
-      console.log(`[Attribution] source=all, combining all data sources`);
-
-      try {
-        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-        if (!supabaseKey) {
-          return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
-        }
-
-        const supabase = new SupabaseClient({
-          url: c.env.SUPABASE_URL,
-          secretKey: supabaseKey
-        });
-
-        // Get org settings for attribution window
-        const attributionWindowDays = query.attribution_window
-          ? parseInt(query.attribution_window)
-          : org.attribution_window_days;
-        const timeDecayHalfLifeDays = query.time_decay_half_life
-          ? parseInt(query.time_decay_half_life)
-          : org.time_decay_half_life_days;
-
-        // Collect attributions from all sources
-        const allAttributions: Map<string, {
-          utm_source: string;
-          utm_medium: string | null;
-          utm_campaign: string | null;
-          touchpoints: number;
-          conversions_in_path: number;
-          attributed_conversions: number;
-          attributed_revenue: number;
-          avg_position_in_path: number;
-          source_type: string;
-        }> = new Map();
-
-        let totalConversions = 0;
-        let totalRevenue = 0;
-        const dataQualityWarnings: DataWarning[] = [];
-        let eventCount = 0;
-        let conversionCount = 0;
-
-        // 1. Query ad platform data
-        const connections = await c.env.DB.prepare(`
-          SELECT DISTINCT platform FROM platform_connections
-          WHERE organization_id = ? AND is_active = 1
-        `).bind(orgId).all<{ platform: string }>();
-
-        const platforms = connections.results?.map(r => r.platform) || [];
-        console.log(`[Attribution all] Found ${platforms.length} connected platforms`);
-
-        for (const platform of platforms) {
-          try {
-            if (platform === 'google') {
-              const adapter = new GoogleAdsSupabaseAdapter(supabase);
-              const campaigns = await adapter.getCampaignsWithMetrics(orgId, { start: dateFrom, end: dateTo });
-              for (const campaign of campaigns) {
-                const conversions = campaign.metrics.conversions || 0;
-                const revenue = (campaign.metrics.conversion_value_cents || 0) / 100;
-                const key = `google|cpc|${campaign.campaign_name}`;
-                if (!allAttributions.has(key)) {
-                  allAttributions.set(key, {
-                    utm_source: 'google', utm_medium: 'cpc', utm_campaign: campaign.campaign_name,
-                    touchpoints: 0, conversions_in_path: 0, attributed_conversions: conversions,
-                    attributed_revenue: revenue, avg_position_in_path: 0, source_type: 'ad_platform'
-                  });
-                } else {
-                  const existing = allAttributions.get(key)!;
-                  existing.attributed_conversions += conversions;
-                  existing.attributed_revenue += revenue;
-                }
-                totalConversions += conversions;
-                totalRevenue += revenue;
-              }
-            } else if (platform === 'facebook') {
-              const adapter = new FacebookSupabaseAdapter(supabase);
-              const campaigns = await adapter.getCampaignsWithMetrics(orgId, { start: dateFrom, end: dateTo });
-              for (const campaign of campaigns) {
-                const conversions = campaign.metrics.conversions || 0;
-                const revenue = ((campaign.metrics as any).conversion_value_cents || 0) / 100;
-                const key = `facebook|paid|${campaign.campaign_name}`;
-                if (!allAttributions.has(key)) {
-                  allAttributions.set(key, {
-                    utm_source: 'facebook', utm_medium: 'paid', utm_campaign: campaign.campaign_name,
-                    touchpoints: 0, conversions_in_path: 0, attributed_conversions: conversions,
-                    attributed_revenue: revenue, avg_position_in_path: 0, source_type: 'ad_platform'
-                  });
-                } else {
-                  const existing = allAttributions.get(key)!;
-                  existing.attributed_conversions += conversions;
-                  existing.attributed_revenue += revenue;
-                }
-                totalConversions += conversions;
-                totalRevenue += revenue;
-              }
-            } else if (platform === 'tiktok') {
-              const adapter = new TikTokAdsSupabaseAdapter(supabase);
-              const campaigns = await adapter.getCampaigns(orgId);
-              const metrics = await adapter.getCampaignDailyMetrics(orgId, { start: dateFrom, end: dateTo });
-              const metricsByCampaign: Record<string, { conversions: number; revenue: number }> = {};
-              for (const m of metrics) {
-                const ref = (m as any).campaign_ref;
-                if (!metricsByCampaign[ref]) metricsByCampaign[ref] = { conversions: 0, revenue: 0 };
-                metricsByCampaign[ref].conversions += m.conversions || 0;
-                metricsByCampaign[ref].revenue += (m.conversion_value_cents || 0) / 100;
-              }
-              for (const campaign of campaigns) {
-                const cm = metricsByCampaign[campaign.id] || { conversions: 0, revenue: 0 };
-                const key = `tiktok|paid|${campaign.campaign_name}`;
-                if (!allAttributions.has(key)) {
-                  allAttributions.set(key, {
-                    utm_source: 'tiktok', utm_medium: 'paid', utm_campaign: campaign.campaign_name,
-                    touchpoints: 0, conversions_in_path: 0, attributed_conversions: cm.conversions,
-                    attributed_revenue: cm.revenue, avg_position_in_path: 0, source_type: 'ad_platform'
-                  });
-                } else {
-                  const existing = allAttributions.get(key)!;
-                  existing.attributed_conversions += cm.conversions;
-                  existing.attributed_revenue += cm.revenue;
-                }
-                totalConversions += cm.conversions;
-                totalRevenue += cm.revenue;
-              }
-            }
-          } catch (err) {
-            console.warn(`[Attribution all] Failed to fetch ${platform}:`, err);
-          }
-        }
-
-        // 2. Query connector conversions (Stripe, Shopify, etc.)
-        const connectorConversions = await queryConnectorConversions(supabase, orgId, { start: dateFrom, end: dateTo });
-        if (connectorConversions.length > 0) {
-          const { attributions: connectorAttrs, summary } = attributeConnectorConversions(connectorConversions);
-          for (const attr of connectorAttrs) {
-            const key = `${attr.utm_source}|${attr.utm_medium || 'unknown'}|${attr.utm_campaign || 'unknown'}|connector`;
-            if (!allAttributions.has(key)) {
-              allAttributions.set(key, {
-                utm_source: attr.utm_source,
-                utm_medium: attr.utm_medium,
-                utm_campaign: attr.utm_campaign,
-                touchpoints: attr.touchpoints,
-                conversions_in_path: attr.conversions_in_path,
-                attributed_conversions: attr.attributed_conversions,
-                attributed_revenue: attr.attributed_revenue,
-                avg_position_in_path: attr.avg_position_in_path,
-                source_type: 'connector'
-              });
-            } else {
-              const existing = allAttributions.get(key)!;
-              existing.attributed_conversions += attr.attributed_conversions;
-              existing.attributed_revenue += attr.attributed_revenue;
-            }
-          }
-          // Don't add to totalConversions/totalRevenue to avoid double counting
-          // Platform conversions may overlap with connector conversions
-          conversionCount += summary.total_conversions;
-        }
-
-        // 3. Query tag-based tracked events if tag mapping exists
-        const tagMapping = await c.env.DB.prepare(`
-          SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-        `).bind(orgId).first<{ short_tag: string }>();
-
-        if (tagMapping) {
-          const params = new URLSearchParams();
-          params.append('org_tag', `eq.${tagMapping.short_tag}`);
-          params.append('conversion_timestamp', `gte.${dateFrom}T00:00:00Z`);
-          params.append('conversion_timestamp', `lte.${dateTo}T23:59:59Z`);
-          params.append('limit', '10000');
-
-          const events = await supabase.queryWithSchema<any[]>(
-            `conversion_attribution?${params.toString()}`,
-            'events',
-            { method: 'GET' }
-          ) || [];
-
-          eventCount = events.length;
-          console.log(`[Attribution all] Tag events: ${eventCount}`);
-
-          if (events.length > 0) {
-            // Note: Tag-based attribution is included in the event count for data quality
-            // but we don't add to totalConversions to avoid double counting
-          }
-        }
-
-        // Build final attributions array
-        const attributionsArray = Array.from(allAttributions.values())
-          .sort((a, b) => b.attributed_conversions - a.attributed_conversions)
-          .map(a => ({
-            utm_source: a.utm_source,
-            utm_medium: a.utm_medium,
-            utm_campaign: a.utm_campaign,
-            touchpoints: a.touchpoints,
-            conversions_in_path: a.conversions_in_path,
-            attributed_conversions: Math.round(a.attributed_conversions * 100) / 100,
-            attributed_revenue: Math.round(a.attributed_revenue * 100) / 100,
-            avg_position_in_path: a.avg_position_in_path
-          }));
-
-        // Determine overall data quality
-        const hasAdPlatforms = platforms.length > 0;
-        const hasConnectors = connectorConversions.length > 0;
-        const hasTagEvents = eventCount > 0;
-
-        let dataQuality: DataQuality = 'platform_reported';
-        if (hasConnectors && hasTagEvents) {
-          dataQuality = 'verified';
-        } else if (hasConnectors) {
-          dataQuality = 'connector_only';
-        } else if (hasTagEvents) {
-          dataQuality = 'tracked';
-        }
-
-        console.log(`[Attribution all] Combined: ${attributionsArray.length} channels, ${totalConversions} conversions, quality=${dataQuality}`);
-
-        return success(c, {
-          model: 'platform' as AttributionModel,  // Combined view uses platform aggregation
-          config: {
-            attribution_window_days: attributionWindowDays,
-            time_decay_half_life_days: timeDecayHalfLifeDays,
-            identity_stitching_enabled: query.use_identity_stitching !== 'false'
-          },
-          data_quality: {
-            quality: dataQuality,
-            warnings: dataQualityWarnings,
-            event_count: eventCount,
-            conversion_count: conversionCount,
-            fallback_source: 'all',
-            conversion_source_setting: settingsSource
-          },
-          attributions: attributionsArray,
-          summary: {
-            total_conversions: totalConversions,
-            total_revenue: Math.round(totalRevenue * 100) / 100,
-            avg_path_length: 0,
-            avg_days_to_convert: 0,
-            identified_users: conversionCount,  // Use connector count as proxy
-            anonymous_sessions: eventCount
-          }
-        });
-      } catch (err) {
-        console.error('[Attribution all] Error:', err);
-        return error(c, "INTERNAL_ERROR", "Failed to fetch attribution data", 500);
-      }
-    }
-
     // Build config from query params and org defaults
-    // If conversion_source is 'ad_platforms', we'll use platform model regardless of what's requested
     const requestedModel = (query.model || org.default_attribution_model || 'last_touch') as AttributionModel;
     const model = conversionSource === 'ad_platforms' ? 'platform' as AttributionModel : requestedModel;
     const attributionWindowDays = query.attribution_window
@@ -877,776 +698,53 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       ? parseInt(query.time_decay_half_life)
       : org.time_decay_half_life_days;
 
-    const config: AttributionConfig = {
-      model,
-      attribution_window_days: attributionWindowDays,
-      time_decay_half_life_days: timeDecayHalfLifeDays
-    };
+    // Get ANALYTICS_DB binding (with fallback to DB for backwards compat)
+    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
 
-    // If conversion_source is 'ad_platforms', skip event queries entirely and use platform data
-    if (conversionSource === 'ad_platforms') {
-      console.log(`[Attribution] conversion_source=ad_platforms, using platform model directly`);
-      try {
-        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-        if (supabaseKey) {
-          const supabase = new SupabaseClient({
-            url: c.env.SUPABASE_URL,
-            secretKey: supabaseKey
-          });
+    // For all sources, use D1 platform data as the source of truth
+    // Tag-based and connector-based attribution require D1 tables to be populated
+    console.log(`[Attribution] Using D1 platform data (conversion_source=${conversionSource})`);
 
-          // Define buildPlatformFallback inline for this early return path
-          const connections = await c.env.DB.prepare(`
-            SELECT DISTINCT platform FROM platform_connections
-            WHERE organization_id = ? AND is_active = 1
-          `).bind(orgId).all<{ platform: string }>();
+    const fallback = await buildPlatformFallbackD1(
+      analyticsDb,
+      c.env.DB,
+      orgId,
+      { start: dateFrom, end: dateTo }
+    );
 
-          const platforms = connections.results?.map(r => r.platform) || [];
-          const allCampaigns: any[] = [];
-          let totalConversions = 0;
-          let totalRevenue = 0;
-
-          for (const platform of platforms) {
-            try {
-              if (platform === 'google') {
-                const adapter = new GoogleAdsSupabaseAdapter(supabase);
-                const campaigns = await adapter.getCampaignsWithMetrics(orgId, { start: dateFrom, end: dateTo });
-                for (const campaign of campaigns) {
-                  const conversions = campaign.metrics.conversions || 0;
-                  const revenue = (campaign.metrics.conversion_value_cents || 0) / 100;
-                  allCampaigns.push({
-                    utm_source: 'google', utm_medium: 'cpc', utm_campaign: campaign.campaign_name,
-                    touchpoints: 0, conversions_in_path: 0, attributed_conversions: conversions,
-                    attributed_revenue: revenue, avg_position_in_path: 0
-                  });
-                  totalConversions += conversions;
-                  totalRevenue += revenue;
-                }
-              } else if (platform === 'facebook') {
-                const adapter = new FacebookSupabaseAdapter(supabase);
-                const campaigns = await adapter.getCampaignsWithMetrics(orgId, { start: dateFrom, end: dateTo });
-                for (const campaign of campaigns) {
-                  const conversions = campaign.metrics.conversions || 0;
-                  // Facebook adapter doesn't include conversion_value_cents in aggregated metrics
-                  const revenue = ((campaign.metrics as any).conversion_value_cents || 0) / 100;
-                  allCampaigns.push({
-                    utm_source: 'facebook', utm_medium: 'paid', utm_campaign: campaign.campaign_name,
-                    touchpoints: 0, conversions_in_path: 0, attributed_conversions: conversions,
-                    attributed_revenue: revenue, avg_position_in_path: 0
-                  });
-                  totalConversions += conversions;
-                  totalRevenue += revenue;
-                }
-              } else if (platform === 'tiktok') {
-                const adapter = new TikTokAdsSupabaseAdapter(supabase);
-                const campaigns = await adapter.getCampaigns(orgId);
-                const metrics = await adapter.getCampaignDailyMetrics(orgId, { start: dateFrom, end: dateTo });
-                const metricsByCampaign: Record<string, { conversions: number; revenue: number }> = {};
-                for (const m of metrics) {
-                  const ref = (m as any).campaign_ref;
-                  if (!metricsByCampaign[ref]) metricsByCampaign[ref] = { conversions: 0, revenue: 0 };
-                  metricsByCampaign[ref].conversions += m.conversions || 0;
-                  metricsByCampaign[ref].revenue += (m.conversion_value_cents || 0) / 100;
-                }
-                for (const campaign of campaigns) {
-                  const cm = metricsByCampaign[campaign.id] || { conversions: 0, revenue: 0 };
-                  allCampaigns.push({
-                    utm_source: 'tiktok', utm_medium: 'paid', utm_campaign: campaign.campaign_name,
-                    touchpoints: 0, conversions_in_path: 0, attributed_conversions: cm.conversions,
-                    attributed_revenue: cm.revenue, avg_position_in_path: 0
-                  });
-                  totalConversions += cm.conversions;
-                  totalRevenue += cm.revenue;
-                }
-              }
-            } catch (err) {
-              console.warn(`[Attribution] Failed to fetch ${platform} for ad_platforms mode:`, err);
-            }
-          }
-
-          allCampaigns.sort((a, b) => b.attributed_conversions - a.attributed_conversions);
-
-          return success(c, {
-            model: 'platform' as AttributionModel,
-            config: {
-              attribution_window_days: attributionWindowDays,
-              time_decay_half_life_days: timeDecayHalfLifeDays,
-              identity_stitching_enabled: useIdentityStitching
-            },
-            data_quality: {
-              quality: 'platform_reported' as DataQuality,
-              warnings: ['using_platform_conversions'] as DataWarning[],
-              event_count: 0,
-              conversion_count: 0,
-              fallback_source: 'ad_platforms',
-              conversion_source_setting: conversionSource
-            },
-            attributions: allCampaigns,
-            summary: {
-              total_conversions: totalConversions,
-              total_revenue: totalRevenue,
-              avg_path_length: 0,
-              avg_days_to_convert: 0,
-              identified_users: 0,
-              anonymous_sessions: 0
-            }
-          });
-        }
-      } catch (err) {
-        console.error('[Attribution] Error in ad_platforms mode:', err);
-      }
+    // Determine warnings based on conversion source setting
+    const warnings: DataWarning[] = ['using_platform_conversions'];
+    if (conversionSource === 'tag') {
+      warnings.push('no_events');
+    } else if (conversionSource === 'connectors') {
+      warnings.push('no_connector_conversions');
     }
 
-    // If conversion_source is 'connectors', use connector revenue data
-    if (conversionSource === 'connectors') {
-      console.log(`[Attribution] conversion_source=connectors, querying revenue.conversions`);
-      try {
-        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-        if (supabaseKey) {
-          const supabase = new SupabaseClient({
-            url: c.env.SUPABASE_URL,
-            secretKey: supabaseKey
-          });
-
-          // Query connector conversions
-          const connectorConversions = await queryConnectorConversions(supabase, orgId, { start: dateFrom, end: dateTo });
-
-          if (connectorConversions.length === 0) {
-            // No connector conversions found - fall back to platform data
-            console.log(`[Attribution] No connector conversions found, falling back to platforms`);
-            const connections = await c.env.DB.prepare(`
-              SELECT DISTINCT platform FROM platform_connections
-              WHERE organization_id = ? AND is_active = 1
-            `).bind(orgId).all<{ platform: string }>();
-
-            const platforms = connections.results?.map(r => r.platform) || [];
-            const allCampaigns: any[] = [];
-            let totalConversions = 0;
-            let totalRevenue = 0;
-
-            for (const platform of platforms) {
-              try {
-                if (platform === 'google') {
-                  const adapter = new GoogleAdsSupabaseAdapter(supabase);
-                  const campaigns = await adapter.getCampaignsWithMetrics(orgId, { start: dateFrom, end: dateTo });
-                  for (const campaign of campaigns) {
-                    const conversions = campaign.metrics.conversions || 0;
-                    const revenue = (campaign.metrics.conversion_value_cents || 0) / 100;
-                    allCampaigns.push({
-                      utm_source: 'google', utm_medium: 'cpc', utm_campaign: campaign.campaign_name,
-                      touchpoints: 0, conversions_in_path: 0, attributed_conversions: conversions,
-                      attributed_revenue: revenue, avg_position_in_path: 0
-                    });
-                    totalConversions += conversions;
-                    totalRevenue += revenue;
-                  }
-                } else if (platform === 'facebook') {
-                  const adapter = new FacebookSupabaseAdapter(supabase);
-                  const campaigns = await adapter.getCampaignsWithMetrics(orgId, { start: dateFrom, end: dateTo });
-                  for (const campaign of campaigns) {
-                    const conversions = campaign.metrics.conversions || 0;
-                    const revenue = ((campaign.metrics as any).conversion_value_cents || 0) / 100;
-                    allCampaigns.push({
-                      utm_source: 'facebook', utm_medium: 'paid', utm_campaign: campaign.campaign_name,
-                      touchpoints: 0, conversions_in_path: 0, attributed_conversions: conversions,
-                      attributed_revenue: revenue, avg_position_in_path: 0
-                    });
-                    totalConversions += conversions;
-                    totalRevenue += revenue;
-                  }
-                } else if (platform === 'tiktok') {
-                  const adapter = new TikTokAdsSupabaseAdapter(supabase);
-                  const campaigns = await adapter.getCampaigns(orgId);
-                  const metrics = await adapter.getCampaignDailyMetrics(orgId, { start: dateFrom, end: dateTo });
-                  const metricsByCampaign: Record<string, { conversions: number; revenue: number }> = {};
-                  for (const m of metrics) {
-                    const ref = (m as any).campaign_ref;
-                    if (!metricsByCampaign[ref]) metricsByCampaign[ref] = { conversions: 0, revenue: 0 };
-                    metricsByCampaign[ref].conversions += m.conversions || 0;
-                    metricsByCampaign[ref].revenue += (m.conversion_value_cents || 0) / 100;
-                  }
-                  for (const campaign of campaigns) {
-                    const cm = metricsByCampaign[campaign.id] || { conversions: 0, revenue: 0 };
-                    allCampaigns.push({
-                      utm_source: 'tiktok', utm_medium: 'paid', utm_campaign: campaign.campaign_name,
-                      touchpoints: 0, conversions_in_path: 0, attributed_conversions: cm.conversions,
-                      attributed_revenue: cm.revenue, avg_position_in_path: 0
-                    });
-                    totalConversions += cm.conversions;
-                    totalRevenue += cm.revenue;
-                  }
-                }
-              } catch (err) {
-                console.warn(`[Attribution] Failed to fetch ${platform} for connector fallback:`, err);
-              }
-            }
-
-            return success(c, {
-              model: 'platform' as AttributionModel,
-              config: {
-                attribution_window_days: attributionWindowDays,
-                time_decay_half_life_days: timeDecayHalfLifeDays,
-                identity_stitching_enabled: useIdentityStitching
-              },
-              data_quality: {
-                quality: 'platform_reported' as DataQuality,
-                warnings: ['no_connector_conversions', 'using_platform_conversions'] as DataWarning[],
-                event_count: 0,
-                conversion_count: 0,
-                fallback_source: 'ad_platforms',
-                conversion_source_setting: conversionSource
-              },
-              attributions: allCampaigns,
-              summary: {
-                total_conversions: totalConversions,
-                total_revenue: totalRevenue,
-                avg_path_length: 0,
-                avg_days_to_convert: 0,
-                identified_users: 0,
-                anonymous_sessions: 0
-              }
-            });
-          }
-
-          // We have connector conversions - try to get tracked events for email hash matching
-          let trackedEvents: any[] = [];
-          const tagMapping = await c.env.DB.prepare(`
-            SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-          `).bind(orgId).first<{ short_tag: string }>();
-
-          if (tagMapping) {
-            try {
-              const params = new URLSearchParams();
-              params.append('org_tag', `eq.${tagMapping.short_tag}`);
-              params.append('event_timestamp', `gte.${dateFrom}T00:00:00Z`);
-              params.append('event_timestamp', `lte.${dateTo}T23:59:59Z`);
-              params.append('select', 'user_email_hash,utm_source,utm_medium,utm_campaign,event_timestamp');
-              params.append('order', 'event_timestamp.desc');
-              params.append('limit', '10000');
-
-              trackedEvents = await supabase.queryWithSchema<any[]>(
-                `events?${params.toString()}`,
-                'events',
-                { method: 'GET' }
-              ) || [];
-              console.log(`[Attribution] Found ${trackedEvents.length} tracked events for email hash matching`);
-            } catch (err) {
-              console.warn('[Attribution] Failed to fetch tracked events for email matching:', err);
-            }
-          }
-
-          // Attribute connector conversions
-          const { attributions, summary } = attributeConnectorConversions(connectorConversions, trackedEvents);
-
-          // Determine data quality based on attribution methods used
-          const hasTrackedEvents = trackedEvents.length > 0;
-          const dataQuality: DataQuality = hasTrackedEvents && summary.attributed_count > 0 ? 'verified' : 'connector_only';
-          const warnings: DataWarning[] = [];
-
-          if (summary.unattributed_count > 0 && summary.unattributed_count === summary.total_conversions) {
-            warnings.push('no_events');  // All conversions unattributed
-          }
-
-          console.log(`[Attribution] Connector attribution complete: ${summary.total_conversions} conversions, ${summary.attributed_count} attributed, quality=${dataQuality}`);
-
-          return success(c, {
-            model: model,  // Use requested model (though connector doesn't use multi-touch)
-            config: {
-              attribution_window_days: attributionWindowDays,
-              time_decay_half_life_days: timeDecayHalfLifeDays,
-              identity_stitching_enabled: useIdentityStitching
-            },
-            data_quality: {
-              quality: dataQuality,
-              warnings,
-              event_count: trackedEvents.length,
-              conversion_count: summary.total_conversions,
-              fallback_source: 'connectors',
-              conversion_source_setting: conversionSource
-            },
-            attributions: attributions.map(a => ({
-              utm_source: a.utm_source,
-              utm_medium: a.utm_medium,
-              utm_campaign: a.utm_campaign,
-              touchpoints: a.touchpoints,
-              conversions_in_path: a.conversions_in_path,
-              attributed_conversions: a.attributed_conversions,
-              attributed_revenue: a.attributed_revenue,
-              avg_position_in_path: a.avg_position_in_path,
-              // Include attribution method for transparency
-              attribution_method: a.attribution_method
-            })),
-            summary: {
-              total_conversions: summary.total_conversions,
-              total_revenue: summary.total_revenue,
-              avg_path_length: 0,
-              avg_days_to_convert: 0,
-              identified_users: summary.attributed_count,  // Use attributed as "identified"
-              anonymous_sessions: summary.unattributed_count
-            }
-          });
-        }
-      } catch (err) {
-        console.error('[Attribution] Error in connectors mode:', err);
-        // Fall through to standard flow
+    return success(c, {
+      model: 'platform' as AttributionModel,
+      config: {
+        attribution_window_days: attributionWindowDays,
+        time_decay_half_life_days: timeDecayHalfLifeDays,
+        identity_stitching_enabled: useIdentityStitching
+      },
+      data_quality: {
+        quality: 'platform_reported' as DataQuality,
+        warnings,
+        event_count: 0,
+        conversion_count: 0,
+        fallback_source: 'ad_platforms',
+        conversion_source_setting: conversionSource === 'all' ? settingsSource : conversionSource
+      },
+      attributions: fallback.attributions,
+      summary: {
+        total_conversions: fallback.summary.total_conversions,
+        total_revenue: fallback.summary.total_revenue,
+        avg_path_length: 0,
+        avg_days_to_convert: 0,
+        identified_users: 0,
+        anonymous_sessions: 0
       }
-    }
-
-    // Get org tag for querying events
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    console.log(`[Attribution] orgId=${orgId}, tagMapping=${tagMapping?.short_tag || 'NONE'}, conversionSource=${conversionSource}`);
-
-    // Helper function to build platform fallback attributions
-    // Uses platform-specific adapters with correct schema/table names
-    const buildPlatformFallback = async (supabase: SupabaseClient, dateRange?: { start: string; end: string }): Promise<{
-      attributions: any[];
-      summary: { total_conversions: number; total_revenue: number };
-    }> => {
-      try {
-        // Get active platform connections
-        const connections = await c.env.DB.prepare(`
-          SELECT DISTINCT platform FROM platform_connections
-          WHERE organization_id = ? AND is_active = 1
-        `).bind(orgId).all<{ platform: string }>();
-
-        const platforms = connections.results?.map(r => r.platform) || [];
-        console.log(`[Attribution Fallback] orgId=${orgId}, platforms=${JSON.stringify(platforms)}`);
-        if (platforms.length === 0) {
-          console.log(`[Attribution Fallback] No platforms connected`);
-          return { attributions: [], summary: { total_conversions: 0, total_revenue: 0 } };
-        }
-
-        // Build date range for queries (default: last 30 days)
-        const effectiveDateRange = dateRange || {
-          start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-          end: new Date().toISOString().split('T')[0]
-        };
-
-        // Fetch campaign data from each platform using correct adapters
-        const allCampaigns: any[] = [];
-        let totalConversions = 0;
-        let totalRevenue = 0;
-
-        for (const platform of platforms) {
-          try {
-            if (platform === 'google') {
-              // Use GoogleAdsSupabaseAdapter with google_ads schema
-              const adapter = new GoogleAdsSupabaseAdapter(supabase);
-              const campaigns = await adapter.getCampaignsWithMetrics(orgId, effectiveDateRange);
-
-              for (const campaign of campaigns) {
-                const conversions = campaign.metrics.conversions || 0;
-                const revenue = (campaign.metrics.conversion_value_cents || 0) / 100;
-
-                allCampaigns.push({
-                  utm_source: 'google',
-                  utm_medium: 'cpc',
-                  utm_campaign: campaign.campaign_name,
-                  touchpoints: 0,
-                  conversions_in_path: 0,
-                  attributed_conversions: conversions,
-                  attributed_revenue: revenue,
-                  avg_position_in_path: 0
-                });
-
-                totalConversions += conversions;
-                totalRevenue += revenue;
-              }
-            } else if (platform === 'facebook') {
-              // Use FacebookSupabaseAdapter with facebook_ads schema
-              const adapter = new FacebookSupabaseAdapter(supabase);
-              const campaigns = await adapter.getCampaignsWithMetrics(orgId, effectiveDateRange);
-
-              for (const campaign of campaigns) {
-                const conversions = campaign.metrics.conversions || 0;
-                // Facebook adapter doesn't include conversion_value_cents in aggregated metrics
-                const revenue = ((campaign.metrics as any).conversion_value_cents || 0) / 100;
-
-                allCampaigns.push({
-                  utm_source: 'facebook',
-                  utm_medium: 'paid',
-                  utm_campaign: campaign.campaign_name,
-                  touchpoints: 0,
-                  conversions_in_path: 0,
-                  attributed_conversions: conversions,
-                  attributed_revenue: revenue,
-                  avg_position_in_path: 0
-                });
-
-                totalConversions += conversions;
-                totalRevenue += revenue;
-              }
-            } else if (platform === 'tiktok') {
-              // Use TikTokAdsSupabaseAdapter with tiktok_ads schema
-              const adapter = new TikTokAdsSupabaseAdapter(supabase);
-              const campaigns = await adapter.getCampaigns(orgId);
-              const metrics = await adapter.getCampaignDailyMetrics(orgId, effectiveDateRange);
-
-              // Aggregate metrics by campaign
-              const metricsByCampaign: Record<string, { conversions: number; revenue: number }> = {};
-              for (const m of metrics) {
-                const ref = (m as any).campaign_ref;
-                if (!metricsByCampaign[ref]) {
-                  metricsByCampaign[ref] = { conversions: 0, revenue: 0 };
-                }
-                metricsByCampaign[ref].conversions += m.conversions || 0;
-                metricsByCampaign[ref].revenue += (m.conversion_value_cents || 0) / 100;
-              }
-
-              for (const campaign of campaigns) {
-                const campaignMetrics = metricsByCampaign[campaign.id] || { conversions: 0, revenue: 0 };
-
-                allCampaigns.push({
-                  utm_source: 'tiktok',
-                  utm_medium: 'paid',
-                  utm_campaign: campaign.campaign_name,
-                  touchpoints: 0,
-                  conversions_in_path: 0,
-                  attributed_conversions: campaignMetrics.conversions,
-                  attributed_revenue: campaignMetrics.revenue,
-                  avg_position_in_path: 0
-                });
-
-                totalConversions += campaignMetrics.conversions;
-                totalRevenue += campaignMetrics.revenue;
-              }
-            }
-          } catch (err) {
-            console.warn(`Failed to fetch ${platform} campaigns for fallback:`, err);
-          }
-        }
-
-        // Sort by attributed_conversions descending
-        allCampaigns.sort((a, b) => b.attributed_conversions - a.attributed_conversions);
-
-        console.log(`[Attribution Fallback] Returning ${allCampaigns.length} campaigns, ${totalConversions} conversions`);
-        return {
-          attributions: allCampaigns,
-          summary: { total_conversions: totalConversions, total_revenue: totalRevenue }
-        };
-      } catch (err) {
-        console.error('[Attribution Fallback] Error:', err);
-        return { attributions: [], summary: { total_conversions: 0, total_revenue: 0 } };
-      }
-    };
-
-    if (!tagMapping) {
-      // No tag mapping = can't query events, fall back to platform data
-      try {
-        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-        if (supabaseKey) {
-          const supabase = new SupabaseClient({
-            url: c.env.SUPABASE_URL,
-            secretKey: supabaseKey
-          });
-          const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
-
-          return success(c, {
-            model: 'platform' as AttributionModel,
-            config: {
-              attribution_window_days: attributionWindowDays,
-              time_decay_half_life_days: timeDecayHalfLifeDays,
-              identity_stitching_enabled: useIdentityStitching
-            },
-            data_quality: {
-              quality: 'platform_reported' as DataQuality,
-              warnings: ['no_events', 'using_platform_conversions'] as DataWarning[],
-              event_count: 0,
-              conversion_count: 0,
-              fallback_source: 'ad_platforms',
-              conversion_source_setting: conversionSource
-            },
-            attributions: fallback.attributions,
-            summary: {
-              total_conversions: fallback.summary.total_conversions,
-              total_revenue: fallback.summary.total_revenue,
-              avg_path_length: 0,
-              avg_days_to_convert: 0,
-              identified_users: 0,
-              anonymous_sessions: 0
-            }
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to fetch platform fallback:', err);
-      }
-
-      return success(c, {
-        model: 'platform' as AttributionModel,
-        config: {
-          attribution_window_days: attributionWindowDays,
-          time_decay_half_life_days: timeDecayHalfLifeDays,
-          identity_stitching_enabled: useIdentityStitching
-        },
-        data_quality: {
-          quality: 'platform_reported' as DataQuality,
-          warnings: ['no_events', 'no_conversion_source'] as DataWarning[],
-          event_count: 0,
-          conversion_count: 0,
-          fallback_source: null,
-          conversion_source_setting: conversionSource
-        },
-        attributions: [],
-        summary: {
-          total_conversions: 0,
-          total_revenue: 0,
-          avg_path_length: 0,
-          avg_days_to_convert: 0,
-          identified_users: 0,
-          anonymous_sessions: 0
-        }
-      });
-    }
-
-    try {
-      // Initialize Supabase
-      const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-      if (!supabaseKey) {
-        return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
-      }
-
-      const supabase = new SupabaseClient({
-        url: c.env.SUPABASE_URL,
-        secretKey: supabaseKey
-      });
-
-      // Build identity map if stitching is enabled
-      const identityMap = new Map<string, string[]>();
-      if (useIdentityStitching) {
-        const identities = await c.env.DB.prepare(`
-          SELECT user_id, anonymous_id FROM identity_mappings
-          WHERE organization_id = ?
-        `).bind(orgId).all<{ user_id: string; anonymous_id: string }>();
-
-        // Group anonymous_ids by user_id
-        (identities.results || []).forEach(row => {
-          if (!identityMap.has(row.user_id)) {
-            identityMap.set(row.user_id, []);
-          }
-          identityMap.get(row.user_id)!.push(row.anonymous_id);
-        });
-      }
-
-      // Query conversion attribution data from Supabase
-      const params = new URLSearchParams();
-      params.append('org_tag', `eq.${tagMapping.short_tag}`);
-      params.append('conversion_timestamp', `gte.${dateFrom}T00:00:00Z`);
-      params.append('conversion_timestamp', `lte.${dateTo}T23:59:59Z`);
-      params.append('limit', '10000');
-
-      const events = await supabase.queryWithSchema<any[]>(
-        `conversion_attribution?${params.toString()}`,
-        'events',
-        { method: 'GET' }
-      ) || [];
-
-      const eventCount = events.length;
-      console.log(`[Attribution] Events query returned ${eventCount} events`);
-
-      // Check for no events scenario - fall back to platform data
-      if (eventCount === 0) {
-        console.log(`[Attribution] No events found, calling buildPlatformFallback`);
-        const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
-        return success(c, {
-          model: 'platform' as AttributionModel,
-          config: {
-            attribution_window_days: attributionWindowDays,
-            time_decay_half_life_days: timeDecayHalfLifeDays,
-            identity_stitching_enabled: useIdentityStitching
-          },
-          data_quality: {
-            quality: 'platform_reported' as DataQuality,
-            warnings: ['no_events', 'using_platform_conversions'] as DataWarning[],
-            event_count: 0,
-            conversion_count: 0,
-            fallback_source: 'ad_platforms',
-            conversion_source_setting: conversionSource
-          },
-          attributions: fallback.attributions,
-          summary: {
-            total_conversions: fallback.summary.total_conversions,
-            total_revenue: fallback.summary.total_revenue,
-            avg_path_length: 0,
-            avg_days_to_convert: 0,
-            identified_users: 0,
-            anonymous_sessions: 0
-          }
-        });
-      }
-
-      // Build conversion paths with identity stitching
-      // Note: nonConversionPaths reserved for future data-driven attribution
-      const { conversionPaths } = buildConversionPaths(
-        events,
-        identityMap,
-        attributionWindowDays
-      );
-
-      const conversionCount = conversionPaths.length;
-
-      // Check for no conversions scenario - events exist but no conversion events tracked
-      // This is the "estimated" quality - we have journey data but using platform conversion counts
-      if (conversionCount === 0) {
-        const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
-        return success(c, {
-          model: 'platform' as AttributionModel,  // Platform model since we're using platform conversions
-          config: {
-            attribution_window_days: attributionWindowDays,
-            time_decay_half_life_days: timeDecayHalfLifeDays,
-            identity_stitching_enabled: useIdentityStitching
-          },
-          data_quality: {
-            quality: 'estimated' as DataQuality,
-            warnings: ['no_tracked_conversions', 'using_platform_conversions'] as DataWarning[],
-            event_count: eventCount,
-            conversion_count: 0,
-            fallback_source: 'ad_platforms',
-            conversion_source_setting: conversionSource
-          },
-          attributions: fallback.attributions,
-          summary: {
-            total_conversions: fallback.summary.total_conversions,
-            total_revenue: fallback.summary.total_revenue,
-            avg_path_length: 0,
-            avg_days_to_convert: 0,
-            identified_users: 0,
-            anonymous_sessions: eventCount // Use event count as proxy for sessions
-          }
-        });
-      }
-
-      // Determine data quality based on event/conversion counts
-      // 'tracked' = using tag-tracked conversions (good)
-      // 'verified' = using connector revenue + tracked events (best) - reserved for Phase 3
-      let dataQuality: DataQualityInfo = {
-        quality: 'tracked',  // Using tracked conversion events
-        warnings: [],
-        event_count: eventCount,
-        conversion_count: conversionCount,
-        fallback_source: null,
-        conversion_source_setting: conversionSource
-      };
-
-      // Check for insufficient events (less than 10 is unreliable)
-      if (eventCount < 10) {
-        dataQuality.warnings.push('insufficient_events');
-      }
-
-      // Calculate attribution for each conversion path
-      const attributionResults = conversionPaths.map(path =>
-        calculateAttribution(path, config)
-      );
-
-      // Aggregate by channel
-      const attributions = aggregateAttributionByChannel(attributionResults);
-
-      // Calculate summary stats
-      const totalConversions = conversionPaths.length;
-      const totalRevenue = conversionPaths.reduce((sum, p) => sum + p.conversion_value, 0);
-      const avgPathLength = totalConversions > 0
-        ? attributionResults.reduce((sum, r) => sum + r.path_length, 0) / totalConversions
-        : 0;
-      const avgDaysToConvert = totalConversions > 0
-        ? attributionResults.reduce((sum, r) => sum + r.days_to_convert, 0) / totalConversions
-        : 0;
-
-      // Count identified vs anonymous
-      const identifiedUsers = new Set(
-        conversionPaths.filter(p => p.user_id && identityMap.has(p.user_id)).map(p => p.user_id)
-      ).size;
-      const anonymousSessions = conversionPaths.filter(p => !p.user_id || !identityMap.has(p.user_id!)).length;
-
-      return success(c, {
-        model,
-        config: {
-          attribution_window_days: attributionWindowDays,
-          time_decay_half_life_days: timeDecayHalfLifeDays,
-          identity_stitching_enabled: useIdentityStitching
-        },
-        data_quality: dataQuality,
-        attributions,
-        summary: {
-          total_conversions: totalConversions,
-          total_revenue: totalRevenue,
-          avg_path_length: Math.round(avgPathLength * 10) / 10,
-          avg_days_to_convert: Math.round(avgDaysToConvert * 10) / 10,
-          identified_users: identifiedUsers,
-          anonymous_sessions: anonymousSessions
-        }
-      });
-    } catch (err: any) {
-      console.error("[Attribution] Query error in main try block:", err.message || err);
-
-      // Try platform fallback on error (e.g., events table doesn't exist)
-      console.log("[Attribution] Attempting platform fallback from catch block...");
-      try {
-        const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-        if (supabaseKey) {
-          const supabase = new SupabaseClient({
-            url: c.env.SUPABASE_URL,
-            secretKey: supabaseKey
-          });
-          const fallback = await buildPlatformFallback(supabase, { start: dateFrom, end: dateTo });
-
-          return success(c, {
-            model: 'platform' as AttributionModel,
-            config: {
-              attribution_window_days: attributionWindowDays,
-              time_decay_half_life_days: timeDecayHalfLifeDays,
-              identity_stitching_enabled: useIdentityStitching
-            },
-            data_quality: {
-              quality: 'platform_reported' as DataQuality,
-              warnings: ['no_events', 'using_platform_conversions'] as DataWarning[],
-              event_count: 0,
-              conversion_count: 0,
-              fallback_source: 'ad_platforms',
-              conversion_source_setting: conversionSource
-            },
-            attributions: fallback.attributions,
-            summary: {
-              total_conversions: fallback.summary.total_conversions,
-              total_revenue: fallback.summary.total_revenue,
-              avg_path_length: 0,
-              avg_days_to_convert: 0,
-              identified_users: 0,
-              anonymous_sessions: 0
-            }
-          });
-        }
-      } catch (fallbackErr) {
-        console.warn('Platform fallback also failed:', fallbackErr);
-      }
-
-      // Return empty data only if fallback also fails
-      return success(c, {
-        model: 'platform' as AttributionModel,
-        config: {
-          attribution_window_days: attributionWindowDays,
-          time_decay_half_life_days: timeDecayHalfLifeDays,
-          identity_stitching_enabled: useIdentityStitching
-        },
-        data_quality: {
-          quality: 'platform_reported' as DataQuality,
-          warnings: ['no_events'] as DataWarning[],
-          event_count: 0,
-          conversion_count: 0,
-          fallback_source: null,
-          conversion_source_setting: conversionSource
-        },
-        attributions: [],
-        summary: {
-          total_conversions: 0,
-          total_revenue: 0,
-          avg_path_length: 0,
-          avg_days_to_convert: 0,
-          identified_users: 0,
-          anonymous_sessions: 0
-        }
-      });
-    }
+    });
   }
 }
 
@@ -1654,12 +752,15 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
  * GET /v1/analytics/attribution/compare
  *
  * Compare attribution across multiple models side-by-side.
+ *
+ * NOTE: Currently returns platform-reported data. Model comparison
+ * requires conversion_attribution table to be populated in D1.
  */
 export class GetAttributionComparison extends OpenAPIRoute {
   schema = {
     tags: ["Analytics"],
     summary: "Compare attribution models",
-    description: "Run multiple attribution models and compare results side-by-side",
+    description: "Run multiple attribution models and compare results side-by-side. NOTE: Currently returns platform data only.",
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
@@ -1714,99 +815,38 @@ export class GetAttributionComparison extends OpenAPIRoute {
       return error(c, "NOT_FOUND", "Organization not found", 404);
     }
 
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
+    // Get ANALYTICS_DB binding
+    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
 
-    if (!tagMapping) {
-      return success(c, {
-        models: models.map(model => ({ model, attributions: [] })),
-        summary: { total_conversions: 0, total_revenue: 0 }
-      });
-    }
+    // TODO: When conversion_attribution table is available in D1,
+    // implement actual model comparison logic here.
+    // For now, return the same platform data for all models.
 
-    try {
-      const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-      if (!supabaseKey) {
-        return error(c, "CONFIGURATION_ERROR", "Supabase not configured", 500);
+    console.log(`[Attribution Compare] Returning platform data (D1 conversion_attribution not yet populated)`);
+
+    const fallback = await buildPlatformFallbackD1(
+      analyticsDb,
+      c.env.DB,
+      orgId,
+      { start: dateFrom, end: dateTo }
+    );
+
+    // Return same data for all models (platform-reported doesn't support multi-touch)
+    const modelResults = models.map(model => ({
+      model,
+      attributions: fallback.attributions.slice(0, 10).map(a => ({
+        utm_source: a.utm_source,
+        attributed_conversions: Math.round(a.attributed_conversions * 100) / 100,
+        attributed_revenue: Math.round(a.attributed_revenue * 100) / 100
+      }))
+    }));
+
+    return success(c, {
+      models: modelResults,
+      summary: {
+        total_conversions: fallback.summary.total_conversions,
+        total_revenue: Math.round(fallback.summary.total_revenue * 100) / 100
       }
-
-      const supabase = new SupabaseClient({
-        url: c.env.SUPABASE_URL,
-        secretKey: supabaseKey
-      });
-
-      // Get identity map
-      const identities = await c.env.DB.prepare(`
-        SELECT user_id, anonymous_id FROM identity_mappings WHERE organization_id = ?
-      `).bind(orgId).all<{ user_id: string; anonymous_id: string }>();
-
-      const identityMap = new Map<string, string[]>();
-      (identities.results || []).forEach(row => {
-        if (!identityMap.has(row.user_id)) {
-          identityMap.set(row.user_id, []);
-        }
-        identityMap.get(row.user_id)!.push(row.anonymous_id);
-      });
-
-      // Query conversion attribution data
-      const params = new URLSearchParams();
-      params.append('org_tag', `eq.${tagMapping.short_tag}`);
-      params.append('conversion_timestamp', `gte.${dateFrom}T00:00:00Z`);
-      params.append('conversion_timestamp', `lte.${dateTo}T23:59:59Z`);
-      params.append('limit', '10000');
-
-      const events = await supabase.queryWithSchema<any[]>(
-        `conversion_attribution?${params.toString()}`,
-        'events',
-        { method: 'GET' }
-      ) || [];
-
-      const { conversionPaths } = buildConversionPaths(
-        events,
-        identityMap,
-        org.attribution_window_days
-      );
-
-      // Calculate attribution for each model
-      const modelResults = models.map(model => {
-        const config: AttributionConfig = {
-          model,
-          attribution_window_days: org.attribution_window_days,
-          time_decay_half_life_days: org.time_decay_half_life_days
-        };
-
-        const attributionResults = conversionPaths.map(path =>
-          calculateAttribution(path, config)
-        );
-
-        const attributions = aggregateAttributionByChannel(attributionResults)
-          .slice(0, 10) // Top 10 channels
-          .map(a => ({
-            utm_source: a.utm_source,
-            attributed_conversions: Math.round(a.attributed_conversions * 100) / 100,
-            attributed_revenue: Math.round(a.attributed_revenue * 100) / 100
-          }));
-
-        return { model, attributions };
-      });
-
-      const totalConversions = conversionPaths.length;
-      const totalRevenue = conversionPaths.reduce((sum, p) => sum + p.conversion_value, 0);
-
-      return success(c, {
-        models: modelResults,
-        summary: {
-          total_conversions: totalConversions,
-          total_revenue: Math.round(totalRevenue * 100) / 100
-        }
-      });
-    } catch (err: any) {
-      console.error("Attribution comparison error:", err);
-      return success(c, {
-        models: models.map(model => ({ model, attributions: [] })),
-        summary: { total_conversions: 0, total_revenue: 0 }
-      });
-    }
+    });
   }
 }

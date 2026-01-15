@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
+import { getDBSession } from "../../../utils/db-session";
 
 /**
  * DEPRECATED: GetPlatformData class removed - broken table naming
@@ -69,7 +70,8 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     const endDate = c.req.query("end_date");
 
     // Check if org has any active platform connections
-    const activeConnections = await c.env.DB.prepare(`
+    const session = getDBSession(c.env.DB);
+    const activeConnections = await session.prepare(`
       SELECT DISTINCT platform FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
     `).bind(orgId).all<{ platform: string }>();
@@ -134,7 +136,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       };
 
       // Get conversion source setting
-      const conversionSettings = await c.env.DB.prepare(`
+      const conversionSettings = await session.prepare(`
         SELECT conversion_source FROM ai_optimization_settings WHERE org_id = ?
       `).bind(orgId).first<{ conversion_source: string }>();
       const conversionSource = conversionSettings?.conversion_source || 'tag';

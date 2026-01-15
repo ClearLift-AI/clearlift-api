@@ -1,44 +1,12 @@
 /**
  * Entity Tree Builder
  *
- * Builds hierarchical tree of ad entities from D1 ANALYTICS_DB
- * Normalizes platform differences (Meta adset = Google ad_group)
+ * Builds hierarchical tree of ad entities from D1 ANALYTICS_DB.
+ * Normalizes platform differences (Meta adset = Google ad_group).
+ * Uses Sessions API for read replication support.
  */
 
-// D1Database type from Cloudflare Workers (matches worker-configuration.d.ts)
-type D1Database = {
-  prepare(query: string): D1PreparedStatement;
-  dump(): Promise<ArrayBuffer>;
-  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
-  exec(query: string): Promise<D1ExecResult>;
-};
-
-interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
-  first<T = unknown>(colName?: string): Promise<T | null>;
-  run(): Promise<D1Result>;
-  all<T = unknown>(): Promise<D1Result<T>>;
-  raw<T = unknown[]>(): Promise<T[]>;
-}
-
-interface D1Result<T = unknown> {
-  results: T[];
-  success: boolean;
-  error?: string;
-  meta?: {
-    changed_db: boolean;
-    changes: number;
-    last_row_id: number;
-    duration: number;
-    rows_read: number;
-    rows_written: number;
-  };
-}
-
-interface D1ExecResult {
-  count: number;
-  duration: number;
-}
+// D1 types (D1Database, D1DatabaseSession, etc.) come from worker-configuration.d.ts
 
 export type Platform = 'google' | 'facebook' | 'tiktok';
 export type EntityLevel = 'ad' | 'adset' | 'campaign' | 'account';
@@ -69,7 +37,12 @@ export interface EntityTree {
 }
 
 export class EntityTreeBuilder {
-  constructor(private db: D1Database) {}
+  private session: D1DatabaseSession;
+
+  constructor(db: D1Database) {
+    // Use Sessions API for read replication support
+    this.session = db.withSession('first-unconstrained');
+  }
 
   /**
    * Build complete entity tree for an organization
@@ -108,7 +81,7 @@ export class EntityTreeBuilder {
     const accounts = new Map<string, AccountEntity>();
 
     // Fetch all campaigns from D1
-    const campaignsResult = await this.db.prepare(`
+    const campaignsResult = await this.session.prepare(`
       SELECT id, customer_id, campaign_id, campaign_name, campaign_status
       FROM google_campaigns
       WHERE organization_id = ?
@@ -122,7 +95,7 @@ export class EntityTreeBuilder {
     const campaigns = campaignsResult.results || [];
 
     // Fetch all ad groups from D1
-    const adGroupsResult = await this.db.prepare(`
+    const adGroupsResult = await this.session.prepare(`
       SELECT id, customer_id, campaign_id, ad_group_id, ad_group_name, ad_group_status
       FROM google_ad_groups
       WHERE organization_id = ?
@@ -137,7 +110,7 @@ export class EntityTreeBuilder {
     const adGroups = adGroupsResult.results || [];
 
     // Fetch all ads from D1
-    const adsResult = await this.db.prepare(`
+    const adsResult = await this.session.prepare(`
       SELECT id, customer_id, campaign_id, ad_group_id, ad_id, ad_name, ad_status
       FROM google_ads
       WHERE organization_id = ?
@@ -152,11 +125,31 @@ export class EntityTreeBuilder {
     }>();
     const ads = adsResult.results || [];
 
-    // Group by customer_id (account)
-    const customerIds = new Set<string>();
-    for (const c of campaigns) customerIds.add(c.customer_id);
+    // Pre-index data with Maps for O(1) lookups instead of O(n) filter operations
+    // This changes complexity from O(n³) to O(n) where n = total entities
+    const campaignsByCustomer = new Map<string, typeof campaigns>();
+    for (const c of campaigns) {
+      const list = campaignsByCustomer.get(c.customer_id) || [];
+      list.push(c);
+      campaignsByCustomer.set(c.customer_id, list);
+    }
 
-    for (const customerId of customerIds) {
+    const adGroupsByCampaign = new Map<string, typeof adGroups>();
+    for (const ag of adGroups) {
+      const list = adGroupsByCampaign.get(ag.campaign_id) || [];
+      list.push(ag);
+      adGroupsByCampaign.set(ag.campaign_id, list);
+    }
+
+    const adsByAdGroup = new Map<string, typeof ads>();
+    for (const a of ads) {
+      const list = adsByAdGroup.get(a.ad_group_id) || [];
+      list.push(a);
+      adsByAdGroup.set(a.ad_group_id, list);
+    }
+
+    // Get unique customer IDs from the index keys
+    for (const customerId of campaignsByCustomer.keys()) {
       const accountKey = `google_${customerId}`;
 
       // Create account entity
@@ -171,8 +164,8 @@ export class EntityTreeBuilder {
         children: []
       };
 
-      // Build campaign entities
-      const accountCampaigns = campaigns.filter(c => c.customer_id === customerId);
+      // Build campaign entities (O(1) Map lookup)
+      const accountCampaigns = campaignsByCustomer.get(customerId) || [];
       for (const campaign of accountCampaigns) {
         const campaignEntity: Entity = {
           id: campaign.id,
@@ -186,8 +179,8 @@ export class EntityTreeBuilder {
           children: []
         };
 
-        // Build ad group entities (normalized as 'adset')
-        const campaignAdGroups = adGroups.filter(ag => ag.campaign_id === campaign.campaign_id);
+        // Build ad group entities (O(1) Map lookup, normalized as 'adset')
+        const campaignAdGroups = adGroupsByCampaign.get(campaign.campaign_id) || [];
         for (const adGroup of campaignAdGroups) {
           const adGroupEntity: Entity = {
             id: adGroup.id,
@@ -201,8 +194,8 @@ export class EntityTreeBuilder {
             children: []
           };
 
-          // Build ad entities
-          const groupAds = ads.filter(a => a.ad_group_id === adGroup.ad_group_id);
+          // Build ad entities (O(1) Map lookup)
+          const groupAds = adsByAdGroup.get(adGroup.ad_group_id) || [];
           for (const ad of groupAds) {
             const adEntity: Entity = {
               id: ad.id,
@@ -237,7 +230,7 @@ export class EntityTreeBuilder {
     const accounts = new Map<string, AccountEntity>();
 
     // Fetch all campaigns from D1
-    const campaignsResult = await this.db.prepare(`
+    const campaignsResult = await this.session.prepare(`
       SELECT id, account_id, campaign_id, campaign_name as name, campaign_status as status
       FROM facebook_campaigns
       WHERE organization_id = ?
@@ -254,7 +247,7 @@ export class EntityTreeBuilder {
     }));
 
     // Fetch all ad sets from D1
-    const adSetsResult = await this.db.prepare(`
+    const adSetsResult = await this.session.prepare(`
       SELECT id, account_id, campaign_id, ad_set_id as adset_id, ad_set_name as name, ad_set_status as status
       FROM facebook_ad_sets
       WHERE organization_id = ?
@@ -272,7 +265,7 @@ export class EntityTreeBuilder {
     }));
 
     // Fetch all ads from D1
-    const adsResult = await this.db.prepare(`
+    const adsResult = await this.session.prepare(`
       SELECT id, account_id, campaign_id, ad_set_id as adset_id, ad_id, ad_name as name, ad_status as status
       FROM facebook_ads
       WHERE organization_id = ?
@@ -290,11 +283,31 @@ export class EntityTreeBuilder {
       ad_account_id: a.account_id
     }));
 
-    // Group by ad_account_id
-    const adAccountIds = new Set<string>();
-    for (const c of campaigns) adAccountIds.add(c.ad_account_id);
+    // Pre-index data with Maps for O(1) lookups instead of O(n) filter operations
+    // This changes complexity from O(n³) to O(n) where n = total entities
+    const campaignsByAccount = new Map<string, typeof campaigns>();
+    for (const c of campaigns) {
+      const list = campaignsByAccount.get(c.ad_account_id) || [];
+      list.push(c);
+      campaignsByAccount.set(c.ad_account_id, list);
+    }
 
-    for (const adAccountId of adAccountIds) {
+    const adSetsByCampaign = new Map<string, typeof adSets>();
+    for (const as of adSets) {
+      const list = adSetsByCampaign.get(as.campaign_id) || [];
+      list.push(as);
+      adSetsByCampaign.set(as.campaign_id, list);
+    }
+
+    const adsByAdSet = new Map<string, typeof ads>();
+    for (const a of ads) {
+      const list = adsByAdSet.get(a.adset_id) || [];
+      list.push(a);
+      adsByAdSet.set(a.adset_id, list);
+    }
+
+    // Get unique account IDs from the index keys
+    for (const adAccountId of campaignsByAccount.keys()) {
       const accountKey = `facebook_${adAccountId}`;
 
       // Create account entity
@@ -309,8 +322,8 @@ export class EntityTreeBuilder {
         children: []
       };
 
-      // Build campaign entities
-      const accountCampaigns = campaigns.filter(c => c.ad_account_id === adAccountId);
+      // Build campaign entities (O(1) Map lookup)
+      const accountCampaigns = campaignsByAccount.get(adAccountId) || [];
       for (const campaign of accountCampaigns) {
         const campaignEntity: Entity = {
           id: campaign.id,
@@ -324,8 +337,8 @@ export class EntityTreeBuilder {
           children: []
         };
 
-        // Build adset entities
-        const campaignAdSets = adSets.filter(as => as.campaign_id === campaign.campaign_id);
+        // Build adset entities (O(1) Map lookup)
+        const campaignAdSets = adSetsByCampaign.get(campaign.campaign_id) || [];
         for (const adSet of campaignAdSets) {
           const adSetEntity: Entity = {
             id: adSet.id,
@@ -339,8 +352,8 @@ export class EntityTreeBuilder {
             children: []
           };
 
-          // Build ad entities
-          const setAds = ads.filter(a => a.adset_id === adSet.adset_id);
+          // Build ad entities (O(1) Map lookup)
+          const setAds = adsByAdSet.get(adSet.adset_id) || [];
           for (const ad of setAds) {
             const adEntity: Entity = {
               id: ad.id,

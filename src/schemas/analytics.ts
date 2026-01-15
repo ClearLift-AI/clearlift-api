@@ -4,7 +4,7 @@ import { z } from "zod";
  * Hybrid Validation Schemas for Analytics Data
  *
  * These schemas validate minimal required fields while allowing
- * additional fields from Supabase to pass through unchanged.
+ * additional fields from D1/R2 SQL to pass through unchanged.
  * This approach provides:
  * - Type safety for core fields
  * - Flexibility for schema evolution
@@ -81,7 +81,7 @@ export const PlatformSummarySchema = z.object({
 // ============================================================================
 
 /**
- * Single conversion record from Supabase
+ * Single conversion record from D1/R2 SQL
  */
 export const ConversionRecordSchema = z.object({
   // Required fields

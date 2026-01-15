@@ -73,13 +73,19 @@ export interface OrganizationWithAttribution extends Organization {
 }
 
 export class D1Adapter {
-  constructor(private db: D1Database) {}
+  private session: D1DatabaseSession;
+
+  constructor(db: D1Database) {
+    // Use Sessions API for read replication support and sequential consistency
+    // 'first-unconstrained' allows first query to hit any replica
+    this.session = db.withSession('first-unconstrained');
+  }
 
   /**
    * Get user by ID
    */
   async getUser(userId: string): Promise<User | null> {
-    const result = await this.db
+    const result = await this.session
       .prepare("SELECT * FROM users WHERE id = ?")
       .bind(userId)
       .first<User>();
@@ -98,7 +104,7 @@ export class D1Adapter {
     const values = Object.values(updates);
     values.push(userId);
 
-    const result = await this.db
+    const result = await this.session
       .prepare(`UPDATE users SET ${fields} WHERE id = ?`)
       .bind(...values)
       .run();
@@ -110,7 +116,7 @@ export class D1Adapter {
    * Get user's organizations
    */
   async getUserOrganizations(userId: string): Promise<any[]> {
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT
           o.id,
@@ -145,7 +151,7 @@ export class D1Adapter {
    * Returns orgs with 'admin' role since admin has access to all
    */
   async getAllOrganizations(): Promise<any[]> {
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT
           o.id,
@@ -176,7 +182,7 @@ export class D1Adapter {
    * Get organization by ID
    */
   async getOrganization(orgId: string): Promise<Organization | null> {
-    const result = await this.db
+    const result = await this.session
       .prepare("SELECT * FROM organizations WHERE id = ?")
       .bind(orgId)
       .first<Organization>();
@@ -193,7 +199,7 @@ export class D1Adapter {
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgIdOrSlug);
 
     if (isUUID) {
-      const result = await this.db
+      const result = await this.session
         .prepare(
           "SELECT 1 FROM organization_members WHERE user_id = ? AND organization_id = ?"
         )
@@ -203,7 +209,7 @@ export class D1Adapter {
     }
 
     // Treat as slug - join with organizations table
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT 1 FROM organization_members om
         JOIN organizations o ON om.organization_id = o.id
@@ -223,7 +229,7 @@ export class D1Adapter {
 
     if (isUUID) {
       // Verify it exists
-      const exists = await this.db
+      const exists = await this.session
         .prepare("SELECT id FROM organizations WHERE id = ?")
         .bind(orgIdOrSlug)
         .first<{ id: string }>();
@@ -231,7 +237,7 @@ export class D1Adapter {
     }
 
     // Lookup by slug
-    const result = await this.db
+    const result = await this.session
       .prepare("SELECT id FROM organizations WHERE slug = ?")
       .bind(orgIdOrSlug)
       .first<{ id: string }>();
@@ -243,7 +249,7 @@ export class D1Adapter {
    * Get organization's tag mapping for DuckDB access
    */
   async getOrgTag(orgId: string): Promise<string | null> {
-    const result = await this.db
+    const result = await this.session
       .prepare(
         "SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1"
       )
@@ -264,13 +270,13 @@ export class D1Adapter {
     const orgId = crypto.randomUUID();
 
     // Start a batch to ensure atomicity
-    await this.db.batch([
-      this.db.prepare(`
+    await this.session.batch([
+      this.session.prepare(`
         INSERT INTO organizations (id, name, slug, created_at, updated_at)
         VALUES (?, ?, ?, datetime('now'), datetime('now'))
       `).bind(orgId, name, slug),
 
-      this.db.prepare(`
+      this.session.prepare(`
         INSERT INTO organization_members (organization_id, user_id, role, joined_at)
         VALUES (?, ?, 'owner', datetime('now'))
       `).bind(orgId, ownerId)
@@ -284,7 +290,7 @@ export class D1Adapter {
    * Get platform connections for organization
    */
   async getPlatformConnections(orgId: string): Promise<any[]> {
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT
           id,
@@ -311,7 +317,7 @@ export class D1Adapter {
    * Returns platform names (e.g., ['facebook', 'google'])
    */
   async getActiveConnections(orgId: string): Promise<string[]> {
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT DISTINCT platform FROM platform_connections
         WHERE organization_id = ? AND is_active = 1
@@ -326,7 +332,7 @@ export class D1Adapter {
    * Check if organization has an active connection for a specific platform
    */
   async hasActiveConnection(orgId: string, platform: string): Promise<boolean> {
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT 1 FROM platform_connections
         WHERE organization_id = ? AND platform = ? AND is_active = 1
@@ -350,7 +356,7 @@ export class D1Adapter {
   ): Promise<boolean> {
     const id = `${orgId}-${platform}-${accountId}`;
 
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         INSERT INTO platform_connections (
           id, organization_id, platform, account_id, account_name,
@@ -391,7 +397,7 @@ export class D1Adapter {
     const metadata = options.metadata ? JSON.stringify(options.metadata) : null;
 
     // Check if mapping already exists
-    const existing = await this.db
+    const existing = await this.session
       .prepare(`
         SELECT id FROM identity_mappings
         WHERE organization_id = ? AND anonymous_id = ? AND user_id = ?
@@ -401,7 +407,7 @@ export class D1Adapter {
 
     if (existing) {
       // Update existing mapping
-      await this.db
+      await this.session
         .prepare(`
           UPDATE identity_mappings
           SET identified_at = ?, source = ?, confidence = ?, metadata = ?, updated_at = datetime('now')
@@ -413,7 +419,7 @@ export class D1Adapter {
     }
 
     // Insert new mapping
-    await this.db
+    await this.session
       .prepare(`
         INSERT INTO identity_mappings (
           id, organization_id, anonymous_id, user_id, identified_at,
@@ -431,7 +437,7 @@ export class D1Adapter {
    */
   async getAnonymousIdsByUserId(orgId: string, userId: string): Promise<string[]> {
     // First check if this user_id has been merged into a canonical
-    const canonical = await this.db
+    const canonical = await this.session
       .prepare(`
         SELECT target_user_id FROM identity_merges
         WHERE organization_id = ? AND source_user_id = ?
@@ -443,7 +449,7 @@ export class D1Adapter {
     const effectiveUserId = canonical?.target_user_id || userId;
 
     // Get all anonymous_ids for this user_id (and any merged user_ids)
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT DISTINCT anonymous_id FROM identity_mappings
         WHERE organization_id = ? AND (
@@ -465,7 +471,7 @@ export class D1Adapter {
    * Get the user_id (or canonical user_id) for an anonymous_id
    */
   async getUserIdByAnonymousId(orgId: string, anonymousId: string): Promise<string | null> {
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT user_id, canonical_user_id FROM identity_mappings
         WHERE organization_id = ? AND anonymous_id = ?
@@ -487,7 +493,7 @@ export class D1Adapter {
     if (anonymousIds.length === 0) return [];
 
     const placeholders = anonymousIds.map(() => '?').join(',');
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT * FROM identity_mappings
         WHERE organization_id = ? AND anonymous_id IN (${placeholders})
@@ -512,7 +518,7 @@ export class D1Adapter {
     const id = crypto.randomUUID();
 
     // Create merge record
-    await this.db
+    await this.session
       .prepare(`
         INSERT INTO identity_merges (id, organization_id, source_user_id, target_user_id, merged_by, reason)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -521,7 +527,7 @@ export class D1Adapter {
       .run();
 
     // Update all identity mappings for source_user_id to point to target
-    await this.db
+    await this.session
       .prepare(`
         UPDATE identity_mappings
         SET canonical_user_id = ?, updated_at = datetime('now')
@@ -537,7 +543,7 @@ export class D1Adapter {
    * Get organization with attribution settings
    */
   async getOrganizationWithAttribution(orgId: string): Promise<OrganizationWithAttribution | null> {
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT
           id, name, slug, created_at, updated_at, settings, subscription_tier,
@@ -557,7 +563,7 @@ export class D1Adapter {
    * Get count of linked anonymous_ids for a user
    */
   async getLinkedIdentityCount(orgId: string, userId: string): Promise<number> {
-    const result = await this.db
+    const result = await this.session
       .prepare(`
         SELECT COUNT(DISTINCT anonymous_id) as count FROM identity_mappings
         WHERE organization_id = ? AND (user_id = ? OR canonical_user_id = ?)

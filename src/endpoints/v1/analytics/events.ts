@@ -14,7 +14,7 @@ export class GetEvents extends OpenAPIRoute {
   public schema = {
     tags: ["Analytics"],
     summary: "Get raw events",
-    description: "Fetches raw events from Supabase for a specific organization",
+    description: "Fetches raw events from R2 SQL for a specific organization",
     operationId: "get-events",
     security: [{ bearerAuth: [] }],
     request: {
@@ -57,7 +57,7 @@ export class GetEvents extends OpenAPIRoute {
     const lookback = c.req.query("lookback") || "24h";
     const limit = parseInt(c.req.query("limit") || "100");
 
-    // Cap limit at 500 for R2 SQL (it's slower than Supabase)
+    // Cap limit at 500 for R2 SQL (queries take 15-25 seconds)
     const cappedLimit = Math.min(limit, 500);
 
     // Look up the org_tag for this organization

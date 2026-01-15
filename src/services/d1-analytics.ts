@@ -2,44 +2,11 @@
  * D1 Analytics Service
  *
  * Service for reading analytics data from D1 ANALYTICS_DB.
- * Used in the dev environment where we use D1 instead of Supabase.
+ * Supports D1 Read Replication via Sessions API for global low-latency reads.
  */
 
-// D1Database type comes from worker-configuration.d.ts
-declare const D1Database: unique symbol;
-type D1Database = {
-  prepare(query: string): D1PreparedStatement;
-  dump(): Promise<ArrayBuffer>;
-  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
-  exec(query: string): Promise<D1ExecResult>;
-};
-
-interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
-  first<T = unknown>(colName?: string): Promise<T | null>;
-  run(): Promise<D1Result>;
-  all<T = unknown>(): Promise<D1Result<T>>;
-  raw<T = unknown[]>(): Promise<T[]>;
-}
-
-interface D1Result<T = unknown> {
-  results: T[];
-  success: boolean;
-  error?: string;
-  meta?: {
-    changed_db: boolean;
-    changes: number;
-    last_row_id: number;
-    duration: number;
-    rows_read: number;
-    rows_written: number;
-  };
-}
-
-interface D1ExecResult {
-  count: number;
-  duration: number;
-}
+// D1 types come from worker-configuration.d.ts (global Cloudflare types)
+// D1Database, D1DatabaseSession, D1PreparedStatement, D1Result are globally available
 
 /**
  * Hourly metrics row from D1
@@ -255,15 +222,25 @@ export interface PlatformSummary {
 
 /**
  * D1 Analytics Service
+ *
+ * Uses Sessions API for read replication support.
+ * All queries within a request share the same session for sequential consistency.
  */
 export class D1AnalyticsService {
-  constructor(private db: D1Database) {}
+  private session: D1DatabaseSession;
+
+  constructor(db: D1Database) {
+    // Create a session for consistent reads across replicas
+    // 'first-unconstrained' allows the first query to hit any replica
+    // (better for read-heavy analytics vs 'first-primary')
+    this.session = db.withSession('first-unconstrained');
+  }
 
   /**
    * Get hourly metrics for an org
    */
   async getHourlyMetrics(orgTag: string, startDate: string, endDate: string): Promise<HourlyMetricRow[]> {
-    const result = await this.db.prepare(`
+    const result = await this.session.prepare(`
       SELECT *
       FROM hourly_metrics
       WHERE org_tag = ?
@@ -279,7 +256,7 @@ export class D1AnalyticsService {
    * Get daily metrics for an org
    */
   async getDailyMetrics(orgTag: string, startDate: string, endDate: string): Promise<DailyMetricRow[]> {
-    const result = await this.db.prepare(`
+    const result = await this.session.prepare(`
       SELECT *
       FROM daily_metrics
       WHERE org_tag = ?
@@ -295,7 +272,7 @@ export class D1AnalyticsService {
    * Get UTM performance for an org
    */
   async getUTMPerformance(orgTag: string, startDate: string, endDate: string): Promise<UTMPerformanceRow[]> {
-    const result = await this.db.prepare(`
+    const result = await this.session.prepare(`
       SELECT *
       FROM utm_performance
       WHERE org_tag = ?
@@ -323,7 +300,7 @@ export class D1AnalyticsService {
 
     query += ` ORDER BY first_touch_ts DESC LIMIT ?`;
 
-    const result = await this.db.prepare(query)
+    const result = await this.session.prepare(query)
       .bind(orgTag, limit)
       .all<JourneyRow>();
 
@@ -363,7 +340,7 @@ export class D1AnalyticsService {
 
     query += ` ORDER BY computed_at DESC, credit DESC`;
 
-    const stmt = this.db.prepare(query);
+    const stmt = this.session.prepare(query);
     const result = await stmt.bind(...params).all<AttributionResultRow>();
 
     return result.results;
@@ -473,7 +450,7 @@ export class D1AnalyticsService {
 
     query += ` ORDER BY transition_count DESC`;
 
-    const stmt = this.db.prepare(query);
+    const stmt = this.session.prepare(query);
     const result = await stmt.bind(...params).all<{
       from_channel: string;
       to_channel: string;
@@ -509,7 +486,7 @@ export class D1AnalyticsService {
     query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
     params.push(options.limit || 100, options.offset || 0);
 
-    const result = await this.db.prepare(query).bind(...params).all<GoogleCampaignRow>();
+    const result = await this.session.prepare(query).bind(...params).all<GoogleCampaignRow>();
     return result.results;
   }
 
@@ -521,7 +498,7 @@ export class D1AnalyticsService {
     startDate: string,
     endDate: string
   ): Promise<GoogleCampaignMetricsRow[]> {
-    const result = await this.db.prepare(`
+    const result = await this.session.prepare(`
       SELECT m.*
       FROM google_campaign_daily_metrics m
       WHERE m.organization_id = ?
@@ -571,7 +548,7 @@ export class D1AnalyticsService {
     query += ` GROUP BY c.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
     params.push(options.limit || 100, options.offset || 0);
 
-    const result = await this.db.prepare(query).bind(...params).all<any>();
+    const result = await this.session.prepare(query).bind(...params).all<any>();
 
     return result.results.map((row: any) => ({
       campaign_id: row.campaign_id,
@@ -594,7 +571,7 @@ export class D1AnalyticsService {
    * Get Google Ads summary for an organization
    */
   async getGoogleSummary(orgId: string, startDate: string, endDate: string): Promise<PlatformSummary> {
-    const result = await this.db.prepare(`
+    const result = await this.session.prepare(`
       SELECT
         COALESCE(SUM(m.spend_cents), 0) as spend_cents,
         COALESCE(SUM(m.impressions), 0) as impressions,
@@ -638,7 +615,7 @@ export class D1AnalyticsService {
     query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
     params.push(options.limit || 100, options.offset || 0);
 
-    const result = await this.db.prepare(query).bind(...params).all<FacebookCampaignRow>();
+    const result = await this.session.prepare(query).bind(...params).all<FacebookCampaignRow>();
     return result.results;
   }
 
@@ -680,7 +657,7 @@ export class D1AnalyticsService {
     query += ` GROUP BY c.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
     params.push(options.limit || 100, options.offset || 0);
 
-    const result = await this.db.prepare(query).bind(...params).all<any>();
+    const result = await this.session.prepare(query).bind(...params).all<any>();
 
     return result.results.map((row: any) => ({
       campaign_id: row.campaign_id,
@@ -703,7 +680,7 @@ export class D1AnalyticsService {
    * Get Facebook Ads summary for an organization
    */
   async getFacebookSummary(orgId: string, startDate: string, endDate: string): Promise<PlatformSummary> {
-    const result = await this.db.prepare(`
+    const result = await this.session.prepare(`
       SELECT
         COALESCE(SUM(m.spend_cents), 0) as spend_cents,
         COALESCE(SUM(m.impressions), 0) as impressions,
@@ -747,7 +724,7 @@ export class D1AnalyticsService {
     query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
     params.push(options.limit || 100, options.offset || 0);
 
-    const result = await this.db.prepare(query).bind(...params).all<TikTokCampaignRow>();
+    const result = await this.session.prepare(query).bind(...params).all<TikTokCampaignRow>();
     return result.results;
   }
 
@@ -789,7 +766,7 @@ export class D1AnalyticsService {
     query += ` GROUP BY c.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
     params.push(options.limit || 100, options.offset || 0);
 
-    const result = await this.db.prepare(query).bind(...params).all<any>();
+    const result = await this.session.prepare(query).bind(...params).all<any>();
 
     return result.results.map((row: any) => ({
       campaign_id: row.campaign_id,
@@ -812,7 +789,7 @@ export class D1AnalyticsService {
    * Get TikTok Ads summary for an organization
    */
   async getTikTokSummary(orgId: string, startDate: string, endDate: string): Promise<PlatformSummary> {
-    const result = await this.db.prepare(`
+    const result = await this.session.prepare(`
       SELECT
         COALESCE(SUM(m.spend_cents), 0) as spend_cents,
         COALESCE(SUM(m.impressions), 0) as impressions,
@@ -928,7 +905,7 @@ export class D1AnalyticsService {
     query += ` ORDER BY stripe_created_at DESC LIMIT ? OFFSET ?`;
     params.push(options.limit || 100, options.offset || 0);
 
-    const result = await this.db.prepare(query).bind(...params).all<StripeChargeRow>();
+    const result = await this.session.prepare(query).bind(...params).all<StripeChargeRow>();
     return result.results;
   }
 
@@ -940,7 +917,7 @@ export class D1AnalyticsService {
     startDate: string,
     endDate: string
   ): Promise<StripeDailySummaryRow[]> {
-    const result = await this.db.prepare(`
+    const result = await this.session.prepare(`
       SELECT *
       FROM stripe_daily_summary
       WHERE organization_id = ?
@@ -961,7 +938,7 @@ export class D1AnalyticsService {
     startDate: string,
     endDate: string
   ): Promise<StripeSummary> {
-    const result = await this.db.prepare(`
+    const result = await this.session.prepare(`
       SELECT
         COUNT(*) as total_transactions,
         COALESCE(SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END), 0) as total_revenue_cents,
@@ -1012,7 +989,7 @@ export class D1AnalyticsService {
         dateFormat = "date(stripe_created_at)";
     }
 
-    const result = await this.db.prepare(`
+    const result = await this.session.prepare(`
       SELECT
         ${dateFormat} as date,
         SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as revenue_cents,

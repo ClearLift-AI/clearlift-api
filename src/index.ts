@@ -185,15 +185,6 @@ import {
   AdminEndImpersonation
 } from "./endpoints/v1/admin/tasks";
 import {
-  GetRolloutStats,
-  GetOrgRoutingConfig,
-  EnableDualWrite,
-  EnableD1Reads,
-  EnableD1Only,
-  RollbackToSupabase,
-  ListOrgsByRoutingStatus
-} from "./endpoints/v1/admin/data-routing";
-import {
   GetMatrixSettings,
   UpdateMatrixSettings,
   GetAIDecisions,
@@ -255,25 +246,6 @@ app.onError(errorHandler);
 
 // Apply security headers to all routes (SOC 2 requirement)
 app.use("*", securityHeaders());
-
-// Production Supabase warning for local development
-// Only logs once per worker instance to avoid spam
-let hasLoggedSupabaseWarning = false;
-app.use("*", async (c, next) => {
-  if (!hasLoggedSupabaseWarning && c.env.SUPABASE_URL?.includes('supabase.co')) {
-    hasLoggedSupabaseWarning = true;
-    console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.warn('⚠️  PRODUCTION SUPABASE URL DETECTED');
-    console.warn('   This worker will query PRODUCTION Supabase data!');
-    console.warn('   URL: ' + c.env.SUPABASE_URL);
-    console.warn('');
-    console.warn('   For true local development:');
-    console.warn('   1. Start local Supabase: cd ../clearlift-cron && supabase start');
-    console.warn('   2. Comment out SUPABASE_URL in .dev.vars');
-    console.warn('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  }
-  return next();
-});
 
 // Apply CORS to all routes
 app.use("*", corsMiddleware);
@@ -381,14 +353,7 @@ openapi.post("/v1/admin/tasks/:id/comments", auth, AdminAddTaskComment);
 openapi.post("/v1/admin/impersonate", auth, AdminStartImpersonation);
 openapi.post("/v1/admin/end-impersonation", auth, AdminEndImpersonation);
 
-// D1 rollout admin endpoints
-openapi.get("/v1/admin/d1-rollout/stats", auth, GetRolloutStats);
-openapi.get("/v1/admin/d1-rollout/orgs", auth, ListOrgsByRoutingStatus);
-openapi.get("/v1/admin/d1-rollout/orgs/:org_id", auth, GetOrgRoutingConfig);
-openapi.post("/v1/admin/d1-rollout/orgs/:org_id/dual-write", auth, EnableDualWrite);
-openapi.post("/v1/admin/d1-rollout/orgs/:org_id/enable-d1-reads", auth, EnableD1Reads);
-openapi.post("/v1/admin/d1-rollout/orgs/:org_id/enable-d1-only", auth, EnableD1Only);
-openapi.post("/v1/admin/d1-rollout/orgs/:org_id/rollback", auth, RollbackToSupabase);
+// D1 rollout admin endpoints removed - Supabase fully deprecated
 
 // Debug SendGrid endpoint removed for production security
 
@@ -629,7 +594,7 @@ openapi.post("/v1/goals", auth, requireOrg, requireOrgAdmin, CreateConversionGoa
 openapi.put("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, UpdateConversionGoal);
 openapi.delete("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, DeleteConversionGoal);
 
-// Goal Metrics endpoints (Supabase data)
+// Goal Metrics endpoints (D1 data)
 openapi.get("/v1/goals/:id/metrics", auth, requireOrg, GetGoalMetrics);
 openapi.get("/v1/goals/:id/conversions", auth, requireOrg, GetGoalConversions);
 

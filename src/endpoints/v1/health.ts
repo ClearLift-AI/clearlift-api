@@ -2,7 +2,6 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { success } from "../../utils/response";
-import { getSecret } from "../../utils/secrets";
 
 export class HealthEndpoint extends OpenAPIRoute {
   public schema = {
@@ -22,7 +21,7 @@ export class HealthEndpoint extends OpenAPIRoute {
                 timestamp: z.string(),
                 bindings: z.object({
                   db: z.boolean(),
-                  supabase: z.boolean(),
+                  analytics_db: z.boolean(),
                   r2_sql: z.boolean()
                 }),
                 checks: z.object({
@@ -30,7 +29,7 @@ export class HealthEndpoint extends OpenAPIRoute {
                     connected: z.boolean(),
                     latency_ms: z.number().optional()
                   }),
-                  supabase: z.object({
+                  analytics_db: z.object({
                     connected: z.boolean(),
                     latency_ms: z.number().optional()
                   }),
@@ -50,11 +49,11 @@ export class HealthEndpoint extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const checks = {
       database: { connected: false, latency_ms: 0 },
-      supabase: { connected: false, latency_ms: 0 },
+      analytics_db: { connected: false, latency_ms: 0 },
       r2_sql: { connected: false, latency_ms: 0 }
     };
 
-    // Check D1 Database
+    // Check D1 Database (main)
     if (c.env.DB) {
       try {
         const start = Date.now();
@@ -67,25 +66,16 @@ export class HealthEndpoint extends OpenAPIRoute {
       }
     }
 
-    // Check Supabase connectivity
-    const supabaseUrl = c.env.SUPABASE_URL;
-    const supabaseKey = await getSecret(c.env.SUPABASE_SECRET_KEY);
-
-    if (supabaseUrl && supabaseKey) {
+    // Check D1 ANALYTICS_DB
+    if (c.env.ANALYTICS_DB) {
       try {
         const start = Date.now();
-        const response = await fetch(`${supabaseUrl}/rest/v1/`, {
-          method: "HEAD",
-          headers: {
-            "apikey": supabaseKey.toString(),
-            "Authorization": `Bearer ${supabaseKey}`
-          }
-        });
-        checks.supabase.latency_ms = Date.now() - start;
-        checks.supabase.connected = response.ok || response.status === 406; // 406 is expected for HEAD request
+        const result = await c.env.ANALYTICS_DB.prepare("SELECT 1 as test").first();
+        checks.analytics_db.latency_ms = Date.now() - start;
+        checks.analytics_db.connected = result?.test === 1;
       } catch (error) {
-        console.error("Supabase health check failed:", error);
-        checks.supabase.connected = false;
+        console.error("ANALYTICS_DB health check failed:", error);
+        checks.analytics_db.connected = false;
       }
     }
 
@@ -101,7 +91,7 @@ export class HealthEndpoint extends OpenAPIRoute {
       timestamp: new Date().toISOString(),
       bindings: {
         db: !!c.env.DB,
-        supabase: !!(supabaseUrl && supabaseKey),
+        analytics_db: !!c.env.ANALYTICS_DB,
         r2_sql: hasR2Token
       },
       checks
