@@ -1111,7 +1111,7 @@ export class GetTrackingDomains extends OpenAPIRoute {
       ORDER BY is_primary DESC, created_at DESC
     `).bind(orgId).all();
 
-    // Return domains from D1 - backfill enrichment deprecated (was Supabase-based)
+    // Return domains from D1 - backfill enrichment deprecated
     // Events are now in R2 SQL and associated with org_tag at ingestion time
     const enrichedDomains = (domains.results || []).map((d: any) => ({
       ...d,

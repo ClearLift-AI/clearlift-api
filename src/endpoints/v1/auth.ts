@@ -750,7 +750,7 @@ export class DeleteAccount extends OpenAPIRoute {
         DELETE FROM users WHERE id = ?
       `).bind(userId).run();
 
-      // Note: Supabase synced data (campaigns, metrics) becomes orphaned
+      // Note: Synced data (campaigns, metrics in D1) becomes orphaned
       // but will be cleaned up by a separate maintenance job
 
       return success(c, {

@@ -39,6 +39,13 @@ import {
   GetD1ChannelTransitions
 } from "./endpoints/v1/analytics/d1-metrics";
 import {
+  GetRealtimeSummary,
+  GetRealtimeTimeSeries,
+  GetRealtimeBreakdown,
+  GetRealtimeEvents,
+  GetRealtimeEventTypes
+} from "./endpoints/v1/analytics/realtime";
+import {
   GetFacebookCampaigns,
   GetFacebookAdSets,
   GetFacebookCreatives,
@@ -428,6 +435,13 @@ openapi.get("/v1/analytics/metrics/utm", auth, requireOrg, GetD1UTMPerformance);
 openapi.get("/v1/analytics/metrics/attribution", auth, requireOrg, GetD1Attribution);
 openapi.get("/v1/analytics/metrics/journeys", auth, requireOrg, GetD1Journeys);
 openapi.get("/v1/analytics/metrics/transitions", auth, requireOrg, GetD1ChannelTransitions);
+
+// Real-time Analytics Engine endpoints (sub-second latency)
+openapi.get("/v1/analytics/realtime/summary", auth, requireOrg, GetRealtimeSummary);
+openapi.get("/v1/analytics/realtime/timeseries", auth, requireOrg, GetRealtimeTimeSeries);
+openapi.get("/v1/analytics/realtime/breakdown", auth, requireOrg, GetRealtimeBreakdown);
+openapi.get("/v1/analytics/realtime/events", auth, requireOrg, GetRealtimeEvents);
+openapi.get("/v1/analytics/realtime/event-types", auth, requireOrg, GetRealtimeEventTypes);
 
 // Facebook Ads endpoints
 openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);

@@ -9,29 +9,18 @@
   },
 
   "vars": {
-    "SUPABASE_URL": "https://jwosqxmfezmnhrbbjlbx.supabase.co",
     "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
     "R2_BUCKET_NAME": "clearlift-db",
     "R2_SQL_TABLE": "clearlift.event_data_v4_1",
     "USE_D1_ANALYTICS": "true"
   },
 
-  // Secrets Store bindings - required for Supabase and OAuth
+  // Secrets Store bindings - required for OAuth and encryption
   "secrets_store_secrets": [
     {
       "binding": "ENCRYPTION_KEY",
       "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
       "secret_name": "ENCRYPTION_KEY"
-    },
-    {
-      "binding": "SUPABASE_SECRET_KEY",
-      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-      "secret_name": "SUPABASE_SECRET_KEY"
-    },
-    {
-      "binding": "SUPABASE_PUBLISHABLE_KEY",
-      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-      "secret_name": "SUPABASE_PUBLISHABLE_KEY"
     },
     {
       "binding": "R2_SQL_TOKEN",
@@ -169,6 +158,14 @@
     ]
   },
 
+  // Analytics Engine for real-time analytics queries
+  "analytics_engine_datasets": [
+    {
+      "binding": "ANALYTICS",
+      "dataset": "clearlift_events"
+    }
+  ],
+
   "workflows": [
     {
       "name": "analysis-workflow",
@@ -192,7 +189,6 @@
   "env": {
     "local": {
       "vars": {
-        "SUPABASE_URL": "http://127.0.0.1:54321",
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
         "R2_BUCKET_NAME": "clearlift-db",
         "R2_SQL_TABLE": "clearlift.event_data_v4_1"
@@ -256,7 +252,6 @@
     // Deploy with: npx wrangler deploy (default) or npx wrangler deploy --env production
     "production": {
       "vars": {
-        "SUPABASE_URL": "https://jwosqxmfezmnhrbbjlbx.supabase.co",
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
         "R2_BUCKET_NAME": "clearlift-db",
         "R2_SQL_TABLE": "clearlift.event_data_v4_1",
@@ -301,16 +296,6 @@
           "binding": "ENCRYPTION_KEY",
           "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
           "secret_name": "ENCRYPTION_KEY"
-        },
-        {
-          "binding": "SUPABASE_SECRET_KEY",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "SUPABASE_SECRET_KEY"
-        },
-        {
-          "binding": "SUPABASE_PUBLISHABLE_KEY",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "SUPABASE_PUBLISHABLE_KEY"
         },
         {
           "binding": "R2_SQL_TOKEN",
@@ -391,11 +376,11 @@
     },
 
     // ========================================================================
-    // DEV ENVIRONMENT (Pure Cloudflare - No Supabase)
+    // DEV ENVIRONMENT
     // ========================================================================
     // Deploy with: npx wrangler deploy --env dev
     // Accessible at: dev.clearlift.ai (via api-dev.clearlift.ai)
-    // Uses D1 ANALYTICS_DB instead of Supabase for events/touchpoints/metrics
+    // Uses D1 ANALYTICS_DB for events/touchpoints/metrics
     "dev": {
       "name": "clearlift-api-dev",
       "vars": {

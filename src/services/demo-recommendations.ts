@@ -5,7 +5,7 @@
  * when a Facebook Ads account is connected and synced. This allows Meta reviewers
  * to test all API endpoints during App Review.
  *
- * Updated to use D1 ANALYTICS_DB instead of Supabase
+ * Uses D1 ANALYTICS_DB for campaign data
  */
 
 interface DemoRecommendation {

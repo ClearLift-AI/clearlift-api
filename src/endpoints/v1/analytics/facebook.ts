@@ -4,7 +4,7 @@
  * Provides clean access to Facebook Ads data from D1 ANALYTICS_DB
  * All endpoints use auth + requireOrg middleware for access control
  *
- * Updated: Removed all Supabase dependencies, uses D1 only
+ * Uses D1 ANALYTICS_DB for all data queries
  */
 
 import { OpenAPIRoute, contentJson } from "chanfana";

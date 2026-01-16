@@ -8,7 +8,7 @@
  * - Get creative details
  * - Get audience/targeting breakdowns
  *
- * Updated to use D1 ANALYTICS_DB instead of Supabase
+ * Uses D1 ANALYTICS_DB for metrics queries
  */
 
 // D1Database type from Cloudflare Workers (matches worker-configuration.d.ts)

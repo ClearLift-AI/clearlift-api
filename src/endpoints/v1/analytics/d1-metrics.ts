@@ -2,7 +2,6 @@
  * D1 Analytics Metrics Endpoints
  *
  * These endpoints read aggregated metrics from D1 ANALYTICS_DB.
- * Used in the dev environment (pure Cloudflare - no Supabase).
  */
 
 import { OpenAPIRoute } from "chanfana";
