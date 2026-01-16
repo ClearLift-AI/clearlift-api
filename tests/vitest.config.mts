@@ -12,6 +12,7 @@ export default defineWorkersConfig({
     target: "esnext",
   },
   test: {
+    exclude: ["**/api-production.test.ts", "**/node_modules/**"],
     setupFiles: ["./tests/apply-migrations.ts"],
     poolOptions: {
       workers: {
@@ -25,6 +26,7 @@ export default defineWorkersConfig({
             MIGRATIONS: migrations,
           },
         },
+        isolatedStorage: false,
       },
     },
     server: {

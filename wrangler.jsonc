@@ -171,6 +171,11 @@
       "name": "analysis-workflow",
       "binding": "ANALYSIS_WORKFLOW",
       "class_name": "AnalysisWorkflow"
+    },
+    {
+      "name": "attribution-workflow",
+      "binding": "ATTRIBUTION_WORKFLOW",
+      "class_name": "AttributionWorkflow"
     }
   ],
 
@@ -241,6 +246,11 @@
           "name": "analysis-workflow",
           "binding": "ANALYSIS_WORKFLOW",
           "class_name": "AnalysisWorkflow"
+        },
+        {
+          "name": "attribution-workflow-local",
+          "binding": "ATTRIBUTION_WORKFLOW",
+          "class_name": "AttributionWorkflow"
         }
       ]
       // No secrets_store_secrets - uses .dev.vars instead
@@ -289,6 +299,11 @@
           "name": "analysis-workflow",
           "binding": "ANALYSIS_WORKFLOW",
           "class_name": "AnalysisWorkflow"
+        },
+        {
+          "name": "attribution-workflow",
+          "binding": "ATTRIBUTION_WORKFLOW",
+          "class_name": "AttributionWorkflow"
         }
       ],
       "secrets_store_secrets": [
@@ -422,6 +437,11 @@
           "name": "analysis-workflow-dev",
           "binding": "ANALYSIS_WORKFLOW",
           "class_name": "AnalysisWorkflow"
+        },
+        {
+          "name": "attribution-workflow-dev",
+          "binding": "ATTRIBUTION_WORKFLOW",
+          "class_name": "AttributionWorkflow"
         }
       ],
       "secrets_store_secrets": [

@@ -850,3 +850,254 @@ export class GetAttributionComparison extends OpenAPIRoute {
     });
   }
 }
+
+/**
+ * POST /v1/analytics/attribution/run
+ *
+ * Trigger Markov Chain and Shapley Value attribution workflow.
+ * These models are compute-intensive and run as a background workflow.
+ */
+export class RunAttributionAnalysis extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Run attribution analysis workflow",
+    description: "Trigger Markov Chain and Shapley Value attribution calculation. Returns a job ID to poll for completion.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        days: z.coerce.number().optional().default(30).describe("Days of data to analyze")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Analysis job started",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                job_id: z.string(),
+                status: z.enum(['pending', 'running', 'completed', 'failed'])
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const query = await this.getValidatedQuery<{
+      org_id: string;
+      days: number;
+    }>();
+
+    const orgId = c.get("organization")?.id || query.org_id;
+    const days = query.days || 30;
+    const jobId = crypto.randomUUID().replace(/-/g, '');
+
+    // Create job record
+    await c.env.AI_DB.prepare(`
+      INSERT INTO analysis_jobs (id, organization_id, type, status, created_at)
+      VALUES (?, ?, 'attribution', 'pending', datetime('now'))
+    `).bind(jobId, orgId).run();
+
+    // Start the workflow
+    try {
+      const workflow = (c.env as any).ATTRIBUTION_WORKFLOW;
+      if (!workflow) {
+        return error(c, "Attribution workflow not configured", 500);
+      }
+
+      await workflow.create({
+        id: jobId,
+        params: { orgId, jobId, days }
+      });
+
+      console.log(`[Attribution] Started workflow ${jobId} for org ${orgId} (${days} days)`);
+
+      return success(c, {
+        job_id: jobId,
+        status: 'pending'
+      });
+    } catch (err: any) {
+      // Update job status to failed
+      await c.env.AI_DB.prepare(`
+        UPDATE analysis_jobs SET status = 'failed', result = ?
+        WHERE id = ?
+      `).bind(JSON.stringify({ error: err.message }), jobId).run();
+
+      console.error(`[Attribution] Failed to start workflow:`, err);
+      return error(c, `Failed to start attribution analysis: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * GET /v1/analytics/attribution/status/:job_id
+ *
+ * Get the status of an attribution analysis job.
+ */
+export class GetAttributionJobStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Get attribution job status",
+    description: "Check the status of an attribution analysis workflow",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        job_id: z.string().describe("Job ID from run endpoint")
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Job status",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                job_id: z.string(),
+                status: z.enum(['pending', 'running', 'completed', 'failed']),
+                result: z.any().optional(),
+                created_at: z.string(),
+                completed_at: z.string().nullable()
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const params = await this.getValidatedParams<{ job_id: string }>();
+    const query = await this.getValidatedQuery<{ org_id: string }>();
+
+    const orgId = c.get("organization")?.id || query.org_id;
+
+    const job = await c.env.AI_DB.prepare(`
+      SELECT id, status, result, created_at, completed_at
+      FROM analysis_jobs
+      WHERE id = ? AND organization_id = ? AND type = 'attribution'
+    `).bind(params.job_id, orgId).first<{
+      id: string;
+      status: string;
+      result: string | null;
+      created_at: string;
+      completed_at: string | null;
+    }>();
+
+    if (!job) {
+      return error(c, "Job not found", 404);
+    }
+
+    return success(c, {
+      job_id: job.id,
+      status: job.status,
+      result: job.result ? JSON.parse(job.result) : null,
+      created_at: job.created_at,
+      completed_at: job.completed_at
+    });
+  }
+}
+
+/**
+ * GET /v1/analytics/attribution/computed
+ *
+ * Get pre-computed Markov Chain or Shapley Value attribution results.
+ */
+export class GetComputedAttribution extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Get computed attribution results",
+    description: "Retrieve pre-computed Markov Chain or Shapley Value attribution. Run the attribution workflow first.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        model: z.enum(['markov_chain', 'shapley_value']).describe("Attribution model")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Computed attribution results",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                model: z.enum(['markov_chain', 'shapley_value']),
+                computation_date: z.string(),
+                attributions: z.array(z.object({
+                  channel: z.string(),
+                  attributed_credit: z.number(),
+                  removal_effect: z.number().nullable(),
+                  shapley_value: z.number().nullable()
+                })),
+                metadata: z.object({
+                  conversion_count: z.number(),
+                  path_count: z.number()
+                })
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const query = await this.getValidatedQuery<{
+      org_id: string;
+      model: 'markov_chain' | 'shapley_value';
+    }>();
+
+    const orgId = c.get("organization")?.id || query.org_id;
+    const model = query.model;
+
+    // Get most recent computed results
+    const results = await c.env.AI_DB.prepare(`
+      SELECT channel, attributed_credit, removal_effect, shapley_value,
+             computation_date, conversion_count, path_count
+      FROM attribution_model_results
+      WHERE organization_id = ?
+        AND model = ?
+        AND expires_at > datetime('now')
+      ORDER BY computation_date DESC
+    `).bind(orgId, model).all<{
+      channel: string;
+      attributed_credit: number;
+      removal_effect: number | null;
+      shapley_value: number | null;
+      computation_date: string;
+      conversion_count: number;
+      path_count: number;
+    }>();
+
+    if (!results.results || results.results.length === 0) {
+      return error(c, `No ${model} results available. Run attribution analysis first.`, 404);
+    }
+
+    const first = results.results[0];
+
+    return success(c, {
+      model,
+      computation_date: first.computation_date,
+      attributions: results.results.map(r => ({
+        channel: r.channel,
+        attributed_credit: r.attributed_credit,
+        removal_effect: r.removal_effect,
+        shapley_value: r.shapley_value
+      })),
+      metadata: {
+        conversion_count: first.conversion_count,
+        path_count: first.path_count
+      }
+    });
+  }
+}

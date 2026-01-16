@@ -27,7 +27,7 @@ describe('Production Health Check', () => {
     const data = await response.json() as any;
 
     expect(data.data.bindings.db).toBe(true);
-    expect(data.data.bindings.supabase).toBe(true);
+    expect(data.data.bindings.analytics_db).toBe(true);
     expect(data.data.bindings.r2_sql).toBe(true);
   });
 

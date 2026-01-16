@@ -22,7 +22,13 @@ import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
 import { GetJobberRevenue, GetJobberInvoices } from "./endpoints/v1/analytics/jobber";
 import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
-import { GetAttribution, GetAttributionComparison } from "./endpoints/v1/analytics/attribution";
+import {
+  GetAttribution,
+  GetAttributionComparison,
+  RunAttributionAnalysis,
+  GetAttributionJobStatus,
+  GetComputedAttribution
+} from "./endpoints/v1/analytics/attribution";
 import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-campaigns";
 import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
 import { GetTrackingLinkPerformance } from "./endpoints/v1/analytics/tracking-links";
@@ -405,6 +411,9 @@ openapi.get("/v1/analytics/events/historical", auth, requireOrg, GetEventsHistor
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributionComparison);
+openapi.post("/v1/analytics/attribution/run", auth, requireOrg, RunAttributionAnalysis);
+openapi.get("/v1/analytics/attribution/status/:job_id", auth, requireOrg, GetAttributionJobStatus);
+openapi.get("/v1/analytics/attribution/computed", auth, requireOrg, GetComputedAttribution);
 openapi.get("/v1/analytics/stripe", auth, requireOrg, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, requireOrg, GetStripeDailyAggregates);
 openapi.get("/v1/analytics/jobber/revenue", auth, requireOrg, GetJobberRevenue);
@@ -626,5 +635,6 @@ export default {
   }
 };
 
-// Export the workflow class for Cloudflare Workflows binding
+// Export workflow classes for Cloudflare Workflows bindings
 export { AnalysisWorkflow } from './workflows/analysis-workflow';
+export { AttributionWorkflow } from './workflows/attribution-workflow';
