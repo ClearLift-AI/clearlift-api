@@ -276,9 +276,9 @@ export class GetFacebookCreatives extends OpenAPIRoute {
 
     try {
       // Query creatives from D1 (creatives are stored in facebook_ads table)
+      // Only query columns that exist in the table
       const sql = `
-        SELECT ad_id, ad_name, creative_id, creative_type, headline, body,
-               call_to_action, image_url, video_url, updated_at
+        SELECT ad_id, ad_name, creative_id, updated_at
         FROM facebook_ads
         WHERE organization_id = ?
         ORDER BY updated_at DESC
@@ -292,12 +292,6 @@ export class GetFacebookCreatives extends OpenAPIRoute {
         ad_id: ad.ad_id,
         ad_name: ad.ad_name,
         creative_id: ad.creative_id,
-        creative_type: ad.creative_type,
-        headline: ad.headline,
-        body: ad.body,
-        call_to_action: ad.call_to_action,
-        image_url: ad.image_url,
-        video_url: ad.video_url,
         updated_at: ad.updated_at
       }));
 
@@ -349,10 +343,9 @@ export class GetFacebookAds extends OpenAPIRoute {
     }
 
     try {
-      // Query ads from D1
+      // Query ads from D1 - only columns that exist in the table
       let sql = `
-        SELECT ad_id, ad_name, ad_status, campaign_id, ad_set_id,
-               creative_type, headline, body, call_to_action, updated_at
+        SELECT ad_id, ad_name, ad_status, campaign_id, ad_set_id, creative_id, updated_at
         FROM facebook_ads
         WHERE organization_id = ?
       `;
@@ -386,10 +379,7 @@ export class GetFacebookAds extends OpenAPIRoute {
           ad_status: ad.ad_status,
           campaign_id: ad.campaign_id,
           ad_set_id: ad.ad_set_id,
-          creative_type: ad.creative_type,
-          headline: ad.headline,
-          body: ad.body,
-          call_to_action: ad.call_to_action,
+          creative_id: ad.creative_id,
           updated_at: ad.updated_at
         })),
         total: ads.length
@@ -452,7 +442,7 @@ export class GetFacebookMetrics extends OpenAPIRoute {
 
       let sql = `
         SELECT metric_date, ${tableInfo.refColumn} as entity_ref,
-               impressions, clicks, spend_cents, conversions, conversion_value_cents
+               impressions, clicks, spend_cents, conversions
         FROM ${tableInfo.table}
         WHERE organization_id = ?
           AND metric_date >= ? AND metric_date <= ?
@@ -482,14 +472,12 @@ export class GetFacebookMetrics extends OpenAPIRoute {
         total_impressions: acc.total_impressions + (m.impressions || 0),
         total_clicks: acc.total_clicks + (m.clicks || 0),
         total_spend_cents: acc.total_spend_cents + (m.spend_cents || 0),
-        total_conversions: acc.total_conversions + (m.conversions || 0),
-        total_conversion_value_cents: acc.total_conversion_value_cents + (m.conversion_value_cents || 0)
+        total_conversions: acc.total_conversions + (m.conversions || 0)
       }), {
         total_impressions: 0,
         total_clicks: 0,
         total_spend_cents: 0,
-        total_conversions: 0,
-        total_conversion_value_cents: 0
+        total_conversions: 0
       });
 
       return success(c, {
@@ -499,13 +487,11 @@ export class GetFacebookMetrics extends OpenAPIRoute {
           impressions: m.impressions || 0,
           clicks: m.clicks || 0,
           spend_cents: m.spend_cents || 0,
-          conversions: m.conversions || 0,
-          conversion_value_cents: m.conversion_value_cents || 0
+          conversions: m.conversions || 0
         })),
         summary: {
           ...summary,
           total_spend: summary.total_spend_cents / 100,
-          total_conversion_value: summary.total_conversion_value_cents / 100,
           ctr: summary.total_impressions > 0 ? (summary.total_clicks / summary.total_impressions) * 100 : 0
         },
         total: metrics.length,

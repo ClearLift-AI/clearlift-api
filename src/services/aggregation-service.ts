@@ -38,7 +38,11 @@ export interface AggregationJobResult {
 type Platform = 'google' | 'facebook' | 'tiktok';
 
 export class AggregationService {
-  constructor(private shards: D1Database[]) {}
+  private analyticsDb?: D1Database;
+
+  constructor(private shards: D1Database[], analyticsDb?: D1Database) {
+    this.analyticsDb = analyticsDb;
+  }
 
   /**
    * Run aggregation across all shards
@@ -77,6 +81,18 @@ export class AggregationService {
           duration_ms: 0,
           error: String(result.reason),
         });
+      }
+    }
+
+    // Also run Stripe aggregation from ANALYTICS_DB if available
+    if (this.analyticsDb) {
+      try {
+        const stripeResult = await this.aggregateStripeFromAnalyticsDb(date);
+        console.log(`[Aggregation] Stripe aggregation: ${stripeResult.charges} charges processed`);
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        errors.push(`ANALYTICS_DB Stripe: ${error}`);
+        console.error(`[Aggregation] Stripe aggregation failed: ${error}`);
       }
     }
 
@@ -256,7 +272,7 @@ export class AggregationService {
         COUNT(*) as total_charges,
         datetime('now') as updated_at
       FROM stripe_charges
-      WHERE date(charge_created_at) = ?
+      WHERE date(stripe_created_at) = ?
         AND status = 'succeeded'
       GROUP BY organization_id
     `).bind(date, date, date).run();
@@ -583,6 +599,47 @@ export class AggregationService {
         )
       `).bind(org.organization_id, org.organization_id).run();
     }
+  }
+
+  /**
+   * Aggregate Stripe daily summary from ANALYTICS_DB
+   * This is separate from shard aggregation since Stripe data lives in ANALYTICS_DB
+   */
+  async aggregateStripeFromAnalyticsDb(date: string): Promise<{ charges: number; orgs: number }> {
+    if (!this.analyticsDb) {
+      return { charges: 0, orgs: 0 };
+    }
+
+    console.log(`[Aggregation] Aggregating Stripe data for ${date} from ANALYTICS_DB`);
+
+    // Aggregate into stripe_daily_summary table
+    const result = await this.analyticsDb.prepare(`
+      INSERT OR REPLACE INTO stripe_daily_summary (
+        organization_id, summary_date,
+        total_charges, total_amount_cents,
+        successful_charges, failed_charges,
+        refunded_amount_cents, unique_customers,
+        created_at
+      )
+      SELECT
+        organization_id,
+        date(stripe_created_at) as summary_date,
+        COUNT(*) as total_charges,
+        SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as total_amount_cents,
+        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as successful_charges,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_charges,
+        0 as refunded_amount_cents,
+        COUNT(DISTINCT customer_id) as unique_customers,
+        datetime('now') as created_at
+      FROM stripe_charges
+      WHERE date(stripe_created_at) = ?
+      GROUP BY organization_id, date(stripe_created_at)
+    `).bind(date).run();
+
+    const changes = result.meta?.changes || 0;
+    console.log(`[Aggregation] Stripe: ${changes} org-days aggregated`);
+
+    return { charges: changes, orgs: changes };
   }
 
   /**

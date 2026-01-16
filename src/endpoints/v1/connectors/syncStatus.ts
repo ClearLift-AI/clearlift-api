@@ -14,8 +14,12 @@ const ConnectionStatusSchema = z.object({
 const SyncJobSchema = z.object({
   status: z.enum(['pending', 'running', 'completed', 'failed']),
   type: z.enum(['full', 'incremental']),
+  started_at: z.string().nullable(),
   completed_at: z.string().nullable(),
   records_synced: z.number(),
+  total_records: z.number().nullable(),
+  progress_percentage: z.number(),
+  current_phase: z.string().nullable(),
   error: z.string().nullable()
 });
 
@@ -88,14 +92,41 @@ export class GetSyncStatus extends OpenAPIRoute {
       LIMIT 1
     `).bind(connectionId).first();
 
-    // Parse metadata to get records_synced if available
+    // Parse metadata for progress info
     let recordsSynced = latestJob?.records_synced || 0;
+    let totalRecords: number | null = null;
+    let progressPercentage = 0;
+    let currentPhase: string | null = null;
+
     if (latestJob?.metadata) {
       try {
         const metadata = JSON.parse(latestJob.metadata as string);
-        recordsSynced = metadata.records_synced || recordsSynced;
+        recordsSynced = metadata.records_synced ?? recordsSynced;
+        totalRecords = metadata.total_records ?? null;
+        currentPhase = metadata.current_phase ?? null;
+
+        // Calculate progress from metadata if available
+        if (metadata.progress_percentage !== undefined) {
+          progressPercentage = metadata.progress_percentage;
+        }
       } catch (e) {
         // Ignore parse errors
+      }
+    }
+
+    // Calculate progress percentage based on status if not set
+    if (progressPercentage === 0 && latestJob) {
+      if (latestJob.status === 'completed') {
+        progressPercentage = 100;
+      } else if (latestJob.status === 'running') {
+        // If we have total_records, calculate actual progress
+        if (totalRecords !== null && totalRecords > 0) {
+          progressPercentage = Math.min(Math.round((Number(recordsSynced) / Number(totalRecords)) * 100), 99);
+        } else {
+          progressPercentage = 50; // Default to 50% if we don't know total
+        }
+      } else if (latestJob.status === 'pending') {
+        progressPercentage = 0;
       }
     }
 
@@ -110,8 +141,12 @@ export class GetSyncStatus extends OpenAPIRoute {
       latest_sync: latestJob ? {
         status: latestJob.status,
         type: latestJob.job_type,
+        started_at: latestJob.started_at,
         completed_at: latestJob.completed_at,
         records_synced: recordsSynced,
+        total_records: totalRecords,
+        progress_percentage: progressPercentage,
+        current_phase: currentPhase,
         error: latestJob.error_message
       } : null
     }, 200);

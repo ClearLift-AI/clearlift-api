@@ -69,7 +69,9 @@ export class GetRealtimeSummary extends OpenAPIRoute {
     }
 
     // Get API token from secrets store (use R2_SQL_TOKEN as fallback)
-    const apiToken = await c.env.CF_API_TOKEN?.get() || await c.env.R2_SQL_TOKEN?.get();
+    const apiToken = typeof c.env.R2_SQL_TOKEN === 'string'
+      ? c.env.R2_SQL_TOKEN
+      : await (c.env.R2_SQL_TOKEN as any)?.get();
     if (!apiToken) {
       return error(c, "CONFIG_ERROR", "Analytics Engine not configured", 500);
     }
@@ -145,7 +147,9 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
     }
 
-    const apiToken = await c.env.CF_API_TOKEN?.get() || await c.env.R2_SQL_TOKEN?.get();
+    const apiToken = typeof c.env.R2_SQL_TOKEN === 'string'
+      ? c.env.R2_SQL_TOKEN
+      : await (c.env.R2_SQL_TOKEN as any)?.get();
     if (!apiToken) {
       return error(c, "CONFIG_ERROR", "Analytics Engine not configured", 500);
     }
@@ -225,7 +229,9 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
     }
 
-    const apiToken = await c.env.CF_API_TOKEN?.get() || await c.env.R2_SQL_TOKEN?.get();
+    const apiToken = typeof c.env.R2_SQL_TOKEN === 'string'
+      ? c.env.R2_SQL_TOKEN
+      : await (c.env.R2_SQL_TOKEN as any)?.get();
     if (!apiToken) {
       return error(c, "CONFIG_ERROR", "Analytics Engine not configured", 500);
     }
@@ -304,7 +310,9 @@ export class GetRealtimeEvents extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
     }
 
-    const apiToken = await c.env.CF_API_TOKEN?.get() || await c.env.R2_SQL_TOKEN?.get();
+    const apiToken = typeof c.env.R2_SQL_TOKEN === 'string'
+      ? c.env.R2_SQL_TOKEN
+      : await (c.env.R2_SQL_TOKEN as any)?.get();
     if (!apiToken) {
       return error(c, "CONFIG_ERROR", "Analytics Engine not configured", 500);
     }
@@ -378,7 +386,9 @@ export class GetRealtimeEventTypes extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
     }
 
-    const apiToken = await c.env.CF_API_TOKEN?.get() || await c.env.R2_SQL_TOKEN?.get();
+    const apiToken = typeof c.env.R2_SQL_TOKEN === 'string'
+      ? c.env.R2_SQL_TOKEN
+      : await (c.env.R2_SQL_TOKEN as any)?.get();
     if (!apiToken) {
       return error(c, "CONFIG_ERROR", "Analytics Engine not configured", 500);
     }

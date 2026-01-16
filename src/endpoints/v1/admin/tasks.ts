@@ -235,7 +235,7 @@ export class AdminCreateTask extends OpenAPIRoute {
       WHERE t.id = ?
     `).bind(id).first();
 
-    return success(c, created, 201);
+    return success(c, created, undefined, 201);
   }
 }
 
@@ -467,7 +467,7 @@ export class AdminAddTaskComment extends OpenAPIRoute {
       WHERE c.id = ?
     `).bind(commentId).first();
 
-    return success(c, comment, 201);
+    return success(c, comment, undefined, 201);
   }
 }
 

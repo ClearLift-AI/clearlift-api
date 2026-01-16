@@ -649,42 +649,49 @@ export class DeleteAccount extends OpenAPIRoute {
     const userId = session.user_id;
 
     try {
-      // Step 1: Find all organizations where user is a member
+      // OPTIMIZED: Single query gets memberships with member counts using window function
+      // This replaces N+1 queries with a single query
       const memberships = await c.env.DB.prepare(`
-        SELECT organization_id FROM organization_members WHERE user_id = ?
-      `).bind(userId).all<{ organization_id: string }>();
+        SELECT
+          om.organization_id,
+          COUNT(*) OVER (PARTITION BY om.organization_id) as member_count
+        FROM organization_members om
+        WHERE om.user_id = ?
+      `).bind(userId).all<{ organization_id: string; member_count: number }>();
 
       const orgsToDelete: string[] = [];
       const orgsToLeave: string[] = [];
 
-      // Step 2: For each org, check if user is the sole member
       for (const membership of memberships.results || []) {
-        const memberCount = await c.env.DB.prepare(`
-          SELECT COUNT(*) as count FROM organization_members WHERE organization_id = ?
-        `).bind(membership.organization_id).first<{ count: number }>();
-
-        if (memberCount && memberCount.count <= 1) {
+        if (membership.member_count <= 1) {
           orgsToDelete.push(membership.organization_id);
         } else {
           orgsToLeave.push(membership.organization_id);
         }
       }
 
-      // Step 3: Delete organizations where user is sole member (cascading delete)
-      for (const orgId of orgsToDelete) {
-        // Get platform connections for this org (needed for connector_filter_rules)
-        const connections = await c.env.DB.prepare(`
-          SELECT id FROM platform_connections WHERE organization_id = ?
-        `).bind(orgId).all<{ id: string }>();
+      // OPTIMIZED: Batch delete org data using IN clauses and db.batch()
+      if (orgsToDelete.length > 0) {
+        const orgPlaceholders = orgsToDelete.map(() => '?').join(', ');
 
-        // Delete connector_filter_rules for each connection
-        for (const conn of connections.results || []) {
-          await c.env.DB.prepare(`
-            DELETE FROM connector_filter_rules WHERE connection_id = ?
-          `).bind(conn.id).run();
+        // Get all connection IDs for all orgs to delete in one query
+        const connections = await c.env.DB.prepare(`
+          SELECT id FROM platform_connections WHERE organization_id IN (${orgPlaceholders})
+        `).bind(...orgsToDelete).all<{ id: string }>();
+
+        const batchStatements: D1PreparedStatement[] = [];
+
+        // Delete connector_filter_rules for all connections at once
+        if (connections.results && connections.results.length > 0) {
+          const connPlaceholders = connections.results.map(() => '?').join(', ');
+          batchStatements.push(
+            c.env.DB.prepare(`
+              DELETE FROM connector_filter_rules WHERE connection_id IN (${connPlaceholders})
+            `).bind(...connections.results.map(c => c.id))
+          );
         }
 
-        // Delete all org-level data in proper order
+        // Delete from all org tables using IN clause
         const orgTables = [
           'platform_connections',
           'sync_jobs',
@@ -704,51 +711,43 @@ export class DeleteAccount extends OpenAPIRoute {
         ];
 
         for (const table of orgTables) {
-          try {
-            await c.env.DB.prepare(`
-              DELETE FROM ${table} WHERE organization_id = ?
-            `).bind(orgId).run();
-          } catch {
-            // Table may not exist or column may differ - continue
-          }
+          batchStatements.push(
+            c.env.DB.prepare(`
+              DELETE FROM ${table} WHERE organization_id IN (${orgPlaceholders})
+            `).bind(...orgsToDelete)
+          );
         }
 
-        // Finally delete the organization
-        await c.env.DB.prepare(`
-          DELETE FROM organizations WHERE id = ?
-        `).bind(orgId).run();
+        // Delete the organizations themselves
+        batchStatements.push(
+          c.env.DB.prepare(`
+            DELETE FROM organizations WHERE id IN (${orgPlaceholders})
+          `).bind(...orgsToDelete)
+        );
+
+        // Execute all org deletions in a single batch
+        await c.env.DB.batch(batchStatements);
       }
 
-      // Step 4: Leave organizations where user is not sole member
-      for (const orgId of orgsToLeave) {
+      // OPTIMIZED: Batch leave multiple orgs
+      if (orgsToLeave.length > 0) {
+        const leavePlaceholders = orgsToLeave.map(() => '?').join(', ');
         await c.env.DB.prepare(`
-          DELETE FROM organization_members WHERE organization_id = ? AND user_id = ?
-        `).bind(orgId, userId).run();
+          DELETE FROM organization_members WHERE organization_id IN (${leavePlaceholders}) AND user_id = ?
+        `).bind(...orgsToLeave, userId).run();
       }
 
-      // Step 5: Delete user-specific data
-      const userTables = [
-        { table: 'sessions', column: 'user_id' },
-        { table: 'email_verification_tokens', column: 'user_id' },
-        { table: 'password_reset_tokens', column: 'user_id' },
-        { table: 'oauth_states', column: 'user_id' },
-        { table: 'onboarding_progress', column: 'user_id' },
+      // OPTIMIZED: Batch delete user data with single db.batch() call
+      const userBatchStatements: D1PreparedStatement[] = [
+        c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId),
+        c.env.DB.prepare('DELETE FROM email_verification_tokens WHERE user_id = ?').bind(userId),
+        c.env.DB.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(userId),
+        c.env.DB.prepare('DELETE FROM oauth_states WHERE user_id = ?').bind(userId),
+        c.env.DB.prepare('DELETE FROM onboarding_progress WHERE user_id = ?').bind(userId),
+        c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(userId),
       ];
 
-      for (const { table, column } of userTables) {
-        try {
-          await c.env.DB.prepare(`
-            DELETE FROM ${table} WHERE ${column} = ?
-          `).bind(userId).run();
-        } catch {
-          // Table may not exist - continue
-        }
-      }
-
-      // Step 6: Delete the user record
-      await c.env.DB.prepare(`
-        DELETE FROM users WHERE id = ?
-      `).bind(userId).run();
+      await c.env.DB.batch(userBatchStatements);
 
       // Note: Synced data (campaigns, metrics in D1) becomes orphaned
       // but will be cleaned up by a separate maintenance job

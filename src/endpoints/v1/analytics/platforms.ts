@@ -74,9 +74,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     const activeConnections = await session.prepare(`
       SELECT DISTINCT platform FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).all<{ platform: string }>();
+    `).bind(orgId).all();
 
-    const activePlatforms = activeConnections.results?.map(r => r.platform) || [];
+    const activePlatforms = (activeConnections.results?.map(r => (r as { platform: string }).platform) || []) as string[];
 
     // If no active connections, return empty data
     if (activePlatforms.length === 0) {
@@ -206,7 +206,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         AND DATE(created_at) <= ?
         GROUP BY DATE(created_at)
         ORDER BY date ASC
-      `).bind(orgId, startDate, endDate).all<{ date: string; conversions: number }>();
+      `).bind(orgId, startDate, endDate).all();
 
       const byDate = result.results || [];
       const totalConversions = byDate.reduce((sum: number, row: any) => sum + row.conversions, 0);
@@ -223,6 +223,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
 
   /**
    * Fetch daily time series data from D1
+   * OPTIMIZED: Uses single UNION ALL query instead of N separate queries
    */
   private async fetchPlatformTimeSeriesD1(
     db: any,
@@ -237,94 +238,107 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     total_conversions: number;
     by_platform: Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number }>;
   }>> {
-    const dailyData: Map<string, {
-      date: string;
-      total_spend_cents: number;
-      total_impressions: number;
-      total_clicks: number;
-      total_conversions: number;
-      by_platform: Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number }>;
-    }> = new Map();
-
     console.log(`[TimeSeries] Starting D1 aggregation for platforms: ${JSON.stringify(platforms)}`);
 
-    const platformTableMap: Record<string, string> = {
-      google: 'google_campaign_daily_metrics',
-      facebook: 'facebook_campaign_daily_metrics',
-      meta: 'facebook_campaign_daily_metrics',
-      tiktok: 'tiktok_campaign_daily_metrics'
-    };
+    // Build UNION ALL query for all requested platforms
+    const unionParts: string[] = [];
+    const params: unknown[] = [];
 
-    for (const platform of platforms) {
-      try {
-        const normalizedPlatform = platform.toLowerCase().replace('_ads', '');
-        const tableName = platformTableMap[normalizedPlatform];
+    // Normalize platforms
+    const normalizedPlatforms = platforms.map(p => p.toLowerCase().replace('_ads', ''));
+    const uniquePlatforms = [...new Set(normalizedPlatforms.map(p => p === 'meta' ? 'facebook' : p))];
 
-        if (!tableName) {
-          console.log(`[TimeSeries] Skipping unknown platform: ${platform}`);
-          continue;
-        }
+    for (const platform of uniquePlatforms) {
+      const tableMap: Record<string, string> = {
+        google: 'google_campaign_daily_metrics',
+        facebook: 'facebook_campaign_daily_metrics',
+        tiktok: 'tiktok_campaign_daily_metrics'
+      };
 
-        const result = await db.prepare(`
-          SELECT
-            date,
-            SUM(impressions) as impressions,
-            SUM(clicks) as clicks,
-            SUM(spend_cents) as spend_cents,
-            SUM(conversions) as conversions
-          FROM ${tableName}
-          WHERE organization_id = ?
-          AND date >= ? AND date <= ?
-          GROUP BY date
-          ORDER BY date ASC
-        `).bind(orgId, dateRange.start, dateRange.end).all<any>();
+      const tableName = tableMap[platform];
+      if (!tableName) continue;
 
-        const dailyMetrics = result.results || [];
-        console.log(`[TimeSeries] ${normalizedPlatform} returned ${dailyMetrics.length} daily metrics`);
-
-        for (const metric of dailyMetrics) {
-          const date = metric.date;
-          if (!date) continue;
-
-          if (!dailyData.has(date)) {
-            dailyData.set(date, {
-              date,
-              total_spend_cents: 0,
-              total_impressions: 0,
-              total_clicks: 0,
-              total_conversions: 0,
-              by_platform: {}
-            });
-          }
-
-          const dayData = dailyData.get(date)!;
-          const spend = metric.spend_cents || 0;
-          const impressions = metric.impressions || 0;
-          const clicks = metric.clicks || 0;
-          const conversions = metric.conversions || 0;
-
-          // Add to totals
-          dayData.total_spend_cents += spend;
-          dayData.total_impressions += impressions;
-          dayData.total_clicks += clicks;
-          dayData.total_conversions += conversions;
-
-          // Add to platform breakdown
-          const platformKey = normalizedPlatform === 'meta' ? 'facebook' : normalizedPlatform;
-          if (!dayData.by_platform[platformKey]) {
-            dayData.by_platform[platformKey] = { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0 };
-          }
-          dayData.by_platform[platformKey].spend_cents += spend;
-          dayData.by_platform[platformKey].impressions += impressions;
-          dayData.by_platform[platformKey].clicks += clicks;
-          dayData.by_platform[platformKey].conversions += conversions;
-        }
-      } catch (err) {
-        console.warn(`Failed to fetch ${platform} daily metrics from D1:`, err);
-      }
+      unionParts.push(`
+        SELECT
+          '${platform}' as platform,
+          metric_date as date,
+          SUM(impressions) as impressions,
+          SUM(clicks) as clicks,
+          SUM(spend_cents) as spend_cents,
+          SUM(conversions) as conversions
+        FROM ${tableName}
+        WHERE organization_id = ?
+          AND metric_date >= ? AND metric_date <= ?
+        GROUP BY metric_date
+      `);
+      params.push(orgId, dateRange.start, dateRange.end);
     }
 
-    console.log(`[TimeSeries] Final dailyData has ${dailyData.size} dates`);
-    return Array.from(dailyData.values()).sort((a, b) => a.date.localeCompare(b.date));
+    if (unionParts.length === 0) {
+      console.log(`[TimeSeries] No valid platforms to query`);
+      return [];
+    }
+
+    // Execute single UNION ALL query
+    const query = unionParts.join(' UNION ALL ') + ' ORDER BY date ASC';
+
+    try {
+      const result = await db.prepare(query).bind(...params).all();
+
+      console.log(`[TimeSeries] UNION ALL returned ${result.results?.length || 0} rows`);
+
+      // Process results into daily aggregates
+      const dailyData: Map<string, {
+        date: string;
+        total_spend_cents: number;
+        total_impressions: number;
+        total_clicks: number;
+        total_conversions: number;
+        by_platform: Record<string, { spend_cents: number; impressions: number; clicks: number; conversions: number }>;
+      }> = new Map();
+
+      for (const row of result.results || []) {
+        const date = row.date;
+        if (!date) continue;
+
+        if (!dailyData.has(date)) {
+          dailyData.set(date, {
+            date,
+            total_spend_cents: 0,
+            total_impressions: 0,
+            total_clicks: 0,
+            total_conversions: 0,
+            by_platform: {}
+          });
+        }
+
+        const dayData = dailyData.get(date)!;
+        const spend = row.spend_cents || 0;
+        const impressions = row.impressions || 0;
+        const clicks = row.clicks || 0;
+        const conversions = row.conversions || 0;
+
+        // Add to totals
+        dayData.total_spend_cents += spend;
+        dayData.total_impressions += impressions;
+        dayData.total_clicks += clicks;
+        dayData.total_conversions += conversions;
+
+        // Add to platform breakdown
+        if (!dayData.by_platform[row.platform]) {
+          dayData.by_platform[row.platform] = { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0 };
+        }
+        dayData.by_platform[row.platform].spend_cents += spend;
+        dayData.by_platform[row.platform].impressions += impressions;
+        dayData.by_platform[row.platform].clicks += clicks;
+        dayData.by_platform[row.platform].conversions += conversions;
+      }
+
+      console.log(`[TimeSeries] Final dailyData has ${dailyData.size} dates`);
+      return Array.from(dailyData.values()).sort((a, b) => a.date.localeCompare(b.date));
+    } catch (err) {
+      console.error('[TimeSeries] UNION ALL query failed:', err);
+      return [];
+    }
   }
 }

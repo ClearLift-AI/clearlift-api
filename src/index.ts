@@ -616,7 +616,8 @@ export default {
         return;
       }
 
-      const aggregator = new AggregationService(shards);
+      // Pass ANALYTICS_DB for Stripe aggregation (Stripe data lives in ANALYTICS_DB, not shards)
+      const aggregator = new AggregationService(shards, env.ANALYTICS_DB);
       const result = await aggregator.runFullAggregation();
 
       console.log(`[Cron] Aggregation completed: ${result.success ? 'SUCCESS' : 'FAILED'}`);

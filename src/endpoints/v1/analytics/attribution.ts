@@ -888,13 +888,10 @@ export class RunAttributionAnalysis extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const query = await this.getValidatedQuery<{
-      org_id: string;
-      days: number;
-    }>();
+    const data = await this.getValidatedData<typeof this.schema>();
 
-    const orgId = c.get("organization")?.id || query.org_id;
-    const days = query.days || 30;
+    const orgId = c.get("org_id" as any) || data.query.org_id;
+    const days = data.query.days || 30;
     const jobId = crypto.randomUUID().replace(/-/g, '');
 
     // Create job record
@@ -907,7 +904,7 @@ export class RunAttributionAnalysis extends OpenAPIRoute {
     try {
       const workflow = (c.env as any).ATTRIBUTION_WORKFLOW;
       if (!workflow) {
-        return error(c, "Attribution workflow not configured", 500);
+        return error(c, "WORKFLOW_NOT_CONFIGURED", "Attribution workflow not configured", 500);
       }
 
       await workflow.create({
@@ -929,7 +926,7 @@ export class RunAttributionAnalysis extends OpenAPIRoute {
       `).bind(JSON.stringify({ error: err.message }), jobId).run();
 
       console.error(`[Attribution] Failed to start workflow:`, err);
-      return error(c, `Failed to start attribution analysis: ${err.message}`, 500);
+      return error(c, "WORKFLOW_START_FAILED", `Failed to start attribution analysis: ${err.message}`, 500);
     }
   }
 }
@@ -975,16 +972,15 @@ export class GetAttributionJobStatus extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const params = await this.getValidatedParams<{ job_id: string }>();
-    const query = await this.getValidatedQuery<{ org_id: string }>();
+    const data = await this.getValidatedData<typeof this.schema>();
 
-    const orgId = c.get("organization")?.id || query.org_id;
+    const orgId = c.get("org_id" as any) || data.query.org_id;
 
     const job = await c.env.AI_DB.prepare(`
       SELECT id, status, result, created_at, completed_at
       FROM analysis_jobs
       WHERE id = ? AND organization_id = ? AND type = 'attribution'
-    `).bind(params.job_id, orgId).first<{
+    `).bind(data.params.job_id, orgId).first<{
       id: string;
       status: string;
       result: string | null;
@@ -993,7 +989,7 @@ export class GetAttributionJobStatus extends OpenAPIRoute {
     }>();
 
     if (!job) {
-      return error(c, "Job not found", 404);
+      return error(c, "JOB_NOT_FOUND", "Job not found", 404);
     }
 
     return success(c, {
@@ -1052,13 +1048,10 @@ export class GetComputedAttribution extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    const query = await this.getValidatedQuery<{
-      org_id: string;
-      model: 'markov_chain' | 'shapley_value';
-    }>();
+    const data = await this.getValidatedData<typeof this.schema>();
 
-    const orgId = c.get("organization")?.id || query.org_id;
-    const model = query.model;
+    const orgId = c.get("org_id" as any) || data.query.org_id;
+    const model = data.query.model;
 
     // Get most recent computed results
     const results = await c.env.AI_DB.prepare(`
@@ -1080,7 +1073,7 @@ export class GetComputedAttribution extends OpenAPIRoute {
     }>();
 
     if (!results.results || results.results.length === 0) {
-      return error(c, `No ${model} results available. Run attribution analysis first.`, 404);
+      return error(c, "NO_RESULTS", `No ${model} results available. Run attribution analysis first.`, 404);
     }
 
     const first = results.results[0];

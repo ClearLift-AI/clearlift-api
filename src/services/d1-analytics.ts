@@ -814,6 +814,7 @@ export class D1AnalyticsService {
 
   /**
    * Get unified platform summary across all ad platforms
+   * OPTIMIZED: Uses single UNION ALL query instead of N separate queries
    */
   async getUnifiedPlatformSummary(
     orgId: string,
@@ -821,6 +822,95 @@ export class D1AnalyticsService {
     endDate: string,
     platforms: string[]
   ): Promise<{ summary: PlatformSummary; by_platform: Record<string, PlatformSummary> }> {
+    // Build UNION ALL query for requested platforms
+    const unionParts: string[] = [];
+    const params: unknown[] = [];
+
+    // Normalize 'meta' to 'facebook' for query purposes
+    const normalizedPlatforms = platforms.map(p => p === 'meta' ? 'facebook' : p);
+    const uniquePlatforms = [...new Set(normalizedPlatforms)];
+
+    if (uniquePlatforms.includes('google')) {
+      unionParts.push(`
+        SELECT
+          'google' as platform,
+          COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+          COALESCE(SUM(m.impressions), 0) as impressions,
+          COALESCE(SUM(m.clicks), 0) as clicks,
+          COALESCE(SUM(m.conversions), 0) as conversions,
+          COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents,
+          COUNT(DISTINCT c.id) as campaigns
+        FROM google_campaigns c
+        LEFT JOIN google_campaign_daily_metrics m
+          ON c.id = m.campaign_ref
+          AND m.metric_date >= ?
+          AND m.metric_date <= ?
+        WHERE c.organization_id = ?
+      `);
+      params.push(startDate, endDate, orgId);
+    }
+
+    if (uniquePlatforms.includes('facebook')) {
+      unionParts.push(`
+        SELECT
+          'facebook' as platform,
+          COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+          COALESCE(SUM(m.impressions), 0) as impressions,
+          COALESCE(SUM(m.clicks), 0) as clicks,
+          COALESCE(SUM(m.conversions), 0) as conversions,
+          0 as conversion_value_cents,
+          COUNT(DISTINCT c.id) as campaigns
+        FROM facebook_campaigns c
+        LEFT JOIN facebook_campaign_daily_metrics m
+          ON c.id = m.campaign_ref
+          AND m.metric_date >= ?
+          AND m.metric_date <= ?
+        WHERE c.organization_id = ?
+      `);
+      params.push(startDate, endDate, orgId);
+    }
+
+    if (uniquePlatforms.includes('tiktok')) {
+      unionParts.push(`
+        SELECT
+          'tiktok' as platform,
+          COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+          COALESCE(SUM(m.impressions), 0) as impressions,
+          COALESCE(SUM(m.clicks), 0) as clicks,
+          COALESCE(SUM(m.conversions), 0) as conversions,
+          0 as conversion_value_cents,
+          COUNT(DISTINCT c.id) as campaigns
+        FROM tiktok_campaigns c
+        LEFT JOIN tiktok_campaign_daily_metrics m
+          ON c.id = m.campaign_ref
+          AND m.metric_date >= ?
+          AND m.metric_date <= ?
+        WHERE c.organization_id = ?
+      `);
+      params.push(startDate, endDate, orgId);
+    }
+
+    // If no platforms requested, return empty
+    if (unionParts.length === 0) {
+      return {
+        summary: { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 },
+        by_platform: {}
+      };
+    }
+
+    // Execute single UNION ALL query
+    const query = unionParts.join(' UNION ALL ');
+    const result = await this.session.prepare(query).bind(...params).all<{
+      platform: string;
+      spend_cents: number;
+      impressions: number;
+      clicks: number;
+      conversions: number;
+      conversion_value_cents: number;
+      campaigns: number;
+    }>();
+
+    // Process results
     const by_platform: Record<string, PlatformSummary> = {};
     let totalSummary: PlatformSummary = {
       spend_cents: 0,
@@ -831,25 +921,20 @@ export class D1AnalyticsService {
       campaigns: 0,
     };
 
-    for (const platform of platforms) {
-      let summary: PlatformSummary;
+    for (const row of result.results) {
+      const summary: PlatformSummary = {
+        spend_cents: row.spend_cents,
+        impressions: row.impressions,
+        clicks: row.clicks,
+        conversions: row.conversions,
+        conversion_value_cents: row.conversion_value_cents,
+        campaigns: row.campaigns,
+      };
 
-      switch (platform) {
-        case 'google':
-          summary = await this.getGoogleSummary(orgId, startDate, endDate);
-          break;
-        case 'facebook':
-        case 'meta':
-          summary = await this.getFacebookSummary(orgId, startDate, endDate);
-          break;
-        case 'tiktok':
-          summary = await this.getTikTokSummary(orgId, startDate, endDate);
-          break;
-        default:
-          continue;
-      }
+      // Map 'facebook' back to 'meta' if that was the original request
+      const platformKey = platforms.includes('meta') && row.platform === 'facebook' ? 'meta' : row.platform;
+      by_platform[platformKey] = summary;
 
-      by_platform[platform] = summary;
       totalSummary.spend_cents += summary.spend_cents;
       totalSummary.impressions += summary.impressions;
       totalSummary.clicks += summary.clicks;

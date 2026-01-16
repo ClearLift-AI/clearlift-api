@@ -1301,6 +1301,8 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
           console.error('Failed to send sync job to queue:', queueErr);
           // Don't fail the connection if queue send fails
         }
+      } else {
+        console.error('SYNC_QUEUE not available! Job will remain pending. isLocal:', isLocal, 'hasQueue:', !!c.env.SYNC_QUEUE);
       }
 
       // Clean up OAuth state
@@ -1566,9 +1568,9 @@ export class TriggerResync extends OpenAPIRoute {
 
       await c.env.DB.prepare(`
         INSERT INTO sync_jobs (
-          id, connection_id, status, created_at, updated_at
-        ) VALUES (?, ?, 'pending', ?, ?)
-      `).bind(jobId, connection_id, now, now).run();
+          id, connection_id, organization_id, status, created_at, updated_at
+        ) VALUES (?, ?, ?, 'pending', ?, ?)
+      `).bind(jobId, connection_id, connection.organization_id, now, now).run();
 
       // Enqueue sync job
       await c.env.SYNC_QUEUE.send({
