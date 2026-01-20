@@ -490,7 +490,10 @@ async function buildPlatformFallbackD1(
       WHERE organization_id = ? AND is_active = 1
     `).bind(orgId).all<{ platform: string }>();
 
-    const platforms = connections.results?.map(r => r.platform) || [];
+    const allPlatforms = connections.results?.map(r => r.platform) || [];
+    // Filter to only ad platforms that have campaign_daily_metrics tables
+    // Stripe doesn't have campaigns, so we exclude it from this query
+    const platforms = allPlatforms.filter(p => ['google', 'facebook', 'tiktok'].includes(p));
     console.log(`[Attribution D1 Fallback] orgId=${orgId}, platforms=${JSON.stringify(platforms)}`);
 
     if (platforms.length === 0) {
@@ -507,18 +510,19 @@ async function buildPlatformFallbackD1(
         const campaignsTable = `${platform}_campaigns`;
 
         // Query aggregated metrics by campaign
+        // Note: Tables use 'metric_date', 'organization_id', and 'campaign_name' columns
         const metricsResult = await analyticsDb.prepare(`
           SELECT
             m.campaign_ref,
-            c.name as campaign_name,
+            c.campaign_name,
             SUM(m.conversions) as conversions,
             SUM(m.conversion_value_cents) as conversion_value_cents
           FROM ${metricsTable} m
           LEFT JOIN ${campaignsTable} c ON m.campaign_ref = c.id
-          WHERE m.org_id = ?
-            AND m.date >= ?
-            AND m.date <= ?
-          GROUP BY m.campaign_ref, c.name
+          WHERE m.organization_id = ?
+            AND m.metric_date >= ?
+            AND m.metric_date <= ?
+          GROUP BY m.campaign_ref, c.campaign_name
         `).bind(orgId, dateRange.start, dateRange.end).all<{
           campaign_ref: string;
           campaign_name: string | null;
@@ -1091,6 +1095,837 @@ export class GetComputedAttribution extends OpenAPIRoute {
         conversion_count: first.conversion_count,
         path_count: first.path_count
       }
+    });
+  }
+}
+
+/**
+ * GET /v1/analytics/attribution/blended
+ *
+ * Probabilistic attribution that combines ad platform data with connector revenue.
+ * Works even when no click/event tracking is available.
+ *
+ * Returns:
+ * - Ad platform spend and platform-reported conversions
+ * - Connector (Stripe) revenue as actual conversions
+ * - Spend gap analysis (ad spend vs actual revenue)
+ * - Estimated ROAS and CPA
+ * - Data quality warnings (e.g., non-overlapping time periods)
+ */
+export class GetBlendedAttribution extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Get blended attribution with spend gap analysis",
+    description: `
+Combines ad platform data with connector revenue for probabilistic attribution.
+Works even without click tracking or event data.
+
+**Returns:**
+- Ad platform spend and platform-reported conversions
+- Connector (Stripe/Shopify) revenue
+- Spend gap analysis (actual revenue vs ad spend)
+- Estimated ROAS and CPA
+- Data quality warnings
+
+**Use case:** When you have ad platforms and payment connectors but no click tracking.
+    `.trim(),
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Start date (YYYY-MM-DD)"),
+        date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("End date (YYYY-MM-DD)")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Blended attribution data",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                ad_platforms: z.object({
+                  total_spend: z.number(),
+                  total_impressions: z.number(),
+                  total_clicks: z.number(),
+                  platform_reported_conversions: z.number(),
+                  platform_reported_revenue: z.number(),
+                  date_range: z.object({
+                    start: z.string().nullable(),
+                    end: z.string().nullable()
+                  }),
+                  by_platform: z.array(z.object({
+                    platform: z.string(),
+                    spend: z.number(),
+                    impressions: z.number(),
+                    clicks: z.number(),
+                    conversions: z.number(),
+                    revenue: z.number()
+                  }))
+                }),
+                connectors: z.object({
+                  total_revenue: z.number(),
+                  total_transactions: z.number(),
+                  unique_customers: z.number(),
+                  date_range: z.object({
+                    start: z.string().nullable(),
+                    end: z.string().nullable()
+                  }),
+                  by_source: z.array(z.object({
+                    source: z.string(),
+                    revenue: z.number(),
+                    transactions: z.number()
+                  }))
+                }),
+                spend_gap: z.object({
+                  ad_spend: z.number(),
+                  actual_revenue: z.number(),
+                  implied_roas: z.number().nullable(),
+                  spend_to_revenue_ratio: z.number().nullable(),
+                  estimated_cpa: z.number().nullable()
+                }),
+                data_quality: z.object({
+                  has_overlapping_data: z.boolean(),
+                  ad_platform_date_range: z.string().nullable(),
+                  connector_date_range: z.string().nullable(),
+                  warnings: z.array(z.string())
+                }),
+                probabilistic_attribution: z.array(z.object({
+                  channel: z.string(),
+                  estimated_revenue: z.number(),
+                  confidence: z.enum(['high', 'medium', 'low', 'none']),
+                  attribution_method: z.string()
+                }))
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const query = c.req.query();
+    const dateFrom = query.date_from;
+    const dateTo = query.date_to;
+
+    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+
+    // 1. Query ad platform data
+    const adPlatformData = await this.getAdPlatformData(analyticsDb, c.env.DB, orgId, dateFrom, dateTo);
+
+    // 2. Query connector revenue (Stripe, Shopify, etc.)
+    const connectorData = await this.getConnectorData(analyticsDb, orgId, dateFrom, dateTo);
+
+    // 3. Calculate spend gap
+    const spendGap = this.calculateSpendGap(adPlatformData, connectorData);
+
+    // 4. Determine data quality
+    const dataQuality = this.assessDataQuality(adPlatformData, connectorData, dateFrom, dateTo);
+
+    // 5. Build probabilistic attribution
+    const attribution = this.buildProbabilisticAttribution(adPlatformData, connectorData, dataQuality);
+
+    return success(c, {
+      ad_platforms: adPlatformData,
+      connectors: connectorData,
+      spend_gap: spendGap,
+      data_quality: dataQuality,
+      probabilistic_attribution: attribution
+    });
+  }
+
+  private async getAdPlatformData(
+    analyticsDb: D1Database,
+    mainDb: D1Database,
+    orgId: string,
+    dateFrom: string,
+    dateTo: string
+  ) {
+    const platforms = ['google', 'facebook', 'tiktok'];
+    const byPlatform: any[] = [];
+    let totalSpend = 0;
+    let totalImpressions = 0;
+    let totalClicks = 0;
+    let totalConversions = 0;
+    let totalRevenue = 0;
+    let minDate: string | null = null;
+    let maxDate: string | null = null;
+
+    for (const platform of platforms) {
+      try {
+        const result = await analyticsDb.prepare(`
+          SELECT
+            SUM(spend_cents) / 100.0 as spend,
+            SUM(impressions) as impressions,
+            SUM(clicks) as clicks,
+            SUM(conversions) as conversions,
+            SUM(conversion_value_cents) / 100.0 as revenue,
+            MIN(metric_date) as min_date,
+            MAX(metric_date) as max_date
+          FROM ${platform}_campaign_daily_metrics
+          WHERE organization_id = ?
+            AND metric_date >= ?
+            AND metric_date <= ?
+        `).bind(orgId, dateFrom, dateTo).first<{
+          spend: number;
+          impressions: number;
+          clicks: number;
+          conversions: number;
+          revenue: number;
+          min_date: string;
+          max_date: string;
+        }>();
+
+        if (result && (result.spend || result.impressions)) {
+          byPlatform.push({
+            platform,
+            spend: result.spend || 0,
+            impressions: result.impressions || 0,
+            clicks: result.clicks || 0,
+            conversions: result.conversions || 0,
+            revenue: result.revenue || 0
+          });
+
+          totalSpend += result.spend || 0;
+          totalImpressions += result.impressions || 0;
+          totalClicks += result.clicks || 0;
+          totalConversions += result.conversions || 0;
+          totalRevenue += result.revenue || 0;
+
+          if (result.min_date && (!minDate || result.min_date < minDate)) {
+            minDate = result.min_date;
+          }
+          if (result.max_date && (!maxDate || result.max_date > maxDate)) {
+            maxDate = result.max_date;
+          }
+        }
+      } catch (err) {
+        // Table might not exist
+        console.warn(`[Blended Attribution] Failed to query ${platform}:`, err);
+      }
+    }
+
+    return {
+      total_spend: Math.round(totalSpend * 100) / 100,
+      total_impressions: totalImpressions,
+      total_clicks: totalClicks,
+      platform_reported_conversions: Math.round(totalConversions * 100) / 100,
+      platform_reported_revenue: Math.round(totalRevenue * 100) / 100,
+      date_range: { start: minDate, end: maxDate },
+      by_platform: byPlatform
+    };
+  }
+
+  private async getConnectorData(
+    analyticsDb: D1Database,
+    orgId: string,
+    dateFrom: string,
+    dateTo: string
+  ) {
+    const bySource: any[] = [];
+    let totalRevenue = 0;
+    let totalTransactions = 0;
+    let uniqueCustomers = 0;
+    let minDate: string | null = null;
+    let maxDate: string | null = null;
+
+    // Query Stripe charges
+    try {
+      const stripeResult = await analyticsDb.prepare(`
+        SELECT
+          SUM(amount_cents) / 100.0 as revenue,
+          COUNT(*) as transactions,
+          COUNT(DISTINCT customer_id) as unique_customers,
+          MIN(DATE(stripe_created_at)) as min_date,
+          MAX(DATE(stripe_created_at)) as max_date
+        FROM stripe_charges
+        WHERE organization_id = ?
+          AND status = 'succeeded'
+          AND DATE(stripe_created_at) >= ?
+          AND DATE(stripe_created_at) <= ?
+      `).bind(orgId, dateFrom, dateTo).first<{
+        revenue: number;
+        transactions: number;
+        unique_customers: number;
+        min_date: string;
+        max_date: string;
+      }>();
+
+      if (stripeResult && stripeResult.revenue) {
+        bySource.push({
+          source: 'stripe',
+          revenue: stripeResult.revenue || 0,
+          transactions: stripeResult.transactions || 0
+        });
+
+        totalRevenue += stripeResult.revenue || 0;
+        totalTransactions += stripeResult.transactions || 0;
+        uniqueCustomers += stripeResult.unique_customers || 0;
+
+        if (stripeResult.min_date) minDate = stripeResult.min_date;
+        if (stripeResult.max_date) maxDate = stripeResult.max_date;
+      }
+    } catch (err) {
+      console.warn('[Blended Attribution] Failed to query Stripe:', err);
+    }
+
+    // Query Shopify orders (if table exists)
+    try {
+      const shopifyResult = await analyticsDb.prepare(`
+        SELECT
+          SUM(total_price_cents) / 100.0 as revenue,
+          COUNT(*) as transactions,
+          COUNT(DISTINCT customer_id) as unique_customers,
+          MIN(DATE(shopify_created_at)) as min_date,
+          MAX(DATE(shopify_created_at)) as max_date
+        FROM shopify_orders
+        WHERE organization_id = ?
+          AND DATE(shopify_created_at) >= ?
+          AND DATE(shopify_created_at) <= ?
+      `).bind(orgId, dateFrom, dateTo).first<{
+        revenue: number;
+        transactions: number;
+        unique_customers: number;
+        min_date: string;
+        max_date: string;
+      }>();
+
+      if (shopifyResult && shopifyResult.revenue) {
+        bySource.push({
+          source: 'shopify',
+          revenue: shopifyResult.revenue || 0,
+          transactions: shopifyResult.transactions || 0
+        });
+
+        totalRevenue += shopifyResult.revenue || 0;
+        totalTransactions += shopifyResult.transactions || 0;
+        uniqueCustomers += shopifyResult.unique_customers || 0;
+
+        if (shopifyResult.min_date && (!minDate || shopifyResult.min_date < minDate)) {
+          minDate = shopifyResult.min_date;
+        }
+        if (shopifyResult.max_date && (!maxDate || shopifyResult.max_date > maxDate)) {
+          maxDate = shopifyResult.max_date;
+        }
+      }
+    } catch (err) {
+      // Table might not exist
+    }
+
+    return {
+      total_revenue: Math.round(totalRevenue * 100) / 100,
+      total_transactions: totalTransactions,
+      unique_customers: uniqueCustomers,
+      date_range: { start: minDate, end: maxDate },
+      by_source: bySource
+    };
+  }
+
+  private calculateSpendGap(adPlatformData: any, connectorData: any) {
+    const adSpend = adPlatformData.total_spend;
+    const actualRevenue = connectorData.total_revenue;
+
+    return {
+      ad_spend: adSpend,
+      actual_revenue: actualRevenue,
+      implied_roas: adSpend > 0 ? Math.round((actualRevenue / adSpend) * 100) / 100 : null,
+      spend_to_revenue_ratio: actualRevenue > 0 ? Math.round((adSpend / actualRevenue) * 100) / 100 : null,
+      estimated_cpa: connectorData.total_transactions > 0
+        ? Math.round((adSpend / connectorData.total_transactions) * 100) / 100
+        : null
+    };
+  }
+
+  private assessDataQuality(
+    adPlatformData: any,
+    connectorData: any,
+    dateFrom: string,
+    dateTo: string
+  ) {
+    const warnings: string[] = [];
+
+    const adStart = adPlatformData.date_range.start;
+    const adEnd = adPlatformData.date_range.end;
+    const connStart = connectorData.date_range.start;
+    const connEnd = connectorData.date_range.end;
+
+    // Check for date range overlap
+    let hasOverlap = false;
+    if (adStart && adEnd && connStart && connEnd) {
+      hasOverlap = !(adEnd < connStart || connEnd < adStart);
+    }
+
+    if (!hasOverlap && adStart && connStart) {
+      warnings.push(`No date overlap: Ad data (${adStart} to ${adEnd}) vs Connector data (${connStart} to ${connEnd})`);
+    }
+
+    if (!adStart && !adEnd) {
+      warnings.push('No ad platform data found in date range');
+    }
+
+    if (!connStart && !connEnd) {
+      warnings.push('No connector revenue data found in date range');
+    }
+
+    if (adPlatformData.platform_reported_revenue === 0 && adPlatformData.platform_reported_conversions > 0) {
+      warnings.push('Platform conversions have no revenue value - conversion tracking may not be configured');
+    }
+
+    // Check for tracking data
+    warnings.push('No click tracking data - attribution is estimated based on spend distribution');
+
+    return {
+      has_overlapping_data: hasOverlap,
+      ad_platform_date_range: adStart && adEnd ? `${adStart} to ${adEnd}` : null,
+      connector_date_range: connStart && connEnd ? `${connStart} to ${connEnd}` : null,
+      warnings
+    };
+  }
+
+  private buildProbabilisticAttribution(
+    adPlatformData: any,
+    connectorData: any,
+    dataQuality: any
+  ): any[] {
+    const attribution: any[] = [];
+    const totalRevenue = connectorData.total_revenue;
+    const totalSpend = adPlatformData.total_spend;
+
+    // If we have overlapping data and both ad spend and revenue,
+    // distribute revenue proportionally by platform spend
+    if (dataQuality.has_overlapping_data && totalSpend > 0 && totalRevenue > 0) {
+      for (const platform of adPlatformData.by_platform) {
+        const spendShare = platform.spend / totalSpend;
+        const estimatedRevenue = Math.round(totalRevenue * spendShare * 100) / 100;
+
+        attribution.push({
+          channel: platform.platform,
+          estimated_revenue: estimatedRevenue,
+          confidence: 'medium',
+          attribution_method: 'spend_weighted'
+        });
+      }
+    } else if (totalRevenue > 0) {
+      // No overlap or no ad spend - all revenue is unattributed
+      attribution.push({
+        channel: 'unattributed',
+        estimated_revenue: totalRevenue,
+        confidence: 'none',
+        attribution_method: 'no_tracking_data'
+      });
+
+      // Add platforms with zero estimated revenue but show they exist
+      for (const platform of adPlatformData.by_platform) {
+        if (platform.spend > 0) {
+          attribution.push({
+            channel: platform.platform,
+            estimated_revenue: 0,
+            confidence: 'low',
+            attribution_method: 'no_date_overlap'
+          });
+        }
+      }
+    }
+
+    // Sort by estimated revenue
+    attribution.sort((a, b) => b.estimated_revenue - a.estimated_revenue);
+
+    return attribution;
+  }
+}
+
+/**
+ * POST /v1/analytics/attribution/probabilistic/run
+ *
+ * Run probabilistic attribution using Stripe conversions + tag events.
+ * This workflow matches Stripe charges to tag events for multi-touch attribution
+ * WITHOUT requiring ad platform data.
+ *
+ * Supports multiple conversion sources:
+ * - 'stripe': Use Stripe charges as conversions
+ * - 'tag': Use tag goal_id events as conversions
+ * - 'all': Use both (default)
+ *
+ * Matching strategies (in priority order):
+ * 1. Direct tag: Tag conversions already know their journey
+ * 2. Identity match: Hash of Stripe customer_email matches tag user_id_hash
+ * 3. Time proximity: Sessions with engagement within conversion window
+ */
+export class RunProbabilisticAttribution extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Run probabilistic attribution",
+    description: `
+Trigger probabilistic attribution using Stripe + tag data.
+Matches Stripe conversions to tag events for multi-touch attribution.
+Returns a job ID to poll for completion.
+
+**Conversion Sources:**
+- \`stripe\`: Use Stripe charges as ground truth conversions
+- \`tag\`: Use tag events with goal_id as conversions
+- \`all\`: Use both (default)
+
+**No ad platform data required** - perfect for orgs with Stripe but no ad spend data.
+    `.trim(),
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        days: z.coerce.number().optional().default(7).describe("Days of data to analyze"),
+        lookback_days: z.coerce.number().optional().default(30).describe("Days to look back for touchpoints"),
+        conversion_window_hours: z.coerce.number().optional().default(24).describe("Hours before conversion to look for touchpoints"),
+        conversion_sources: z.string().optional().default('all').describe("Comma-separated: stripe,tag,all")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Analysis job started",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                job_id: z.string(),
+                status: z.enum(['pending', 'running', 'completed', 'failed'])
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+
+    const orgId = c.get("org_id" as any) || data.query.org_id;
+    const days = data.query.days || 7;
+    const lookbackDays = data.query.lookback_days || 30;
+    const conversionWindowHours = data.query.conversion_window_hours || 24;
+    const conversionSources = (data.query.conversion_sources || 'all').split(',').map(s => s.trim()) as any[];
+
+    const jobId = crypto.randomUUID().replace(/-/g, '');
+
+    // Get org tag for R2 SQL queries
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).first<{ short_tag: string }>();
+
+    if (!tagMapping?.short_tag) {
+      return error(c, "NO_TAG_CONFIGURED", "Organization has no tracking tag configured", 400);
+    }
+
+    // Calculate date range
+    const endDate = new Date().toISOString().split('T')[0];
+    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    // Create job record (days is required, status defaults to 'pending', current_level tracks job type)
+    await c.env.AI_DB.prepare(`
+      INSERT INTO analysis_jobs (id, organization_id, days, status, current_level, created_at)
+      VALUES (?, ?, ?, 'pending', 'probabilistic_attribution', datetime('now'))
+    `).bind(jobId, orgId, days).run();
+
+    // Trigger the workflow via service binding to queue-consumer
+    try {
+      const cronService = (c.env as any).CLEARLIFT_CRON;
+      if (!cronService) {
+        return error(c, "SERVICE_NOT_CONFIGURED", "CLEARLIFT_CRON service binding not configured", 500);
+      }
+
+      const response = await cronService.fetch('https://internal/workflows/probabilistic-attribution', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'CF-Worker': 'true'
+        },
+        body: JSON.stringify({
+          org_id: orgId,
+          org_tag: tagMapping.short_tag,
+          start_date: startDate,
+          end_date: endDate,
+          lookback_days: lookbackDays,
+          conversion_window_hours: conversionWindowHours,
+          conversion_sources: conversionSources,
+          job_id: jobId
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({})) as any;
+        throw new Error(errorData.error || `Workflow trigger failed: ${response.status}`);
+      }
+
+      console.log(`[ProbabilisticAttribution] Started job ${jobId} for org ${orgId} (${tagMapping.short_tag})`);
+
+      return success(c, {
+        job_id: jobId,
+        status: 'pending',
+        config: {
+          org_tag: tagMapping.short_tag,
+          start_date: startDate,
+          end_date: endDate,
+          lookback_days: lookbackDays,
+          conversion_window_hours: conversionWindowHours,
+          conversion_sources: conversionSources
+        }
+      });
+
+    } catch (err: any) {
+      // Update job status to failed
+      await c.env.AI_DB.prepare(`
+        UPDATE analysis_jobs SET status = 'failed', error_message = ?
+        WHERE id = ?
+      `).bind(err.message, jobId).run();
+
+      console.error(`[ProbabilisticAttribution] Failed to start workflow:`, err);
+      return error(c, "WORKFLOW_START_FAILED", `Failed to start probabilistic attribution: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * GET /v1/analytics/attribution/probabilistic/status/:job_id
+ *
+ * Get the status of a probabilistic attribution job.
+ */
+export class GetProbabilisticAttributionStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Get probabilistic attribution job status",
+    description: "Check the status of a probabilistic attribution workflow",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        job_id: z.string().describe("Job ID from run endpoint")
+      }),
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Job status",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                job_id: z.string(),
+                status: z.enum(['pending', 'running', 'completed', 'failed']),
+                result: z.any().optional(),
+                created_at: z.string(),
+                completed_at: z.string().nullable()
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+
+    const orgId = c.get("org_id" as any) || data.query.org_id;
+
+    const job = await c.env.AI_DB.prepare(`
+      SELECT id, status, error_message, created_at, completed_at, processed_entities, total_entities
+      FROM analysis_jobs
+      WHERE id = ? AND organization_id = ? AND current_level = 'probabilistic_attribution'
+    `).bind(data.params.job_id, orgId).first<{
+      id: string;
+      status: string;
+      error_message: string | null;
+      created_at: string;
+      completed_at: string | null;
+      processed_entities: number | null;
+      total_entities: number | null;
+    }>();
+
+    if (!job) {
+      return error(c, "JOB_NOT_FOUND", "Job not found", 404);
+    }
+
+    return success(c, {
+      job_id: job.id,
+      status: job.status,
+      error: job.error_message,
+      progress: job.total_entities ? {
+        processed: job.processed_entities || 0,
+        total: job.total_entities
+      } : null,
+      created_at: job.created_at,
+      completed_at: job.completed_at
+    });
+  }
+}
+
+/**
+ * GET /v1/analytics/attribution/journey-analytics
+ *
+ * Get journey analytics data (Level 1 - always available).
+ * Returns channel distribution, transition matrix, common paths, and data quality report.
+ */
+export class GetJourneyAnalytics extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Get journey analytics",
+    description: `
+Get journey analytics data from probabilistic attribution.
+This data is always available (Level 1) even when conversion matching fails.
+
+**Returns:**
+- Channel distribution (percentage of traffic by channel)
+- Entry/exit channels (where users start and end their journeys)
+- Common paths (most frequent user journeys)
+- Transition matrix (Markov chain probabilities)
+- Data quality report with recommendations
+
+Run probabilistic attribution first to generate this data.
+    `.trim(),
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        period_start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Start date (YYYY-MM-DD)"),
+        period_end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("End date (YYYY-MM-DD)")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Journey analytics data",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                channel_distribution: z.record(z.number()),
+                total_sessions: z.number(),
+                converting_sessions: z.number(),
+                conversion_rate: z.number(),
+                avg_path_length: z.number(),
+                common_paths: z.array(z.object({
+                  path: z.array(z.string()),
+                  count: z.number(),
+                  conversion_rate: z.number()
+                })),
+                entry_channels: z.record(z.number()),
+                exit_channels: z.record(z.number()),
+                transition_matrix: z.record(z.record(z.number())),
+                data_quality: z.object({
+                  level: z.number(),
+                  level_name: z.string(),
+                  total_conversions: z.number(),
+                  matched_conversions: z.number(),
+                  match_rate: z.number(),
+                  recommendations: z.array(z.string())
+                }),
+                period: z.object({
+                  start: z.string(),
+                  end: z.string()
+                }),
+                computed_at: z.string()
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const orgId = c.get("org_id" as any) || data.query.org_id;
+
+    // Get org tag
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).first<{ short_tag: string }>();
+
+    if (!tagMapping?.short_tag) {
+      return error(c, "NO_TAG_CONFIGURED", "Organization has no tracking tag configured", 400);
+    }
+
+    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    if (!analyticsDb) {
+      return error(c, "DATABASE_ERROR", "ANALYTICS_DB not configured", 500);
+    }
+
+    // Query journey analytics
+    let query = `
+      SELECT
+        channel_distribution, total_sessions, converting_sessions,
+        conversion_rate, avg_path_length, common_paths,
+        entry_channels, exit_channels, transition_matrix,
+        data_quality_level, data_quality_report, match_breakdown,
+        total_conversions, matched_conversions,
+        period_start, period_end, computed_at
+      FROM journey_analytics
+      WHERE org_tag = ?
+    `;
+
+    const params: any[] = [tagMapping.short_tag];
+
+    if (data.query.period_start && data.query.period_end) {
+      query += ` AND period_start = ? AND period_end = ?`;
+      params.push(data.query.period_start, data.query.period_end);
+    }
+
+    query += ` ORDER BY computed_at DESC LIMIT 1`;
+
+    const result = await analyticsDb.prepare(query).bind(...params).first<{
+      channel_distribution: string;
+      total_sessions: number;
+      converting_sessions: number;
+      conversion_rate: number;
+      avg_path_length: number;
+      common_paths: string;
+      entry_channels: string;
+      exit_channels: string;
+      transition_matrix: string;
+      data_quality_level: number;
+      data_quality_report: string;
+      match_breakdown: string;
+      total_conversions: number;
+      matched_conversions: number;
+      period_start: string;
+      period_end: string;
+      computed_at: string;
+    }>();
+
+    if (!result) {
+      return error(c, "NO_DATA", "No journey analytics available. Run probabilistic attribution first.", 404);
+    }
+
+    // Parse JSON fields
+    const dataQualityReport = JSON.parse(result.data_quality_report || '{}');
+
+    return success(c, {
+      channel_distribution: JSON.parse(result.channel_distribution || '{}'),
+      total_sessions: result.total_sessions,
+      converting_sessions: result.converting_sessions,
+      conversion_rate: result.conversion_rate,
+      avg_path_length: result.avg_path_length,
+      common_paths: JSON.parse(result.common_paths || '[]'),
+      entry_channels: JSON.parse(result.entry_channels || '{}'),
+      exit_channels: JSON.parse(result.exit_channels || '{}'),
+      transition_matrix: JSON.parse(result.transition_matrix || '{}'),
+      data_quality: {
+        level: result.data_quality_level,
+        level_name: dataQualityReport.level_name || 'unknown',
+        total_conversions: result.total_conversions,
+        matched_conversions: result.matched_conversions,
+        match_rate: dataQualityReport.match_rate || 0,
+        recommendations: dataQualityReport.recommendations || []
+      },
+      period: {
+        start: result.period_start,
+        end: result.period_end
+      },
+      computed_at: result.computed_at
     });
   }
 }

@@ -27,7 +27,11 @@ import {
   GetAttributionComparison,
   RunAttributionAnalysis,
   GetAttributionJobStatus,
-  GetComputedAttribution
+  GetComputedAttribution,
+  GetBlendedAttribution,
+  RunProbabilisticAttribution,
+  GetProbabilisticAttributionStatus,
+  GetJourneyAnalytics
 } from "./endpoints/v1/analytics/attribution";
 import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-campaigns";
 import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
@@ -124,6 +128,7 @@ import {
 import {
   ListConnectors,
   ListConnectedPlatforms,
+  GetConnectionsNeedingReauth,
   InitiateOAuthFlow,
   HandleOAuthCallback,
   MockOAuthCallback,
@@ -413,7 +418,11 @@ openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributionComparison);
 openapi.post("/v1/analytics/attribution/run", auth, requireOrg, RunAttributionAnalysis);
 openapi.get("/v1/analytics/attribution/status/:job_id", auth, requireOrg, GetAttributionJobStatus);
+openapi.post("/v1/analytics/attribution/probabilistic/run", auth, requireOrg, RunProbabilisticAttribution);
+openapi.get("/v1/analytics/attribution/probabilistic/status/:job_id", auth, requireOrg, GetProbabilisticAttributionStatus);
+openapi.get("/v1/analytics/attribution/journey-analytics", auth, requireOrg, GetJourneyAnalytics);
 openapi.get("/v1/analytics/attribution/computed", auth, requireOrg, GetComputedAttribution);
+openapi.get("/v1/analytics/attribution/blended", auth, requireOrg, GetBlendedAttribution);
 openapi.get("/v1/analytics/stripe", auth, requireOrg, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, requireOrg, GetStripeDailyAggregates);
 openapi.get("/v1/analytics/jobber/revenue", auth, requireOrg, GetJobberRevenue);
@@ -499,6 +508,7 @@ openapi.post("/v1/onboarding/reset", auth, ResetOnboarding);
 // Connector endpoints
 openapi.get("/v1/connectors", auth, ListConnectors);
 openapi.get("/v1/connectors/connected", auth, ListConnectedPlatforms);
+openapi.get("/v1/connectors/needs-reauth", auth, GetConnectionsNeedingReauth);
 
 // Stripe-specific connector endpoints (MUST be before generic :provider routes)
 openapi.post("/v1/connectors/stripe/connect", auth, ConnectStripe);
@@ -601,7 +611,7 @@ export default {
   fetch: app.fetch,
 
   // Scheduled handler for cron jobs
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     console.log(`[Cron] Triggered at ${new Date(event.scheduledTime).toISOString()}, cron: ${event.cron}`);
 
     // Daily aggregation cron (runs at 5 AM UTC)
@@ -632,6 +642,135 @@ export default {
       for (const shard of result.shards) {
         console.log(`[Cron] Shard ${shard.shardId}: ${shard.success ? 'OK' : 'FAILED'} (${shard.duration_ms}ms)`);
       }
+    }
+
+    // Stale job cleanup cron (runs every 15 minutes)
+    if (event.cron === '*/15 * * * *') {
+      console.log('[Cron] Running stale job cleanup...');
+      await this.cleanupStaleJobs(env);
+    }
+  },
+
+  // Cleanup stale pending jobs - retry or fail them
+  async cleanupStaleJobs(env: Env): Promise<void> {
+    const STALE_THRESHOLD_MINUTES = 30;  // Jobs pending > 30 min are stale
+    const MAX_RETRIES = 3;               // Max retry attempts before marking failed
+    const FAIL_THRESHOLD_HOURS = 2;      // Jobs pending > 2 hours are failed
+
+    try {
+      // Find stale pending jobs (> 30 minutes old, < 2 hours old)
+      const staleJobs = await env.DB.prepare(`
+        SELECT
+          sj.id, sj.connection_id, sj.organization_id, sj.job_type, sj.metadata,
+          pc.platform, pc.account_id
+        FROM sync_jobs sj
+        JOIN platform_connections pc ON sj.connection_id = pc.id
+        WHERE sj.status = 'pending'
+          AND sj.created_at < datetime('now', '-${STALE_THRESHOLD_MINUTES} minutes')
+          AND sj.created_at > datetime('now', '-${FAIL_THRESHOLD_HOURS} hours')
+        LIMIT 10
+      `).all<{
+        id: string;
+        connection_id: string;
+        organization_id: string;
+        job_type: string;
+        metadata: string | null;
+        platform: string;
+        account_id: string;
+      }>();
+
+      console.log(`[Cron] Found ${staleJobs.results?.length || 0} stale pending jobs`);
+
+      for (const job of staleJobs.results || []) {
+        const metadata = job.metadata ? JSON.parse(job.metadata) : {};
+        const retryCount = metadata.retry_count || 0;
+
+        if (retryCount >= MAX_RETRIES) {
+          // Too many retries - mark as failed
+          console.log(`[Cron] Job ${job.id} exceeded max retries, marking as failed`);
+          await env.DB.prepare(`
+            UPDATE sync_jobs
+            SET status = 'failed',
+                error_message = 'Job stuck in pending state after ${MAX_RETRIES} retry attempts',
+                completed_at = datetime('now'),
+                metadata = ?
+            WHERE id = ?
+          `).bind(
+            JSON.stringify({ ...metadata, retry_count: retryCount, failed_reason: 'max_retries_exceeded' }),
+            job.id
+          ).run();
+        } else {
+          // Retry - re-queue the job
+          console.log(`[Cron] Re-queuing stale job ${job.id} (retry ${retryCount + 1}/${MAX_RETRIES})`);
+
+          // Update metadata with retry count
+          const updatedMetadata = { ...metadata, retry_count: retryCount + 1, last_retry: new Date().toISOString() };
+          await env.DB.prepare(`
+            UPDATE sync_jobs SET metadata = ? WHERE id = ?
+          `).bind(JSON.stringify(updatedMetadata), job.id).run();
+
+          // Re-send to queue
+          try {
+            await env.SYNC_QUEUE.send({
+              job_id: job.id,
+              connection_id: job.connection_id,
+              organization_id: job.organization_id,
+              platform: job.platform,
+              account_id: job.account_id,
+              sync_window: metadata.sync_window || {
+                type: job.job_type,
+                start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+                end: new Date().toISOString()
+              },
+              metadata: updatedMetadata
+            });
+            console.log(`[Cron] Successfully re-queued job ${job.id}`);
+          } catch (queueErr) {
+            console.error(`[Cron] Failed to re-queue job ${job.id}:`, queueErr);
+          }
+        }
+      }
+
+      // Find very old pending jobs (> 2 hours) and mark as failed
+      const veryOldJobs = await env.DB.prepare(`
+        SELECT id, metadata FROM sync_jobs
+        WHERE status = 'pending'
+          AND created_at < datetime('now', '-${FAIL_THRESHOLD_HOURS} hours')
+        LIMIT 20
+      `).all<{ id: string; metadata: string | null }>();
+
+      if (veryOldJobs.results?.length) {
+        console.log(`[Cron] Marking ${veryOldJobs.results.length} very old pending jobs as failed`);
+
+        for (const job of veryOldJobs.results) {
+          const metadata = job.metadata ? JSON.parse(job.metadata) : {};
+          await env.DB.prepare(`
+            UPDATE sync_jobs
+            SET status = 'failed',
+                error_message = 'Job abandoned - pending for over ${FAIL_THRESHOLD_HOURS} hours without being processed',
+                completed_at = datetime('now'),
+                metadata = ?
+            WHERE id = ?
+          `).bind(
+            JSON.stringify({ ...metadata, failed_reason: 'abandoned' }),
+            job.id
+          ).run();
+        }
+      }
+
+      // Also cleanup stale active_event_workflows entries (> 2 hours old)
+      const cleanedWorkflows = await env.DB.prepare(`
+        DELETE FROM active_event_workflows
+        WHERE created_at < datetime('now', '-2 hours')
+      `).run();
+
+      if (cleanedWorkflows.meta.changes > 0) {
+        console.log(`[Cron] Cleaned up ${cleanedWorkflows.meta.changes} stale workflow entries`);
+      }
+
+      console.log('[Cron] Stale job cleanup completed');
+    } catch (err) {
+      console.error('[Cron] Error during stale job cleanup:', err);
     }
   }
 };
