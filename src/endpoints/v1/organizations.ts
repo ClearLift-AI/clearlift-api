@@ -359,15 +359,23 @@ export class InviteToOrganization extends OpenAPIRoute {
       org_name: string;
     }>();
 
-    // Send invitation email
+    // Send invitation email and check result
     const emailService = createEmailService(c.env);
-    await emailService.sendOrganizationInvite(
+    const emailResult = await emailService.sendOrganizationInvite(
       email,
       inviterDetails?.org_name || 'Organization',
       inviterDetails?.inviter_name || 'A team member',
       role,
       inviteCode
     );
+
+    if (!emailResult.success) {
+      // Rollback - delete the invite since email failed
+      await c.env.DB.prepare(`DELETE FROM invitations WHERE id = ?`).bind(inviteId).run();
+      console.error('Invite email failed:', emailResult.error);
+      return error(c, "EMAIL_FAILED",
+        "Failed to send invitation email. Please try again or contact support.", 500);
+    }
 
     return c.json({
       success: true,
@@ -433,34 +441,65 @@ export class JoinOrganization extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>();
     const { invite_code } = data.body;
 
-    // Find invitation - handle both regular and shareable invites
-    const invitation = await c.env.DB.prepare(`
-      SELECT i.*, o.name, o.slug
+    // 1. First check if invite exists at all
+    const inviteExists = await c.env.DB.prepare(`
+      SELECT i.id, i.expires_at, i.email, i.is_shareable, i.accepted_at, i.max_uses, i.use_count,
+             i.organization_id, i.role, o.name, o.slug
       FROM invitations i
       JOIN organizations o ON i.organization_id = o.id
       WHERE i.invite_code = ?
-        AND i.expires_at > datetime('now')
-        AND (
-          -- Regular invite: not accepted, email matches
-          (i.is_shareable = 0 AND i.accepted_at IS NULL AND i.email = ?)
-          OR
-          -- Shareable invite: within usage limit
-          (i.is_shareable = 1 AND (i.max_uses IS NULL OR i.use_count < i.max_uses))
-        )
-    `).bind(invite_code, session.email).first<{
+    `).bind(invite_code).first<{
       id: string;
+      expires_at: string;
+      email: string | null;
+      is_shareable: number;
+      accepted_at: string | null;
+      max_uses: number | null;
+      use_count: number;
       organization_id: string;
       role: string;
       name: string;
       slug: string;
-      is_shareable: number;
-      max_uses: number | null;
-      use_count: number;
     }>();
 
-    if (!invitation) {
-      return error(c, "INVALID_CODE", "Invalid or expired invitation code", 400);
+    if (!inviteExists) {
+      return error(c, "INVALID_CODE", "This invite code does not exist", 400);
     }
+
+    // 2. Check expiration
+    if (new Date(inviteExists.expires_at) < new Date()) {
+      return error(c, "INVITE_EXPIRED", "This invite code has expired", 400);
+    }
+
+    // 3. For regular invites, check email match and usage
+    if (!inviteExists.is_shareable) {
+      if (inviteExists.accepted_at) {
+        return error(c, "INVITE_USED", "This invite code has already been used", 400);
+      }
+      // Case-insensitive email comparison
+      if (inviteExists.email?.toLowerCase() !== session.email?.toLowerCase()) {
+        return error(c, "EMAIL_MISMATCH",
+          `This invite was sent to a different email address. Please sign in with ${inviteExists.email}`, 400);
+      }
+    }
+
+    // 4. For shareable invites, check usage limit
+    if (inviteExists.is_shareable && inviteExists.max_uses &&
+        inviteExists.use_count >= inviteExists.max_uses) {
+      return error(c, "INVITE_EXHAUSTED", "This invite link has reached its maximum uses", 400);
+    }
+
+    // Use the validated invite data
+    const invitation = {
+      id: inviteExists.id,
+      organization_id: inviteExists.organization_id,
+      role: inviteExists.role,
+      name: inviteExists.name,
+      slug: inviteExists.slug,
+      is_shareable: inviteExists.is_shareable,
+      max_uses: inviteExists.max_uses,
+      use_count: inviteExists.use_count,
+    };
 
     // Check if already a member
     const existingMembership = await c.env.DB.prepare(`
@@ -474,31 +513,46 @@ export class JoinOrganization extends OpenAPIRoute {
 
     const now = new Date().toISOString();
 
-    // Add user to organization
-    await c.env.DB.prepare(`
-      INSERT INTO organization_members (organization_id, user_id, role, joined_at)
-      VALUES (?, ?, ?, ?)
-    `).bind(invitation.organization_id, session.user_id, invitation.role, now).run();
-
-    // Handle invitation tracking based on type
-    if (invitation.is_shareable) {
-      // Shareable invite: increment use count
+    // Add user to organization with explicit error handling
+    try {
       await c.env.DB.prepare(`
-        UPDATE invitations SET use_count = use_count + 1 WHERE id = ?
-      `).bind(invitation.id).run();
-    } else {
-      // Regular invite: mark as accepted
-      await c.env.DB.prepare(`
-        UPDATE invitations SET accepted_at = ? WHERE id = ?
-      `).bind(now, invitation.id).run();
+        INSERT INTO organization_members (organization_id, user_id, role, joined_at)
+        VALUES (?, ?, ?, ?)
+      `).bind(invitation.organization_id, session.user_id, invitation.role, now).run();
+    } catch (dbError: any) {
+      console.error('Failed to insert organization member:', {
+        error: dbError.message,
+        org_id: invitation.organization_id,
+        user_id: session.user_id,
+        role: invitation.role
+      });
+      return error(c, "JOIN_FAILED", `Failed to add you to the organization: ${dbError.message}`, 500);
     }
 
-    // Update organization timestamp
-    await c.env.DB.prepare(`
-      UPDATE organizations
-      SET updated_at = ?
-      WHERE id = ?
-    `).bind(now, invitation.organization_id).run();
+    // Handle invitation tracking based on type
+    try {
+      if (invitation.is_shareable) {
+        // Shareable invite: increment use count
+        await c.env.DB.prepare(`
+          UPDATE invitations SET use_count = use_count + 1 WHERE id = ?
+        `).bind(invitation.id).run();
+      } else {
+        // Regular invite: mark as accepted
+        await c.env.DB.prepare(`
+          UPDATE invitations SET accepted_at = ? WHERE id = ?
+        `).bind(now, invitation.id).run();
+      }
+
+      // Update organization timestamp
+      await c.env.DB.prepare(`
+        UPDATE organizations
+        SET updated_at = ?
+        WHERE id = ?
+      `).bind(now, invitation.organization_id).run();
+    } catch (updateError: any) {
+      // Non-critical - membership was already added, just log the error
+      console.error('Failed to update invitation/org timestamps:', updateError.message);
+    }
 
     return success(c, {
       organization: {

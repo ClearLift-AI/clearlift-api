@@ -140,7 +140,13 @@ export async function requireOrg(c: AppContext, next: Next) {
   // Verify user has access to the organization (supports both ID and slug)
   const { D1Adapter } = await import("../adapters/d1");
   const d1 = new D1Adapter(c.env.DB);
-  const hasAccess = await d1.checkOrgAccess(session.user_id, orgIdOrSlug);
+
+  // Check if user is super admin - super admins bypass org membership check
+  const user = await d1.getUser(session.user_id);
+  const isSuperAdmin = user?.is_admin === true;
+
+  // Super admins have access to all organizations
+  const hasAccess = isSuperAdmin || await d1.checkOrgAccess(session.user_id, orgIdOrSlug);
 
   if (!hasAccess) {
     return c.json({
@@ -195,6 +201,17 @@ export function requireRole(roles: string[]) {
     }
 
     try {
+      // Check if user is super admin - super admins bypass role checks
+      const { D1Adapter } = await import("../adapters/d1");
+      const d1 = new D1Adapter(c.env.DB);
+      const user = await d1.getUser(session.user_id);
+
+      if (user?.is_admin === true) {
+        // Super admins have implicit owner-level access to all orgs
+        await next();
+        return;
+      }
+
       // Get user's role in the organization
       const member = await c.env.DB.prepare(`
         SELECT role FROM organization_members
