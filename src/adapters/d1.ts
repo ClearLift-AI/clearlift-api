@@ -193,8 +193,15 @@ export class D1Adapter {
   /**
    * Check if user has access to organization
    * Supports both organization ID (UUID) and slug
+   * Super admins (is_admin=true) have access to all organizations
    */
   async checkOrgAccess(userId: string, orgIdOrSlug: string): Promise<boolean> {
+    // First check if user is a super admin - they have access to all orgs
+    const user = await this.getUser(userId);
+    if (user?.is_admin === true) {
+      return true;
+    }
+
     // Check if input looks like a UUID
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgIdOrSlug);
 

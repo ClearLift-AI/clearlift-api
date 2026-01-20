@@ -56,7 +56,7 @@ export class GetSyncStatus extends OpenAPIRoute {
     const connectionId = c.req.param("connection_id");
     const session = c.get("session");
 
-    // Get connection info - verify user has access
+    // Get connection info
     const connection = await c.env.DB.prepare(`
       SELECT
         pc.platform,
@@ -66,14 +66,20 @@ export class GetSyncStatus extends OpenAPIRoute {
         pc.is_active,
         pc.organization_id
       FROM platform_connections pc
-      INNER JOIN organization_members om
-        ON pc.organization_id = om.organization_id
       WHERE pc.id = ?
-        AND om.user_id = ?
-    `).bind(connectionId, session.user_id).first();
+    `).bind(connectionId).first();
 
     if (!connection) {
-      return c.json({ error: "Connection not found or access denied" }, 404);
+      return c.json({ error: "Connection not found" }, 404);
+    }
+
+    // Verify user has access (checkOrgAccess handles super admin bypass)
+    const { D1Adapter } = await import("../../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id as string);
+
+    if (!hasAccess) {
+      return c.json({ error: "Access denied" }, 403);
     }
 
     // Get latest sync job
