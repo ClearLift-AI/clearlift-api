@@ -92,6 +92,78 @@ export class ListConnectedPlatforms extends OpenAPIRoute {
 }
 
 /**
+ * GET /v1/connectors/needs-reauth - Get connections that need re-authentication
+ *
+ * Returns connections with expired/invalid OAuth tokens that require user action
+ */
+export class GetConnectionsNeedingReauth extends OpenAPIRoute {
+  public schema = {
+    tags: ["Connectors"],
+    summary: "Get connections needing re-authentication",
+    operationId: "get-connections-needing-reauth",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Connections needing re-authentication",
+        content: {
+          "application/json": {
+            schema: z.object({
+              connections: z.array(z.object({
+                id: z.string(),
+                platform: z.string(),
+                account_id: z.string(),
+                account_name: z.string().nullable(),
+                reauth_reason: z.string().nullable(),
+                reauth_detected_at: z.string().nullable(),
+                consecutive_auth_failures: z.number()
+              }))
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext): Promise<Response> {
+    try {
+      const session = c.get("session");
+      const data = await this.getValidatedData<typeof this.schema>();
+      const org_id = data.query.org_id;
+
+      // Verify user has access to org
+      const { D1Adapter } = await import("../../adapters/d1");
+      const d1 = new D1Adapter(c.env.DB);
+      const hasAccess = await d1.checkOrgAccess(session.user_id, org_id);
+
+      if (!hasAccess) {
+        return error(c, "FORBIDDEN", "No access to this organization", 403);
+      }
+
+      // Get connections needing reauth
+      const result = await c.env.DB.prepare(`
+        SELECT id, platform, account_id, account_name,
+               reauth_reason, reauth_detected_at, consecutive_auth_failures
+        FROM platform_connections
+        WHERE organization_id = ?
+          AND needs_reauth = TRUE
+          AND is_active = TRUE
+        ORDER BY reauth_detected_at DESC
+      `).bind(org_id).all();
+
+      return success(c, { connections: result.results || [] });
+    } catch (err: any) {
+      console.error("GetConnectionsNeedingReauth error:", err);
+      return error(c, "INTERNAL_ERROR", `Failed to fetch connections: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
  * POST /v1/connectors/:provider/connect - Initiate OAuth flow
  */
 export class InitiateOAuthFlow extends OpenAPIRoute {
@@ -1160,6 +1232,19 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       });
 
       console.log('Connection created:', { connectionId });
+
+      // Clear needs_reauth flag if this is a reconnection
+      // This handles the case where user is re-authenticating after token expiration
+      await c.env.DB.prepare(`
+        UPDATE platform_connections
+        SET needs_reauth = FALSE,
+            reauth_reason = NULL,
+            reauth_detected_at = NULL,
+            consecutive_auth_failures = 0,
+            sync_status = 'pending'
+        WHERE id = ?
+      `).bind(connectionId).run();
+      console.log('Cleared needs_reauth flag for connection:', connectionId);
 
       // For Facebook, fetch connected pages (demonstrates pages_read_engagement usage)
       if (provider === 'facebook') {

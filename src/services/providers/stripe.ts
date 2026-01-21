@@ -253,6 +253,69 @@ export class StripeAPIProvider {
   }
 
   /**
+   * List invoices to analyze billing_reason values
+   * This is useful for understanding subscription patterns
+   */
+  async listInvoices(options: {
+    limit?: number;
+    starting_after?: string;
+    created?: { gte?: number; lte?: number };
+    expand?: string[];
+  } = {}): Promise<Array<{
+    id: string;
+    customer: string;
+    subscription: string | null;
+    billing_reason: string | null;
+    amount_paid: number;
+    currency: string;
+    status: string;
+    created: number;
+  }>> {
+    const params = new URLSearchParams({
+      limit: String(options.limit || 100)
+    });
+
+    if (options.starting_after) {
+      params.append('starting_after', options.starting_after);
+    }
+
+    if (options.created?.gte) {
+      params.append('created[gte]', String(options.created.gte));
+    }
+
+    if (options.created?.lte) {
+      params.append('created[lte]', String(options.created.lte));
+    }
+
+    if (options.expand) {
+      options.expand.forEach(field => params.append('expand[]', field));
+    }
+
+    const response = await fetch(`${this.baseUrl}/invoices?${params}`, {
+      headers: {
+        'Authorization': `Bearer ${this.config.apiKey}`,
+        'Stripe-Version': this.apiVersion
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to list invoices: ${response.statusText}`);
+    }
+
+    const result = await response.json() as { data: any[] };
+    return result.data.map((inv: any) => ({
+      id: inv.id,
+      customer: inv.customer,
+      subscription: inv.subscription,
+      billing_reason: inv.billing_reason,
+      amount_paid: inv.amount_paid,
+      currency: inv.currency,
+      status: inv.status,
+      created: inv.created
+    }));
+  }
+
+  /**
    * List charges with basic filtering (fallback when search isn't enough)
    */
   async listCharges(options: {

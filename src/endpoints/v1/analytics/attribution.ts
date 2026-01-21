@@ -20,6 +20,8 @@ import {
   aggregateAttributionByChannel,
   buildConversionPaths
 } from "../../../services/attribution-models";
+// Import from providers to ensure all revenue sources are registered
+import { getCombinedRevenueByDateRange, CombinedRevenueResult } from "../../../services/revenue-sources/providers";
 
 const AttributionModelEnum = z.enum([
   'platform',       // Self-reported by ad platforms (no attribution calculation)
@@ -570,6 +572,80 @@ async function buildPlatformFallbackD1(
 }
 
 /**
+ * Helper: Build attributions from connector revenue data (Stripe, Shopify, Jobber, etc.)
+ * Converts the unified revenue sources format into attribution format.
+ */
+function buildConnectorAttributions(
+  revenueData: CombinedRevenueResult
+): {
+  attributions: any[];
+  summary: { total_conversions: number; total_revenue: number };
+} {
+  const attributions: any[] = [];
+  let totalConversions = 0;
+  let totalRevenue = 0;
+
+  // Convert each revenue source into an attribution entry
+  // Note: Without tracking data, we can only attribute by payment source (not marketing channel)
+  for (const [platform, data] of Object.entries(revenueData.summary.sources)) {
+    totalConversions += data.conversions;
+    totalRevenue += data.revenue;
+
+    attributions.push({
+      utm_source: platform,  // 'stripe', 'shopify', 'jobber'
+      utm_medium: 'connector',
+      utm_campaign: data.displayName,  // 'Stripe Payments', 'Shopify Orders', etc.
+      touchpoints: 0,
+      conversions_in_path: data.conversions,
+      attributed_conversions: data.conversions,
+      attributed_revenue: Math.round(data.revenue * 100) / 100,
+      avg_position_in_path: 0
+    });
+  }
+
+  // Sort by attributed revenue descending
+  attributions.sort((a, b) => b.attributed_revenue - a.attributed_revenue);
+
+  return {
+    attributions,
+    summary: {
+      total_conversions: totalConversions,
+      total_revenue: Math.round(totalRevenue * 100) / 100
+    }
+  };
+}
+
+/**
+ * Helper: Merge ad platform attributions with connector revenue data
+ * Used when source='all' to show complete picture
+ */
+function mergeAttributions(
+  adPlatformData: { attributions: any[]; summary: { total_conversions: number; total_revenue: number } },
+  connectorData: { attributions: any[]; summary: { total_conversions: number; total_revenue: number } }
+): {
+  attributions: any[];
+  summary: { total_conversions: number; total_revenue: number };
+} {
+  // Combine attributions from both sources
+  const allAttributions = [
+    ...adPlatformData.attributions,
+    ...connectorData.attributions
+  ];
+
+  // Sort by attributed revenue descending
+  allAttributions.sort((a, b) => b.attributed_revenue - a.attributed_revenue);
+
+  return {
+    attributions: allAttributions,
+    summary: {
+      // For 'all' mode, we show connector conversions (ground truth) but include ad platform metrics
+      total_conversions: connectorData.summary.total_conversions || adPlatformData.summary.total_conversions,
+      total_revenue: connectorData.summary.total_revenue || adPlatformData.summary.total_revenue
+    }
+  };
+}
+
+/**
  * GET /v1/analytics/attribution
  *
  * Multi-touch attribution with identity stitching.
@@ -705,44 +781,117 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     // Get ANALYTICS_DB binding (with fallback to DB for backwards compat)
     const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
 
-    // For all sources, use D1 platform data as the source of truth
-    // Tag-based and connector-based attribution require D1 tables to be populated
-    console.log(`[Attribution] Using D1 platform data (conversion_source=${conversionSource})`);
+    // Build attribution data based on conversion source
+    let attributionData: { attributions: any[]; summary: { total_conversions: number; total_revenue: number } };
+    let dataQuality: DataQuality = 'platform_reported';
+    let fallbackSource: string | null = null;
+    const warnings: DataWarning[] = [];
 
-    const fallback = await buildPlatformFallbackD1(
-      analyticsDb,
-      c.env.DB,
-      orgId,
-      { start: dateFrom, end: dateTo }
-    );
+    const dateRange = { start: dateFrom, end: dateTo };
 
-    // Determine warnings based on conversion source setting
-    const warnings: DataWarning[] = ['using_platform_conversions'];
-    if (conversionSource === 'tag') {
+    if (conversionSource === 'connectors' || conversionSource === 'all') {
+      // Query unified revenue sources (Stripe, Shopify, Jobber, etc.)
+      console.log(`[Attribution] Querying unified revenue sources for connectors`);
+      try {
+        const revenueData = await getCombinedRevenueByDateRange(
+          analyticsDb,
+          orgId,
+          dateRange
+        );
+
+        if (revenueData.summary.conversions > 0) {
+          const connectorAttributions = buildConnectorAttributions(revenueData);
+          console.log(`[Attribution] Found ${connectorAttributions.summary.total_conversions} connector conversions, $${connectorAttributions.summary.total_revenue} revenue`);
+
+          if (conversionSource === 'all') {
+            // Get ad platform data too and merge
+            const adPlatformData = await buildPlatformFallbackD1(
+              analyticsDb,
+              c.env.DB,
+              orgId,
+              dateRange
+            );
+            attributionData = mergeAttributions(adPlatformData, connectorAttributions);
+            dataQuality = 'connector_only';
+            fallbackSource = 'connectors+ad_platforms';
+          } else {
+            attributionData = connectorAttributions;
+            dataQuality = 'connector_only';
+            fallbackSource = 'connectors';
+          }
+        } else {
+          // No connector data, fall back to ad platforms
+          console.log(`[Attribution] No connector conversions found, falling back to ad platforms`);
+          warnings.push('no_connector_conversions');
+          attributionData = await buildPlatformFallbackD1(
+            analyticsDb,
+            c.env.DB,
+            orgId,
+            dateRange
+          );
+          dataQuality = 'platform_reported';
+          fallbackSource = 'ad_platforms';
+          warnings.push('using_platform_conversions');
+        }
+      } catch (err) {
+        console.error(`[Attribution] Error querying revenue sources:`, err);
+        // Fall back to ad platforms on error
+        attributionData = await buildPlatformFallbackD1(
+          analyticsDb,
+          c.env.DB,
+          orgId,
+          dateRange
+        );
+        dataQuality = 'platform_reported';
+        fallbackSource = 'ad_platforms';
+        warnings.push('using_platform_conversions');
+      }
+    } else if (conversionSource === 'ad_platforms') {
+      // Use ad platform data directly
+      console.log(`[Attribution] Using D1 ad platform data`);
+      attributionData = await buildPlatformFallbackD1(
+        analyticsDb,
+        c.env.DB,
+        orgId,
+        dateRange
+      );
+      dataQuality = 'platform_reported';
+      fallbackSource = 'ad_platforms';
+      warnings.push('using_platform_conversions');
+    } else {
+      // 'tag' source - requires events table, fall back to ad platforms for now
+      console.log(`[Attribution] Tag source requested but events table not available, falling back to ad platforms`);
       warnings.push('no_events');
-    } else if (conversionSource === 'connectors') {
-      warnings.push('no_connector_conversions');
+      attributionData = await buildPlatformFallbackD1(
+        analyticsDb,
+        c.env.DB,
+        orgId,
+        dateRange
+      );
+      dataQuality = 'platform_reported';
+      fallbackSource = 'ad_platforms';
+      warnings.push('using_platform_conversions');
     }
 
     return success(c, {
-      model: 'platform' as AttributionModel,
+      model: dataQuality === 'connector_only' ? model : ('platform' as AttributionModel),
       config: {
         attribution_window_days: attributionWindowDays,
         time_decay_half_life_days: timeDecayHalfLifeDays,
         identity_stitching_enabled: useIdentityStitching
       },
       data_quality: {
-        quality: 'platform_reported' as DataQuality,
+        quality: dataQuality,
         warnings,
         event_count: 0,
-        conversion_count: 0,
-        fallback_source: 'ad_platforms',
+        conversion_count: attributionData.summary.total_conversions,
+        fallback_source: fallbackSource,
         conversion_source_setting: conversionSource === 'all' ? settingsSource : conversionSource
       },
-      attributions: fallback.attributions,
+      attributions: attributionData.attributions,
       summary: {
-        total_conversions: fallback.summary.total_conversions,
-        total_revenue: fallback.summary.total_revenue,
+        total_conversions: attributionData.summary.total_conversions,
+        total_revenue: attributionData.summary.total_revenue,
         avg_path_length: 0,
         avg_days_to_convert: 0,
         identified_users: 0,
@@ -1876,7 +2025,7 @@ Run probabilistic attribution first to generate this data.
 
     query += ` ORDER BY computed_at DESC LIMIT 1`;
 
-    const result = await analyticsDb.prepare(query).bind(...params).first<{
+    interface JourneyAnalyticsRow {
       channel_distribution: string;
       total_sessions: number;
       converting_sessions: number;
@@ -1894,7 +2043,8 @@ Run probabilistic attribution first to generate this data.
       period_start: string;
       period_end: string;
       computed_at: string;
-    }>();
+    }
+    const result = await analyticsDb.prepare(query).bind(...params).first() as JourneyAnalyticsRow | null;
 
     if (!result) {
       return error(c, "NO_DATA", "No journey analytics available. Run probabilistic attribution first.", 404);

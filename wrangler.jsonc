@@ -179,10 +179,19 @@
     }
   ],
 
+  // Service binding to queue-consumer for triggering workflows
+  "services": [
+    {
+      "binding": "CLEARLIFT_CRON",
+      "service": "clearlift-queue-consumer"
+    }
+  ],
+
   // Cron triggers for scheduled tasks
   "triggers": {
     "crons": [
-      "0 5 * * *"  // Daily aggregation at 5 AM UTC
+      "0 5 * * *",        // Daily aggregation at 5 AM UTC
+      "*/15 * * * *"      // Stale job cleanup every 15 minutes
     ]
   },
 
@@ -442,6 +451,12 @@
           "name": "attribution-workflow-dev",
           "binding": "ATTRIBUTION_WORKFLOW",
           "class_name": "AttributionWorkflow"
+        }
+      ],
+      "services": [
+        {
+          "binding": "CLEARLIFT_CRON",
+          "service": "clearlift-queue-consumer-dev"
         }
       ],
       "secrets_store_secrets": [

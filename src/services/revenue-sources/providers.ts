@@ -11,7 +11,7 @@ import './shopify';
 import './jobber';
 
 // Re-export the registry and helper functions
-export { revenueSourceRegistry, getCombinedRevenue } from './index';
+export { revenueSourceRegistry, getCombinedRevenue, getCombinedRevenueByDateRange } from './index';
 export type {
   RevenueSourceProvider,
   RevenueSourceMeta,

@@ -197,8 +197,9 @@ export class D1Adapter {
    */
   async checkOrgAccess(userId: string, orgIdOrSlug: string): Promise<boolean> {
     // First check if user is a super admin - they have access to all orgs
+    // D1 stores booleans as 0/1, so use Boolean() to handle both numeric and boolean values
     const user = await this.getUser(userId);
-    if (user?.is_admin === true) {
+    if (Boolean(user?.is_admin)) {
       return true;
     }
 

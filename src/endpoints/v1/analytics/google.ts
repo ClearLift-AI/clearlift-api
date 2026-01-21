@@ -401,7 +401,7 @@ export class GetGoogleMetrics extends OpenAPIRoute {
       let sql = `
         SELECT
           ${tableInfo.idColumn} as entity_id,
-          date,
+          metric_date as date,
           impressions,
           clicks,
           spend_cents,
@@ -409,7 +409,7 @@ export class GetGoogleMetrics extends OpenAPIRoute {
           conversion_value_cents
         FROM ${tableInfo.table}
         WHERE organization_id = ?
-        AND date >= ? AND date <= ?
+        AND metric_date >= ? AND metric_date <= ?
       `;
       const params: any[] = [orgId, dateRange.start, dateRange.end];
 
@@ -425,7 +425,7 @@ export class GetGoogleMetrics extends OpenAPIRoute {
         params.push(query.query.ad_id);
       }
 
-      sql += ' ORDER BY date DESC';
+      sql += ' ORDER BY metric_date DESC';
       sql += ` LIMIT ${query.query.limit} OFFSET ${query.query.offset}`;
 
       const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();

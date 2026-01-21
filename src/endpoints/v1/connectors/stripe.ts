@@ -391,23 +391,36 @@ export class UpdateStripeConfig extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>();
     // Config parameters validated but not yet implemented
 
-    // Verify connection exists and user has access
+    // First get connection info
     const connection = await c.env.DB.prepare(`
-      SELECT pc.*, om.role
-      FROM platform_connections pc
-      INNER JOIN organization_members om
-        ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND pc.platform = 'stripe' AND om.user_id = ?
-    `).bind(connectionId, session.user_id).first();
+      SELECT * FROM platform_connections
+      WHERE id = ? AND platform = 'stripe' AND is_active = 1
+    `).bind(connectionId).first();
 
     if (!connection) {
+      return error(c, "NOT_FOUND", "Stripe connection not found", 404);
+    }
+
+    // Check access using D1Adapter (handles super admin bypass)
+    const { D1Adapter } = await import("../../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id as string);
+
+    if (!hasAccess) {
       return error(c, "NOT_FOUND", "Stripe connection not found or access denied", 404);
     }
 
     // Pre-launch: No reconfiguration checks needed
 
-    if (connection.role === 'viewer') {
-      return error(c, "FORBIDDEN", "Insufficient permissions to update configuration", 403);
+    // Check role for non-super-admins
+    const user = await d1.getUser(session.user_id);
+    if (!Boolean(user?.is_admin)) {
+      const member = await c.env.DB.prepare(`
+        SELECT role FROM organization_members WHERE user_id = ? AND organization_id = ?
+      `).bind(session.user_id, connection.organization_id).first<{role: string}>();
+      if (member?.role === 'viewer') {
+        return error(c, "FORBIDDEN", "Insufficient permissions to update configuration", 403);
+      }
     }
 
     // Update configuration
@@ -452,16 +465,22 @@ export class TriggerStripeSync extends OpenAPIRoute {
     const connectionId = c.req.param('connection_id');
     const body = await c.req.json();
 
-    // Verify connection exists and user has access
+    // First get connection info
     const connection = await c.env.DB.prepare(`
-      SELECT pc.*, om.role
-      FROM platform_connections pc
-      INNER JOIN organization_members om
-        ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND pc.platform = 'stripe' AND om.user_id = ?
-    `).bind(connectionId, session.user_id).first();
+      SELECT * FROM platform_connections
+      WHERE id = ? AND platform = 'stripe' AND is_active = 1
+    `).bind(connectionId).first();
 
     if (!connection) {
+      return error(c, "NOT_FOUND", "Stripe connection not found", 404);
+    }
+
+    // Check access using D1Adapter (handles super admin bypass)
+    const { D1Adapter } = await import("../../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id as string);
+
+    if (!hasAccess) {
       return error(c, "NOT_FOUND", "Stripe connection not found or access denied", 404);
     }
 
@@ -603,16 +622,22 @@ export class TestStripeConnection extends OpenAPIRoute {
     const session = c.get("session");
     const connectionId = c.req.param('connection_id');
 
-    // Verify connection exists and user has access
+    // First get connection info
     const connection = await c.env.DB.prepare(`
-      SELECT pc.*
-      FROM platform_connections pc
-      INNER JOIN organization_members om
-        ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND pc.platform = 'stripe' AND om.user_id = ?
-    `).bind(connectionId, session.user_id).first();
+      SELECT * FROM platform_connections
+      WHERE id = ? AND platform = 'stripe' AND is_active = 1
+    `).bind(connectionId).first();
 
     if (!connection) {
+      return error(c, "NOT_FOUND", "Stripe connection not found", 404);
+    }
+
+    // Check access using D1Adapter (handles super admin bypass)
+    const { D1Adapter } = await import("../../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id as string);
+
+    if (!hasAccess) {
       return error(c, "NOT_FOUND", "Stripe connection not found or access denied", 404);
     }
 
@@ -637,6 +662,18 @@ export class TestStripeConnection extends OpenAPIRoute {
       // Try to fetch a few recent charges
       const charges = await stripeProvider.listCharges({ limit: 5 });
 
+      // Also fetch invoices to show billing_reason breakdown (useful for SaaS analysis)
+      let invoiceBreakdown: Record<string, number> = {};
+      try {
+        const invoices = await stripeProvider.listInvoices({ limit: 100 });
+        for (const inv of invoices) {
+          const reason = inv.billing_reason || 'unknown';
+          invoiceBreakdown[reason] = (invoiceBreakdown[reason] || 0) + 1;
+        }
+      } catch (invErr) {
+        console.warn('Could not fetch invoices:', invErr);
+      }
+
       return success(c, {
         success: true,
         account: {
@@ -646,6 +683,7 @@ export class TestStripeConnection extends OpenAPIRoute {
           charges_enabled: accountInfo.charges_enabled
         },
         recent_charges: charges.length,
+        invoice_billing_reasons: invoiceBreakdown,
         message: "Connection is working correctly"
       });
 

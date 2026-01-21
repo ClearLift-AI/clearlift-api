@@ -143,7 +143,10 @@ export async function requireOrg(c: AppContext, next: Next) {
 
   // Check if user is super admin - super admins bypass org membership check
   const user = await d1.getUser(session.user_id);
-  const isSuperAdmin = user?.is_admin === true;
+  // D1 stores booleans as 0/1, so use Boolean() to handle both numeric and boolean values
+  const isSuperAdmin = Boolean(user?.is_admin);
+
+  console.log(`[requireOrg] user_id=${session.user_id}, is_admin=${user?.is_admin}, isSuperAdmin=${isSuperAdmin}, org=${orgIdOrSlug}`);
 
   // Super admins have access to all organizations
   const hasAccess = isSuperAdmin || await d1.checkOrgAccess(session.user_id, orgIdOrSlug);
@@ -206,7 +209,8 @@ export function requireRole(roles: string[]) {
       const d1 = new D1Adapter(c.env.DB);
       const user = await d1.getUser(session.user_id);
 
-      if (user?.is_admin === true) {
+      // D1 stores booleans as 0/1, so use Boolean() to handle both numeric and boolean values
+      if (Boolean(user?.is_admin)) {
         // Super admins have implicit owner-level access to all orgs
         await next();
         return;

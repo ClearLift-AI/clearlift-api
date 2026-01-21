@@ -250,23 +250,29 @@ export class GetDeadLetterQueue extends OpenAPIRoute {
     const limit = parseInt(c.req.query("limit") || "10");
 
     try {
+      // Check if user is super admin (handles is_admin stored as integer)
+      const { D1Adapter } = await import("../../adapters/d1");
+      const d1 = new D1Adapter(c.env.DB);
+      const user = await d1.getUser(session.user_id);
+      const isSuperAdmin = Boolean(user?.is_admin);
+
+      // Build query with or without user filter based on super admin status
+      const userJoin = isSuperAdmin ? '' : 'JOIN organization_members om ON pc.organization_id = om.organization_id';
+      const userFilter = isSuperAdmin ? '' : 'AND om.user_id = ?';
+      const bindings: any[] = isSuperAdmin ? [limit] : [session.user_id, limit];
+      const countBindings: any[] = isSuperAdmin ? [] : [session.user_id];
+
       // Query failed sync jobs from D1
       const failedJobs = await c.env.DB.prepare(`
-        SELECT
-          sj.id,
-          sj.connection_id,
-          pc.platform,
-          sj.error_message,
-          sj.completed_at as failed_at,
-          sj.metadata
+        SELECT sj.id, sj.connection_id, pc.platform, sj.error_message,
+               sj.completed_at as failed_at, sj.metadata
         FROM sync_jobs sj
         JOIN platform_connections pc ON sj.connection_id = pc.id
-        JOIN organization_members om ON pc.organization_id = om.organization_id
-        WHERE sj.status = 'failed'
-          AND om.user_id = ?
+        ${userJoin}
+        WHERE sj.status = 'failed' ${userFilter}
         ORDER BY sj.completed_at DESC
         LIMIT ?
-      `).bind(session.user_id, limit).all();
+      `).bind(...bindings).all();
 
       const items = (failedJobs.results || []).map((job: any) => {
         let retryCount = 0;
@@ -274,11 +280,8 @@ export class GetDeadLetterQueue extends OpenAPIRoute {
           try {
             const metadata = JSON.parse(job.metadata);
             retryCount = metadata.retry_count || 0;
-          } catch (e) {
-            // Ignore parse errors
-          }
+          } catch (e) {}
         }
-
         return {
           id: job.id,
           connection_id: job.connection_id,
@@ -290,14 +293,15 @@ export class GetDeadLetterQueue extends OpenAPIRoute {
       });
 
       // Get total count
-      const countResult = await c.env.DB.prepare(`
-        SELECT COUNT(*) as total
-        FROM sync_jobs sj
+      const countQuery = `
+        SELECT COUNT(*) as total FROM sync_jobs sj
         JOIN platform_connections pc ON sj.connection_id = pc.id
-        JOIN organization_members om ON pc.organization_id = om.organization_id
-        WHERE sj.status = 'failed'
-          AND om.user_id = ?
-      `).bind(session.user_id).first();
+        ${userJoin}
+        WHERE sj.status = 'failed' ${userFilter}
+      `;
+      const countResult = countBindings.length > 0
+        ? await c.env.DB.prepare(countQuery).bind(...countBindings).first()
+        : await c.env.DB.prepare(countQuery).first();
 
       return success(c, {
         items,
@@ -354,15 +358,21 @@ export class TestConnectionToken extends OpenAPIRoute {
     const connection_id = data.params.connection_id;
 
     try {
-      // Verify user has access
+      // Get connection first
       const connection = await c.env.DB.prepare(`
-        SELECT pc.*, om.role
-        FROM platform_connections pc
-        JOIN organization_members om ON pc.organization_id = om.organization_id
-        WHERE pc.id = ? AND om.user_id = ?
-      `).bind(connection_id, session.user_id).first();
+        SELECT * FROM platform_connections WHERE id = ? AND is_active = 1
+      `).bind(connection_id).first();
 
       if (!connection) {
+        return error(c, "NOT_FOUND", "Connection not found", 404);
+      }
+
+      // Verify user has access (handles super admin bypass)
+      const { D1Adapter } = await import("../../adapters/d1");
+      const d1 = new D1Adapter(c.env.DB);
+      const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id as string);
+
+      if (!hasAccess) {
         return error(c, "NOT_FOUND", "Connection not found or access denied", 404);
       }
 
@@ -875,15 +885,21 @@ export class TriggerSync extends OpenAPIRoute {
     const { connection_id, job_type, sync_window } = data.body;
 
     try {
-      // Verify user has access to this connection
+      // Get connection first
       const connection = await c.env.DB.prepare(`
-        SELECT pc.*, om.role
-        FROM platform_connections pc
-        JOIN organization_members om ON pc.organization_id = om.organization_id
-        WHERE pc.id = ? AND om.user_id = ?
-      `).bind(connection_id, session.user_id).first();
+        SELECT * FROM platform_connections WHERE id = ?
+      `).bind(connection_id).first();
 
       if (!connection) {
+        return error(c, "NOT_FOUND", "Connection not found", 404);
+      }
+
+      // Verify user has access (handles super admin bypass)
+      const { D1Adapter } = await import("../../adapters/d1");
+      const d1 = new D1Adapter(c.env.DB);
+      const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id as string);
+
+      if (!hasAccess) {
         return error(c, "NOT_FOUND", "Connection not found or access denied", 404);
       }
 

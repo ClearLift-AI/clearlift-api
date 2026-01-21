@@ -2,7 +2,15 @@
  * Stripe Revenue Source Provider
  *
  * Queries stripe_charges table for conversion and revenue data.
- * A conversion is a successful charge (status = 'succeeded').
+ *
+ * CONVERSION LOGIC (automatically handles both e-commerce and SaaS):
+ * - E-commerce: All succeeded charges count as conversions (billing_reason IS NULL)
+ * - SaaS: Only new subscriptions count as conversions (billing_reason = 'subscription_create')
+ *   Renewals (billing_reason = 'subscription_cycle') are NOT conversions but DO contribute to revenue
+ *
+ * REVENUE LOGIC:
+ * - All succeeded charges contribute to revenue (including renewals)
+ * - Net revenue = amount_cents - refund_cents
  */
 
 // D1Database is globally available in the Workers environment
@@ -11,6 +19,7 @@ import {
   RevenueSourceMeta,
   RevenueSourceSummary,
   RevenueSourceTimeSeries,
+  DateRange,
   revenueSourceRegistry,
 } from './index';
 
@@ -20,6 +29,32 @@ const meta: RevenueSourceMeta = {
   conversionLabel: 'Charges',
   icon: 'credit-card',
 };
+
+/**
+ * SQL fragment for counting conversions
+ * Only counts new acquisitions:
+ * - One-time charges (billing_reason IS NULL)
+ * - New subscriptions (billing_reason = 'subscription_create')
+ * Excludes renewals (billing_reason = 'subscription_cycle')
+ */
+const CONVERSION_COUNT_SQL = `
+  SUM(CASE
+    WHEN status = 'succeeded'
+      AND (billing_reason IS NULL OR billing_reason = 'subscription_create')
+    THEN 1 ELSE 0
+  END)
+`;
+
+/**
+ * SQL fragment for calculating net revenue (all succeeded charges)
+ */
+const NET_REVENUE_SQL = `
+  SUM(CASE
+    WHEN status = 'succeeded'
+    THEN amount_cents - COALESCE(refund_cents, 0)
+    ELSE 0
+  END)
+`;
 
 const stripeProvider: RevenueSourceProvider = {
   meta,
@@ -37,22 +72,22 @@ const stripeProvider: RevenueSourceProvider = {
     const result = await db.prepare(`
       SELECT
         COUNT(*) as total_charges,
-        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as successful_charges,
-        SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as total_revenue_cents,
+        ${CONVERSION_COUNT_SQL} as conversions,
+        ${NET_REVENUE_SQL} as net_revenue_cents,
         COUNT(DISTINCT customer_id) as unique_customers
       FROM stripe_charges
       WHERE organization_id = ?
         AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
     `).bind(orgId, hours).first<{
       total_charges: number;
-      successful_charges: number;
-      total_revenue_cents: number;
+      conversions: number;
+      net_revenue_cents: number;
       unique_customers: number;
     }>();
 
     return {
-      conversions: result?.successful_charges || 0,
-      revenue: (result?.total_revenue_cents || 0) / 100,
+      conversions: result?.conversions || 0,
+      revenue: (result?.net_revenue_cents || 0) / 100,
       uniqueCustomers: result?.unique_customers || 0,
     };
   },
@@ -61,8 +96,8 @@ const stripeProvider: RevenueSourceProvider = {
     const result = await db.prepare(`
       SELECT
         strftime('%Y-%m-%d %H:00:00', stripe_created_at) as bucket,
-        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as revenue_cents
+        ${CONVERSION_COUNT_SQL} as conversions,
+        ${NET_REVENUE_SQL} as net_revenue_cents
       FROM stripe_charges
       WHERE organization_id = ?
         AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
@@ -71,14 +106,148 @@ const stripeProvider: RevenueSourceProvider = {
     `).bind(orgId, hours).all<{
       bucket: string;
       conversions: number;
-      revenue_cents: number;
+      net_revenue_cents: number;
     }>();
 
-    return result.results.map((row: { bucket: string; conversions: number; revenue_cents: number }) => ({
+    return result.results.map((row: { bucket: string; conversions: number; net_revenue_cents: number }) => ({
       bucket: row.bucket,
       conversions: row.conversions,
-      revenue: row.revenue_cents / 100,
+      revenue: row.net_revenue_cents / 100,
     }));
+  },
+
+  async getSummaryByDateRange(db: D1Database, orgId: string, dateRange: DateRange): Promise<RevenueSourceSummary> {
+    const result = await db.prepare(`
+      SELECT
+        COUNT(*) as total_charges,
+        ${CONVERSION_COUNT_SQL} as conversions,
+        ${NET_REVENUE_SQL} as net_revenue_cents,
+        COUNT(DISTINCT customer_id) as unique_customers
+      FROM stripe_charges
+      WHERE organization_id = ?
+        AND date(stripe_created_at) >= ?
+        AND date(stripe_created_at) <= ?
+    `).bind(orgId, dateRange.start, dateRange.end).first<{
+      total_charges: number;
+      conversions: number;
+      net_revenue_cents: number;
+      unique_customers: number;
+    }>();
+
+    return {
+      conversions: result?.conversions || 0,
+      revenue: (result?.net_revenue_cents || 0) / 100,
+      uniqueCustomers: result?.unique_customers || 0,
+    };
+  },
+
+  async getTimeSeriesByDateRange(db: D1Database, orgId: string, dateRange: DateRange): Promise<RevenueSourceTimeSeries[]> {
+    const result = await db.prepare(`
+      SELECT
+        date(stripe_created_at) as bucket,
+        ${CONVERSION_COUNT_SQL} as conversions,
+        ${NET_REVENUE_SQL} as net_revenue_cents
+      FROM stripe_charges
+      WHERE organization_id = ?
+        AND date(stripe_created_at) >= ?
+        AND date(stripe_created_at) <= ?
+      GROUP BY date(stripe_created_at)
+      ORDER BY bucket ASC
+    `).bind(orgId, dateRange.start, dateRange.end).all<{
+      bucket: string;
+      conversions: number;
+      net_revenue_cents: number;
+    }>();
+
+    return result.results.map((row: { bucket: string; conversions: number; net_revenue_cents: number }) => ({
+      bucket: row.bucket,
+      conversions: row.conversions,
+      revenue: row.net_revenue_cents / 100,
+    }));
+  },
+
+  /**
+   * Get MRR/ARR metrics from Stripe subscriptions
+   * MRR is calculated by normalizing all active subscriptions to monthly values
+   */
+  async getMRR(db: D1Database, orgId: string): Promise<{
+    mrr: number;
+    arr: number;
+    activeSubscriptions: number;
+    trialSubscriptions: number;
+    churnedThisMonth: number;
+  }> {
+    // Get active subscriptions and calculate MRR
+    const activeResult = await db.prepare(`
+      SELECT
+        plan_amount_cents,
+        plan_interval,
+        plan_interval_count,
+        status
+      FROM stripe_subscriptions
+      WHERE organization_id = ?
+        AND status IN ('active', 'trialing')
+    `).bind(orgId).all<{
+      plan_amount_cents: number;
+      plan_interval: string;
+      plan_interval_count: number;
+      status: string;
+    }>();
+
+    // Calculate MRR by normalizing all intervals to monthly
+    let mrrCents = 0;
+    let activeSubscriptions = 0;
+    let trialSubscriptions = 0;
+
+    for (const sub of activeResult.results || []) {
+      const intervalCount = sub.plan_interval_count || 1;
+      let monthlyAmount = sub.plan_amount_cents;
+
+      // Normalize to monthly
+      switch (sub.plan_interval) {
+        case 'year':
+          monthlyAmount = sub.plan_amount_cents / (12 * intervalCount);
+          break;
+        case 'week':
+          monthlyAmount = (sub.plan_amount_cents * 52) / (12 * intervalCount);
+          break;
+        case 'day':
+          monthlyAmount = (sub.plan_amount_cents * 365) / (12 * intervalCount);
+          break;
+        case 'month':
+        default:
+          monthlyAmount = sub.plan_amount_cents / intervalCount;
+          break;
+      }
+
+      if (sub.status === 'active') {
+        mrrCents += monthlyAmount;
+        activeSubscriptions++;
+      } else if (sub.status === 'trialing') {
+        trialSubscriptions++;
+        // Don't count trial subscriptions in MRR until they convert
+      }
+    }
+
+    // Get churned subscriptions this month
+    const churnedResult = await db.prepare(`
+      SELECT COUNT(*) as churned
+      FROM stripe_subscriptions
+      WHERE organization_id = ?
+        AND status IN ('canceled', 'unpaid')
+        AND canceled_at >= date('now', 'start of month')
+    `).bind(orgId).first<{ churned: number }>();
+
+    const mrr = Math.round(mrrCents) / 100;  // Convert to dollars
+    const arr = mrr * 12;
+
+    return {
+      mrr,
+      arr,
+      activeSubscriptions,
+      trialSubscriptions,
+      churnedThisMonth: churnedResult?.churned || 0,
+    };
   },
 };
 

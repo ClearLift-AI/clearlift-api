@@ -85,16 +85,22 @@ export class GetStripeAnalytics extends OpenAPIRoute {
     const session = c.get("session");
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Verify connection exists and user has access
+    // Get connection first
     const connection = await c.env.DB.prepare(`
-      SELECT pc.*, pc.organization_id
-      FROM platform_connections pc
-      INNER JOIN organization_members om
-        ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND pc.platform = 'stripe' AND om.user_id = ?
-    `).bind(query.query.connection_id, session.user_id).first<{ id: string; organization_id: string }>();
+      SELECT * FROM platform_connections
+      WHERE id = ? AND platform = 'stripe' AND is_active = 1
+    `).bind(query.query.connection_id).first<{ id: string; organization_id: string }>();
 
     if (!connection) {
+      return error(c, "NOT_FOUND", "Stripe connection not found", 404);
+    }
+
+    // Verify user has access (handles super admin bypass)
+    const { D1Adapter } = await import("../../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id);
+
+    if (!hasAccess) {
       return error(c, "NOT_FOUND", "Stripe connection not found or access denied", 404);
     }
 
@@ -147,6 +153,7 @@ export class GetStripeAnalytics extends OpenAPIRoute {
         currency: charge.currency,
         status: charge.status,
         customer_id: charge.customer_id,
+        billing_reason: (charge as any).billing_reason || null, // For SaaS conversion filtering
         metadata: charge.metadata ? JSON.parse(charge.metadata) : {}
       }));
 
@@ -183,6 +190,17 @@ export class GetStripeAnalytics extends OpenAPIRoute {
     }
   }
 
+  /**
+   * Check if a charge counts as a conversion
+   * - One-time charges (billing_reason IS NULL) = conversion
+   * - New subscriptions (billing_reason = 'subscription_create') = conversion
+   * - Renewals (billing_reason = 'subscription_cycle') = NOT a conversion
+   */
+  private isConversion(record: any): boolean {
+    const billingReason = record.billing_reason;
+    return billingReason === null || billingReason === undefined || billingReason === 'subscription_create';
+  }
+
   private calculateSummary(records: any[]): any {
     // For charges: status === 'succeeded'
     // For subscriptions: status in ('active', 'trialing', 'past_due') - active billing relationships
@@ -194,10 +212,15 @@ export class GetStripeAnalytics extends OpenAPIRoute {
     const totalUnits = successfulRecords.reduce((sum, r) => sum + (r.units || 1), 0);
     const transactionCount = successfulRecords.length;
 
+    // Count only new acquisitions as conversions (excludes renewals)
+    const conversionRecords = successfulRecords.filter(r => this.isConversion(r));
+    const conversions = conversionRecords.length;
+
     return {
       total_revenue: totalRevenue / 100, // Convert from cents
       total_units: totalUnits,
       transaction_count: transactionCount,
+      conversions: conversions, // NEW: Only new acquisitions
       unique_customers: customerSet.size,
       average_order_value: transactionCount > 0 ? (totalRevenue / transactionCount) / 100 : 0
     };
@@ -207,7 +230,7 @@ export class GetStripeAnalytics extends OpenAPIRoute {
     records: any[],
     groupBy: 'day' | 'week' | 'month'
   ): any[] {
-    const grouped: Record<string, { revenue: number; units: number; transactions: number }> = {};
+    const grouped: Record<string, { revenue: number; units: number; transactions: number; conversions: number }> = {};
     const successfulStatuses = ['succeeded', 'active', 'trialing', 'past_due'];
 
     for (const record of records) {
@@ -216,12 +239,17 @@ export class GetStripeAnalytics extends OpenAPIRoute {
       const date = this.getGroupedDate(record.date, groupBy);
 
       if (!grouped[date]) {
-        grouped[date] = { revenue: 0, units: 0, transactions: 0 };
+        grouped[date] = { revenue: 0, units: 0, transactions: 0, conversions: 0 };
       }
 
       grouped[date].revenue += record.amount;
       grouped[date].units += record.units || 1;
       grouped[date].transactions += 1;
+
+      // Only count new acquisitions as conversions
+      if (this.isConversion(record)) {
+        grouped[date].conversions += 1;
+      }
     }
 
     return Object.entries(grouped)
@@ -229,7 +257,8 @@ export class GetStripeAnalytics extends OpenAPIRoute {
         date,
         revenue: data.revenue / 100,
         units: data.units,
-        transactions: data.transactions
+        transactions: data.transactions,
+        conversions: data.conversions  // NEW: separate from transactions
       }))
       .sort((a, b) => a.date.localeCompare(b.date));
   }
@@ -353,15 +382,22 @@ export class GetStripeDailyAggregates extends OpenAPIRoute {
     const session = c.get("session");
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Verify access and get org_id
+    // Get connection first
     const connection = await c.env.DB.prepare(`
-      SELECT pc.organization_id FROM platform_connections pc
-      INNER JOIN organization_members om
-        ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND pc.platform = 'stripe' AND om.user_id = ?
-    `).bind(query.query.connection_id, session.user_id).first<{ organization_id: string }>();
+      SELECT * FROM platform_connections
+      WHERE id = ? AND platform = 'stripe' AND is_active = 1
+    `).bind(query.query.connection_id).first<{ organization_id: string }>();
 
     if (!connection) {
+      return error(c, "NOT_FOUND", "Stripe connection not found", 404);
+    }
+
+    // Verify user has access (handles super admin bypass)
+    const { D1Adapter } = await import("../../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id);
+
+    if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied", 403);
     }
 

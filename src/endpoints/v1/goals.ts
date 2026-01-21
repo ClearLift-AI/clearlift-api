@@ -2,6 +2,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { success, error } from "../../utils/response";
+import { calculateGoalValue, validateGoalValueConfig } from "../../services/goal-value";
 
 // ============== Schema Definitions ==============
 
@@ -21,6 +22,11 @@ const ConversionGoalSchema = z.object({
   is_primary: z.boolean().default(false),
   include_in_path: z.boolean().default(true),
   priority: z.number().int().default(0),
+  // Enhanced value configuration
+  value_type: z.enum(['from_source', 'fixed', 'calculated', 'none']).optional(),
+  fixed_value_cents: z.number().int().min(0).optional(),
+  avg_deal_value_cents: z.number().int().min(0).optional(),
+  close_rate_percent: z.number().int().min(0).max(100).optional(),
 });
 
 const FilterRuleSchema = z.object({
@@ -87,23 +93,40 @@ export class ListConversionGoals extends OpenAPIRoute {
       SELECT id, name, type, trigger_config, default_value_cents,
              is_primary, include_in_path, priority, created_at, updated_at,
              slug, description, goal_type, revenue_sources, event_filters_v2,
-             value_type, fixed_value_cents, display_order, color, icon, is_active
+             value_type, fixed_value_cents, display_order, color, icon, is_active,
+             avg_deal_value_cents, close_rate_percent
       FROM conversion_goals
       WHERE organization_id = ?
       ORDER BY COALESCE(display_order, priority) ASC, created_at DESC
     `).bind(orgId).all();
 
     // Parse JSON fields and include enhanced properties
-    const parsedGoals = (goals.results || []).map(g => ({
-      ...g,
-      trigger_config: JSON.parse(g.trigger_config as string || '{}'),
-      is_primary: Boolean(g.is_primary),
-      include_in_path: Boolean(g.include_in_path),
-      is_active: g.is_active !== 0,
-      // Enhanced fields
-      revenue_sources: g.revenue_sources ? JSON.parse(g.revenue_sources as string) : undefined,
-      event_filters: g.event_filters_v2 ? JSON.parse(g.event_filters_v2 as string) : undefined,
-    }));
+    const parsedGoals = (goals.results || []).map(g => {
+      // Calculate the effective value based on value_type
+      const calculatedResult = calculateGoalValue({
+        id: g.id as string,
+        name: g.name as string,
+        value_type: (g.value_type || 'from_source') as 'from_source' | 'fixed' | 'calculated' | 'none',
+        fixed_value_cents: g.fixed_value_cents as number | undefined,
+        avg_deal_value_cents: g.avg_deal_value_cents as number | undefined,
+        close_rate_percent: g.close_rate_percent as number | undefined,
+        default_value_cents: g.default_value_cents as number | undefined,
+      });
+
+      return {
+        ...g,
+        trigger_config: JSON.parse(g.trigger_config as string || '{}'),
+        is_primary: Boolean(g.is_primary),
+        include_in_path: Boolean(g.include_in_path),
+        is_active: g.is_active !== 0,
+        // Enhanced fields
+        revenue_sources: g.revenue_sources ? JSON.parse(g.revenue_sources as string) : undefined,
+        event_filters: g.event_filters_v2 ? JSON.parse(g.event_filters_v2 as string) : undefined,
+        // Calculated value based on value_type
+        calculated_value_cents: calculatedResult.value_cents,
+        value_formula: calculatedResult.formula_used,
+      };
+    });
 
     return success(c, parsedGoals);
   }
@@ -159,6 +182,14 @@ export class CreateConversionGoal extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>();
     const body = data.body;
 
+    // Validate value configuration if using calculated type
+    if (body.value_type === 'calculated') {
+      const validationErrors = validateGoalValueConfig(body);
+      if (validationErrors.length > 0) {
+        return error(c, "VALIDATION_ERROR", validationErrors.join(', '), 400);
+      }
+    }
+
     // Generate ID
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -167,8 +198,9 @@ export class CreateConversionGoal extends OpenAPIRoute {
       INSERT INTO conversion_goals (
         id, organization_id, name, type, trigger_config,
         default_value_cents, is_primary, include_in_path, priority,
+        value_type, fixed_value_cents, avg_deal_value_cents, close_rate_percent,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
       orgId,
@@ -179,13 +211,30 @@ export class CreateConversionGoal extends OpenAPIRoute {
       body.is_primary ? 1 : 0,
       body.include_in_path ? 1 : 0,
       body.priority,
+      body.value_type || 'from_source',
+      body.fixed_value_cents ?? null,
+      body.avg_deal_value_cents ?? null,
+      body.close_rate_percent ?? null,
       now,
       now
     ).run();
 
+    // Calculate the effective value for the response
+    const calculatedResult = calculateGoalValue({
+      id,
+      name: body.name,
+      value_type: body.value_type,
+      fixed_value_cents: body.fixed_value_cents,
+      avg_deal_value_cents: body.avg_deal_value_cents,
+      close_rate_percent: body.close_rate_percent,
+      default_value_cents: body.default_value_cents,
+    });
+
     return success(c, {
       id,
       ...body,
+      calculated_value_cents: calculatedResult.value_cents,
+      value_formula: calculatedResult.formula_used,
       created_at: now,
       updated_at: now,
     }, undefined, 201);
@@ -273,6 +322,31 @@ export class UpdateConversionGoal extends OpenAPIRoute {
     if (body.priority !== undefined) {
       updates.push('priority = ?');
       values.push(body.priority);
+    }
+    // Enhanced value configuration fields
+    if (body.value_type !== undefined) {
+      updates.push('value_type = ?');
+      values.push(body.value_type);
+    }
+    if (body.fixed_value_cents !== undefined) {
+      updates.push('fixed_value_cents = ?');
+      values.push(body.fixed_value_cents);
+    }
+    if (body.avg_deal_value_cents !== undefined) {
+      updates.push('avg_deal_value_cents = ?');
+      values.push(body.avg_deal_value_cents);
+    }
+    if (body.close_rate_percent !== undefined) {
+      updates.push('close_rate_percent = ?');
+      values.push(body.close_rate_percent);
+    }
+
+    // Validate value configuration
+    if (body.value_type === 'calculated') {
+      const validationErrors = validateGoalValueConfig(body);
+      if (validationErrors.length > 0) {
+        return error(c, "VALIDATION_ERROR", validationErrors.join(', '), 400);
+      }
     }
 
     if (updates.length > 0) {

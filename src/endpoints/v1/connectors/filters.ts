@@ -10,6 +10,38 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { StripeQueryBuilder } from "../../../services/filters/stripeQueryBuilder";
+import { D1Adapter } from "../../../adapters/d1";
+
+/**
+ * Helper to check if user has access to a connection (handles super admin bypass)
+ * Returns the connection's organization_id if access granted, null otherwise
+ */
+async function checkConnectionAccess(
+  c: AppContext,
+  connectionId: string,
+  userId: string
+): Promise<{ hasAccess: boolean; organizationId: string | null; connection: any }> {
+  // Get connection info first
+  const connection = await c.env.DB.prepare(`
+    SELECT id, organization_id, platform, is_active
+    FROM platform_connections
+    WHERE id = ? AND is_active = 1
+  `).bind(connectionId).first();
+
+  if (!connection) {
+    return { hasAccess: false, organizationId: null, connection: null };
+  }
+
+  // Check access using D1Adapter (handles super admin bypass)
+  const d1 = new D1Adapter(c.env.DB);
+  const hasAccess = await d1.checkOrgAccess(userId, connection.organization_id as string);
+
+  return {
+    hasAccess,
+    organizationId: connection.organization_id as string,
+    connection
+  };
+}
 
 // Zod schemas for validation
 const FilterConditionSchema = z.object({
@@ -71,17 +103,15 @@ export class CreateFilterRule extends OpenAPIRoute {
     const { params, body } = await this.getValidatedData<typeof this.schema>();
     const connectionId = params.connection_id;
 
-    // Verify connection exists and user has access
-    const connection = await c.env.DB.prepare(`
-      SELECT pc.*, om.role
-      FROM platform_connections pc
-      INNER JOIN organization_members om
-        ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND om.user_id = ? AND pc.is_active = 1
-    `).bind(connectionId, session.user_id).first();
+    // Verify connection exists and user has access (handles super admin bypass)
+    const { hasAccess, connection } = await checkConnectionAccess(c, connectionId, session.user_id);
 
     if (!connection) {
-      return error(c, "NOT_FOUND", "Connection not found or access denied", 404);
+      return error(c, "NOT_FOUND", "Connection not found", 404);
+    }
+
+    if (!hasAccess) {
+      return error(c, "FORBIDDEN", "Access denied", 403);
     }
 
     // Validate filter based on platform type
@@ -161,13 +191,12 @@ export class ListFilterRules extends OpenAPIRoute {
     const { params, query } = await this.getValidatedData<typeof this.schema>();
     const connectionId = params.connection_id;
 
-    // Verify access
-    const hasAccess = await c.env.DB.prepare(`
-      SELECT 1 FROM platform_connections pc
-      INNER JOIN organization_members om
-        ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND om.user_id = ? AND pc.is_active = 1
-    `).bind(connectionId, session.user_id).first();
+    // Verify access (handles super admin bypass)
+    const { hasAccess, connection } = await checkConnectionAccess(c, connectionId, session.user_id);
+
+    if (!connection) {
+      return error(c, "NOT_FOUND", "Connection not found", 404);
+    }
 
     if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied", 403);
@@ -224,17 +253,25 @@ export class UpdateFilterRule extends OpenAPIRoute {
     const { params, body } = await this.getValidatedData<typeof this.schema>();
     const { connection_id, filter_id } = params;
 
-    // Verify filter exists and user has access
+    // Verify access (handles super admin bypass)
+    const { hasAccess, connection } = await checkConnectionAccess(c, connection_id, session.user_id);
+
+    if (!connection) {
+      return error(c, "NOT_FOUND", "Connection not found", 404);
+    }
+
+    if (!hasAccess) {
+      return error(c, "FORBIDDEN", "Access denied", 403);
+    }
+
+    // Verify filter exists
     const filter = await c.env.DB.prepare(`
-      SELECT fr.*, om.role
-      FROM connector_filter_rules fr
-      INNER JOIN platform_connections pc ON fr.connection_id = pc.id
-      INNER JOIN organization_members om ON pc.organization_id = om.organization_id
-      WHERE fr.id = ? AND fr.connection_id = ? AND om.user_id = ?
-    `).bind(filter_id, connection_id, session.user_id).first();
+      SELECT * FROM connector_filter_rules
+      WHERE id = ? AND connection_id = ?
+    `).bind(filter_id, connection_id).first();
 
     if (!filter) {
-      return error(c, "NOT_FOUND", "Filter not found or access denied", 404);
+      return error(c, "NOT_FOUND", "Filter not found", 404);
     }
 
     // Validate if conditions changed
@@ -330,21 +367,42 @@ export class DeleteFilterRule extends OpenAPIRoute {
     const { params } = await this.getValidatedData<typeof this.schema>();
     const { connection_id, filter_id } = params;
 
-    // Verify filter exists and user has admin/owner role
-    const filter = await c.env.DB.prepare(`
-      SELECT om.role
-      FROM connector_filter_rules fr
-      INNER JOIN platform_connections pc ON fr.connection_id = pc.id
-      INNER JOIN organization_members om ON pc.organization_id = om.organization_id
-      WHERE fr.id = ? AND fr.connection_id = ? AND om.user_id = ?
-    `).bind(filter_id, connection_id, session.user_id).first();
+    // Verify access (handles super admin bypass)
+    const { hasAccess, connection, organizationId } = await checkConnectionAccess(c, connection_id, session.user_id);
 
-    if (!filter) {
-      return error(c, "NOT_FOUND", "Filter not found or access denied", 404);
+    if (!connection) {
+      return error(c, "NOT_FOUND", "Connection not found", 404);
     }
 
-    if (filter.role === 'viewer') {
-      return error(c, "FORBIDDEN", "Insufficient permissions", 403);
+    if (!hasAccess) {
+      return error(c, "FORBIDDEN", "Access denied", 403);
+    }
+
+    // Check role (super admins can delete, viewers cannot)
+    const d1 = new D1Adapter(c.env.DB);
+    const user = await d1.getUser(session.user_id);
+    const isSuperAdmin = Boolean(user?.is_admin);
+
+    if (!isSuperAdmin && organizationId) {
+      // Check role for non-super-admins
+      const member = await c.env.DB.prepare(`
+        SELECT role FROM organization_members
+        WHERE user_id = ? AND organization_id = ?
+      `).bind(session.user_id, organizationId).first<{ role: string }>();
+
+      if (member?.role === 'viewer') {
+        return error(c, "FORBIDDEN", "Insufficient permissions", 403);
+      }
+    }
+
+    // Verify filter exists
+    const filter = await c.env.DB.prepare(`
+      SELECT id FROM connector_filter_rules
+      WHERE id = ? AND connection_id = ?
+    `).bind(filter_id, connection_id).first();
+
+    if (!filter) {
+      return error(c, "NOT_FOUND", "Filter not found", 404);
     }
 
     // Delete filter
@@ -398,13 +456,12 @@ export class TestFilterRule extends OpenAPIRoute {
     const { params, body } = await this.getValidatedData<typeof this.schema>();
     const connectionId = params.connection_id;
 
-    // Verify access
-    const hasAccess = await c.env.DB.prepare(`
-      SELECT 1 FROM platform_connections pc
-      INNER JOIN organization_members om
-        ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND om.user_id = ? AND pc.is_active = 1
-    `).bind(connectionId, session.user_id).first();
+    // Verify access (handles super admin bypass)
+    const { hasAccess, connection } = await checkConnectionAccess(c, connectionId, session.user_id);
+
+    if (!connection) {
+      return error(c, "NOT_FOUND", "Connection not found", 404);
+    }
 
     if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied", 403);
@@ -534,13 +591,12 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
     const { params } = await this.getValidatedData<typeof this.schema>();
     const connectionId = params.connection_id;
 
-    // Verify access
-    const hasAccess = await c.env.DB.prepare(`
-      SELECT 1 FROM platform_connections pc
-      INNER JOIN organization_members om
-        ON pc.organization_id = om.organization_id
-      WHERE pc.id = ? AND om.user_id = ? AND pc.is_active = 1
-    `).bind(connectionId, session.user_id).first();
+    // Verify access (handles super admin bypass)
+    const { hasAccess, connection } = await checkConnectionAccess(c, connectionId, session.user_id);
+
+    if (!connection) {
+      return error(c, "NOT_FOUND", "Connection not found", 404);
+    }
 
     if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied", 403);
