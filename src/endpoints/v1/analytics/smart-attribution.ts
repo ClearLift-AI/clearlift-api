@@ -11,7 +11,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
-import { SmartAttributionService, type SignalType, type DataQualityLevel } from "../../../services/smart-attribution";
+import { SmartAttributionService, type SignalType, type DataQualityLevel, type SmartAttributionTimeSeriesEntry } from "../../../services/smart-attribution";
 
 // Schema definitions for OpenAPI documentation
 const SignalTypeEnum = z.enum([
@@ -58,6 +58,21 @@ const SmartAttributionSchema = z.object({
   dataQuality: DataQualityLevelEnum,
   signals: SignalAvailabilitySchema,
   explanation: z.string()
+});
+
+const TimeSeriesChannelSchema = z.object({
+  channel: z.string(),
+  conversions: z.number(),
+  revenue: z.number(),
+  spend: z.number()
+});
+
+const TimeSeriesEntrySchema = z.object({
+  date: z.string().describe("Date (YYYY-MM-DD)"),
+  totalConversions: z.number().describe("Total conversions for this day (max of UTM vs connector)"),
+  totalRevenue: z.number().describe("Total revenue for this day"),
+  totalSpend: z.number().describe("Total ad spend for this day"),
+  channels: z.array(TimeSeriesChannelSchema).describe("Channel breakdown for this day")
 });
 
 /**
@@ -116,6 +131,7 @@ Intelligent attribution that combines ad platform data, UTM tracking, click IDs,
                     percentage: z.number()
                   }))
                 }),
+                timeSeries: z.array(TimeSeriesEntrySchema).describe("Daily time series with conversions, revenue, and spend"),
                 dataQuality: z.object({
                   hasPlatformData: z.boolean(),
                   hasTagData: z.boolean(),

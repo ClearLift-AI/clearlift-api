@@ -405,7 +405,14 @@ export class GetJourneysOverview extends OpenAPIRoute {
                   avg_days_to_convert: z.number(),
                   avg_sessions_to_convert: z.number()
                 }),
-                top_paths: z.array(z.object({
+                top_journeys: z.array(z.object({
+                  path: z.string(),
+                  journeys: z.number(),
+                  conversions: z.number(),
+                  revenue: z.number(),
+                  conversion_rate: z.number()
+                })),
+                top_converting_paths: z.array(z.object({
                   path: z.string(),
                   conversions: z.number(),
                   revenue: z.number()
@@ -533,8 +540,40 @@ export class GetJourneysOverview extends OpenAPIRoute {
       }
     }
 
+    // Query top journeys by traffic volume (regardless of conversion status)
+    let topJourneys: Array<{ path: string; journeys: number; conversions: number; revenue: number; conversion_rate: number }> = [];
+    if (analyticsDb) {
+      try {
+        const journeysResult = await analyticsDb.prepare(`
+          SELECT
+            channel_path as path,
+            COUNT(*) as journeys,
+            SUM(CASE WHEN converted = 1 THEN 1 ELSE 0 END) as conversions,
+            COALESCE(SUM(conversion_value_cents), 0) as revenue_cents
+          FROM journeys
+          WHERE org_tag = ?
+            AND first_touch_ts >= ? AND first_touch_ts <= ?
+          GROUP BY channel_path
+          ORDER BY journeys DESC
+          LIMIT 10
+        `).bind(orgTag, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
+          results: Array<{ path: string; journeys: number; conversions: number; revenue_cents: number }>
+        };
+
+        topJourneys = (journeysResult.results || []).map(row => ({
+          path: row.path,
+          journeys: row.journeys,
+          conversions: row.conversions || 0,
+          revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100,
+          conversion_rate: row.journeys > 0 ? Math.round((row.conversions || 0) / row.journeys * 100 * 100) / 100 : 0
+        }));
+      } catch (err) {
+        console.warn('[Journey Overview] Failed to query top journeys:', err);
+      }
+    }
+
     // Query top converting paths from journeys table (if available)
-    let topPaths: Array<{ path: string; conversions: number; revenue: number }> = [];
+    let topConvertingPaths: Array<{ path: string; conversions: number; revenue: number }> = [];
     if (analyticsDb) {
       try {
         const pathsResult = await analyticsDb.prepare(`
@@ -553,13 +592,13 @@ export class GetJourneysOverview extends OpenAPIRoute {
           results: Array<{ path: string; conversions: number; revenue_cents: number }>
         };
 
-        topPaths = (pathsResult.results || []).map(row => ({
+        topConvertingPaths = (pathsResult.results || []).map(row => ({
           path: row.path,
           conversions: row.conversions,
           revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100
         }));
       } catch (err) {
-        console.warn('[Journey Overview] Failed to query top paths:', err);
+        console.warn('[Journey Overview] Failed to query top converting paths:', err);
       }
     }
 
@@ -613,7 +652,8 @@ export class GetJourneysOverview extends OpenAPIRoute {
         total_conversions: revenueData.conversions,
         total_revenue: Math.round(revenueData.revenue * 100) / 100
       },
-      top_paths: topPaths,
+      top_journeys: topJourneys,
+      top_converting_paths: topConvertingPaths,
       conversion_by_path_length: conversionByPathLength,
       revenue_by_source: revenueData.sources
     });

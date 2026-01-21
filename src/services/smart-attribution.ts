@@ -110,6 +110,47 @@ interface ConnectorRevenue {
   revenue: number;
 }
 
+// Daily connector revenue data
+interface DailyConnectorRevenue {
+  date: string;
+  source: string;
+  conversions: number;
+  revenue: number;
+}
+
+// Daily UTM performance data
+interface DailyUtmPerformance {
+  date: string;
+  utmSource: string;
+  utmMedium: string | null;
+  sessions: number;
+  conversions: number;
+  revenue: number;
+}
+
+// Daily platform metrics
+interface DailyPlatformMetrics {
+  date: string;
+  platform: string;
+  spend: number;
+  conversions: number;
+  revenue: number;
+}
+
+// Time series entry for response
+export interface SmartAttributionTimeSeriesEntry {
+  date: string;
+  totalConversions: number;
+  totalRevenue: number;
+  totalSpend: number;
+  channels: {
+    channel: string;
+    conversions: number;
+    revenue: number;
+    spend: number;
+  }[];
+}
+
 /**
  * SmartAttributionService
  *
@@ -139,6 +180,7 @@ export class SmartAttributionService {
       dataCompleteness: number;
       signalBreakdown: Record<SignalType, { count: number; percentage: number }>;
     };
+    timeSeries: SmartAttributionTimeSeriesEntry[];
     dataQuality: {
       hasPlatformData: boolean;
       hasTagData: boolean;
@@ -153,15 +195,21 @@ export class SmartAttributionService {
     const orgTag = await this.getOrgTag(orgId);
     console.log(`[SmartAttribution] Resolved org_tag=${orgTag}`);
 
-    // Fetch all data sources in parallel
+    // Fetch all data sources in parallel (both aggregate and daily)
     const [
       platformMetrics,
       utmPerformance,
       connectorRevenue,
+      dailyUtmPerformance,
+      dailyConnectorRevenue,
+      dailyPlatformMetrics,
     ] = await Promise.all([
       this.getPlatformMetrics(orgId, startDate, endDate),
       orgTag ? this.getUtmPerformance(orgTag, startDate, endDate) : Promise.resolve([]),
       this.getConnectorRevenue(orgId, startDate, endDate),
+      orgTag ? this.getDailyUtmPerformance(orgTag, startDate, endDate) : Promise.resolve([]),
+      this.getDailyConnectorRevenue(orgId, startDate, endDate),
+      this.getDailyPlatformMetrics(orgId, startDate, endDate),
     ]);
 
     console.log(`[SmartAttribution] Data sources: platforms=${platformMetrics.length}, utm=${utmPerformance.length}, connectors=${connectorRevenue.length}`);
@@ -176,6 +224,17 @@ export class SmartAttributionService {
     // Calculate summary
     const summary = this.calculateSummary(attributions);
 
+    // Build daily time series
+    const timeSeries = this.buildDailyTimeSeries(
+      dailyUtmPerformance,
+      dailyConnectorRevenue,
+      dailyPlatformMetrics,
+      startDate,
+      endDate
+    );
+
+    console.log(`[SmartAttribution] Built time series with ${timeSeries.length} days`);
+
     // Assess data quality
     const dataQuality = this.assessDataQuality(
       platformMetrics,
@@ -184,7 +243,7 @@ export class SmartAttributionService {
       !!orgTag
     );
 
-    return { attributions, summary, dataQuality };
+    return { attributions, summary, timeSeries, dataQuality };
   }
 
   /**
@@ -330,14 +389,18 @@ export class SmartAttributionService {
   /**
    * Get UTM performance from D1 utm_performance table
    * Note: Uses org_tag, not organization_id
+   * Includes DIRECT traffic (null/empty utm_source) as a separate channel
    */
   private async getUtmPerformance(
     orgTag: string,
     startDate: string,
     endDate: string
   ): Promise<UtmPerformance[]> {
+    const results: UtmPerformance[] = [];
+
+    // Get UTM-attributed sessions
     try {
-      const result = await this.analyticsDb.prepare(`
+      const utmResult = await this.analyticsDb.prepare(`
         SELECT
           utm_source,
           utm_medium,
@@ -363,18 +426,54 @@ export class SmartAttributionService {
         revenue: number;
       }>();
 
-      return (result.results || []).map(r => ({
-        utmSource: r.utm_source,
-        utmMedium: r.utm_medium,
-        utmCampaign: r.utm_campaign,
-        sessions: r.sessions || 0,
-        conversions: r.conversions || 0,
-        revenue: r.revenue || 0
-      }));
+      for (const r of utmResult.results || []) {
+        results.push({
+          utmSource: r.utm_source,
+          utmMedium: r.utm_medium,
+          utmCampaign: r.utm_campaign,
+          sessions: r.sessions || 0,
+          conversions: r.conversions || 0,
+          revenue: r.revenue || 0
+        });
+      }
     } catch (err) {
       console.warn('[SmartAttribution] Failed to query UTM performance:', err);
-      return [];
     }
+
+    // Get DIRECT traffic (sessions without UTM source)
+    try {
+      const directResult = await this.analyticsDb.prepare(`
+        SELECT
+          SUM(sessions) as sessions,
+          SUM(conversions) as conversions,
+          SUM(revenue_cents) / 100.0 as revenue
+        FROM utm_performance
+        WHERE org_tag = ?
+          AND date >= ?
+          AND date <= ?
+          AND (utm_source IS NULL OR utm_source = '')
+      `).bind(orgTag, startDate, endDate).first<{
+        sessions: number;
+        conversions: number;
+        revenue: number;
+      }>();
+
+      if (directResult && directResult.sessions > 0) {
+        results.push({
+          utmSource: '(direct)',
+          utmMedium: '(none)',
+          utmCampaign: null,
+          sessions: directResult.sessions || 0,
+          conversions: directResult.conversions || 0,
+          revenue: directResult.revenue || 0
+        });
+        console.log(`[SmartAttribution] Direct traffic: ${directResult.sessions} sessions, ${directResult.conversions} conversions`);
+      }
+    } catch (err) {
+      console.warn('[SmartAttribution] Failed to query direct traffic:', err);
+    }
+
+    return results;
   }
 
   /**
@@ -491,8 +590,11 @@ export class SmartAttributionService {
 
     for (const utm of utmPerformance) {
       const sourceLower = utm.utmSource.toLowerCase().trim();
-      const matchedPlatform = UTM_SOURCE_PLATFORMS[sourceLower];
-      const channelKey = matchedPlatform || sourceLower;
+
+      // Handle direct traffic specially
+      const isDirect = sourceLower === '(direct)' || sourceLower === 'direct' || sourceLower === '';
+      const matchedPlatform = isDirect ? null : UTM_SOURCE_PLATFORMS[sourceLower];
+      const channelKey = isDirect ? 'direct' : (matchedPlatform || sourceLower);
 
       totalUtmSessions += utm.sessions;
 
@@ -508,14 +610,15 @@ export class SmartAttributionService {
         if (!existing.campaign && utm.utmCampaign) existing.campaign = utm.utmCampaign;
       } else {
         aggregatedUtm.set(channelKey, {
-          channel: matchedPlatform || utm.utmSource,
+          channel: isDirect ? 'Direct' : (matchedPlatform || utm.utmSource),
           platform: matchedPlatform || null,
-          medium: utm.utmMedium,
+          medium: isDirect ? '(none)' : utm.utmMedium,
           campaign: utm.utmCampaign,
           sessions: utm.sessions,
           conversions: utm.conversions,
           revenue: utm.revenue,
-          sources: [utm.utmSource]
+          sources: [utm.utmSource],
+          isDirect // Track if this is direct traffic
         });
       }
     }
@@ -776,6 +879,382 @@ export class SmartAttributionService {
       dataCompleteness,
       signalBreakdown
     };
+  }
+
+  /**
+   * Get daily UTM performance grouped by date and source
+   */
+  private async getDailyUtmPerformance(
+    orgTag: string,
+    startDate: string,
+    endDate: string
+  ): Promise<DailyUtmPerformance[]> {
+    const results: DailyUtmPerformance[] = [];
+
+    try {
+      // Get UTM data grouped by date and source
+      const utmResult = await this.analyticsDb.prepare(`
+        SELECT
+          date,
+          utm_source,
+          utm_medium,
+          SUM(sessions) as sessions,
+          SUM(conversions) as conversions,
+          SUM(revenue_cents) / 100.0 as revenue
+        FROM utm_performance
+        WHERE org_tag = ?
+          AND date >= ?
+          AND date <= ?
+        GROUP BY date, utm_source, utm_medium
+        ORDER BY date, sessions DESC
+      `).bind(orgTag, startDate, endDate).all<{
+        date: string;
+        utm_source: string | null;
+        utm_medium: string | null;
+        sessions: number;
+        conversions: number;
+        revenue: number;
+      }>();
+
+      for (const r of utmResult.results || []) {
+        results.push({
+          date: r.date,
+          utmSource: r.utm_source || '(direct)',
+          utmMedium: r.utm_medium,
+          sessions: r.sessions || 0,
+          conversions: r.conversions || 0,
+          revenue: r.revenue || 0,
+        });
+      }
+    } catch (err) {
+      console.warn('[SmartAttribution] Failed to query daily UTM performance:', err);
+    }
+
+    return results;
+  }
+
+  /**
+   * Get daily connector revenue (Stripe, Shopify) grouped by date
+   */
+  private async getDailyConnectorRevenue(
+    orgId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<DailyConnectorRevenue[]> {
+    const results: DailyConnectorRevenue[] = [];
+
+    // Query Stripe by date
+    try {
+      const stripeResult = await this.analyticsDb.prepare(`
+        SELECT
+          DATE(stripe_created_at) as date,
+          COUNT(*) as conversions,
+          COALESCE(SUM(amount_cents), 0) / 100.0 as revenue
+        FROM stripe_charges
+        WHERE organization_id = ?
+          AND DATE(stripe_created_at) >= ?
+          AND DATE(stripe_created_at) <= ?
+          AND status = 'succeeded'
+        GROUP BY DATE(stripe_created_at)
+        ORDER BY date
+      `).bind(orgId, startDate, endDate).all<{
+        date: string;
+        conversions: number;
+        revenue: number;
+      }>();
+
+      for (const r of stripeResult.results || []) {
+        results.push({
+          date: r.date,
+          source: 'stripe',
+          conversions: r.conversions,
+          revenue: r.revenue || 0,
+        });
+      }
+    } catch (err) {
+      console.warn('[SmartAttribution] Failed to query daily Stripe revenue:', err);
+    }
+
+    // Query Shopify by date
+    try {
+      const shopifyResult = await this.analyticsDb.prepare(`
+        SELECT
+          DATE(created_at) as date,
+          COUNT(*) as conversions,
+          COALESCE(SUM(total_price_cents), 0) / 100.0 as revenue
+        FROM shopify_orders
+        WHERE organization_id = ?
+          AND DATE(created_at) >= ?
+          AND DATE(created_at) <= ?
+        GROUP BY DATE(created_at)
+        ORDER BY date
+      `).bind(orgId, startDate, endDate).all<{
+        date: string;
+        conversions: number;
+        revenue: number;
+      }>();
+
+      for (const r of shopifyResult.results || []) {
+        results.push({
+          date: r.date,
+          source: 'shopify',
+          conversions: r.conversions,
+          revenue: r.revenue || 0,
+        });
+      }
+    } catch (err) {
+      // Table might not exist
+    }
+
+    return results;
+  }
+
+  /**
+   * Get daily platform metrics (spend, conversions) grouped by date
+   */
+  private async getDailyPlatformMetrics(
+    orgId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<DailyPlatformMetrics[]> {
+    const results: DailyPlatformMetrics[] = [];
+
+    // Query Google Ads daily
+    try {
+      const googleResult = await this.analyticsDb.prepare(`
+        SELECT
+          m.metric_date as date,
+          COALESCE(SUM(m.spend_cents), 0) / 100.0 as spend,
+          COALESCE(SUM(m.conversions), 0) as conversions,
+          COALESCE(SUM(m.conversion_value_cents), 0) / 100.0 as revenue
+        FROM google_campaigns c
+        JOIN google_campaign_daily_metrics m
+          ON c.id = m.campaign_ref
+        WHERE c.organization_id = ?
+          AND m.metric_date >= ?
+          AND m.metric_date <= ?
+        GROUP BY m.metric_date
+        ORDER BY m.metric_date
+      `).bind(orgId, startDate, endDate).all<{
+        date: string;
+        spend: number;
+        conversions: number;
+        revenue: number;
+      }>();
+
+      for (const r of googleResult.results || []) {
+        results.push({
+          date: r.date,
+          platform: 'google',
+          spend: r.spend || 0,
+          conversions: r.conversions || 0,
+          revenue: r.revenue || 0,
+        });
+      }
+    } catch (err) {
+      console.warn('[SmartAttribution] Failed to query daily google metrics:', err);
+    }
+
+    // Query Facebook Ads daily
+    try {
+      const facebookResult = await this.analyticsDb.prepare(`
+        SELECT
+          m.metric_date as date,
+          COALESCE(SUM(m.spend_cents), 0) / 100.0 as spend,
+          COALESCE(SUM(m.conversions), 0) as conversions,
+          0 as revenue
+        FROM facebook_campaigns c
+        JOIN facebook_campaign_daily_metrics m
+          ON c.id = m.campaign_ref
+        WHERE c.organization_id = ?
+          AND m.metric_date >= ?
+          AND m.metric_date <= ?
+        GROUP BY m.metric_date
+        ORDER BY m.metric_date
+      `).bind(orgId, startDate, endDate).all<{
+        date: string;
+        spend: number;
+        conversions: number;
+        revenue: number;
+      }>();
+
+      for (const r of facebookResult.results || []) {
+        results.push({
+          date: r.date,
+          platform: 'facebook',
+          spend: r.spend || 0,
+          conversions: r.conversions || 0,
+          revenue: r.revenue || 0,
+        });
+      }
+    } catch (err) {
+      console.warn('[SmartAttribution] Failed to query daily facebook metrics:', err);
+    }
+
+    // Query TikTok Ads daily
+    try {
+      const tiktokResult = await this.analyticsDb.prepare(`
+        SELECT
+          m.metric_date as date,
+          COALESCE(SUM(m.spend_cents), 0) / 100.0 as spend,
+          COALESCE(SUM(m.conversions), 0) as conversions,
+          COALESCE(SUM(m.conversion_value_cents), 0) / 100.0 as revenue
+        FROM tiktok_campaigns c
+        JOIN tiktok_campaign_daily_metrics m
+          ON c.id = m.campaign_ref
+        WHERE c.organization_id = ?
+          AND m.metric_date >= ?
+          AND m.metric_date <= ?
+        GROUP BY m.metric_date
+        ORDER BY m.metric_date
+      `).bind(orgId, startDate, endDate).all<{
+        date: string;
+        spend: number;
+        conversions: number;
+        revenue: number;
+      }>();
+
+      for (const r of tiktokResult.results || []) {
+        results.push({
+          date: r.date,
+          platform: 'tiktok',
+          spend: r.spend || 0,
+          conversions: r.conversions || 0,
+          revenue: r.revenue || 0,
+        });
+      }
+    } catch (err) {
+      console.warn('[SmartAttribution] Failed to query daily tiktok metrics:', err);
+    }
+
+    return results;
+  }
+
+  /**
+   * Build daily time series from all sources
+   *
+   * For each day, we aggregate:
+   * - UTM conversions (tag-tracked)
+   * - Connector conversions (Stripe/Shopify)
+   * - Platform spend
+   *
+   * We use the MAXIMUM of UTM vs Connector conversions to avoid
+   * double-counting while ensuring we capture all conversions.
+   */
+  private buildDailyTimeSeries(
+    dailyUtm: DailyUtmPerformance[],
+    dailyConnector: DailyConnectorRevenue[],
+    dailyPlatform: DailyPlatformMetrics[],
+    startDate: string,
+    endDate: string
+  ): SmartAttributionTimeSeriesEntry[] {
+    // Create a map of all dates in range
+    const dateMap = new Map<string, {
+      utmConversions: number;
+      utmRevenue: number;
+      connectorConversions: number;
+      connectorRevenue: number;
+      platformSpend: number;
+      platformConversions: number;
+      channelData: Map<string, { conversions: number; revenue: number; spend: number }>;
+    }>();
+
+    // Initialize all dates in range
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().split('T')[0];
+      dateMap.set(dateStr, {
+        utmConversions: 0,
+        utmRevenue: 0,
+        connectorConversions: 0,
+        connectorRevenue: 0,
+        platformSpend: 0,
+        platformConversions: 0,
+        channelData: new Map(),
+      });
+    }
+
+    // Aggregate UTM data by date
+    for (const utm of dailyUtm) {
+      const day = dateMap.get(utm.date);
+      if (day) {
+        day.utmConversions += utm.conversions;
+        day.utmRevenue += utm.revenue;
+
+        // Track by channel (normalize source to channel name)
+        const sourceLower = utm.utmSource.toLowerCase().trim();
+        const isDirect = sourceLower === '(direct)' || sourceLower === 'direct' || sourceLower === '';
+        const matchedPlatform = isDirect ? null : UTM_SOURCE_PLATFORMS[sourceLower];
+        const channelKey = isDirect ? 'direct' : (matchedPlatform || sourceLower);
+
+        const existing = day.channelData.get(channelKey) || { conversions: 0, revenue: 0, spend: 0 };
+        existing.conversions += utm.conversions;
+        existing.revenue += utm.revenue;
+        day.channelData.set(channelKey, existing);
+      }
+    }
+
+    // Aggregate connector data by date
+    for (const conn of dailyConnector) {
+      const day = dateMap.get(conn.date);
+      if (day) {
+        day.connectorConversions += conn.conversions;
+        day.connectorRevenue += conn.revenue;
+      }
+    }
+
+    // Aggregate platform data by date
+    for (const plat of dailyPlatform) {
+      const day = dateMap.get(plat.date);
+      if (day) {
+        day.platformSpend += plat.spend;
+        day.platformConversions += plat.conversions;
+
+        // Add platform spend to channel data
+        const existing = day.channelData.get(plat.platform) || { conversions: 0, revenue: 0, spend: 0 };
+        existing.spend += plat.spend;
+        // If no UTM conversions for this platform, use platform-reported
+        if (existing.conversions === 0) {
+          existing.conversions = plat.conversions;
+          existing.revenue = plat.revenue;
+        }
+        day.channelData.set(plat.platform, existing);
+      }
+    }
+
+    // Build final time series
+    const timeSeries: SmartAttributionTimeSeriesEntry[] = [];
+
+    for (const [date, data] of dateMap) {
+      // Use the maximum of UTM vs Connector conversions
+      // This captures all conversions without double-counting
+      const totalConversions = Math.max(data.utmConversions, data.connectorConversions);
+
+      // Prefer connector revenue (actual transaction data) over UTM-tracked revenue
+      const totalRevenue = data.connectorRevenue > 0 ? data.connectorRevenue : data.utmRevenue;
+
+      // Convert channel map to array
+      const channels = Array.from(data.channelData.entries()).map(([channel, metrics]) => ({
+        channel,
+        conversions: metrics.conversions,
+        revenue: metrics.revenue,
+        spend: metrics.spend,
+      }));
+
+      timeSeries.push({
+        date,
+        totalConversions,
+        totalRevenue,
+        totalSpend: data.platformSpend,
+        channels,
+      });
+    }
+
+    // Sort by date
+    timeSeries.sort((a, b) => a.date.localeCompare(b.date));
+
+    return timeSeries;
   }
 
   /**
