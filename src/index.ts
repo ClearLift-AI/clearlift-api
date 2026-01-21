@@ -18,6 +18,7 @@ import {
 } from "./endpoints/v1/user";
 import { GetEvents } from "./endpoints/v1/analytics/events";
 import { GetEventsHistorical } from "./endpoints/v1/analytics/events-historical";
+import { GetEventsD1 } from "./endpoints/v1/analytics/events-d1";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
 import { GetJobberRevenue, GetJobberInvoices } from "./endpoints/v1/analytics/jobber";
@@ -53,7 +54,8 @@ import {
   GetRealtimeTimeSeries,
   GetRealtimeBreakdown,
   GetRealtimeEvents,
-  GetRealtimeEventTypes
+  GetRealtimeEventTypes,
+  GetRealtimeStripe
 } from "./endpoints/v1/analytics/realtime";
 import {
   GetFacebookCampaigns,
@@ -411,6 +413,7 @@ openapi.post("/v1/organizations/:org_id/tracking-domains/:domain_id/resync", aut
 
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, requireOrg, GetEvents);
+openapi.get("/v1/analytics/events/d1", auth, requireOrg, GetEventsD1);
 openapi.get("/v1/analytics/events/sync-status", auth, requireOrg, GetEventsSyncStatus);
 openapi.get("/v1/analytics/events/historical", auth, requireOrg, GetEventsHistorical);
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
@@ -460,6 +463,7 @@ openapi.get("/v1/analytics/realtime/timeseries", auth, requireOrg, GetRealtimeTi
 openapi.get("/v1/analytics/realtime/breakdown", auth, requireOrg, GetRealtimeBreakdown);
 openapi.get("/v1/analytics/realtime/events", auth, requireOrg, GetRealtimeEvents);
 openapi.get("/v1/analytics/realtime/event-types", auth, requireOrg, GetRealtimeEventTypes);
+openapi.get("/v1/analytics/realtime/stripe", auth, requireOrg, GetRealtimeStripe);
 
 // Facebook Ads endpoints
 openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);

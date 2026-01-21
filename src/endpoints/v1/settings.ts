@@ -15,6 +15,11 @@ const MatrixSettingsSchema = z.object({
   // Platforms to exclude from conversion display (e.g., ['stripe', 'jobber'])
   disabled_conversion_sources: z.array(z.string()).optional(),
   custom_instructions: z.string().max(5000).optional().nullable(),
+  // Business type determines how conversions/revenue are calculated in Real-Time:
+  // - 'ecommerce': Conversions = Stripe charges, Revenue = Stripe revenue
+  // - 'lead_gen': Conversions = Tag goal events, Revenue hidden
+  // - 'saas': Conversions = New subscriptions, Revenue = MRR from Stripe
+  business_type: z.enum(['ecommerce', 'lead_gen', 'saas']).optional(),
   // LLM provider settings
   llm_default_provider: z.enum(['auto', 'claude', 'gemini']).optional(),
   llm_claude_model: z.enum(['opus', 'sonnet', 'haiku']).optional(),
@@ -64,13 +69,12 @@ export class GetMatrixSettings extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify user has access to this organization
-    const memberCheck = await c.env.DB.prepare(`
-      SELECT 1 FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(orgId, session.user_id).first();
+    // Verify user has access to this organization (handles super admin bypass)
+    const { D1Adapter } = await import("../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
 
-    if (!memberCheck) {
+    if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
@@ -90,6 +94,7 @@ export class GetMatrixSettings extends OpenAPIRoute {
           conversion_source,
           disabled_conversion_sources,
           custom_instructions,
+          business_type,
           llm_default_provider,
           llm_claude_model,
           llm_gemini_model,
@@ -111,6 +116,7 @@ export class GetMatrixSettings extends OpenAPIRoute {
           conversion_source: 'tag',
           disabled_conversion_sources: [],
           custom_instructions: null,
+          business_type: 'lead_gen',
           llm_default_provider: 'auto',
           llm_claude_model: 'haiku',
           llm_gemini_model: 'flash',
@@ -140,6 +146,7 @@ export class GetMatrixSettings extends OpenAPIRoute {
         conversion_source: settings.conversion_source,
         disabled_conversion_sources: disabledSources,
         custom_instructions: settings.custom_instructions,
+        business_type: (settings as any).business_type || 'lead_gen',
         llm_default_provider: (settings as any).llm_default_provider || 'auto',
         llm_claude_model: (settings as any).llm_claude_model || 'haiku',
         llm_gemini_model: (settings as any).llm_gemini_model || 'flash',
@@ -196,13 +203,12 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify user has access to this organization
-    const memberCheck = await c.env.DB.prepare(`
-      SELECT role FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(orgId, session.user_id).first();
+    // Verify user has access to this organization (handles super admin bypass)
+    const { D1Adapter } = await import("../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
 
-    if (!memberCheck) {
+    if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
@@ -224,13 +230,14 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         conversion_source,
         disabled_conversion_sources,
         custom_instructions,
+        business_type,
         llm_default_provider,
         llm_claude_model,
         llm_gemini_model,
         llm_max_recommendations,
         llm_enable_exploration,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(org_id) DO UPDATE SET
         growth_strategy = excluded.growth_strategy,
         budget_optimization = excluded.budget_optimization,
@@ -241,6 +248,7 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         conversion_source = excluded.conversion_source,
         disabled_conversion_sources = excluded.disabled_conversion_sources,
         custom_instructions = excluded.custom_instructions,
+        business_type = excluded.business_type,
         llm_default_provider = excluded.llm_default_provider,
         llm_claude_model = excluded.llm_claude_model,
         llm_gemini_model = excluded.llm_gemini_model,
@@ -258,6 +266,7 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
       body.conversion_source || 'tag',
       disabledSourcesJson,
       body.custom_instructions || null,
+      body.business_type || 'lead_gen',
       body.llm_default_provider || 'auto',
       body.llm_claude_model || 'haiku',
       body.llm_gemini_model || 'flash',
@@ -332,13 +341,12 @@ export class GetAIDecisions extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify user has access
-    const memberCheck = await c.env.DB.prepare(`
-      SELECT 1 FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(orgId, session.user_id).first();
+    // Verify user has access (handles super admin bypass)
+    const { D1Adapter } = await import("../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
 
-    if (!memberCheck) {
+    if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
@@ -418,13 +426,12 @@ export class AcceptAIDecision extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify user has access to this organization
-    const memberCheck = await c.env.DB.prepare(`
-      SELECT 1 FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(orgId, session.user_id).first();
+    // Verify user has access to this organization (handles super admin bypass)
+    const { D1Adapter } = await import("../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
 
-    if (!memberCheck) {
+    if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
@@ -652,13 +659,12 @@ export class RejectAIDecision extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify user has access to this organization
-    const memberCheck = await c.env.DB.prepare(`
-      SELECT 1 FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(orgId, session.user_id).first();
+    // Verify user has access to this organization (handles super admin bypass)
+    const { D1Adapter } = await import("../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
 
-    if (!memberCheck) {
+    if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
@@ -724,13 +730,12 @@ export class RateAIDecision extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify user has access to this organization
-    const memberCheck = await c.env.DB.prepare(`
-      SELECT 1 FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(orgId, session.user_id).first();
+    // Verify user has access to this organization (handles super admin bypass)
+    const { D1Adapter } = await import("../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
 
-    if (!memberCheck) {
+    if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 

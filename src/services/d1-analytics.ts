@@ -1101,6 +1101,182 @@ export class D1AnalyticsService {
       unique_customers: row.unique_customers,
     }));
   }
+
+  /**
+   * Get real-time Stripe summary for the last N hours
+   * Used by Real-Time analytics when business_type is 'ecommerce' or 'saas'
+   */
+  async getStripeRealtimeSummary(
+    orgId: string,
+    hours: number = 24
+  ): Promise<StripeRealtimeSummary> {
+    const result = await this.session.prepare(`
+      SELECT
+        COUNT(*) as total_charges,
+        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as successful_charges,
+        SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as total_revenue_cents,
+        COUNT(DISTINCT customer_id) as unique_customers
+      FROM stripe_charges
+      WHERE organization_id = ?
+        AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
+    `).bind(orgId, hours).first<{
+      total_charges: number;
+      successful_charges: number;
+      total_revenue_cents: number;
+      unique_customers: number;
+    }>();
+
+    return {
+      conversions: result?.successful_charges || 0,
+      revenue: (result?.total_revenue_cents || 0) / 100,
+      totalCharges: result?.total_charges || 0,
+      uniqueCustomers: result?.unique_customers || 0,
+    };
+  }
+
+  /**
+   * Get real-time Stripe time series for charts
+   */
+  async getStripeRealtimeTimeSeries(
+    orgId: string,
+    hours: number = 24
+  ): Promise<StripeRealtimeTimeSeriesRow[]> {
+    const result = await this.session.prepare(`
+      SELECT
+        strftime('%Y-%m-%d %H:00:00', stripe_created_at) as bucket,
+        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as conversions,
+        SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as revenue_cents
+      FROM stripe_charges
+      WHERE organization_id = ?
+        AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
+      GROUP BY strftime('%Y-%m-%d %H:00:00', stripe_created_at)
+      ORDER BY bucket ASC
+    `).bind(orgId, hours).all<{
+      bucket: string;
+      conversions: number;
+      revenue_cents: number;
+    }>();
+
+    return result.results.map(row => ({
+      bucket: row.bucket,
+      conversions: row.conversions,
+      revenue: row.revenue_cents / 100,
+    }));
+  }
+
+  /**
+   * Get real-time Shopify summary for the last N hours
+   * Used by Real-Time analytics when business_type is 'ecommerce'
+   */
+  async getShopifyRealtimeSummary(
+    orgId: string,
+    hours: number = 24
+  ): Promise<ShopifyRealtimeSummary> {
+    const result = await this.session.prepare(`
+      SELECT
+        COUNT(*) as total_orders,
+        SUM(CASE WHEN financial_status = 'paid' THEN 1 ELSE 0 END) as paid_orders,
+        SUM(CASE WHEN financial_status = 'paid' THEN total_price_cents ELSE 0 END) as total_revenue_cents,
+        COUNT(DISTINCT customer_id) as unique_customers
+      FROM shopify_orders
+      WHERE organization_id = ?
+        AND shopify_created_at >= datetime('now', '-' || ? || ' hours')
+    `).bind(orgId, hours).first<{
+      total_orders: number;
+      paid_orders: number;
+      total_revenue_cents: number;
+      unique_customers: number;
+    }>();
+
+    return {
+      conversions: result?.paid_orders || 0,
+      revenue: (result?.total_revenue_cents || 0) / 100,
+      totalOrders: result?.total_orders || 0,
+      uniqueCustomers: result?.unique_customers || 0,
+    };
+  }
+
+  /**
+   * Get real-time Shopify time series for charts
+   */
+  async getShopifyRealtimeTimeSeries(
+    orgId: string,
+    hours: number = 24
+  ): Promise<ShopifyRealtimeTimeSeriesRow[]> {
+    const result = await this.session.prepare(`
+      SELECT
+        strftime('%Y-%m-%d %H:00:00', shopify_created_at) as bucket,
+        SUM(CASE WHEN financial_status = 'paid' THEN 1 ELSE 0 END) as conversions,
+        SUM(CASE WHEN financial_status = 'paid' THEN total_price_cents ELSE 0 END) as revenue_cents
+      FROM shopify_orders
+      WHERE organization_id = ?
+        AND shopify_created_at >= datetime('now', '-' || ? || ' hours')
+      GROUP BY strftime('%Y-%m-%d %H:00:00', shopify_created_at)
+      ORDER BY bucket ASC
+    `).bind(orgId, hours).all<{
+      bucket: string;
+      conversions: number;
+      revenue_cents: number;
+    }>();
+
+    return result.results.map(row => ({
+      bucket: row.bucket,
+      conversions: row.conversions,
+      revenue: row.revenue_cents / 100,
+    }));
+  }
+
+  /**
+   * Get combined real-time revenue from all sources (Stripe + Shopify)
+   * Respects disabled_conversion_sources setting
+   */
+  async getCombinedRealtimeSummary(
+    orgId: string,
+    hours: number = 24,
+    disabledSources: string[] = []
+  ): Promise<CombinedRealtimeSummary> {
+    const sources: CombinedRealtimeSummary['sources'] = {};
+    let totalConversions = 0;
+    let totalRevenue = 0;
+    let totalCustomers = 0;
+
+    // Get Stripe data if not disabled
+    if (!disabledSources.includes('stripe')) {
+      try {
+        const stripeData = await this.getStripeRealtimeSummary(orgId, hours);
+        if (stripeData.conversions > 0 || stripeData.revenue > 0) {
+          sources.stripe = { conversions: stripeData.conversions, revenue: stripeData.revenue };
+          totalConversions += stripeData.conversions;
+          totalRevenue += stripeData.revenue;
+          totalCustomers += stripeData.uniqueCustomers;
+        }
+      } catch (e) {
+        // Stripe table may not exist or have data
+      }
+    }
+
+    // Get Shopify data if not disabled
+    if (!disabledSources.includes('shopify')) {
+      try {
+        const shopifyData = await this.getShopifyRealtimeSummary(orgId, hours);
+        if (shopifyData.conversions > 0 || shopifyData.revenue > 0) {
+          sources.shopify = { conversions: shopifyData.conversions, revenue: shopifyData.revenue };
+          totalConversions += shopifyData.conversions;
+          totalRevenue += shopifyData.revenue;
+          totalCustomers += shopifyData.uniqueCustomers;
+        }
+      } catch (e) {
+        // Shopify table may not exist or have data
+      }
+    }
+
+    return {
+      conversions: totalConversions,
+      revenue: totalRevenue,
+      uniqueCustomers: totalCustomers,
+      sources,
+    };
+  }
 }
 
 // =============================================================================
@@ -1151,4 +1327,40 @@ export interface StripeTimeSeriesRow {
   revenue: number;
   transactions: number;
   unique_customers: number;
+}
+
+export interface StripeRealtimeSummary {
+  conversions: number;
+  revenue: number;
+  totalCharges: number;
+  uniqueCustomers: number;
+}
+
+export interface StripeRealtimeTimeSeriesRow {
+  bucket: string;
+  conversions: number;
+  revenue: number;
+}
+
+export interface ShopifyRealtimeSummary {
+  conversions: number;
+  revenue: number;
+  totalOrders: number;
+  uniqueCustomers: number;
+}
+
+export interface ShopifyRealtimeTimeSeriesRow {
+  bucket: string;
+  conversions: number;
+  revenue: number;
+}
+
+export interface CombinedRealtimeSummary {
+  conversions: number;
+  revenue: number;
+  uniqueCustomers: number;
+  sources: {
+    stripe?: { conversions: number; revenue: number };
+    shopify?: { conversions: number; revenue: number };
+  };
 }
