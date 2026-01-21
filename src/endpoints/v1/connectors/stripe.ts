@@ -170,10 +170,20 @@ export class ConnectStripe extends OpenAPIRoute {
             : f.value
         }));
 
+        // Determine rule_type based on filter semantics:
+        // - 'in' with status filter on incomplete/expired → exclude those statuses
+        // - 'equals' → include only matching records
+        // - 'not_in' / 'not_equals' → include records NOT matching (keep the condition as-is)
+        const hasStatusInFilter = conditions.some(c =>
+          c.field === 'status' && c.operator === 'in'
+        );
+
         filterConfig = {
           name: isSubscriptionMode ? 'Subscription Filter' : 'Payment Filter',
           description: 'Custom filter configured during setup',
-          rule_type: conditions.some(c => c.operator === 'not_in' || c.operator === 'not_equals') ? 'exclude' : 'include',
+          // For 'in' operator on status (like "status in incomplete,incomplete_expired"), use exclude
+          // For 'equals' or 'not_in', use include
+          rule_type: hasStatusInFilter ? 'exclude' : 'include',
           conditions
         };
       } else {
