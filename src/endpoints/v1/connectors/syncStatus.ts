@@ -82,7 +82,7 @@ export class GetSyncStatus extends OpenAPIRoute {
       return c.json({ error: "Access denied" }, 403);
     }
 
-    // Get latest sync job
+    // Get latest sync job (including new progress tracking columns)
     const latestJob = await c.env.DB.prepare(`
       SELECT
         status,
@@ -90,6 +90,9 @@ export class GetSyncStatus extends OpenAPIRoute {
         started_at,
         completed_at,
         records_synced,
+        total_records,
+        progress_percentage,
+        current_phase,
         error_message,
         metadata
       FROM sync_jobs
@@ -98,21 +101,19 @@ export class GetSyncStatus extends OpenAPIRoute {
       LIMIT 1
     `).bind(connectionId).first();
 
-    // Parse metadata for progress info
+    // Use dedicated columns first, fall back to metadata for backwards compatibility
     let recordsSynced = latestJob?.records_synced || 0;
-    let totalRecords: number | null = null;
-    let progressPercentage = 0;
-    let currentPhase: string | null = null;
+    let totalRecords: number | null = (latestJob?.total_records as number) ?? null;
+    let progressPercentage = (latestJob?.progress_percentage as number) ?? 0;
+    let currentPhase: string | null = (latestJob?.current_phase as string) ?? null;
 
-    if (latestJob?.metadata) {
+    // Fall back to metadata if dedicated columns are empty (backwards compatibility)
+    if (latestJob?.metadata && (!currentPhase || progressPercentage === 0)) {
       try {
         const metadata = JSON.parse(latestJob.metadata as string);
-        recordsSynced = metadata.records_synced ?? recordsSynced;
-        totalRecords = metadata.total_records ?? null;
-        currentPhase = metadata.current_phase ?? null;
-
-        // Calculate progress from metadata if available
-        if (metadata.progress_percentage !== undefined) {
+        if (!totalRecords) totalRecords = metadata.total_records ?? null;
+        if (!currentPhase) currentPhase = metadata.current_phase ?? null;
+        if (progressPercentage === 0 && metadata.progress_percentage !== undefined) {
           progressPercentage = metadata.progress_percentage;
         }
       } catch (e) {
@@ -120,7 +121,7 @@ export class GetSyncStatus extends OpenAPIRoute {
       }
     }
 
-    // Calculate progress percentage based on status if not set
+    // Calculate progress percentage based on status if still not set
     if (progressPercentage === 0 && latestJob) {
       if (latestJob.status === 'completed') {
         progressPercentage = 100;
@@ -129,10 +130,11 @@ export class GetSyncStatus extends OpenAPIRoute {
         if (totalRecords !== null && totalRecords > 0) {
           progressPercentage = Math.min(Math.round((Number(recordsSynced) / Number(totalRecords)) * 100), 99);
         } else {
-          progressPercentage = 50; // Default to 50% if we don't know total
+          progressPercentage = 25; // Default to 25% if we don't know total
         }
       } else if (latestJob.status === 'pending') {
-        progressPercentage = 0;
+        progressPercentage = 5;
+        currentPhase = currentPhase || 'Queued...';
       }
     }
 
