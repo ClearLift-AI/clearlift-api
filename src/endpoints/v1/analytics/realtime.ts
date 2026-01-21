@@ -537,14 +537,15 @@ export class GetRealtimeEventTypes extends OpenAPIRoute {
 
 /**
  * GET /v1/analytics/realtime/revenue
- * Get real-time revenue analytics from all connected sources (Stripe + Shopify)
+ * Get real-time revenue analytics from all connected revenue sources
+ * Uses the plugin system to query Stripe, Shopify, Jobber, and future connectors
  * Respects the org's disabled_conversion_sources setting
  */
 export class GetRealtimeStripe extends OpenAPIRoute {
   schema = {
     tags: ["Analytics"],
     summary: "Get real-time revenue analytics",
-    description: "Returns combined conversions and revenue from Stripe and Shopify for the specified time window. Use when business_type is 'ecommerce' or 'saas'.",
+    description: "Returns combined conversions and revenue from all connected revenue sources (Stripe, Shopify, Jobber, etc.) for the specified time window.",
     operationId: "get-realtime-revenue",
     security: [{ bearerAuth: [] }],
     request: {
@@ -565,21 +566,21 @@ export class GetRealtimeStripe extends OpenAPIRoute {
                   conversions: z.number().describe("Total successful transactions"),
                   revenue: z.number().describe("Total revenue from all sources"),
                   uniqueCustomers: z.number().describe("Unique customers in time window"),
-                  sources: z.object({
-                    stripe: z.object({
-                      conversions: z.number(),
-                      revenue: z.number()
-                    }).optional(),
-                    shopify: z.object({
-                      conversions: z.number(),
-                      revenue: z.number()
-                    }).optional()
-                  })
+                  sources: z.record(z.object({
+                    conversions: z.number(),
+                    revenue: z.number(),
+                    displayName: z.string()
+                  })).describe("Per-source breakdown")
                 }),
                 timeSeries: z.array(z.object({
                   bucket: z.string(),
                   conversions: z.number(),
                   revenue: z.number()
+                })),
+                availableSources: z.array(z.object({
+                  platform: z.string(),
+                  displayName: z.string(),
+                  conversionLabel: z.string()
                 }))
               })
             })
@@ -617,53 +618,11 @@ export class GetRealtimeStripe extends OpenAPIRoute {
         // Settings may not exist, use empty disabled list
       }
 
-      const { D1AnalyticsService } = await import("../../../services/d1-analytics");
-      const d1Analytics = new D1AnalyticsService(analyticsDb);
+      // Import and use the revenue source plugin system
+      const { getCombinedRevenue } = await import("../../../services/revenue-sources/providers");
+      const result = await getCombinedRevenue(analyticsDb, orgId, hours, disabledSources);
 
-      // Get combined summary from all enabled sources
-      const summary = await d1Analytics.getCombinedRealtimeSummary(orgId, hours, disabledSources);
-
-      // Get time series from enabled sources and combine
-      const timeSeriesData: Record<string, { conversions: number; revenue: number }> = {};
-
-      if (!disabledSources.includes('stripe')) {
-        try {
-          const stripeTs = await d1Analytics.getStripeRealtimeTimeSeries(orgId, hours);
-          for (const row of stripeTs) {
-            if (!timeSeriesData[row.bucket]) {
-              timeSeriesData[row.bucket] = { conversions: 0, revenue: 0 };
-            }
-            timeSeriesData[row.bucket].conversions += row.conversions;
-            timeSeriesData[row.bucket].revenue += row.revenue;
-          }
-        } catch (e) {
-          // Stripe data may not exist
-        }
-      }
-
-      if (!disabledSources.includes('shopify')) {
-        try {
-          const shopifyTs = await d1Analytics.getShopifyRealtimeTimeSeries(orgId, hours);
-          for (const row of shopifyTs) {
-            if (!timeSeriesData[row.bucket]) {
-              timeSeriesData[row.bucket] = { conversions: 0, revenue: 0 };
-            }
-            timeSeriesData[row.bucket].conversions += row.conversions;
-            timeSeriesData[row.bucket].revenue += row.revenue;
-          }
-        } catch (e) {
-          // Shopify data may not exist
-        }
-      }
-
-      const timeSeries = Object.entries(timeSeriesData)
-        .map(([bucket, data]) => ({ bucket, ...data }))
-        .sort((a, b) => a.bucket.localeCompare(b.bucket));
-
-      return success(c, {
-        summary,
-        timeSeries
-      });
+      return success(c, result);
     } catch (err) {
       console.error('[Realtime] Revenue query failed:', err);
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
