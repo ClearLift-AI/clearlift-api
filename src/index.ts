@@ -55,7 +55,9 @@ import {
   GetRealtimeBreakdown,
   GetRealtimeEvents,
   GetRealtimeEventTypes,
-  GetRealtimeStripe
+  GetRealtimeStripe,
+  GetRealtimeGoals,
+  GetRealtimeGoalTimeSeries
 } from "./endpoints/v1/analytics/realtime";
 import {
   GetFacebookCampaigns,
@@ -464,6 +466,8 @@ openapi.get("/v1/analytics/realtime/breakdown", auth, requireOrg, GetRealtimeBre
 openapi.get("/v1/analytics/realtime/events", auth, requireOrg, GetRealtimeEvents);
 openapi.get("/v1/analytics/realtime/event-types", auth, requireOrg, GetRealtimeEventTypes);
 openapi.get("/v1/analytics/realtime/stripe", auth, requireOrg, GetRealtimeStripe);
+openapi.get("/v1/analytics/realtime/goals", auth, requireOrg, GetRealtimeGoals);
+openapi.get("/v1/analytics/realtime/goals/:id/timeseries", auth, requireOrg, GetRealtimeGoalTimeSeries);
 
 // Facebook Ads endpoints
 openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);

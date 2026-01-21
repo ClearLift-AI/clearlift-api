@@ -75,37 +75,34 @@ export class ListConversionGoals extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
     const orgId = c.get("org_id");
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify access
-    const memberCheck = await c.env.DB.prepare(`
-      SELECT 1 FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(orgId, session.user_id).first();
-
-    if (!memberCheck) {
-      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
-    }
+    // Note: Access already verified by requireOrg middleware (handles admin bypass)
 
     const goals = await c.env.DB.prepare(`
       SELECT id, name, type, trigger_config, default_value_cents,
-             is_primary, include_in_path, priority, created_at, updated_at
+             is_primary, include_in_path, priority, created_at, updated_at,
+             slug, description, goal_type, revenue_sources, event_filters_v2,
+             value_type, fixed_value_cents, display_order, color, icon, is_active
       FROM conversion_goals
       WHERE organization_id = ?
-      ORDER BY priority ASC, created_at DESC
+      ORDER BY COALESCE(display_order, priority) ASC, created_at DESC
     `).bind(orgId).all();
 
-    // Parse JSON fields
+    // Parse JSON fields and include enhanced properties
     const parsedGoals = (goals.results || []).map(g => ({
       ...g,
       trigger_config: JSON.parse(g.trigger_config as string || '{}'),
       is_primary: Boolean(g.is_primary),
       include_in_path: Boolean(g.include_in_path),
+      is_active: g.is_active !== 0,
+      // Enhanced fields
+      revenue_sources: g.revenue_sources ? JSON.parse(g.revenue_sources as string) : undefined,
+      event_filters: g.event_filters_v2 ? JSON.parse(g.event_filters_v2 as string) : undefined,
     }));
 
     return success(c, parsedGoals);
@@ -157,15 +154,7 @@ export class CreateConversionGoal extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify access
-    const memberCheck = await c.env.DB.prepare(`
-      SELECT 1 FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(orgId, session.user_id).first();
-
-    if (!memberCheck) {
-      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
-    }
+    // Note: Access already verified by requireOrg middleware (handles admin bypass)
 
     const data = await this.getValidatedData<typeof this.schema>();
     const body = data.body;
@@ -382,15 +371,7 @@ export class ListEventFilters extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify access
-    const memberCheck = await c.env.DB.prepare(`
-      SELECT 1 FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(orgId, session.user_id).first();
-
-    if (!memberCheck) {
-      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
-    }
+    // Note: Access already verified by requireOrg middleware (handles admin bypass)
 
     const filters = await c.env.DB.prepare(`
       SELECT id, name, filter_type, rules, is_active, created_at, updated_at
@@ -443,15 +424,7 @@ export class CreateEventFilter extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Verify access
-    const memberCheck = await c.env.DB.prepare(`
-      SELECT 1 FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(orgId, session.user_id).first();
-
-    if (!memberCheck) {
-      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
-    }
+    // Note: Access already verified by requireOrg middleware (handles admin bypass)
 
     const data = await this.getValidatedData<typeof this.schema>();
     const body = data.body;
