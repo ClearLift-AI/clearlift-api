@@ -203,6 +203,7 @@ export class SmartAttributionService {
       dailyUtmPerformance,
       dailyConnectorRevenue,
       dailyPlatformMetrics,
+      clickIdStats,
     ] = await Promise.all([
       this.getPlatformMetrics(orgId, startDate, endDate),
       orgTag ? this.getUtmPerformance(orgTag, startDate, endDate) : Promise.resolve([]),
@@ -210,6 +211,7 @@ export class SmartAttributionService {
       orgTag ? this.getDailyUtmPerformance(orgTag, startDate, endDate) : Promise.resolve([]),
       this.getDailyConnectorRevenue(orgId, startDate, endDate),
       this.getDailyPlatformMetrics(orgId, startDate, endDate),
+      this.getClickIdStats(orgId, startDate, endDate),
     ]);
 
     console.log(`[SmartAttribution] Data sources: platforms=${platformMetrics.length}, utm=${utmPerformance.length}, connectors=${connectorRevenue.length}`);
@@ -240,7 +242,8 @@ export class SmartAttributionService {
       platformMetrics,
       utmPerformance,
       connectorRevenue,
-      !!orgTag
+      !!orgTag,
+      clickIdStats
     );
 
     return { attributions, summary, timeSeries, dataQuality };
@@ -546,6 +549,50 @@ export class SmartAttributionService {
     }
 
     return results;
+  }
+
+  /**
+   * Get click ID statistics from conversions table
+   * Checks for gclid, fbclid, ttclid in the conversions
+   */
+  private async getClickIdStats(
+    orgId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<{ hasClickIds: boolean; clickIdCount: number; byType: Record<string, number> }> {
+    try {
+      const result = await this.analyticsDb.prepare(`
+        SELECT
+          click_id_type,
+          COUNT(*) as count
+        FROM conversions
+        WHERE organization_id = ?
+          AND conversion_timestamp >= ?
+          AND conversion_timestamp <= ?
+          AND click_id IS NOT NULL
+          AND click_id_type IS NOT NULL
+        GROUP BY click_id_type
+      `).bind(orgId, startDate, endDate + 'T23:59:59Z').all();
+
+      const rows = (result.results || []) as Array<{ click_id_type: string; count: number }>;
+      const byType: Record<string, number> = {};
+      let clickIdCount = 0;
+
+      for (const row of rows) {
+        byType[row.click_id_type] = row.count;
+        clickIdCount += row.count;
+      }
+
+      return {
+        hasClickIds: clickIdCount > 0,
+        clickIdCount,
+        byType
+      };
+    } catch (err) {
+      // Table might not exist or have different schema
+      console.warn('[SmartAttribution] Failed to query click ID stats:', err);
+      return { hasClickIds: false, clickIdCount: 0, byType: {} };
+    }
   }
 
   /**
@@ -1275,19 +1322,22 @@ export class SmartAttributionService {
     platformMetrics: PlatformMetrics[],
     utmPerformance: UtmPerformance[],
     connectorRevenue: ConnectorRevenue[],
-    hasTag: boolean
+    hasTag: boolean,
+    clickIdStats: { hasClickIds: boolean; clickIdCount: number; byType: Record<string, number> }
   ): {
     hasPlatformData: boolean;
     hasTagData: boolean;
     hasClickIds: boolean;
     hasConnectorData: boolean;
+    clickIdCount: number;
+    clickIdsByType: Record<string, number>;
     recommendations: string[];
   } {
     const recommendations: string[] = [];
 
     const hasPlatformData = platformMetrics.length > 0;
     const hasTagData = utmPerformance.length > 0;
-    const hasClickIds = false; // Not yet implemented
+    const hasClickIds = clickIdStats.hasClickIds;
     const hasConnectorData = connectorRevenue.length > 0;
 
     // Generate recommendations
@@ -1313,11 +1363,18 @@ export class SmartAttributionService {
       recommendations.push('Ad platforms have spend but no conversions. Verify conversion tracking is configured.');
     }
 
+    // Add recommendation for click IDs if not present
+    if (!hasClickIds && hasPlatformData) {
+      recommendations.push('Enable auto-tagging in your ad platforms (Google/Meta/TikTok) to capture click IDs for 100% accurate attribution.');
+    }
+
     return {
       hasPlatformData,
       hasTagData,
       hasClickIds,
       hasConnectorData,
+      clickIdCount: clickIdStats.clickIdCount,
+      clickIdsByType: clickIdStats.byType,
       recommendations
     };
   }

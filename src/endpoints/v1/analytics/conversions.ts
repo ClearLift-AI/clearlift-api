@@ -1,6 +1,6 @@
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
-import { AppContext } from "../../../types";
+import { AppContext, SetupStatus, buildDataQualityResponse } from "../../../types";
 import { success, error, getDateRange } from "../../../utils/response";
 import {
   ConversionRecordSchema,
@@ -8,6 +8,39 @@ import {
   type ConversionRecord
 } from "../../../schemas/analytics";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
+
+/**
+ * Check setup status for conversions
+ */
+async function checkConversionSetupStatus(
+  mainDb: D1Database,
+  orgId: string
+): Promise<SetupStatus> {
+  // Check tracking tag
+  const tagMapping = await mainDb.prepare(`
+    SELECT short_tag, domain FROM org_tag_mappings WHERE organization_id = ? LIMIT 1
+  `).bind(orgId).first<{ short_tag: string; domain: string }>();
+
+  // Check connected platforms
+  const platformsResult = await mainDb.prepare(`
+    SELECT platform FROM platform_connections WHERE organization_id = ? AND is_active = 1
+  `).bind(orgId).all<{ platform: string }>();
+  const connectedPlatforms = (platformsResult.results || []).map(r => r.platform);
+
+  const adPlatforms = connectedPlatforms.filter(p => ['google', 'facebook', 'tiktok', 'microsoft', 'linkedin'].includes(p));
+  const revenueConnectors = connectedPlatforms.filter(p => ['stripe', 'shopify', 'jobber'].includes(p));
+
+  return {
+    hasTrackingTag: !!tagMapping?.short_tag,
+    hasAdPlatforms: adPlatforms.length > 0,
+    hasRevenueConnector: revenueConnectors.length > 0,
+    hasClickIds: false, // Checked separately
+    hasUtmData: false, // Checked separately
+    trackingDomain: tagMapping?.domain,
+    connectedPlatforms: adPlatforms,
+    connectedConnectors: revenueConnectors
+  };
+}
 
 /**
  * GET /v1/analytics/conversions - Get conversion data from D1
@@ -80,10 +113,17 @@ export class GetConversions extends OpenAPIRoute {
       `).bind(orgId).all<{ id: string }>();
 
       if (!connections.results || connections.results.length === 0) {
-        // No Stripe connections - return empty
+        // No Stripe connections - return empty with setup guidance
+        const setupStatus = await checkConversionSetupStatus(c.env.DB, orgId);
+        const setupGuidance = buildDataQualityResponse(setupStatus);
+
         return success(
           c,
-          this.formatEmptyResponse(groupBy),
+          {
+            ...this.formatEmptyResponse(groupBy),
+            setup_guidance: setupGuidance,
+            _message: 'No revenue source connected. Connect Stripe, Shopify, or Jobber to track conversions.'
+          },
           { date_range: dateRange }
         );
       }
@@ -116,9 +156,13 @@ export class GetConversions extends OpenAPIRoute {
       }
 
       if (allConversions.length === 0) {
+        // Stripe connected but no conversions in date range
         return success(
           c,
-          this.formatEmptyResponse(groupBy),
+          {
+            ...this.formatEmptyResponse(groupBy),
+            _message: 'Stripe connected but no conversions found in the selected date range.'
+          },
           { date_range: dateRange }
         );
       }

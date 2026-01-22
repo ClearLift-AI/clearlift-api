@@ -398,43 +398,55 @@ export class GetGoogleMetrics extends OpenAPIRoute {
 
       const tableInfo = tableMap[query.query.level];
 
+      // Join with entity table to get name for display
+      const entityTableMap: Record<string, { table: string; nameColumn: string; idColumn: string }> = {
+        campaign: { table: 'google_campaigns', nameColumn: 'campaign_name', idColumn: 'id' },
+        ad_group: { table: 'google_ad_groups', nameColumn: 'ad_group_name', idColumn: 'id' },
+        ad: { table: 'google_ads', nameColumn: 'ad_name', idColumn: 'id' }
+      };
+      const entityInfo = entityTableMap[query.query.level];
+
       let sql = `
         SELECT
-          ${tableInfo.idColumn} as entity_id,
-          metric_date as date,
-          impressions,
-          clicks,
-          spend_cents,
-          conversions,
-          conversion_value_cents
-        FROM ${tableInfo.table}
-        WHERE organization_id = ?
-        AND metric_date >= ? AND metric_date <= ?
+          m.${tableInfo.idColumn} as entity_id,
+          m.metric_date,
+          m.impressions,
+          m.clicks,
+          m.spend_cents,
+          m.conversions,
+          m.conversion_value_cents,
+          e.${entityInfo.nameColumn} as entity_name
+        FROM ${tableInfo.table} m
+        LEFT JOIN ${entityInfo.table} e ON m.${tableInfo.idColumn} = e.${entityInfo.idColumn}
+        WHERE m.organization_id = ?
+        AND m.metric_date >= ? AND m.metric_date <= ?
       `;
       const params: any[] = [orgId, dateRange.start, dateRange.end];
 
       // Add entity-specific filter
       if (query.query.level === 'campaign' && query.query.campaign_id) {
-        sql += ` AND ${tableInfo.filterColumn} = ?`;
+        sql += ` AND m.${tableInfo.filterColumn} = ?`;
         params.push(query.query.campaign_id);
       } else if (query.query.level === 'ad_group' && query.query.ad_group_id) {
-        sql += ` AND ${tableInfo.filterColumn} = ?`;
+        sql += ` AND m.${tableInfo.filterColumn} = ?`;
         params.push(query.query.ad_group_id);
       } else if (query.query.level === 'ad' && query.query.ad_id) {
-        sql += ` AND ${tableInfo.filterColumn} = ?`;
+        sql += ` AND m.${tableInfo.filterColumn} = ?`;
         params.push(query.query.ad_id);
       }
 
-      sql += ' ORDER BY metric_date DESC';
+      sql += ' ORDER BY m.metric_date DESC';
       sql += ` LIMIT ${query.query.limit} OFFSET ${query.query.offset}`;
 
       const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
       const metrics = (result.results || []).map((row: any) => ({
-        entity_id: row.entity_id,
-        date: row.date,
+        metric_date: row.metric_date,
+        campaign_ref: row.entity_id,  // For frontend compatibility
+        entity_ref: row.entity_id,
+        entity_name: row.entity_name || 'Unknown',
         impressions: row.impressions || 0,
         clicks: row.clicks || 0,
-        spend: (row.spend_cents || 0) / 100,
+        spend_cents: row.spend_cents || 0,
         conversions: row.conversions || 0,
         revenue: (row.conversion_value_cents || 0) / 100
       }));
@@ -444,11 +456,11 @@ export class GetGoogleMetrics extends OpenAPIRoute {
         (acc: any, m: any) => ({
           total_impressions: acc.total_impressions + m.impressions,
           total_clicks: acc.total_clicks + m.clicks,
-          total_spend: acc.total_spend + m.spend,
+          total_spend_cents: acc.total_spend_cents + m.spend_cents,
           total_conversions: acc.total_conversions + m.conversions,
           total_revenue: acc.total_revenue + m.revenue
         }),
-        { total_impressions: 0, total_clicks: 0, total_spend: 0, total_conversions: 0, total_revenue: 0 }
+        { total_impressions: 0, total_clicks: 0, total_spend_cents: 0, total_conversions: 0, total_revenue: 0 }
       );
 
       return success(c, {

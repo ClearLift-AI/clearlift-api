@@ -341,7 +341,43 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
         );
       }
 
-      // For other dimensions, return empty (would need utm_breakdowns table)
+      // For page breakdown, use by_page JSON column in hourly_metrics (same pattern as device)
+      if (dimension === 'page') {
+        const result = await analyticsDb.prepare(`
+          SELECT by_page FROM hourly_metrics
+          WHERE org_tag = ?
+            AND hour >= datetime('now', '-' || ? || ' hours')
+            AND by_page IS NOT NULL
+        `).bind(orgTagMapping.short_tag, hours).all();
+
+        const aggregated: Record<string, { events: number; sessions: number; conversions: number; revenue: number }> = {};
+
+        for (const row of (result.results || []) as { by_page: string }[]) {
+          try {
+            const pages = JSON.parse(row.by_page || '{}');
+            for (const [page, data] of Object.entries(pages as Record<string, any>)) {
+              if (!aggregated[page]) {
+                aggregated[page] = { events: 0, sessions: 0, conversions: 0, revenue: 0 };
+              }
+              aggregated[page].events += data.events || 0;
+              aggregated[page].sessions += data.sessions || 0;
+              aggregated[page].conversions += data.conversions || 0;
+              aggregated[page].revenue += (data.revenue_cents || 0) / 100;
+            }
+          } catch (e) {
+            // Skip invalid JSON
+          }
+        }
+
+        return success(c, Object.entries(aggregated)
+          .map(([dim, data]) => ({ dimension: dim, ...data }))
+          .sort((a, b) => b.events - a.events)
+          .slice(0, 50)
+        );
+      }
+
+      // For utm_medium, utm_campaign, country, browser - not yet implemented
+      // Would need additional JSON columns or Analytics Engine API token
       return success(c, []);
     } catch (err) {
       console.error('[Realtime] Breakdown query failed:', err);

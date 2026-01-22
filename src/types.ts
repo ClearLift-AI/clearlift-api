@@ -17,3 +17,133 @@ export type AppContext = Context<{
 }>;
 
 export type HandleArgs = [AppContext];
+
+/**
+ * Data Setup Status - Used across analytics endpoints to communicate
+ * what's missing and provide actionable guidance to users.
+ */
+export interface SetupStatus {
+  hasTrackingTag: boolean;
+  hasAdPlatforms: boolean;
+  hasRevenueConnector: boolean;
+  hasClickIds: boolean;
+  hasUtmData: boolean;
+  trackingDomain?: string;
+  connectedPlatforms: string[];
+  connectedConnectors: string[];
+}
+
+/**
+ * Data Quality Response - Consistent empty state handling across all analytics endpoints.
+ * When data is missing, this explains WHY and HOW to fix it.
+ */
+export interface DataQualityResponse {
+  /** Current data quality level */
+  quality: 'complete' | 'partial' | 'limited' | 'none';
+  /** What's currently set up */
+  setup: SetupStatus;
+  /** Human-readable issues */
+  issues: string[];
+  /** Actionable recommendations */
+  recommendations: {
+    action: string;
+    description: string;
+    setupUrl: string;
+    priority: 'high' | 'medium' | 'low';
+  }[];
+  /** Percentage of data completeness (0-100) */
+  completeness: number;
+}
+
+/**
+ * Helper to build consistent data quality responses
+ */
+export function buildDataQualityResponse(setup: SetupStatus): DataQualityResponse {
+  const issues: string[] = [];
+  const recommendations: DataQualityResponse['recommendations'] = [];
+
+  // Check tracking tag
+  if (!setup.hasTrackingTag) {
+    issues.push('No tracking tag configured');
+    recommendations.push({
+      action: 'Install tracking tag',
+      description: 'Add the ClearLift tracking tag to your website to capture visitor journeys and UTM parameters.',
+      setupUrl: '/settings?tab=tracking',
+      priority: 'high'
+    });
+  }
+
+  // Check ad platforms
+  if (!setup.hasAdPlatforms) {
+    issues.push('No ad platforms connected');
+    recommendations.push({
+      action: 'Connect ad platforms',
+      description: 'Connect Google Ads, Meta Ads, or TikTok Ads to import spend and campaign data.',
+      setupUrl: '/connectors',
+      priority: 'high'
+    });
+  }
+
+  // Check revenue connector
+  if (!setup.hasRevenueConnector) {
+    issues.push('No revenue source connected');
+    recommendations.push({
+      action: 'Connect revenue source',
+      description: 'Connect Stripe, Shopify, or Jobber to track actual conversions and revenue.',
+      setupUrl: '/connectors',
+      priority: 'high'
+    });
+  }
+
+  // Check UTM data (only if tag is installed)
+  if (setup.hasTrackingTag && !setup.hasUtmData) {
+    issues.push('No UTM parameters detected');
+    recommendations.push({
+      action: 'Add UTM parameters to ad campaigns',
+      description: 'Your tracking tag is installed but no UTM data is being captured. Ensure your ad campaigns include UTM parameters.',
+      setupUrl: '/settings?tab=tracking',
+      priority: 'medium'
+    });
+  }
+
+  // Check click IDs (only if platforms connected)
+  if (setup.hasAdPlatforms && !setup.hasClickIds) {
+    issues.push('No click IDs captured (gclid/fbclid/ttclid)');
+    recommendations.push({
+      action: 'Enable auto-tagging',
+      description: 'Enable auto-tagging in your ad platforms to capture click IDs for 100% accurate attribution.',
+      setupUrl: '/settings?tab=tracking',
+      priority: 'medium'
+    });
+  }
+
+  // Calculate completeness
+  const checkpoints = [
+    setup.hasTrackingTag,
+    setup.hasAdPlatforms,
+    setup.hasRevenueConnector,
+    setup.hasUtmData,
+    setup.hasClickIds
+  ];
+  const completeness = Math.round((checkpoints.filter(Boolean).length / checkpoints.length) * 100);
+
+  // Determine quality level
+  let quality: DataQualityResponse['quality'];
+  if (completeness >= 80) {
+    quality = 'complete';
+  } else if (completeness >= 60) {
+    quality = 'partial';
+  } else if (completeness >= 20) {
+    quality = 'limited';
+  } else {
+    quality = 'none';
+  }
+
+  return {
+    quality,
+    setup,
+    issues,
+    recommendations,
+    completeness
+  };
+}

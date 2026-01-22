@@ -11,10 +11,43 @@
 
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
-import { AppContext } from "../../../types";
+import { AppContext, SetupStatus, DataQualityResponse, buildDataQualityResponse } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1Adapter } from "../../../adapters/d1";
 import { getCombinedRevenueByDateRange } from "../../../services/revenue-sources";
+
+/**
+ * Check setup status for journey analytics
+ */
+async function checkJourneySetupStatus(
+  mainDb: D1Database,
+  orgId: string
+): Promise<SetupStatus> {
+  // Check tracking tag
+  const tagMapping = await mainDb.prepare(`
+    SELECT short_tag, domain FROM org_tag_mappings WHERE organization_id = ? LIMIT 1
+  `).bind(orgId).first<{ short_tag: string; domain: string }>();
+
+  // Check connected platforms
+  const platformsResult = await mainDb.prepare(`
+    SELECT platform FROM platform_connections WHERE organization_id = ? AND is_active = 1
+  `).bind(orgId).all<{ platform: string }>();
+  const connectedPlatforms = (platformsResult.results || []).map(r => r.platform);
+
+  const adPlatforms = connectedPlatforms.filter(p => ['google', 'facebook', 'tiktok', 'microsoft', 'linkedin'].includes(p));
+  const revenueConnectors = connectedPlatforms.filter(p => ['stripe', 'shopify', 'jobber'].includes(p));
+
+  return {
+    hasTrackingTag: !!tagMapping?.short_tag,
+    hasAdPlatforms: adPlatforms.length > 0,
+    hasRevenueConnector: revenueConnectors.length > 0,
+    hasClickIds: false, // Not checked at endpoint level
+    hasUtmData: false, // Not checked at endpoint level
+    trackingDomain: tagMapping?.domain,
+    connectedPlatforms: adPlatforms,
+    connectedConnectors: revenueConnectors
+  };
+}
 
 /**
  * Generic connector conversion record
@@ -376,8 +409,36 @@ Returns the complete journey for an identified user, including:
       SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
     `).bind(orgId).first<{ short_tag: string }>();
 
+    // If no tracking tag, return empty data with setup guidance instead of 404
     if (!tagMapping) {
-      return error(c, "NOT_FOUND", "Organization has no tracking configured", 404);
+      const setupStatus = await checkJourneySetupStatus(c.env.DB, orgId);
+      const setupGuidance = buildDataQualityResponse(setupStatus);
+
+      return success(c, {
+        user_id: userId,
+        identity: {
+          first_identified: null,
+          devices: 0,
+          email_verified: false
+        },
+        ltv: {
+          total_revenue: 0,
+          total_conversions: 0,
+          currency: 'USD',
+          by_source: {}
+        },
+        journeys: [],
+        events: [],
+        summary: {
+          total_sessions: 0,
+          total_pageviews: 0,
+          first_seen: null,
+          last_seen: null,
+          avg_session_duration: null
+        },
+        setup_guidance: setupGuidance,
+        _message: 'No tracking tag configured. Install the ClearLift tracking tag to capture user journeys.'
+      });
     }
 
     // Get all anonymous_ids linked to this user from identity_mappings

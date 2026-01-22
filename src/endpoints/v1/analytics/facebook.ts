@@ -497,12 +497,22 @@ export class GetFacebookMetrics extends OpenAPIRoute {
 
       const tableInfo = tableMap[level];
 
+      // Join with entity table to get name for display
+      const entityTableMap: Record<string, { table: string; nameColumn: string; idColumn: string }> = {
+        campaign: { table: 'facebook_campaigns', nameColumn: 'campaign_name', idColumn: 'id' },
+        ad_set: { table: 'facebook_ad_sets', nameColumn: 'ad_set_name', idColumn: 'id' },
+        ad: { table: 'facebook_ads', nameColumn: 'ad_name', idColumn: 'id' }
+      };
+      const entityInfo = entityTableMap[level];
+
       let sql = `
-        SELECT metric_date, ${tableInfo.refColumn} as entity_ref,
-               impressions, clicks, spend_cents, conversions
-        FROM ${tableInfo.table}
-        WHERE organization_id = ?
-          AND metric_date >= ? AND metric_date <= ?
+        SELECT m.metric_date, m.${tableInfo.refColumn} as entity_ref,
+               m.impressions, m.clicks, m.spend_cents, m.conversions,
+               e.${entityInfo.nameColumn} as entity_name
+        FROM ${tableInfo.table} m
+        LEFT JOIN ${entityInfo.table} e ON m.${tableInfo.refColumn} = e.${entityInfo.idColumn}
+        WHERE m.organization_id = ?
+          AND m.metric_date >= ? AND m.metric_date <= ?
       `;
       const params: any[] = [orgId, start_date, end_date];
 
@@ -540,7 +550,9 @@ export class GetFacebookMetrics extends OpenAPIRoute {
       return success(c, {
         metrics: metrics.map((m: any) => ({
           metric_date: m.metric_date,
+          campaign_ref: m.entity_ref,  // Keep as campaign_ref for frontend compatibility
           entity_ref: m.entity_ref,
+          entity_name: m.entity_name || 'Unknown',
           impressions: m.impressions || 0,
           clicks: m.clicks || 0,
           spend_cents: m.spend_cents || 0,

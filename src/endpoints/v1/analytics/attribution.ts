@@ -10,7 +10,7 @@
 
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
-import { AppContext } from "../../../types";
+import { AppContext, SetupStatus, DataQualityResponse, buildDataQualityResponse } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1Adapter } from "../../../adapters/d1";
 import {
@@ -22,6 +22,74 @@ import {
 } from "../../../services/attribution-models";
 // Import from providers to ensure all revenue sources are registered
 import { getCombinedRevenueByDateRange, CombinedRevenueResult } from "../../../services/revenue-sources/providers";
+
+/**
+ * Check organization setup status for attribution.
+ * Returns what's configured and what's missing.
+ */
+async function checkSetupStatus(
+  mainDb: D1Database,
+  analyticsDb: D1Database,
+  orgId: string,
+  dateRange: { start: string; end: string }
+): Promise<SetupStatus> {
+  // Check tracking tag
+  const tagMapping = await mainDb.prepare(`
+    SELECT short_tag, domain FROM org_tag_mappings WHERE organization_id = ? LIMIT 1
+  `).bind(orgId).first<{ short_tag: string; domain: string }>();
+
+  // Check connected platforms
+  const platformsResult = await mainDb.prepare(`
+    SELECT platform FROM platform_connections WHERE organization_id = ? AND is_active = 1
+  `).bind(orgId).all<{ platform: string }>();
+  const connectedPlatforms = (platformsResult.results || []).map(r => r.platform);
+
+  // Separate ad platforms from revenue connectors
+  const adPlatforms = connectedPlatforms.filter(p => ['google', 'facebook', 'tiktok', 'microsoft', 'linkedin'].includes(p));
+  const revenueConnectors = connectedPlatforms.filter(p => ['stripe', 'shopify', 'jobber'].includes(p));
+
+  // Check for UTM data (only if tag is configured)
+  let hasUtmData = false;
+  if (tagMapping?.short_tag) {
+    try {
+      const utmCheck = await analyticsDb.prepare(`
+        SELECT 1 FROM utm_performance
+        WHERE org_tag = ? AND date >= ? AND date <= ?
+        LIMIT 1
+      `).bind(tagMapping.short_tag, dateRange.start, dateRange.end).first();
+      hasUtmData = !!utmCheck;
+    } catch {
+      // Table might not exist yet
+    }
+  }
+
+  // Check for click IDs in conversions
+  let hasClickIds = false;
+  try {
+    const clickIdCheck = await analyticsDb.prepare(`
+      SELECT 1 FROM conversions
+      WHERE organization_id = ?
+        AND click_id IS NOT NULL
+        AND conversion_timestamp >= ?
+        AND conversion_timestamp <= ?
+      LIMIT 1
+    `).bind(orgId, dateRange.start, dateRange.end + 'T23:59:59Z').first();
+    hasClickIds = !!clickIdCheck;
+  } catch {
+    // Table might not exist
+  }
+
+  return {
+    hasTrackingTag: !!tagMapping?.short_tag,
+    hasAdPlatforms: adPlatforms.length > 0,
+    hasRevenueConnector: revenueConnectors.length > 0,
+    hasClickIds,
+    hasUtmData,
+    trackingDomain: tagMapping?.domain,
+    connectedPlatforms: adPlatforms,
+    connectedConnectors: revenueConnectors
+  };
+}
 
 const AttributionModelEnum = z.enum([
   'platform',       // Self-reported by ad platforms (no attribution calculation)
@@ -48,7 +116,8 @@ type DataWarning =
   | 'insufficient_events'          // Too few events for reliable attribution
   | 'using_platform_conversions'   // Using platform-reported conversions
   | 'no_conversion_source'         // No conversion source configured
-  | 'no_connector_conversions';    // Connector mode but no conversions found
+  | 'no_connector_conversions'     // Connector mode but no conversions found
+  | 'query_error';                 // Error querying data source (check logs)
 
 // Connector conversion from revenue.conversions table
 interface ConnectorConversion {
@@ -726,7 +795,29 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
                   avg_days_to_convert: z.number(),
                   identified_users: z.number(),
                   anonymous_sessions: z.number()
-                })
+                }),
+                // Setup guidance when data is missing
+                setup_guidance: z.object({
+                  quality: z.enum(['complete', 'partial', 'limited', 'none']),
+                  completeness: z.number(),
+                  setup: z.object({
+                    hasTrackingTag: z.boolean(),
+                    hasAdPlatforms: z.boolean(),
+                    hasRevenueConnector: z.boolean(),
+                    hasClickIds: z.boolean(),
+                    hasUtmData: z.boolean(),
+                    trackingDomain: z.string().optional(),
+                    connectedPlatforms: z.array(z.string()),
+                    connectedConnectors: z.array(z.string())
+                  }),
+                  issues: z.array(z.string()),
+                  recommendations: z.array(z.object({
+                    action: z.string(),
+                    description: z.string(),
+                    setupUrl: z.string(),
+                    priority: z.enum(['high', 'medium', 'low'])
+                  }))
+                }).optional()
               })
             })
           }
@@ -745,6 +836,15 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     const useIdentityStitching = query.use_identity_stitching !== 'false';
 
     console.log(`[Attribution] Request: orgId=${orgId}, dateFrom=${dateFrom}, dateTo=${dateTo}, model=${query.model}`);
+
+    // Get ANALYTICS_DB binding (with fallback to DB for backwards compat)
+    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    const dateRange = { start: dateFrom, end: dateTo };
+
+    // Check setup status for guidance
+    const setupStatus = await checkSetupStatus(c.env.DB, analyticsDb, orgId, dateRange);
+    const setupGuidance = buildDataQualityResponse(setupStatus);
+    console.log(`[Attribution] Setup: tag=${setupStatus.hasTrackingTag}, platforms=${setupStatus.connectedPlatforms.join(',')}, connectors=${setupStatus.connectedConnectors.join(',')}, completeness=${setupGuidance.completeness}%`);
 
     // Get org settings for defaults
     const d1 = new D1Adapter(c.env.DB);
@@ -778,16 +878,11 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       ? parseInt(query.time_decay_half_life)
       : org.time_decay_half_life_days;
 
-    // Get ANALYTICS_DB binding (with fallback to DB for backwards compat)
-    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
-
     // Build attribution data based on conversion source
     let attributionData: { attributions: any[]; summary: { total_conversions: number; total_revenue: number } };
     let dataQuality: DataQuality = 'platform_reported';
     let fallbackSource: string | null = null;
     const warnings: DataWarning[] = [];
-
-    const dateRange = { start: dateFrom, end: dateTo };
 
     if (conversionSource === 'connectors' || conversionSource === 'all') {
       // Query unified revenue sources (Stripe, Shopify, Jobber, etc.)
@@ -834,8 +929,9 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
           warnings.push('using_platform_conversions');
         }
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
         console.error(`[Attribution] Error querying revenue sources:`, err);
-        // Fall back to ad platforms on error
+        // Fall back to ad platforms on error, but surface the issue
         attributionData = await buildPlatformFallbackD1(
           analyticsDb,
           c.env.DB,
@@ -844,7 +940,10 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         );
         dataQuality = 'platform_reported';
         fallbackSource = 'ad_platforms';
+        warnings.push('query_error');
         warnings.push('using_platform_conversions');
+        // Include error details in data_quality response
+        (warnings as any).error_details = `Failed to query connector revenue: ${errMsg}. Using ad platform data instead.`;
       }
     } else if (conversionSource === 'ad_platforms') {
       // Use ad platform data directly
@@ -896,7 +995,9 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         avg_days_to_convert: 0,
         identified_users: 0,
         anonymous_sessions: 0
-      }
+      },
+      // Include setup guidance when data quality is poor or data is missing
+      setup_guidance: setupGuidance.completeness < 100 ? setupGuidance : undefined
     });
   }
 }
