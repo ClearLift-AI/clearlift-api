@@ -118,7 +118,8 @@ export interface QueryOptions {
   };
   filters?: Record<string, any>;
   limit?: number;
-  offset?: number;
+  // NOTE: OFFSET is NOT supported by R2 SQL - pagination must use cursor-based approach
+  // offset?: number;  // REMOVED - not supported
   select?: string[];
   // Domain patterns for org_tag resolution (e.g., ['domain_%rockbot_com'])
   // When provided, queries will match org_tag = 'explicit' OR org_tag LIKE 'domain_%xxx'
@@ -222,11 +223,24 @@ export class R2SQLAdapter {
 
   /**
    * Build WHERE clause for time filtering
+   *
+   * IMPORTANT: R2 SQL uses __ingest_ts as the partition key, NOT timestamp.
+   * Filtering on __ingest_ts enables partition pruning for much faster queries.
+   * We filter on BOTH __ingest_ts (for pruning) AND timestamp (for accuracy).
+   *
    * Note: R2 SQL does not support CURRENT_TIMESTAMP or INTERVAL, so we calculate timestamps in JS
    */
   private buildTimeFilter(options: QueryOptions): string {
+    const clauses: string[] = [];
+
     if (options.timeRange) {
-      return `timestamp >= '${options.timeRange.start}' AND timestamp <= '${options.timeRange.end}'`;
+      // Filter on __ingest_ts for partition pruning (primary filter)
+      clauses.push(`__ingest_ts >= '${options.timeRange.start}'`);
+      clauses.push(`__ingest_ts <= '${options.timeRange.end}'`);
+      // Also filter on timestamp for accuracy (events may be ingested slightly after they occurred)
+      clauses.push(`timestamp >= '${options.timeRange.start}'`);
+      clauses.push(`timestamp <= '${options.timeRange.end}'`);
+      return clauses.join(" AND ");
     }
 
     if (options.lookback) {
@@ -248,9 +262,13 @@ export class R2SQLAdapter {
       const lookbackMs = amountNum * msMultipliers[unit];
       const now = new Date();
       const startTime = new Date(now.getTime() - lookbackMs);
+      const startTimeISO = startTime.toISOString();
 
-      // Generate absolute timestamp for R2 SQL
-      return `timestamp >= '${startTime.toISOString()}'`;
+      // Filter on __ingest_ts for partition pruning (primary filter)
+      clauses.push(`__ingest_ts >= '${startTimeISO}'`);
+      // Also filter on timestamp for accuracy
+      clauses.push(`timestamp >= '${startTimeISO}'`);
+      return clauses.join(" AND ");
     }
 
     return "";
@@ -288,11 +306,16 @@ export class R2SQLAdapter {
 
   /**
    * Build SQL query from options
+   *
+   * R2 SQL Limitations:
+   * - OFFSET is NOT supported (use cursor-based pagination with __ingest_ts)
+   * - ORDER BY only works on partition key (__ingest_ts)
+   * - LIMIT 5000 is safe; 10000 may timeout
    */
   private buildQuery(orgTag: string, options: QueryOptions): string {
     const select = options.select?.join(", ") || "*";
-    const limit = options.limit || 1000;
-    const offset = options.offset || 0;
+    // Cap limit at 5000 to prevent timeouts
+    const limit = Math.min(options.limit || 1000, 5000);
 
     // Start with SELECT
     let sql = `SELECT ${select} FROM ${this.tableName}`;
@@ -333,14 +356,11 @@ export class R2SQLAdapter {
       sql += ` WHERE ${whereClauses.join(" AND ")}`;
     }
 
-    // Note: R2 SQL doesn't support ORDER BY except on partition keys
-    // We'll sort client-side if needed
+    // R2 SQL only supports ORDER BY on partition key (__ingest_ts)
+    sql += ` ORDER BY __ingest_ts DESC`;
 
-    // Add LIMIT and OFFSET
+    // Add LIMIT (OFFSET is not supported - must use cursor-based pagination)
     sql += ` LIMIT ${limit}`;
-    if (offset > 0) {
-      sql += ` OFFSET ${offset}`;
-    }
 
     return sql;
   }
@@ -475,6 +495,8 @@ export class R2SQLAdapter {
   /**
    * Get aggregated statistics
    * Since R2 SQL doesn't support GROUP BY, we fetch raw data and aggregate client-side
+   *
+   * Note: Limit capped at 5000 to prevent R2 SQL timeouts
    */
   async getStats(
     orgTag: string,
@@ -487,10 +509,11 @@ export class R2SQLAdapter {
     error?: string;
   }> {
     // Fetch raw events with minimal fields for performance
+    // Limit 5000 to avoid R2 SQL timeouts (10000 was causing issues)
     const result = await this.getEvents(orgTag, {
       lookback,
       select: ["event_type", "user_id", "session_id", "timestamp"],
-      limit: 10000 // Fetch more for better stats
+      limit: 5000
     });
 
     if (result.error) {
@@ -532,13 +555,14 @@ export class R2SQLAdapter {
     error?: string;
   }> {
     // Fetch all events for the funnel steps
+    // Limit 5000 to avoid R2 SQL timeouts
     const result = await this.getEvents(orgTag, {
       lookback,
       filters: {
         event_type: steps
       },
       select: ["event_type", "user_id", "session_id", "timestamp"],
-      limit: 10000
+      limit: 5000
     });
 
     if (result.error) {
