@@ -549,6 +549,24 @@ export class TriggerEventsSync extends OpenAPIRoute {
 
       const orgTag = tagMapping.short_tag;
 
+      // Check for active sync to prevent duplicate jobs
+      const activeSync = await c.env.DB.prepare(`
+        SELECT id FROM sync_jobs
+        WHERE connection_id = ?
+          AND status IN ('pending', 'syncing')
+          AND created_at > datetime('now', '-2 hours')
+        LIMIT 1
+      `).bind(orgTag).first<{ id: string }>();
+
+      if (activeSync) {
+        return c.json({
+          success: false,
+          error: 'SYNC_IN_PROGRESS',
+          message: 'An events sync is already in progress for this organization',
+          existing_job_id: activeSync.id
+        }, 409);
+      }
+
       // Clear any stuck workflow record
       await c.env.DB.prepare(`
         DELETE FROM active_event_workflows WHERE org_tag = ?
@@ -905,6 +923,24 @@ export class TriggerSync extends OpenAPIRoute {
 
       if (!connection.is_active) {
         return error(c, "INACTIVE_CONNECTION", "Connection is not active", 400);
+      }
+
+      // Check for active sync to prevent duplicate jobs
+      const activeSync = await c.env.DB.prepare(`
+        SELECT id FROM sync_jobs
+        WHERE connection_id = ?
+          AND status IN ('pending', 'syncing')
+          AND created_at > datetime('now', '-2 hours')
+        LIMIT 1
+      `).bind(connection_id).first<{ id: string }>();
+
+      if (activeSync) {
+        return c.json({
+          success: false,
+          error: 'SYNC_IN_PROGRESS',
+          message: 'A sync is already in progress for this connection',
+          existing_job_id: activeSync.id
+        }, 409);
       }
 
       // Determine sync window
