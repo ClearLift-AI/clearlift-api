@@ -341,7 +341,8 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
         );
       }
 
-      // For page breakdown, use by_page JSON column in hourly_metrics (same pattern as device)
+      // For page breakdown, use by_page JSON column in hourly_metrics
+      // Note: by_page stores simple counts like { "/page": 5 } not objects
       if (dimension === 'page') {
         const result = await analyticsDb.prepare(`
           SELECT by_page FROM hourly_metrics
@@ -359,10 +360,15 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
               if (!aggregated[page]) {
                 aggregated[page] = { events: 0, sessions: 0, conversions: 0, revenue: 0 };
               }
-              aggregated[page].events += data.events || 0;
-              aggregated[page].sessions += data.sessions || 0;
-              aggregated[page].conversions += data.conversions || 0;
-              aggregated[page].revenue += (data.revenue_cents || 0) / 100;
+              // Handle both formats: simple count (number) or object with events property
+              if (typeof data === 'number') {
+                aggregated[page].events += data;
+              } else {
+                aggregated[page].events += data.events || data.count || 0;
+                aggregated[page].sessions += data.sessions || 0;
+                aggregated[page].conversions += data.conversions || 0;
+                aggregated[page].revenue += (data.revenue_cents || 0) / 100;
+              }
             }
           } catch (e) {
             // Skip invalid JSON
