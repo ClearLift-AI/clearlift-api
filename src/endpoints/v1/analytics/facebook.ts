@@ -197,27 +197,47 @@ export class GetFacebookAdSets extends OpenAPIRoute {
       return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
+    // Default date range: last 30 days if not provided
+    const endDate = query.query.end_date || new Date().toISOString().split('T')[0];
+    const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
     try {
-      // Query ad sets from D1
+      // Query ad sets from D1 with metrics
       let sql = `
-        SELECT ad_set_id, ad_set_name, ad_set_status, campaign_id,
-               daily_budget_cents, lifetime_budget_cents, targeting, updated_at
-        FROM facebook_ad_sets
-        WHERE organization_id = ?
+        SELECT
+          a.id,
+          a.ad_set_id,
+          a.ad_set_name,
+          a.ad_set_status,
+          a.campaign_id,
+          a.daily_budget_cents,
+          a.lifetime_budget_cents,
+          a.targeting,
+          a.updated_at,
+          COALESCE(SUM(m.impressions), 0) as impressions,
+          COALESCE(SUM(m.clicks), 0) as clicks,
+          COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+          COALESCE(SUM(m.conversions), 0) as conversions
+        FROM facebook_ad_sets a
+        LEFT JOIN facebook_ad_set_daily_metrics m
+          ON a.id = m.ad_set_ref
+          AND m.metric_date >= ?
+          AND m.metric_date <= ?
+        WHERE a.organization_id = ?
       `;
-      const params: any[] = [orgId];
+      const params: any[] = [startDate, endDate, orgId];
 
       if (query.query.campaign_id) {
-        sql += ` AND campaign_id = ?`;
+        sql += ` AND a.campaign_id = ?`;
         params.push(query.query.campaign_id);
       }
 
       if (query.query.status) {
-        sql += ` AND ad_set_status = ?`;
+        sql += ` AND a.ad_set_status = ?`;
         params.push(query.query.status);
       }
 
-      sql += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+      sql += ` GROUP BY a.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
       params.push(query.query.limit, query.query.offset);
 
       const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
@@ -228,11 +248,20 @@ export class GetFacebookAdSets extends OpenAPIRoute {
           ad_set_id: as.ad_set_id,
           ad_set_name: as.ad_set_name,
           ad_set_status: as.ad_set_status,
+          status: as.ad_set_status,
           campaign_id: as.campaign_id,
           daily_budget_cents: as.daily_budget_cents,
+          daily_budget: as.daily_budget_cents,
           lifetime_budget_cents: as.lifetime_budget_cents,
           targeting: as.targeting ? JSON.parse(as.targeting) : null,
-          updated_at: as.updated_at
+          updated_at: as.updated_at,
+          // Include flattened metrics
+          impressions: as.impressions || 0,
+          clicks: as.clicks || 0,
+          spend: (as.spend_cents || 0) / 100,
+          spend_cents: as.spend_cents || 0,
+          conversions: as.conversions || 0,
+          ctr: as.impressions > 0 ? (as.clicks / as.impressions) * 100 : 0,
         })),
         total: adSets.length
       });
@@ -342,31 +371,51 @@ export class GetFacebookAds extends OpenAPIRoute {
       return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
+    // Default date range: last 30 days if not provided
+    const endDate = query.query.end_date || new Date().toISOString().split('T')[0];
+    const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
     try {
-      // Query ads from D1 - only columns that exist in the table
+      // Query ads from D1 with metrics
       let sql = `
-        SELECT ad_id, ad_name, ad_status, campaign_id, ad_set_id, creative_id, updated_at
-        FROM facebook_ads
-        WHERE organization_id = ?
+        SELECT
+          a.id,
+          a.ad_id,
+          a.ad_name,
+          a.ad_status,
+          a.campaign_id,
+          a.ad_set_id,
+          a.creative_id,
+          a.updated_at,
+          COALESCE(SUM(m.impressions), 0) as impressions,
+          COALESCE(SUM(m.clicks), 0) as clicks,
+          COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+          COALESCE(SUM(m.conversions), 0) as conversions
+        FROM facebook_ads a
+        LEFT JOIN facebook_ad_daily_metrics m
+          ON a.id = m.ad_ref
+          AND m.metric_date >= ?
+          AND m.metric_date <= ?
+        WHERE a.organization_id = ?
       `;
-      const params: any[] = [orgId];
+      const params: any[] = [startDate, endDate, orgId];
 
       if (query.query.campaign_id) {
-        sql += ` AND campaign_id = ?`;
+        sql += ` AND a.campaign_id = ?`;
         params.push(query.query.campaign_id);
       }
 
       if (query.query.ad_set_id) {
-        sql += ` AND ad_set_id = ?`;
+        sql += ` AND a.ad_set_id = ?`;
         params.push(query.query.ad_set_id);
       }
 
       if (query.query.status) {
-        sql += ` AND ad_status = ?`;
+        sql += ` AND a.ad_status = ?`;
         params.push(query.query.status);
       }
 
-      sql += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+      sql += ` GROUP BY a.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
       params.push(query.query.limit, query.query.offset);
 
       const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
@@ -377,10 +426,18 @@ export class GetFacebookAds extends OpenAPIRoute {
           ad_id: ad.ad_id,
           ad_name: ad.ad_name,
           ad_status: ad.ad_status,
+          status: ad.ad_status,
           campaign_id: ad.campaign_id,
           ad_set_id: ad.ad_set_id,
           creative_id: ad.creative_id,
-          updated_at: ad.updated_at
+          updated_at: ad.updated_at,
+          // Include flattened metrics
+          impressions: ad.impressions || 0,
+          clicks: ad.clicks || 0,
+          spend: (ad.spend_cents || 0) / 100,
+          spend_cents: ad.spend_cents || 0,
+          conversions: ad.conversions || 0,
+          ctr: ad.impressions > 0 ? (ad.clicks / ad.impressions) * 100 : 0,
         })),
         total: ads.length
       });
@@ -1115,14 +1172,14 @@ export class GetFacebookPages extends OpenAPIRoute {
     const orgId = c.get("org_id" as any) as string;
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Check if org has an active Facebook connection
-    const hasConnection = await c.env.DB.prepare(`
-      SELECT 1 FROM platform_connections
+    // Check if org has an active Facebook connection and get its account_id
+    const connection = await c.env.DB.prepare(`
+      SELECT account_id FROM platform_connections
       WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
       LIMIT 1
-    `).bind(orgId).first();
+    `).bind(orgId).first<{ account_id: string }>();
 
-    if (!hasConnection) {
+    if (!connection) {
       return success(c, {
         pages: [],
         total: 0,
@@ -1139,14 +1196,15 @@ export class GetFacebookPages extends OpenAPIRoute {
     }
 
     try {
-      // Query pages from D1 (facebook_pages table)
+      // Query pages from D1, filtered by both organization_id AND account_id
+      // This ensures we only show pages synced for the specific ad account
       const result = await c.env.ANALYTICS_DB.prepare(`
         SELECT page_id, page_name, category, fan_count, access_token
         FROM facebook_pages
-        WHERE organization_id = ?
+        WHERE organization_id = ? AND account_id = ?
         ORDER BY fan_count DESC
         LIMIT ?
-      `).bind(orgId, query.query.limit).all<any>();
+      `).bind(orgId, connection.account_id, query.query.limit).all<any>();
 
       const pages = (result.results || []).map((p: any) => ({
         page_id: p.page_id,
