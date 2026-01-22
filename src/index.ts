@@ -236,6 +236,16 @@ import {
   GetGoalConversions
 } from "./endpoints/v1/goal-metrics";
 import {
+  GetGoalHierarchy,
+  CreateGoalRelationship,
+  DeleteGoalRelationship,
+  ComputeGoalValue,
+  RecomputeAllGoalValues,
+  GetGoalTemplates,
+  CreateGoalsFromTemplates,
+  GetGoalConversionStats
+} from "./endpoints/v1/goals/hierarchy";
+import {
   RunAnalysis,
   GetAnalysisStatus,
   GetLatestAnalysis,
@@ -608,6 +618,16 @@ openapi.delete("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, DeleteConvers
 // Goal Metrics endpoints (D1 data)
 openapi.get("/v1/goals/:id/metrics", auth, requireOrg, GetGoalMetrics);
 openapi.get("/v1/goals/:id/conversions", auth, requireOrg, GetGoalConversions);
+
+// Goal Hierarchy and Value Computation endpoints
+openapi.get("/v1/goals/hierarchy", auth, requireOrg, GetGoalHierarchy);
+openapi.get("/v1/goals/templates", auth, GetGoalTemplates);
+openapi.post("/v1/goals/from-templates", auth, requireOrg, CreateGoalsFromTemplates);
+openapi.post("/v1/goals/relationships", auth, requireOrg, requireOrgAdmin, CreateGoalRelationship);
+openapi.delete("/v1/goals/relationships/:id", auth, requireOrg, requireOrgAdmin, DeleteGoalRelationship);
+openapi.post("/v1/goals/:id/compute-value", auth, requireOrg, ComputeGoalValue);
+openapi.get("/v1/goals/:id/conversion-stats", auth, requireOrg, GetGoalConversionStats);
+openapi.post("/v1/goals/recompute-all", auth, requireOrg, RecomputeAllGoalValues);
 
 // Event Filters endpoints
 openapi.get("/v1/event-filters", auth, requireOrg, ListEventFilters);
