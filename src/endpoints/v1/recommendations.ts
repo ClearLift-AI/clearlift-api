@@ -32,15 +32,17 @@ async function verifyInternalAuth(c: AppContext): Promise<boolean> {
   }
 
   try {
-    // INTERNAL_API_KEY is optional - only check if configured
+    // SECURITY: INTERNAL_API_KEY must be configured - no fallback to allow all
     const internalApiKeyBinding = (c.env as any).INTERNAL_API_KEY;
     if (!internalApiKeyBinding) {
-      // In dev mode without INTERNAL_API_KEY, allow any key
-      return true;
+      // SECURITY FIX: Do not allow requests when INTERNAL_API_KEY is not configured
+      console.error('[verifyInternalAuth] INTERNAL_API_KEY not configured - rejecting request');
+      return false;
     }
     const expectedKey = await getSecret(internalApiKeyBinding);
     return internalKey === expectedKey;
-  } catch {
+  } catch (err) {
+    console.error('[verifyInternalAuth] Error verifying key:', err);
     return false;
   }
 }

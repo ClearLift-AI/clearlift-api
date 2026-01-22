@@ -95,13 +95,38 @@ export class D1Adapter {
 
   /**
    * Update user profile
+   *
+   * SECURITY: Only allowlisted fields can be updated to prevent SQL injection
+   * via malicious object keys
    */
   async updateUser(userId: string, updates: Partial<User>): Promise<boolean> {
-    const fields = Object.keys(updates)
+    // SECURITY: Allowlist of updatable fields - prevents SQL injection via object keys
+    const ALLOWED_FIELDS = new Set([
+      'name',
+      'avatar_url',
+      'last_login_at',
+      'updated_at'
+    ]);
+
+    // Filter to only allowed fields
+    const safeUpdates: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(updates)) {
+      if (ALLOWED_FIELDS.has(key)) {
+        safeUpdates[key] = value;
+      } else {
+        console.warn(`[D1Adapter.updateUser] Blocked attempt to update disallowed field: ${key}`);
+      }
+    }
+
+    if (Object.keys(safeUpdates).length === 0) {
+      return false; // Nothing to update
+    }
+
+    const fields = Object.keys(safeUpdates)
       .map((key) => `${key} = ?`)
       .join(", ");
 
-    const values = Object.values(updates);
+    const values = Object.values(safeUpdates);
     values.push(userId);
 
     const result = await this.session
