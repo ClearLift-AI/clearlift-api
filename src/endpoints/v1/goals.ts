@@ -11,14 +11,14 @@ const TriggerConfigSchema = z.object({
   page_pattern: z.string().optional(),     // '/thank-you', '/confirmation/*'
   revenue_min: z.number().optional(),      // Minimum $ value
   custom_event: z.string().optional(),     // Custom event name from clearlift.track()
-});
+}).passthrough();
 
 // Enhanced event filters schema for tag_event goals
 const EnhancedEventFiltersSchema = z.object({
   event_type: z.string().optional(),      // 'form_submit', 'purchase', 'click'
   goal_id: z.string().optional(),         // Specific goal_id from tag
   url_pattern: z.string().optional(),     // Regex pattern to match URL
-});
+}).passthrough();
 
 const ConversionGoalSchema = z.object({
   id: z.string().optional(),
@@ -44,7 +44,7 @@ const ConversionGoalSchema = z.object({
   color: z.string().optional(),
   icon: z.string().optional(),
   is_active: z.boolean().optional(),
-});
+}).passthrough(); // Allow extra fields that may be sent by frontend
 
 const FilterRuleSchema = z.object({
   field: z.string(),       // 'page_path', 'utm_source', 'event_type'
@@ -159,6 +159,9 @@ export class CreateConversionGoal extends OpenAPIRoute {
     operationId: "create-conversion-goal",
     security: [{ bearerAuth: [] }],
     request: {
+      query: z.object({
+        org_id: z.string().optional(),
+      }),
       body: {
         content: {
           "application/json": {

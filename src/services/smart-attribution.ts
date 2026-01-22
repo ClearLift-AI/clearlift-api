@@ -137,6 +137,16 @@ interface DailyPlatformMetrics {
   revenue: number;
 }
 
+// Funnel position data for weighting
+interface FunnelPositionData {
+  goalId: string;
+  goalName: string;
+  funnelPosition: number;
+  conversionRate: number;  // Rate of converting to macro conversion
+  visitorCount: number;
+  byChannel: Record<string, number>;  // Channel -> visitor count at this funnel step
+}
+
 // Time series entry for response
 export interface SmartAttributionTimeSeriesEntry {
   date: string;
@@ -204,6 +214,7 @@ export class SmartAttributionService {
       dailyConnectorRevenue,
       dailyPlatformMetrics,
       clickIdStats,
+      funnelData,
     ] = await Promise.all([
       this.getPlatformMetrics(orgId, startDate, endDate),
       orgTag ? this.getUtmPerformance(orgTag, startDate, endDate) : Promise.resolve([]),
@@ -212,15 +223,17 @@ export class SmartAttributionService {
       this.getDailyConnectorRevenue(orgId, startDate, endDate),
       this.getDailyPlatformMetrics(orgId, startDate, endDate),
       this.getClickIdStats(orgId, startDate, endDate),
+      orgTag ? this.getFunnelPositionData(orgId, orgTag, startDate, endDate) : Promise.resolve([]),
     ]);
 
-    console.log(`[SmartAttribution] Data sources: platforms=${platformMetrics.length}, utm=${utmPerformance.length}, connectors=${connectorRevenue.length}`);
+    console.log(`[SmartAttribution] Data sources: platforms=${platformMetrics.length}, utm=${utmPerformance.length}, connectors=${connectorRevenue.length}, funnelSteps=${funnelData.length}`);
 
-    // Build attribution using signal hierarchy
+    // Build attribution using signal hierarchy with funnel weighting
     const attributions = this.buildAttributions(
       platformMetrics,
       utmPerformance,
-      connectorRevenue
+      connectorRevenue,
+      funnelData
     );
 
     // Calculate summary
@@ -552,6 +565,106 @@ export class SmartAttributionService {
   }
 
   /**
+   * Get funnel position data for weighting attribution
+   * Sessions that reached higher funnel positions (closer to conversion) get more credit
+   */
+  private async getFunnelPositionData(
+    orgId: string,
+    orgTag: string,
+    startDate: string,
+    endDate: string
+  ): Promise<FunnelPositionData[]> {
+    try {
+      // Get goal completion metrics with funnel position info
+      const result = await this.analyticsDb.prepare(`
+        SELECT
+          gcm.goal_id,
+          gcm.goal_name,
+          gcm.goal_type,
+          SUM(gcm.completions) as total_completions,
+          SUM(gcm.unique_visitors) as total_visitors,
+          SUM(gcm.downstream_conversions) as downstream_conversions,
+          AVG(gcm.downstream_conversion_rate) as avg_conversion_rate,
+          GROUP_CONCAT(gcm.by_channel) as by_channel_json
+        FROM goal_completion_metrics gcm
+        WHERE gcm.org_tag = ?
+          AND gcm.date >= ?
+          AND gcm.date <= ?
+        GROUP BY gcm.goal_id, gcm.goal_name, gcm.goal_type
+      `).bind(orgTag, startDate.split('T')[0], endDate.split('T')[0]).all();
+
+      // Get funnel positions from main DB
+      const positionsResult = await this.mainDb.prepare(`
+        SELECT
+          g.id as goal_id,
+          r.funnel_position
+        FROM conversion_goals g
+        LEFT JOIN goal_relationships r ON r.upstream_goal_id = g.id
+        WHERE g.organization_id = ?
+          AND (g.is_active = 1 OR g.is_active IS NULL)
+      `).bind(orgId).all();
+
+      // Build position lookup
+      const positionsByGoalId = new Map<string, number>();
+      for (const row of (positionsResult.results || []) as Array<{ goal_id: string; funnel_position: number | null }>) {
+        if (row.funnel_position) {
+          positionsByGoalId.set(row.goal_id, row.funnel_position);
+        }
+      }
+
+      const funnelData: FunnelPositionData[] = [];
+
+      for (const row of (result.results || []) as Array<{
+        goal_id: string;
+        goal_name: string;
+        goal_type: string;
+        total_completions: number;
+        total_visitors: number;
+        downstream_conversions: number;
+        avg_conversion_rate: number;
+        by_channel_json: string | null;
+      }>) {
+        // Parse and merge by_channel JSON arrays
+        const byChannel: Record<string, number> = {};
+        if (row.by_channel_json) {
+          try {
+            // GROUP_CONCAT produces comma-separated JSON objects
+            const jsonParts = row.by_channel_json.split('},{');
+            for (const part of jsonParts) {
+              const cleanJson = part.startsWith('{') ? part : '{' + part;
+              const finalJson = cleanJson.endsWith('}') ? cleanJson : cleanJson + '}';
+              const parsed = JSON.parse(finalJson);
+              for (const [channel, count] of Object.entries(parsed)) {
+                byChannel[channel] = (byChannel[channel] || 0) + (count as number);
+              }
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+
+        funnelData.push({
+          goalId: row.goal_id,
+          goalName: row.goal_name,
+          funnelPosition: positionsByGoalId.get(row.goal_id) || 0,
+          conversionRate: row.avg_conversion_rate || 0,
+          visitorCount: row.total_visitors,
+          byChannel,
+        });
+      }
+
+      // Sort by funnel position (higher = closer to conversion)
+      funnelData.sort((a, b) => b.funnelPosition - a.funnelPosition);
+
+      console.log(`[SmartAttribution] Funnel data: ${funnelData.length} goals with positions`);
+      return funnelData;
+    } catch (err) {
+      console.warn('[SmartAttribution] Failed to query funnel position data:', err);
+      return [];
+    }
+  }
+
+  /**
    * Get click ID statistics from conversions table
    * Checks for gclid, fbclid, ttclid in the conversions
    */
@@ -596,16 +709,22 @@ export class SmartAttributionService {
   }
 
   /**
-   * Build attributions using signal hierarchy
+   * Build attributions using signal hierarchy with funnel weighting
    *
    * Key insight: When we have connector revenue (Stripe/Shopify) but no direct
    * click-level attribution, we probabilistically distribute the revenue based
-   * on session share. This gives us actionable attribution even without click IDs.
+   * on session share WEIGHTED by funnel position. Sessions that reached higher
+   * funnel positions (closer to conversion) get proportionally more credit.
+   *
+   * Funnel Weight Formula:
+   *   weight = sessionShare × (1 + funnelBonus)
+   *   where funnelBonus = Σ(position × conversionRate) for all reached funnel steps
    */
   private buildAttributions(
     platformMetrics: PlatformMetrics[],
     utmPerformance: UtmPerformance[],
-    connectorRevenue: ConnectorRevenue[]
+    connectorRevenue: ConnectorRevenue[],
+    funnelData: FunnelPositionData[] = []
   ): SmartAttribution[] {
     const attributions: SmartAttribution[] = [];
 
@@ -684,6 +803,40 @@ export class SmartAttributionService {
     // doesn't have conversions, distribute based on session share
     const useSessionBasedDistribution = hasConnectorData && totalUtmSessions > 0;
 
+    // Build funnel bonus lookup by channel
+    // Channels with visitors at higher funnel positions get bonus weighting
+    const funnelBonusByChannel = new Map<string, { bonus: number; maxPosition: number; steps: string[] }>();
+    if (funnelData.length > 0) {
+      for (const funnelStep of funnelData) {
+        for (const [channel, visitorCount] of Object.entries(funnelStep.byChannel)) {
+          const normalizedChannel = channel.toLowerCase();
+          const existing = funnelBonusByChannel.get(normalizedChannel) || { bonus: 0, maxPosition: 0, steps: [] };
+
+          // Add bonus based on funnel position × conversion rate
+          // Position 3 with 50% conversion rate = 1.5 bonus points
+          const stepBonus = funnelStep.funnelPosition * funnelStep.conversionRate;
+          existing.bonus += stepBonus;
+          existing.maxPosition = Math.max(existing.maxPosition, funnelStep.funnelPosition);
+          if (!existing.steps.includes(funnelStep.goalName)) {
+            existing.steps.push(funnelStep.goalName);
+          }
+
+          funnelBonusByChannel.set(normalizedChannel, existing);
+        }
+      }
+      console.log(`[SmartAttribution] Funnel bonuses computed for ${funnelBonusByChannel.size} channels`);
+    }
+
+    // Calculate total weighted sessions (for normalization)
+    let totalWeightedSessions = 0;
+    const channelWeights = new Map<string, number>();
+    for (const [channelKey, utm] of aggregatedUtm) {
+      const bonus = funnelBonusByChannel.get(channelKey.toLowerCase())?.bonus || 0;
+      const weight = utm.sessions * (1 + bonus);
+      channelWeights.set(channelKey, weight);
+      totalWeightedSessions += weight;
+    }
+
     // Build attributions from UTM data
     for (const [channelKey, utm] of aggregatedUtm) {
       const matchedPlatform = utm.platform;
@@ -697,7 +850,14 @@ export class SmartAttributionService {
       const hasPlatformMatch = !!matchedPlatform && platformConversionsByName.has(matchedPlatform);
 
       // Calculate session share for probabilistic attribution
-      const sessionShare = totalUtmSessions > 0 ? utm.sessions / totalUtmSessions : 0;
+      // Use funnel-weighted share if funnel data available, otherwise use raw sessions
+      const channelWeight = channelWeights.get(channelKey) || utm.sessions;
+      const sessionShare = totalWeightedSessions > 0
+        ? channelWeight / totalWeightedSessions
+        : (totalUtmSessions > 0 ? utm.sessions / totalUtmSessions : 0);
+
+      // Get funnel info for this channel
+      const funnelInfo = funnelBonusByChannel.get(channelKey.toLowerCase());
 
       // Determine conversions and revenue
       let conversions: number;
@@ -711,6 +871,13 @@ export class SmartAttributionService {
         ? utm.sources.slice(0, 3).join(', ') + (utm.sources.length > 3 ? '...' : '')
         : utm.sources[0];
 
+      // Build funnel explanation suffix if channel has funnel data
+      let funnelSuffix = '';
+      if (funnelInfo && funnelInfo.steps.length > 0) {
+        const stepsText = funnelInfo.steps.slice(0, 2).join(', ');
+        funnelSuffix = ` Funnel-weighted: reached ${stepsText}${funnelInfo.steps.length > 2 ? '...' : ''}.`;
+      }
+
       // If UTM has direct conversions, use those
       if (utm.conversions > 0) {
         conversions = utm.conversions;
@@ -720,17 +887,17 @@ export class SmartAttributionService {
           signalType = 'utm_with_spend';
           confidence = 95;
           dataQuality = 'corroborated';
-          explanation = `${conversions} tracked conversion(s). UTM "${sourcesList}" matches ${matchedPlatform} with $${platformSpend.toFixed(0)} spend.`;
+          explanation = `${conversions} tracked conversion(s). UTM "${sourcesList}" matches ${matchedPlatform} with $${platformSpend.toFixed(0)} spend.${funnelSuffix}`;
         } else if (matchedPlatform) {
           signalType = 'utm_no_spend';
           confidence = 90;
           dataQuality = 'single_source';
-          explanation = `${conversions} tracked conversion(s). UTM "${sourcesList}" matches ${matchedPlatform}, no active spend.`;
+          explanation = `${conversions} tracked conversion(s). UTM "${sourcesList}" matches ${matchedPlatform}, no active spend.${funnelSuffix}`;
         } else {
           signalType = 'utm_only';
           confidence = 85;
           dataQuality = 'single_source';
-          explanation = `${conversions} tracked conversion(s) from "${sourcesList}".`;
+          explanation = `${conversions} tracked conversion(s) from "${sourcesList}".${funnelSuffix}`;
         }
       }
       // Otherwise, probabilistically distribute connector revenue based on session share
@@ -738,21 +905,26 @@ export class SmartAttributionService {
         conversions = Math.round(totalConnectorConversions * sessionShare * 100) / 100;
         revenue = Math.round(totalConnectorRevenue * sessionShare * 100) / 100;
 
+        // Build share explanation - mention funnel weighting if applied
+        const shareExplanation = funnelInfo && funnelInfo.bonus > 0
+          ? `${(sessionShare * 100).toFixed(1)}% funnel-weighted share`
+          : `${(sessionShare * 100).toFixed(1)}% of sessions`;
+
         if (matchedPlatform && hasActiveSpend) {
           signalType = 'utm_with_spend';
-          confidence = 75; // Lower confidence for probabilistic
+          confidence = funnelInfo && funnelInfo.bonus > 0 ? 80 : 75; // Slightly higher confidence with funnel data
           dataQuality = 'estimated';
-          explanation = `Est. ${conversions.toFixed(1)} conv. (${(sessionShare * 100).toFixed(1)}% of sessions). UTM "${sourcesList}" + ${matchedPlatform} spend corroborates.`;
+          explanation = `Est. ${conversions.toFixed(1)} conv. (${shareExplanation}). UTM "${sourcesList}" + ${matchedPlatform} spend corroborates.${funnelSuffix}`;
         } else if (matchedPlatform) {
           signalType = 'utm_no_spend';
-          confidence = 70;
+          confidence = funnelInfo && funnelInfo.bonus > 0 ? 75 : 70;
           dataQuality = 'estimated';
-          explanation = `Est. ${conversions.toFixed(1)} conv. (${(sessionShare * 100).toFixed(1)}% of sessions). UTM "${sourcesList}" matches ${matchedPlatform}.`;
+          explanation = `Est. ${conversions.toFixed(1)} conv. (${shareExplanation}). UTM "${sourcesList}" matches ${matchedPlatform}.${funnelSuffix}`;
         } else {
           signalType = 'utm_only';
-          confidence = 65;
+          confidence = funnelInfo && funnelInfo.bonus > 0 ? 70 : 65;
           dataQuality = 'estimated';
-          explanation = `Est. ${conversions.toFixed(1)} conv. (${(sessionShare * 100).toFixed(1)}% of sessions) from "${sourcesList}".`;
+          explanation = `Est. ${conversions.toFixed(1)} conv. (${shareExplanation}) from "${sourcesList}".${funnelSuffix}`;
         }
       } else {
         // No conversions and no connector data to distribute

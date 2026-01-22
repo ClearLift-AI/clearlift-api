@@ -246,6 +246,10 @@ import {
   GetGoalConversionStats
 } from "./endpoints/v1/goals/hierarchy";
 import {
+  GetGoalConfig,
+  GoalConfigOptions
+} from "./endpoints/v1/goals/config";
+import {
   RunAnalysis,
   GetAnalysisStatus,
   GetLatestAnalysis,
@@ -614,6 +618,10 @@ openapi.get("/v1/goals", auth, requireOrg, ListConversionGoals);
 openapi.post("/v1/goals", auth, requireOrg, requireOrgAdmin, CreateConversionGoal);
 openapi.put("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, UpdateConversionGoal);
 openapi.delete("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, DeleteConversionGoal);
+
+// Goal Config for Tag (public endpoint - no auth required)
+openapi.get("/v1/goals/config", GetGoalConfig);
+openapi.options("/v1/goals/config", GoalConfigOptions);
 
 // Goal Metrics endpoints (D1 data)
 openapi.get("/v1/goals/:id/metrics", auth, requireOrg, GetGoalMetrics);
