@@ -705,7 +705,7 @@ export class DeleteAccount extends OpenAPIRoute {
           'identity_mappings',
           'identity_merges',
           'onboarding_progress',
-          'onboarding_steps',
+          // Note: onboarding_steps is a global reference table with no organization_id
           'invitations',
           'organization_members',
         ];

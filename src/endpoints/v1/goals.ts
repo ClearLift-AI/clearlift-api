@@ -11,13 +11,20 @@ const TriggerConfigSchema = z.object({
   page_pattern: z.string().optional(),     // '/thank-you', '/confirmation/*'
   revenue_min: z.number().optional(),      // Minimum $ value
   custom_event: z.string().optional(),     // Custom event name from clearlift.track()
-}).strict();
+});
+
+// Enhanced event filters schema for tag_event goals
+const EnhancedEventFiltersSchema = z.object({
+  event_type: z.string().optional(),      // 'form_submit', 'purchase', 'click'
+  goal_id: z.string().optional(),         // Specific goal_id from tag
+  url_pattern: z.string().optional(),     // Regex pattern to match URL
+});
 
 const ConversionGoalSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1).max(100),
   type: z.enum(['conversion', 'micro_conversion', 'engagement']).default('conversion'),
-  trigger_config: TriggerConfigSchema,
+  trigger_config: TriggerConfigSchema.optional().default({}),
   default_value_cents: z.number().int().min(0).default(0),
   is_primary: z.boolean().default(false),
   include_in_path: z.boolean().default(true),
@@ -27,6 +34,16 @@ const ConversionGoalSchema = z.object({
   fixed_value_cents: z.number().int().min(0).optional(),
   avg_deal_value_cents: z.number().int().min(0).optional(),
   close_rate_percent: z.number().int().min(0).max(100).optional(),
+  // Enhanced multi-source goal fields
+  slug: z.string().optional(),
+  description: z.string().optional(),
+  goal_type: z.enum(['revenue_source', 'tag_event', 'manual']).optional(),
+  revenue_sources: z.array(z.string()).optional(),
+  event_filters: EnhancedEventFiltersSchema.optional(),
+  display_order: z.number().int().optional(),
+  color: z.string().optional(),
+  icon: z.string().optional(),
+  is_active: z.boolean().optional(),
 });
 
 const FilterRuleSchema = z.object({
@@ -199,22 +216,33 @@ export class CreateConversionGoal extends OpenAPIRoute {
         id, organization_id, name, type, trigger_config,
         default_value_cents, is_primary, include_in_path, priority,
         value_type, fixed_value_cents, avg_deal_value_cents, close_rate_percent,
+        slug, description, goal_type, revenue_sources, event_filters_v2,
+        display_order, color, icon, is_active,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
       orgId,
       body.name,
       body.type,
-      JSON.stringify(body.trigger_config),
+      JSON.stringify(body.trigger_config || {}),
       body.default_value_cents,
       body.is_primary ? 1 : 0,
       body.include_in_path ? 1 : 0,
-      body.priority,
+      body.priority ?? 0,
       body.value_type || 'from_source',
       body.fixed_value_cents ?? null,
       body.avg_deal_value_cents ?? null,
       body.close_rate_percent ?? null,
+      body.slug ?? null,
+      body.description ?? null,
+      body.goal_type ?? null,
+      body.revenue_sources ? JSON.stringify(body.revenue_sources) : null,
+      body.event_filters ? JSON.stringify(body.event_filters) : null,
+      body.display_order ?? null,
+      body.color ?? null,
+      body.icon ?? null,
+      body.is_active !== false ? 1 : 0,
       now,
       now
     ).run();
