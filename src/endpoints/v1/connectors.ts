@@ -1642,6 +1642,24 @@ export class TriggerResync extends OpenAPIRoute {
         return error(c, "FORBIDDEN", "No access to this connection", 403);
       }
 
+      // Check for active sync to prevent duplicate jobs
+      const activeSync = await c.env.DB.prepare(`
+        SELECT id FROM sync_jobs
+        WHERE connection_id = ?
+          AND status IN ('pending', 'syncing')
+          AND created_at > datetime('now', '-2 hours')
+        LIMIT 1
+      `).bind(connection_id).first<{ id: string }>();
+
+      if (activeSync) {
+        return c.json({
+          success: false,
+          error: 'SYNC_IN_PROGRESS',
+          message: 'A sync is already in progress for this connection',
+          existing_job_id: activeSync.id
+        }, 409);
+      }
+
       // Create sync job
       const jobId = crypto.randomUUID();
       const now = new Date().toISOString();
