@@ -122,7 +122,15 @@ export class GetGoalConfig extends OpenAPIRoute {
     const goals: TagGoalConfig[] = [];
 
     for (const row of goalsResult.results || []) {
-      const triggerConfig = JSON.parse(row.trigger_config as string || '{}');
+      // Parse trigger config safely
+      let triggerConfig: Record<string, any> = {};
+      try {
+        triggerConfig = JSON.parse(row.trigger_config as string || '{}');
+      } catch {
+        // Skip goals with invalid trigger config
+        console.warn(`[GoalConfig] Invalid trigger_config for goal ${row.id}`);
+        continue;
+      }
 
       // Determine trigger type and config
       let trigger: TagGoalConfig['trigger'];
@@ -162,10 +170,16 @@ export class GetGoalConfig extends OpenAPIRoute {
         ? row.fixed_value_cents as number
         : row.default_value_cents as number || 0;
 
+      // Validate type field (default to 'conversion' if invalid)
+      const validTypes = ['conversion', 'micro_conversion', 'engagement'] as const;
+      const goalType = validTypes.includes(row.type as any)
+        ? (row.type as typeof validTypes[number])
+        : 'conversion';
+
       goals.push({
         id: row.id as string,
         name: row.name as string,
-        type: row.type as 'conversion' | 'micro_conversion' | 'engagement',
+        type: goalType,
         trigger,
         value_cents: valueCents,
         funnel_position: row.funnel_position as number | undefined,

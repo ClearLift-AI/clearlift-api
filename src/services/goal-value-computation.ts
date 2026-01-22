@@ -10,7 +10,23 @@
  * 4. Markov Removal: Uses existing Markov chain removal effect
  */
 
-import { D1Database } from "@cloudflare/workers-types";
+// D1Database type is provided by wrangler-generated types (worker-configuration.d.ts)
+// Using global declaration to avoid external package dependency
+declare const D1Database: any;
+type D1Database = {
+  prepare(query: string): D1PreparedStatement;
+};
+type D1PreparedStatement = {
+  bind(...values: unknown[]): D1PreparedStatement;
+  first<T = unknown>(colName?: string): Promise<T | null>;
+  all<T = unknown>(): Promise<D1Result<T>>;
+  run(): Promise<D1Result<unknown>>;
+};
+type D1Result<T> = {
+  results?: T[];
+  success: boolean;
+  meta?: Record<string, unknown>;
+};
 
 export interface GoalRelationship {
   id: string;
@@ -47,6 +63,9 @@ export interface ComputedGoalValue {
     bayesian_mean?: number;
     bayesian_alpha?: number;
     bayesian_beta?: number;
+    source?: string;
+    conversion_sources?: string[];
+    message?: string;
   };
 }
 
@@ -640,7 +659,7 @@ export class GoalValueComputationService {
 
       // Find micro-conversions that lead to this macro
       const childRelationships = (relationships.results || []).filter(
-        (r) => r.downstream_goal_id === macro.id
+        (r: GoalRelationship) => r.downstream_goal_id === macro.id
       );
 
       for (const rel of childRelationships) {
