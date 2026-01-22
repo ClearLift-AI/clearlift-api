@@ -1402,3 +1402,262 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
     }
   }
 }
+
+/**
+ * GET /v1/analytics/facebook/audience-insights
+ *
+ * Returns ad performance breakdowns by demographics, platforms, placements, and devices.
+ * This endpoint uses the read_insights permission to fetch breakdown data from Facebook Marketing API.
+ */
+export class GetFacebookAudienceInsights extends OpenAPIRoute {
+  schema = {
+    tags: ["Facebook Ads"],
+    summary: "Get Facebook audience insights with breakdowns",
+    description: "Retrieve ad performance breakdowns by age, gender, platform, placement, and device. Requires read_insights permission.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Start date (YYYY-MM-DD)"),
+        end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("End date (YYYY-MM-DD)")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Audience insights breakdown data",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                by_age: z.array(z.any()),
+                by_gender: z.array(z.any()),
+                by_platform: z.array(z.any()),
+                by_placement: z.array(z.any()),
+                by_device: z.array(z.any()),
+                summary: z.object({
+                  total_spend_cents: z.number(),
+                  total_impressions: z.number(),
+                  total_conversions: z.number(),
+                  best_performing_segment: z.string(),
+                  recommendation: z.string()
+                }),
+                date_range: z.object({
+                  start_date: z.string(),
+                  end_date: z.string()
+                })
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const query = await this.getValidatedData<typeof this.schema>();
+
+    try {
+      // Get Facebook connection for this org
+      const connection = await c.env.DB.prepare(`
+        SELECT id, account_id FROM platform_connections
+        WHERE organization_id = ? AND platform = 'facebook' AND is_active = 1
+        LIMIT 1
+      `).bind(orgId).first<{ id: string; account_id: string }>();
+
+      if (!connection) {
+        return success(c, {
+          by_age: [],
+          by_gender: [],
+          by_platform: [],
+          by_placement: [],
+          by_device: [],
+          summary: {
+            total_spend_cents: 0,
+            total_impressions: 0,
+            total_conversions: 0,
+            best_performing_segment: "N/A",
+            recommendation: "Connect a Facebook Ads account to see audience insights"
+          },
+          date_range: {
+            start_date: query.query.start_date || "",
+            end_date: query.query.end_date || ""
+          }
+        });
+      }
+
+      // Get decrypted access token
+      const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+      const { ConnectorService } = await import('../../../services/connectors');
+      const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+      const accessToken = await connectorService.getAccessToken(connection.id);
+
+      if (!accessToken) {
+        return error(c, "TOKEN_ERROR", "Facebook access token not available", 401);
+      }
+
+      // Default date range: last 30 days
+      const endDate = query.query.end_date || new Date().toISOString().split('T')[0];
+      const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+      const accountId = connection.account_id.startsWith('act_')
+        ? connection.account_id
+        : `act_${connection.account_id}`;
+
+      // Fetch insights with different breakdowns in parallel
+      const baseUrl = `https://graph.facebook.com/v24.0/${accountId}/insights`;
+      const baseParams = {
+        access_token: accessToken,
+        time_range: JSON.stringify({ since: startDate, until: endDate }),
+        fields: 'spend,impressions,clicks,reach,actions',
+        level: 'account'
+      };
+
+      const breakdowns = [
+        { name: 'age', breakdown: 'age' },
+        { name: 'gender', breakdown: 'gender' },
+        { name: 'platform', breakdown: 'publisher_platform' },
+        { name: 'placement', breakdown: 'platform_position' },
+        { name: 'device', breakdown: 'impression_device' }
+      ];
+
+      const results: Record<string, any[]> = {
+        by_age: [],
+        by_gender: [],
+        by_platform: [],
+        by_placement: [],
+        by_device: []
+      };
+
+      let totalSpendCents = 0;
+      let totalImpressions = 0;
+      let totalConversions = 0;
+
+      // Fetch each breakdown
+      for (const { name, breakdown } of breakdowns) {
+        try {
+          const url = new URL(baseUrl);
+          Object.entries(baseParams).forEach(([k, v]) => url.searchParams.set(k, v));
+          url.searchParams.set('breakdowns', breakdown);
+
+          const response = await fetch(url.toString(), {
+            signal: AbortSignal.timeout(15000)
+          });
+
+          if (response.ok) {
+            const data = await response.json() as any;
+            const entries = data.data || [];
+
+            results[`by_${name}`] = entries.map((entry: any) => {
+              const spend = parseFloat(entry.spend || '0');
+              const spendCents = Math.round(spend * 100);
+              const impressions = parseInt(entry.impressions || '0');
+              const clicks = parseInt(entry.clicks || '0');
+              const reach = parseInt(entry.reach || '0');
+
+              // Extract conversions from actions
+              let conversions = 0;
+              if (entry.actions) {
+                const purchaseAction = entry.actions.find((a: any) =>
+                  a.action_type === 'purchase' || a.action_type === 'omni_purchase'
+                );
+                conversions = purchaseAction ? parseInt(purchaseAction.value || '0') : 0;
+              }
+
+              // Calculate derived metrics
+              const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+              const cpaCents = conversions > 0 ? Math.round(spendCents / conversions) : 0;
+              const roas = spendCents > 0 && conversions > 0 ? (conversions * 5000) / spendCents : 0; // Assume $50 AOV
+
+              // Track totals from first breakdown (age) to avoid double counting
+              if (name === 'age') {
+                totalSpendCents += spendCents;
+                totalImpressions += impressions;
+                totalConversions += conversions;
+              }
+
+              // Get dimension value based on breakdown type
+              let dimensionValue = entry[breakdown] || 'Unknown';
+
+              return {
+                dimension_value: dimensionValue,
+                spend_cents: spendCents,
+                impressions,
+                clicks,
+                ctr: Math.round(ctr * 100) / 100,
+                conversions,
+                cpa_cents: cpaCents,
+                roas: Math.round(roas * 100) / 100,
+                percentage_of_spend: 0 // Will calculate after
+              };
+            });
+          }
+        } catch (breakdownError) {
+          console.error(`Failed to fetch ${name} breakdown:`, breakdownError);
+          // Continue with other breakdowns
+        }
+      }
+
+      // Calculate percentage of spend for each breakdown
+      for (const key of Object.keys(results)) {
+        const entries = results[key];
+        const totalForBreakdown = entries.reduce((sum: number, e: any) => sum + e.spend_cents, 0);
+
+        for (const entry of entries) {
+          entry.percentage_of_spend = totalForBreakdown > 0
+            ? Math.round((entry.spend_cents / totalForBreakdown) * 10000) / 100
+            : 0;
+        }
+
+        // Sort by spend descending
+        results[key] = entries.sort((a: any, b: any) => b.spend_cents - a.spend_cents);
+      }
+
+      // Generate recommendation based on best performing segment
+      let bestSegment = "N/A";
+      let recommendation = "Not enough data to generate insights";
+
+      if (results.by_age.length > 0 && results.by_gender.length > 0) {
+        // Find best CPA segment
+        const allSegments = [
+          ...results.by_age.filter((e: any) => e.conversions > 0).map((e: any) => ({ ...e, type: 'age' })),
+          ...results.by_gender.filter((e: any) => e.conversions > 0).map((e: any) => ({ ...e, type: 'gender' })),
+          ...results.by_platform.filter((e: any) => e.conversions > 0).map((e: any) => ({ ...e, type: 'platform' }))
+        ];
+
+        if (allSegments.length > 0) {
+          // Sort by CPA (lower is better)
+          allSegments.sort((a, b) => a.cpa_cents - b.cpa_cents);
+          const best = allSegments[0];
+          bestSegment = `${best.dimension_value} (${best.type})`;
+
+          const cpaDollars = (best.cpa_cents / 100).toFixed(2);
+          recommendation = `Best performing: ${best.dimension_value} with $${cpaDollars} CPA. Consider increasing budget allocation to this segment.`;
+        }
+      }
+
+      return success(c, {
+        by_age: results.by_age,
+        by_gender: results.by_gender,
+        by_platform: results.by_platform,
+        by_placement: results.by_placement,
+        by_device: results.by_device,
+        summary: {
+          total_spend_cents: totalSpendCents,
+          total_impressions: totalImpressions,
+          total_conversions: totalConversions,
+          best_performing_segment: bestSegment,
+          recommendation
+        },
+        date_range: {
+          start_date: startDate,
+          end_date: endDate
+        }
+      });
+    } catch (err: any) {
+      console.error("Get Facebook audience insights error:", err);
+      return error(c, "QUERY_FAILED", `Failed to fetch audience insights: ${err.message}`, 500);
+    }
+  }
+}
