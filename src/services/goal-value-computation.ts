@@ -645,6 +645,7 @@ export class GoalValueComputationService {
     );
 
     const hierarchy: GoalHierarchyNode[] = [];
+    const addedGoalIds = new Set<string>();
 
     // Add macro goals as roots
     for (const macro of macroGoals) {
@@ -656,6 +657,7 @@ export class GoalValueComputationService {
         computed_value_cents: macro.computed_value_cents,
         children: [],
       };
+      addedGoalIds.add(macro.id);
 
       // Find micro-conversions that lead to this macro
       const childRelationships = (relationships.results || []).filter(
@@ -673,10 +675,26 @@ export class GoalValueComputationService {
             computed_value_cents: childGoal.computed_value_cents,
             children: [],
           });
+          addedGoalIds.add(childGoal.id);
         }
       }
 
       hierarchy.push(macroNode);
+    }
+
+    // Add micro-conversions that don't have relationships (standalone)
+    for (const micro of microGoals) {
+      if (!addedGoalIds.has(micro.id)) {
+        hierarchy.push({
+          goal_id: micro.id,
+          goal_name: micro.name,
+          category: "micro_conversion",
+          explicit_value_cents: micro.fixed_value_cents || micro.default_value_cents,
+          computed_value_cents: micro.computed_value_cents,
+          children: [],
+        });
+        addedGoalIds.add(micro.id);
+      }
     }
 
     // Add engagement goals as separate branch
@@ -689,6 +707,7 @@ export class GoalValueComputationService {
         computed_value_cents: engagement.computed_value_cents,
         children: [],
       });
+      addedGoalIds.add(engagement.id);
     }
 
     return hierarchy;

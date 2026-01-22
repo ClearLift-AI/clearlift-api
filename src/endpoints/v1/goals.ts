@@ -214,20 +214,25 @@ export class CreateConversionGoal extends OpenAPIRoute {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
 
+    // Map type to category for funnel hierarchy
+    // 'conversion' → 'macro_conversion', others stay the same
+    const category = body.type === 'conversion' ? 'macro_conversion' : body.type;
+
     await c.env.DB.prepare(`
       INSERT INTO conversion_goals (
-        id, organization_id, name, type, trigger_config,
+        id, organization_id, name, type, category, trigger_config,
         default_value_cents, is_primary, include_in_path, priority,
         value_type, fixed_value_cents, avg_deal_value_cents, close_rate_percent,
         slug, description, goal_type, revenue_sources, event_filters_v2,
         display_order, color, icon, is_active,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
       orgId,
       body.name,
       body.type,
+      category,
       JSON.stringify(body.trigger_config || {}),
       body.default_value_cents,
       body.is_primary ? 1 : 0,
@@ -336,6 +341,10 @@ export class UpdateConversionGoal extends OpenAPIRoute {
     if (body.type !== undefined) {
       updates.push('type = ?');
       values.push(body.type);
+      // Also update category for funnel hierarchy
+      const category = body.type === 'conversion' ? 'macro_conversion' : body.type;
+      updates.push('category = ?');
+      values.push(category);
     }
     if (body.trigger_config !== undefined) {
       updates.push('trigger_config = ?');
