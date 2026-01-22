@@ -11,6 +11,15 @@ const ConnectionStatusSchema = z.object({
   sync_status: z.enum(['pending', 'syncing', 'completed', 'failed'])
 });
 
+const DiagnosticsSchema = z.object({
+  keyMode: z.string().optional(),
+  hasAnyData: z.boolean().optional(),
+  newestCharge: z.string().optional(),
+  accountId: z.string().optional(),
+  suggestion: z.string().optional(),
+  error: z.string().optional()
+}).optional();
+
 const SyncJobSchema = z.object({
   status: z.enum(['pending', 'running', 'completed', 'failed']),
   type: z.enum(['full', 'incremental']),
@@ -20,7 +29,8 @@ const SyncJobSchema = z.object({
   total_records: z.number().nullable(),
   progress_percentage: z.number(),
   current_phase: z.string().nullable(),
-  error: z.string().nullable()
+  error: z.string().nullable(),
+  diagnostics: DiagnosticsSchema.nullable()
 });
 
 const SyncStatusResponseSchema = z.object({
@@ -103,18 +113,26 @@ export class GetSyncStatus extends OpenAPIRoute {
 
     // Use dedicated columns first, fall back to metadata for backwards compatibility
     let recordsSynced = latestJob?.records_synced || 0;
+
+    // Debug logging
+    console.log(`[SyncStatus] Connection ${connectionId}: status=${latestJob?.status}, records_synced=${latestJob?.records_synced}, computed=${recordsSynced}`);
     let totalRecords: number | null = (latestJob?.total_records as number) ?? null;
     let progressPercentage = (latestJob?.progress_percentage as number) ?? 0;
     let currentPhase: string | null = (latestJob?.current_phase as string) ?? null;
 
-    // Fall back to metadata if dedicated columns are empty (backwards compatibility)
-    if (latestJob?.metadata && (!currentPhase || progressPercentage === 0)) {
+    // Parse metadata for backwards compatibility and diagnostics
+    let diagnostics: any = null;
+    if (latestJob?.metadata) {
       try {
         const metadata = JSON.parse(latestJob.metadata as string);
         if (!totalRecords) totalRecords = metadata.total_records ?? null;
         if (!currentPhase) currentPhase = metadata.current_phase ?? null;
         if (progressPercentage === 0 && metadata.progress_percentage !== undefined) {
           progressPercentage = metadata.progress_percentage;
+        }
+        // Extract diagnostics if present (for no-data scenarios)
+        if (metadata.diagnostics) {
+          diagnostics = metadata.diagnostics;
         }
       } catch (e) {
         // Ignore parse errors
@@ -138,6 +156,11 @@ export class GetSyncStatus extends OpenAPIRoute {
       }
     }
 
+    // More debug logging
+    if (latestJob?.status === 'completed' && recordsSynced === 0) {
+      console.log(`[SyncStatus] WARNING: Completed job with 0 records! Raw value: ${JSON.stringify(latestJob.records_synced)}, type: ${typeof latestJob.records_synced}`);
+    }
+
     return c.json({
       connection: {
         platform: connection.platform,
@@ -155,7 +178,8 @@ export class GetSyncStatus extends OpenAPIRoute {
         total_records: totalRecords,
         progress_percentage: progressPercentage,
         current_phase: currentPhase,
-        error: latestJob.error_message
+        error: latestJob.error_message,
+        diagnostics: diagnostics
       } : null
     }, 200);
   }

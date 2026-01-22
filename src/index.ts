@@ -36,6 +36,7 @@ import {
 } from "./endpoints/v1/analytics/attribution";
 import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-campaigns";
 import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
+import { RunClickExtraction, GetClickExtractionStats } from "./endpoints/v1/analytics/click-extraction";
 import { GetSmartAttribution } from "./endpoints/v1/analytics/smart-attribution";
 import { GetTrackingLinkPerformance } from "./endpoints/v1/analytics/tracking-links";
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
@@ -438,6 +439,8 @@ openapi.get("/v1/analytics/platforms/unified", auth, requireOrg, GetUnifiedPlatf
 openapi.get("/v1/analytics/utm-campaigns", auth, requireOrg, GetUtmCampaigns);
 openapi.get("/v1/analytics/utm-campaigns/time-series", auth, requireOrg, GetUtmTimeSeries);
 openapi.get("/v1/analytics/click-attribution", auth, requireOrg, GetClickAttribution);
+openapi.post("/v1/analytics/click-extraction/run", auth, requireOrg, RunClickExtraction);
+openapi.get("/v1/analytics/click-extraction/stats", auth, requireOrg, GetClickExtractionStats);
 openapi.get("/v1/analytics/tracking-links", auth, requireOrg, GetTrackingLinkPerformance);
 
 // Identity resolution endpoints

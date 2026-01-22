@@ -247,7 +247,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       }, async () => {
         return await this.getAgenticFinalSummary(
           agenticMessages,
-          agenticContext.systemPrompt + `\n\nYou have made ${maxRecommendations} recommendations which is the maximum. Provide a brief final summary.`,
+          agenticContext.systemPrompt + `\n\nYou have made ${maxActionRecommendations} recommendations which is the maximum. Provide a brief final summary.`,
           enableExploration
         );
       });

@@ -486,7 +486,10 @@ export class SmartAttributionService {
   ): Promise<ConnectorRevenue[]> {
     const results: ConnectorRevenue[] = [];
 
-    // Query Stripe
+    // Query Stripe - only count actual CONVERSIONS (new subscriptions/purchases)
+    // - subscription_create: New subscription (first payment)
+    // - NULL billing_reason with succeeded status: One-time charge
+    // Do NOT count subscription_cycle (renewals) as conversions
     try {
       const stripeResult = await this.analyticsDb.prepare(`
         SELECT
@@ -496,7 +499,10 @@ export class SmartAttributionService {
         WHERE organization_id = ?
           AND DATE(stripe_created_at) >= ?
           AND DATE(stripe_created_at) <= ?
-          AND status = 'succeeded'
+          AND (
+            billing_reason = 'subscription_create'
+            OR (billing_reason IS NULL AND status = 'succeeded')
+          )
       `).bind(orgId, startDate, endDate).first<{
         conversions: number;
         revenue: number;
@@ -618,7 +624,6 @@ export class SmartAttributionService {
           conversions: utm.conversions,
           revenue: utm.revenue,
           sources: [utm.utmSource],
-          isDirect // Track if this is direct traffic
         });
       }
     }
@@ -943,7 +948,10 @@ export class SmartAttributionService {
   ): Promise<DailyConnectorRevenue[]> {
     const results: DailyConnectorRevenue[] = [];
 
-    // Query Stripe by date
+    // Query Stripe by date - only count actual CONVERSIONS (new subscriptions/purchases)
+    // - subscription_create: New subscription (first payment)
+    // - NULL billing_reason with succeeded status: One-time charge
+    // Do NOT count subscription_cycle (renewals) as conversions
     try {
       const stripeResult = await this.analyticsDb.prepare(`
         SELECT
@@ -954,7 +962,10 @@ export class SmartAttributionService {
         WHERE organization_id = ?
           AND DATE(stripe_created_at) >= ?
           AND DATE(stripe_created_at) <= ?
-          AND status = 'succeeded'
+          AND (
+            billing_reason = 'subscription_create'
+            OR (billing_reason IS NULL AND status = 'succeeded')
+          )
         GROUP BY DATE(stripe_created_at)
         ORDER BY date
       `).bind(orgId, startDate, endDate).all<{

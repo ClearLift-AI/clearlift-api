@@ -112,26 +112,120 @@ NOTE: Requires conversion_attribution data to be populated in D1.
       });
     }
 
-    // TODO: Query D1 conversion_attribution table when available
-    // For now, return empty results as this data is not yet populated in D1
-    // The conversion_attribution table needs to be created and populated
-    // by the events processing pipeline.
+    // Query D1 conversion_attribution and tracked_clicks tables
+    console.log(`[ClickAttribution] Query for org ${orgId}, dates ${dateFrom} to ${dateTo}`);
 
-    console.log(`[ClickAttribution] Query for org ${orgId}, dates ${dateFrom} to ${dateTo} - returning empty (D1 table not yet populated)`);
+    if (!c.env.ANALYTICS_DB) {
+      console.log(`[ClickAttribution] No ANALYTICS_DB - returning empty`);
+      return success(c, {
+        by_platform: {
+          google: null,
+          meta: null,
+          tiktok: null,
+        },
+        summary: {
+          total_attributed_conversions: 0,
+          total_attributed_revenue_cents: 0,
+          unattributed_conversions: 0,
+          unattributed_revenue_cents: 0,
+          attribution_rate: 0,
+        },
+      });
+    }
 
-    return success(c, {
-      by_platform: {
+    try {
+      // Query attribution data grouped by click_id_type
+      const attributionData = await c.env.ANALYTICS_DB.prepare(`
+        SELECT
+          ca.click_id_type,
+          COUNT(DISTINCT ca.conversion_id) as conversions,
+          SUM(ca.credit_value_cents) as revenue_cents,
+          COUNT(DISTINCT tc.anonymous_id) as unique_users
+        FROM conversion_attribution ca
+        LEFT JOIN tracked_clicks tc ON tc.click_id = ca.click_id
+        WHERE ca.organization_id = ?
+          AND ca.model = 'last_touch'
+          AND ca.touchpoint_timestamp >= ?
+          AND ca.touchpoint_timestamp <= ?
+          AND ca.click_id_type IS NOT NULL
+        GROUP BY ca.click_id_type
+      `).bind(orgId, dateFrom, dateTo).all();
+
+      // Query total conversions (including unattributed)
+      const totalConversions = await c.env.ANALYTICS_DB.prepare(`
+        SELECT
+          COUNT(*) as total_conversions,
+          SUM(amount_cents) as total_revenue_cents
+        FROM stripe_charges
+        WHERE organization_id = ?
+          AND counts_as_conversion = 1
+          AND stripe_created_at >= ?
+          AND stripe_created_at <= ?
+      `).bind(orgId, dateFrom, dateTo + 'T23:59:59Z').first();
+
+      // Build response
+      const byPlatform: Record<string, any> = {
         google: null,
         meta: null,
         tiktok: null,
-      },
-      summary: {
-        total_attributed_conversions: 0,
-        total_attributed_revenue_cents: 0,
-        unattributed_conversions: 0,
-        unattributed_revenue_cents: 0,
-        attribution_rate: 0,
-      },
-    });
+      };
+
+      let totalAttributedConversions = 0;
+      let totalAttributedRevenue = 0;
+
+      for (const row of attributionData.results as any[]) {
+        const platform =
+          row.click_id_type === 'gclid' ? 'google' :
+          row.click_id_type === 'fbclid' ? 'meta' :
+          row.click_id_type === 'ttclid' ? 'tiktok' : null;
+
+        if (platform) {
+          byPlatform[platform] = {
+            click_id_type: row.click_id_type,
+            platform,
+            conversions: row.conversions || 0,
+            revenue_cents: row.revenue_cents || 0,
+            avg_order_value_cents: row.conversions > 0
+              ? Math.round(row.revenue_cents / row.conversions)
+              : 0,
+            unique_users: row.unique_users || 0,
+            avg_confidence_score: 1.0, // Click IDs are 100% confidence
+          };
+          totalAttributedConversions += row.conversions || 0;
+          totalAttributedRevenue += row.revenue_cents || 0;
+        }
+      }
+
+      const totalConv = (totalConversions as any)?.total_conversions || 0;
+      const totalRev = (totalConversions as any)?.total_revenue_cents || 0;
+
+      return success(c, {
+        by_platform: byPlatform,
+        summary: {
+          total_attributed_conversions: totalAttributedConversions,
+          total_attributed_revenue_cents: totalAttributedRevenue,
+          unattributed_conversions: Math.max(0, totalConv - totalAttributedConversions),
+          unattributed_revenue_cents: Math.max(0, totalRev - totalAttributedRevenue),
+          attribution_rate: totalConv > 0 ? (totalAttributedConversions / totalConv) * 100 : 0,
+        },
+      });
+    } catch (err) {
+      console.error(`[ClickAttribution] Error:`, err);
+      // Return empty on error
+      return success(c, {
+        by_platform: {
+          google: null,
+          meta: null,
+          tiktok: null,
+        },
+        summary: {
+          total_attributed_conversions: 0,
+          total_attributed_revenue_cents: 0,
+          unattributed_conversions: 0,
+          unattributed_revenue_cents: 0,
+          attribution_rate: 0,
+        },
+      });
+    }
   }
 }
