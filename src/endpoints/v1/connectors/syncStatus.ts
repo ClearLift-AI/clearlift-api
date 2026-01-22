@@ -1,6 +1,6 @@
 import { OpenAPIRoute, Str, Num, Bool } from "chanfana";
 import { z } from "zod";
-import { AppContext, Env } from "../../../types";
+import { AppContext } from "../../../types";
 
 // Response schemas
 const ConnectionStatusSchema = z.object({

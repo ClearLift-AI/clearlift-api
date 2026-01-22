@@ -122,35 +122,88 @@ export class GetTrackingLinkPerformance extends OpenAPIRoute {
         );
       }
 
-      // TODO: Query clicks and conversions from D1 when tables are available
-      // For now, return links with zero metrics as the events/conversions tables
-      // need to be created and populated in D1 ANALYTICS_DB.
+      // Query clicks from tracked_clicks in ANALYTICS_DB
+      const clicksResult = await c.env.ANALYTICS_DB.prepare(`
+        SELECT
+          utm_campaign,
+          COUNT(*) as clicks,
+          SUM(CASE WHEN converted = 1 THEN 1 ELSE 0 END) as conversions
+        FROM tracked_clicks
+        WHERE organization_id = ?
+          AND click_timestamp >= ?
+          AND click_timestamp <= ?
+          AND utm_campaign IS NOT NULL
+        GROUP BY utm_campaign
+      `).bind(orgId, dateRange.start_date, dateRange.end_date + 'T23:59:59Z').all<{
+        utm_campaign: string;
+        clicks: number;
+        conversions: number;
+      }>();
 
-      console.log(`[TrackingLinks] Returning ${links.length} links with empty metrics (D1 tables not yet populated)`);
+      // Query conversion revenue from conversions table
+      const revenueResult = await c.env.ANALYTICS_DB.prepare(`
+        SELECT
+          utm_campaign,
+          SUM(value_cents) as revenue_cents
+        FROM conversions
+        WHERE organization_id = ?
+          AND conversion_timestamp >= ?
+          AND conversion_timestamp <= ?
+          AND utm_campaign IS NOT NULL
+        GROUP BY utm_campaign
+      `).bind(orgId, dateRange.start_date, dateRange.end_date + 'T23:59:59Z').all<{
+        utm_campaign: string;
+        revenue_cents: number;
+      }>();
 
-      // Return link metadata with zero metrics
-      const linksWithMetrics = links.map((link) => ({
-        link_id: link.id,
-        link_name: link.name,
-        destination_url: link.destination_url,
-        utm_campaign: link.utm_campaign,
-        clicks: 0,
-        conversions: 0,
-        revenue_cents: 0,
-        conversion_rate: 0,
-        created_at: link.created_at,
-      }));
+      // Build lookup maps
+      const clicksMap = new Map((clicksResult.results || []).map(r => [r.utm_campaign, r]));
+      const revenueMap = new Map((revenueResult.results || []).map(r => [r.utm_campaign, r.revenue_cents]));
+
+      // Merge link metadata with metrics
+      const linksWithMetrics = links.map((link) => {
+        const clickData = link.utm_campaign ? clicksMap.get(link.utm_campaign) : null;
+        const revenue = link.utm_campaign ? (revenueMap.get(link.utm_campaign) || 0) : 0;
+        const clicks = clickData?.clicks || 0;
+        const conversions = clickData?.conversions || 0;
+
+        return {
+          link_id: link.id,
+          link_name: link.name,
+          destination_url: link.destination_url,
+          utm_campaign: link.utm_campaign,
+          clicks,
+          conversions,
+          revenue_cents: revenue,
+          conversion_rate: clicks > 0 ? (conversions / clicks) * 100 : 0,
+          created_at: link.created_at,
+        };
+      });
+
+      // Calculate totals
+      const totals = linksWithMetrics.reduce((acc, link) => ({
+        total_clicks: acc.total_clicks + link.clicks,
+        total_conversions: acc.total_conversions + link.conversions,
+        total_revenue_cents: acc.total_revenue_cents + link.revenue_cents,
+        avg_conversion_rate: 0, // Calculate after
+      }), {
+        total_clicks: 0,
+        total_conversions: 0,
+        total_revenue_cents: 0,
+        avg_conversion_rate: 0,
+      });
+
+      totals.avg_conversion_rate = totals.total_clicks > 0
+        ? (totals.total_conversions / totals.total_clicks) * 100
+        : 0;
+
+      console.log(`[TrackingLinks] Returning ${links.length} links with metrics from ANALYTICS_DB`);
 
       return success(
         c,
         {
           links: linksWithMetrics,
-          totals: {
-            total_clicks: 0,
-            total_conversions: 0,
-            total_revenue_cents: 0,
-            avg_conversion_rate: 0,
-          },
+          totals,
         },
         { date_range: dateRange }
       );

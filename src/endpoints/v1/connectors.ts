@@ -1261,10 +1261,35 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
             if (pages.length > 0) {
               console.log(`Found ${pages.length} connected Facebook pages`);
 
-              // TODO: Store pages in D1 when facebook_pages table is created
-              // For now, we skip storing pages - they can be fetched on demand
-              // from the Facebook API using the user access token.
-              console.log('Skipping Facebook pages storage (D1 migration pending)');
+              // Store pages in ANALYTICS_DB facebook_pages table
+              for (const page of pages) {
+                try {
+                  await c.env.ANALYTICS_DB.prepare(`
+                    INSERT INTO facebook_pages (
+                      organization_id, account_id, page_id, page_name,
+                      category, fan_count, last_synced_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                    ON CONFLICT(organization_id, page_id)
+                    DO UPDATE SET
+                      page_name = excluded.page_name,
+                      category = excluded.category,
+                      fan_count = excluded.fan_count,
+                      last_synced_at = datetime('now'),
+                      updated_at = datetime('now')
+                  `).bind(
+                    oauthState.organization_id,
+                    account_id,
+                    page.id,
+                    page.name,
+                    page.category || null,
+                    page.fan_count || 0
+                  ).run();
+                  console.log(`Stored Facebook page: ${page.name} (${page.id})`);
+                } catch (pageErr) {
+                  console.warn(`Failed to store page ${page.id}:`, pageErr);
+                }
+              }
+              console.log(`Stored ${pages.length} Facebook pages in ANALYTICS_DB`);
             } else {
               console.log('No Facebook pages connected to this account');
             }

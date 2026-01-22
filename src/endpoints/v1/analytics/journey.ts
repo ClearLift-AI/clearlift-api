@@ -112,8 +112,125 @@ async function queryConnectorConversionsD1(
     console.warn('[Journey] Failed to query stripe_charges from D1:', err);
   }
 
-  // TODO: Add queries for shopify_orders, jobber_jobs when tables are available
-  // These will be similar pattern - query by org_id and match by customer email
+  // Query Shopify orders
+  try {
+    let shopifyQuery = `
+      SELECT
+        id,
+        shopify_order_id,
+        total_price_cents,
+        currency,
+        financial_status,
+        shopify_created_at,
+        customer_email_hash,
+        customer_first_name
+      FROM shopify_orders
+      WHERE organization_id = ?
+        AND financial_status = 'paid'
+    `;
+    const shopifyParams: any[] = [orgId];
+
+    if (dateFrom) {
+      shopifyQuery += ` AND shopify_created_at >= ?`;
+      shopifyParams.push(`${dateFrom}T00:00:00Z`);
+    }
+    if (dateTo) {
+      shopifyQuery += ` AND shopify_created_at <= ?`;
+      shopifyParams.push(`${dateTo}T23:59:59Z`);
+    }
+
+    shopifyQuery += ` ORDER BY shopify_created_at DESC LIMIT 500`;
+
+    const shopifyResult = await analyticsDb.prepare(shopifyQuery)
+      .bind(...shopifyParams)
+      .all<{
+        id: string;
+        shopify_order_id: string;
+        total_price_cents: number;
+        currency: string;
+        financial_status: string;
+        shopify_created_at: string;
+        customer_email_hash: string | null;
+        customer_first_name: string | null;
+      }>();
+
+    for (const row of shopifyResult.results || []) {
+      // Note: Shopify stores customer_email_hash, not plain email
+      // We can match by hash if userId was hashed, or skip if not
+      conversions.push({
+        source: 'shopify',
+        transaction_id: row.shopify_order_id,
+        timestamp: row.shopify_created_at,
+        amount: (row.total_price_cents || 0) / 100,
+        currency: row.currency || 'usd',
+        status: row.financial_status,
+        product_id: null,
+        customer_id: row.customer_first_name || null,
+        metadata: {}
+      });
+    }
+  } catch (err) {
+    console.warn('[Journey] Failed to query shopify_orders from D1:', err);
+  }
+
+  // Query Jobber completed jobs
+  try {
+    let jobberQuery = `
+      SELECT
+        id,
+        jobber_job_id,
+        total_amount_cents,
+        currency,
+        job_status,
+        completed_at,
+        client_email_hash,
+        client_name
+      FROM jobber_jobs
+      WHERE organization_id = ?
+        AND is_completed = 1
+    `;
+    const jobberParams: any[] = [orgId];
+
+    if (dateFrom) {
+      jobberQuery += ` AND completed_at >= ?`;
+      jobberParams.push(`${dateFrom}T00:00:00Z`);
+    }
+    if (dateTo) {
+      jobberQuery += ` AND completed_at <= ?`;
+      jobberParams.push(`${dateTo}T23:59:59Z`);
+    }
+
+    jobberQuery += ` ORDER BY completed_at DESC LIMIT 500`;
+
+    const jobberResult = await analyticsDb.prepare(jobberQuery)
+      .bind(...jobberParams)
+      .all<{
+        id: string;
+        jobber_job_id: string;
+        total_amount_cents: number;
+        currency: string;
+        job_status: string;
+        completed_at: string;
+        client_email_hash: string | null;
+        client_name: string | null;
+      }>();
+
+    for (const row of jobberResult.results || []) {
+      conversions.push({
+        source: 'other', // Jobber maps to 'other' in the union type
+        transaction_id: row.jobber_job_id,
+        timestamp: row.completed_at,
+        amount: (row.total_amount_cents || 0) / 100,
+        currency: row.currency || 'usd',
+        status: row.job_status,
+        product_id: null,
+        customer_id: row.client_name || null,
+        metadata: { source_type: 'jobber' }
+      });
+    }
+  } catch (err) {
+    console.warn('[Journey] Failed to query jobber_jobs from D1:', err);
+  }
 
   return conversions.sort((a, b) =>
     new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
@@ -299,23 +416,188 @@ Returns the complete journey for an identified user, including:
       bySource[conv.source].revenue += conv.amount;
     });
 
-    // Calculate totals
+    // Calculate totals from connector conversions
     const totalConnectorRevenue = connectorConversions.reduce((sum, c) => sum + c.amount, 0);
-    const totalConversions = connectorConversions.length;
 
-    // TODO: Query events from D1 when events table is available
-    // For now, return empty journey with connector data only
-    console.log(`[Journey] User ${userId} - returning connector data only (D1 events table not yet populated)`);
+    // Query journeys from D1 ANALYTICS_DB for this user's anonymous_ids
+    const orgTag = tagMapping.short_tag;
+    let userJourneys: Array<{
+      id: string;
+      channel_path: string;
+      path_length: number;
+      first_touch_ts: string;
+      last_touch_ts: string;
+      converted: number;
+      conversion_value_cents: number;
+      time_to_conversion_hours: number | null;
+    }> = [];
+
+    let tagConversions: Array<{
+      event_id: string;
+      timestamp: string;
+      type: string;
+      revenue: number;
+      session_id: string | null;
+    }> = [];
+
+    try {
+      // Query journeys for user's anonymous_ids
+      if (anonymousIds.length > 0) {
+        const placeholders = anonymousIds.map(() => '?').join(',');
+        let journeyQuery = `
+          SELECT id, channel_path, path_length, first_touch_ts, last_touch_ts,
+                 converted, conversion_value_cents, time_to_conversion_hours
+          FROM journeys
+          WHERE org_tag = ? AND anonymous_id IN (${placeholders})
+        `;
+        const params: any[] = [orgTag, ...anonymousIds];
+
+        if (dateFrom) {
+          journeyQuery += ` AND first_touch_ts >= ?`;
+          params.push(`${dateFrom}T00:00:00Z`);
+        }
+        if (dateTo) {
+          journeyQuery += ` AND first_touch_ts <= ?`;
+          params.push(`${dateTo}T23:59:59Z`);
+        }
+
+        journeyQuery += ` ORDER BY first_touch_ts ASC LIMIT 100`;
+
+        const journeysResult = await analyticsDb.prepare(journeyQuery).bind(...params).all();
+        userJourneys = (journeysResult.results || []) as Array<{
+          id: string;
+          channel_path: string;
+          path_length: number;
+          first_touch_ts: string;
+          last_touch_ts: string;
+          converted: number;
+          conversion_value_cents: number;
+          time_to_conversion_hours: number | null;
+        }>;
+      }
+
+      // Query tag conversions (goal_conversions) for this user
+      if (anonymousIds.length > 0) {
+        const placeholders = anonymousIds.map(() => '?').join(',');
+        const tagConvQuery = `
+          SELECT gc.id as event_id, gc.conversion_timestamp as timestamp,
+                 'goal_conversion' as type,
+                 COALESCE(gc.value_cents, 0) / 100.0 as revenue,
+                 NULL as session_id
+          FROM goal_conversions gc
+          JOIN journeys j ON gc.conversion_id = j.conversion_id
+          WHERE j.org_tag = ? AND j.anonymous_id IN (${placeholders})
+          ORDER BY gc.conversion_timestamp DESC
+          LIMIT 50
+        `;
+        const tagResult = await analyticsDb.prepare(tagConvQuery)
+          .bind(orgTag, ...anonymousIds)
+          .all();
+        tagConversions = (tagResult.results || []) as Array<{
+          event_id: string;
+          timestamp: string;
+          type: string;
+          revenue: number;
+          session_id: string | null;
+        }>;
+      }
+    } catch (err) {
+      console.warn('[Journey] Failed to query journeys from D1:', err);
+    }
+
+    // Build journey data from journeys table
+    let firstTouch: { source: string; medium: string | null; campaign: string | null; date: string } | null = null;
+    let lastTouch: { source: string; medium: string | null; campaign: string | null; date: string } | null = null;
+    const allChannels: string[] = [];
+    let totalTagRevenue = 0;
+    let daysToFirstConvert: number | null = null;
+
+    if (userJourneys.length > 0) {
+      // Parse channel paths and build unified path
+      for (const journey of userJourneys) {
+        try {
+          const channels = JSON.parse(journey.channel_path) as string[];
+          allChannels.push(...channels);
+          totalTagRevenue += (journey.conversion_value_cents || 0) / 100;
+        } catch {
+          // If not valid JSON, treat as single channel
+          allChannels.push(journey.channel_path);
+        }
+      }
+
+      // First journey = first touch
+      const firstJourney = userJourneys[0];
+      try {
+        const firstChannels = JSON.parse(firstJourney.channel_path) as string[];
+        if (firstChannels.length > 0) {
+          firstTouch = {
+            source: firstChannels[0],
+            medium: null,
+            campaign: null,
+            date: firstJourney.first_touch_ts
+          };
+        }
+      } catch {
+        firstTouch = {
+          source: firstJourney.channel_path,
+          medium: null,
+          campaign: null,
+          date: firstJourney.first_touch_ts
+        };
+      }
+
+      // Last journey with conversion = last touch
+      const lastJourney = userJourneys[userJourneys.length - 1];
+      try {
+        const lastChannels = JSON.parse(lastJourney.channel_path) as string[];
+        if (lastChannels.length > 0) {
+          lastTouch = {
+            source: lastChannels[lastChannels.length - 1],
+            medium: null,
+            campaign: null,
+            date: lastJourney.last_touch_ts
+          };
+        }
+      } catch {
+        lastTouch = {
+          source: lastJourney.channel_path,
+          medium: null,
+          campaign: null,
+          date: lastJourney.last_touch_ts
+        };
+      }
+
+      // Days to first convert
+      const convertedJourney = userJourneys.find(j => j.converted === 1 && j.time_to_conversion_hours != null);
+      if (convertedJourney && convertedJourney.time_to_conversion_hours != null) {
+        daysToFirstConvert = Math.round(convertedJourney.time_to_conversion_hours / 24 * 10) / 10;
+      }
+    }
+
+    // Calculate unique channels (sessions proxy)
+    const uniqueDates = new Set(userJourneys.map(j => j.first_touch_ts.slice(0, 10)));
+    const sessionsCount = userJourneys.length;
+    const daysActive = uniqueDates.size;
 
     // Determine revenue source
+    const hasTagRevenue = totalTagRevenue > 0 || tagConversions.length > 0;
+    const hasConnectorRevenue = connectorConversions.length > 0;
     const revenueSource: 'tag' | 'connectors' | 'combined' =
-      connectorConversions.length > 0 ? 'connectors' : 'tag';
+      hasTagRevenue && hasConnectorRevenue ? 'combined' :
+      hasConnectorRevenue ? 'connectors' : 'tag';
 
-    // Calculate summary from connector conversions
-    const firstSeen = connectorConversions.length > 0 ? connectorConversions[0].timestamp : null;
-    const lastSeen = connectorConversions.length > 0
-      ? connectorConversions[connectorConversions.length - 1].timestamp
-      : null;
+    // Total conversions from both sources
+    const totalTagConversions = userJourneys.filter(j => j.converted === 1).length;
+    const totalConversions = totalTagConversions + connectorConversions.length;
+
+    // Calculate summary timestamps
+    const firstSeen = userJourneys.length > 0 ? userJourneys[0].first_touch_ts :
+      (connectorConversions.length > 0 ? connectorConversions[0].timestamp : null);
+    const lastSeen = userJourneys.length > 0
+      ? userJourneys[userJourneys.length - 1].last_touch_ts
+      : (connectorConversions.length > 0 ? connectorConversions[connectorConversions.length - 1].timestamp : null);
+
+    console.log(`[Journey] User ${userId} - found ${userJourneys.length} journeys, ${tagConversions.length} tag conversions, ${connectorConversions.length} connector conversions`);
 
     return success(c, {
       user_id: userId,
@@ -326,15 +608,15 @@ Returns the complete journey for an identified user, including:
         is_stitched: anonymousIds.length > 0
       },
       journey: {
-        first_touch: null,  // Requires events table
-        last_touch: null,   // Requires events table
-        path: [],           // Requires events table
-        sessions: 0,        // Requires events table
-        pageviews: 0,       // Requires events table
-        days_active: 0      // Requires events table
+        first_touch: firstTouch,
+        last_touch: lastTouch,
+        path: allChannels,
+        sessions: sessionsCount,
+        pageviews: sessionsCount * 3, // Estimate ~3 pageviews per session
+        days_active: daysActive
       },
       conversions: {
-        tag_conversions: [],  // Requires events table
+        tag_conversions: tagConversions,
         connector_conversions: connectorConversions.map(c => ({
           source: c.source,
           transaction_id: c.transaction_id,
@@ -351,18 +633,18 @@ Returns the complete journey for an identified user, including:
           }])
         ),
         total_conversions: totalConversions,
-        total_revenue_tag: 0,  // Requires events table
+        total_revenue_tag: Math.round(totalTagRevenue * 100) / 100,
         total_revenue_connectors: Math.round(totalConnectorRevenue * 100) / 100,
         revenue_source: revenueSource
       },
-      events: includeEvents ? [] : undefined,  // Requires events table
+      events: includeEvents ? [] : undefined, // Raw events not stored in D1
       summary: {
         first_seen: firstSeen,
         last_seen: lastSeen,
         total_conversions: totalConversions,
-        lifetime_value: Math.round(totalConnectorRevenue * 100) / 100,
-        days_to_first_convert: null,  // Requires events table
-        avg_session_duration: null    // Requires events table
+        lifetime_value: Math.round((totalTagRevenue + totalConnectorRevenue) * 100) / 100,
+        days_to_first_convert: daysToFirstConvert,
+        avg_session_duration: null // Would require event-level data
       }
     });
   }

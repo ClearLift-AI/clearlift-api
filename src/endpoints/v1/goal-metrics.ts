@@ -105,24 +105,73 @@ export class GetGoalMetrics extends OpenAPIRoute {
       return error(c, "NOT_FOUND", "Goal not found", 404);
     }
 
-    // TODO: Query goal_metrics_daily from D1 when table is available
-    // For now, return empty results as this table needs to be created
-    // and populated in D1 ANALYTICS_DB.
+    // Query goal_metrics_daily from ANALYTICS_DB
+    const result = await c.env.ANALYTICS_DB.prepare(`
+      SELECT
+        id,
+        goal_id,
+        summary_date as date,
+        conversions,
+        conversion_value_cents,
+        conversion_rate,
+        conversions_platform,
+        conversions_tag,
+        value_platform_cents,
+        value_tag_cents
+      FROM goal_metrics_daily
+      WHERE organization_id = ?
+        AND goal_id = ?
+        AND summary_date >= ?
+        AND summary_date <= ?
+      ORDER BY summary_date DESC
+    `).bind(orgId, goalId, dateRange.start_date, dateRange.end_date).all<{
+      id: number;
+      goal_id: string;
+      date: string;
+      conversions: number;
+      conversion_value_cents: number;
+      conversion_rate: number | null;
+      conversions_platform: number;
+      conversions_tag: number;
+      value_platform_cents: number;
+      value_tag_cents: number;
+    }>();
 
-    console.log(`[GoalMetrics] Query for goal ${goalId} - returning empty (D1 table not yet populated)`);
+    const data = result.results.map(row => ({
+      id: String(row.id),
+      goal_id: row.goal_id,
+      date: row.date,
+      conversions: row.conversions || 0,
+      conversion_value_cents: row.conversion_value_cents || 0,
+      conversion_rate: row.conversion_rate,
+      conversions_platform: row.conversions_platform || 0,
+      conversions_tag: row.conversions_tag || 0,
+      value_platform_cents: row.value_platform_cents || 0,
+      value_tag_cents: row.value_tag_cents || 0,
+    }));
 
-    return success(c, [], {
+    // Calculate totals
+    const totals = data.reduce((acc, row) => ({
+      conversions: acc.conversions + row.conversions,
+      conversion_value_cents: acc.conversion_value_cents + row.conversion_value_cents,
+      conversions_platform: acc.conversions_platform + row.conversions_platform,
+      conversions_tag: acc.conversions_tag + row.conversions_tag,
+    }), {
+      conversions: 0,
+      conversion_value_cents: 0,
+      conversions_platform: 0,
+      conversions_tag: 0,
+    });
+
+    console.log(`[GoalMetrics] Query for goal ${goalId} returned ${data.length} records`);
+
+    return success(c, data, {
       goal_id: goalId,
       date_range: {
         start: dateRange.start_date,
         end: dateRange.end_date
       },
-      totals: {
-        conversions: 0,
-        conversion_value_cents: 0,
-        conversions_platform: 0,
-        conversions_tag: 0,
-      }
+      totals
     });
   }
 }
@@ -179,6 +228,7 @@ export class GetGoalConversions extends OpenAPIRoute {
     const goalId = c.req.param("id");
     const limit = parseInt(c.req.query("limit") || "100");
     const offset = parseInt(c.req.query("offset") || "0");
+    const sourceFilter = c.req.query("source");
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "Organization ID not found in context", 403);
@@ -193,15 +243,77 @@ export class GetGoalConversions extends OpenAPIRoute {
       return error(c, "NOT_FOUND", "Goal not found", 404);
     }
 
-    // TODO: Query goal_conversions from D1 when table is available
-    // For now, return empty results as this table needs to be created
-    // and populated in D1 ANALYTICS_DB.
+    // Query goal_conversions from ANALYTICS_DB
+    let query = `
+      SELECT
+        id,
+        goal_id,
+        conversion_source,
+        conversion_timestamp,
+        value_cents,
+        currency,
+        attribution_model,
+        attribution_data,
+        source_platform
+      FROM goal_conversions
+      WHERE organization_id = ?
+        AND goal_id = ?
+    `;
+    const params: unknown[] = [orgId, goalId];
 
-    console.log(`[GoalConversions] Query for goal ${goalId} - returning empty (D1 table not yet populated)`);
+    if (sourceFilter && (sourceFilter === 'platform' || sourceFilter === 'tag')) {
+      query += ` AND conversion_source = ?`;
+      params.push(sourceFilter);
+    }
 
-    return success(c, [], {
+    query += ` ORDER BY conversion_timestamp DESC LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+
+    const result = await c.env.ANALYTICS_DB.prepare(query).bind(...params).all<{
+      id: string;
+      goal_id: string;
+      conversion_source: string;
+      conversion_timestamp: string;
+      value_cents: number;
+      currency: string;
+      attribution_model: string | null;
+      attribution_data: string | null;
+      source_platform: string | null;
+    }>();
+
+    // Get total count for pagination
+    let countQuery = `
+      SELECT COUNT(*) as count
+      FROM goal_conversions
+      WHERE organization_id = ?
+        AND goal_id = ?
+    `;
+    const countParams: unknown[] = [orgId, goalId];
+
+    if (sourceFilter && (sourceFilter === 'platform' || sourceFilter === 'tag')) {
+      countQuery += ` AND conversion_source = ?`;
+      countParams.push(sourceFilter);
+    }
+
+    const countResult = await c.env.ANALYTICS_DB.prepare(countQuery).bind(...countParams).first<{ count: number }>();
+
+    const data = result.results.map(row => ({
+      id: row.id,
+      goal_id: row.goal_id,
+      conversion_source: row.conversion_source as 'platform' | 'tag',
+      conversion_timestamp: row.conversion_timestamp,
+      value_cents: row.value_cents || 0,
+      currency: row.currency || 'USD',
+      attribution_model: row.attribution_model,
+      attribution_data: row.attribution_data ? JSON.parse(row.attribution_data) : null,
+      source_platform: row.source_platform,
+    }));
+
+    console.log(`[GoalConversions] Query for goal ${goalId} returned ${data.length} records`);
+
+    return success(c, data, {
       goal_id: goalId,
-      count: 0,
+      count: countResult?.count || 0,
       limit,
       offset
     });

@@ -959,7 +959,7 @@ export class GetAttributionComparison extends OpenAPIRoute {
     const dateFrom = query.date_from;
     const dateTo = query.date_to;
 
-    const modelsParam = query.models || 'first_touch,last_touch,linear,time_decay,position_based';
+    const modelsParam = query.models || 'first_touch,last_touch,linear,time_decay,position_based,markov,shapley';
     const models = modelsParam.split(',').map(m => m.trim()) as AttributionModel[];
 
     const d1 = new D1Adapter(c.env.DB);
@@ -968,14 +968,101 @@ export class GetAttributionComparison extends OpenAPIRoute {
       return error(c, "NOT_FOUND", "Organization not found", 404);
     }
 
+    // Get org_tag for D1 analytics queries
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).first<{ short_tag: string }>();
+
     // Get ANALYTICS_DB binding
     const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
 
-    // TODO: When conversion_attribution table is available in D1,
-    // implement actual model comparison logic here.
-    // For now, return the same platform data for all models.
+    // Query attribution_results from D1 ANALYTICS_DB
+    let attributionResults: Array<{
+      model: string;
+      channel: string;
+      credit: number;
+      conversions: number;
+      revenue_cents: number;
+      removal_effect: number | null;
+      shapley_value: number | null;
+    }> = [];
 
-    console.log(`[Attribution Compare] Returning platform data (D1 conversion_attribution not yet populated)`);
+    if (tagMapping?.short_tag) {
+      try {
+        // Query attribution results for requested models within date range
+        const modelsPlaceholder = models.map(() => '?').join(',');
+        const attrResult = await analyticsDb.prepare(`
+          SELECT model, channel, credit, conversions, revenue_cents, removal_effect, shapley_value
+          FROM attribution_results
+          WHERE org_tag = ?
+            AND model IN (${modelsPlaceholder})
+            AND period_start >= ?
+            AND period_end <= ?
+          ORDER BY model, credit DESC
+        `).bind(tagMapping.short_tag, ...models, dateFrom, dateTo).all();
+        attributionResults = (attrResult.results || []) as Array<{
+          model: string;
+          channel: string;
+          credit: number;
+          conversions: number;
+          revenue_cents: number;
+          removal_effect: number | null;
+          shapley_value: number | null;
+        }>;
+        console.log(`[Attribution Compare] Found ${attributionResults.length} results from attribution_results table`);
+      } catch (err) {
+        console.warn('[Attribution Compare] Failed to query attribution_results:', err);
+      }
+    }
+
+    // If we have D1 attribution results, use them
+    if (attributionResults.length > 0) {
+      // Group results by model
+      const resultsByModel = new Map<string, typeof attributionResults>();
+      for (const result of attributionResults) {
+        const existing = resultsByModel.get(result.model) || [];
+        existing.push(result);
+        resultsByModel.set(result.model, existing);
+      }
+
+      // Build response with actual attribution data
+      const modelResults = models.map(model => {
+        const modelData = resultsByModel.get(model) || [];
+        return {
+          model,
+          attributions: modelData.slice(0, 10).map(a => ({
+            utm_source: a.channel,
+            attributed_conversions: Math.round(a.conversions * 100) / 100,
+            attributed_revenue: Math.round((a.revenue_cents || 0) / 100 * 100) / 100,
+            credit: Math.round(a.credit * 100) / 100,
+            removal_effect: a.removal_effect != null ? Math.round(a.removal_effect * 100) / 100 : null,
+            shapley_value: a.shapley_value != null ? Math.round(a.shapley_value * 100) / 100 : null
+          }))
+        };
+      });
+
+      // Calculate summary from all results
+      const allResults = Array.from(resultsByModel.values()).flat();
+      const uniqueConversions = new Set(allResults.map(r => `${r.channel}-${r.conversions}`));
+      const totalConversions = allResults.length > 0
+        ? allResults.reduce((sum, r) => sum + r.conversions, 0) / models.length // Average across models
+        : 0;
+      const totalRevenue = allResults.length > 0
+        ? allResults.reduce((sum, r) => sum + (r.revenue_cents || 0), 0) / models.length / 100
+        : 0;
+
+      return success(c, {
+        models: modelResults,
+        summary: {
+          total_conversions: Math.round(totalConversions * 100) / 100,
+          total_revenue: Math.round(totalRevenue * 100) / 100
+        },
+        data_source: 'attribution_workflow'
+      });
+    }
+
+    // Fallback to platform-reported data if no attribution results
+    console.log(`[Attribution Compare] No D1 attribution data, falling back to platform data`);
 
     const fallback = await buildPlatformFallbackD1(
       analyticsDb,
@@ -999,7 +1086,8 @@ export class GetAttributionComparison extends OpenAPIRoute {
       summary: {
         total_conversions: fallback.summary.total_conversions,
         total_revenue: Math.round(fallback.summary.total_revenue * 100) / 100
-      }
+      },
+      data_source: 'platform_reported'
     });
   }
 }
