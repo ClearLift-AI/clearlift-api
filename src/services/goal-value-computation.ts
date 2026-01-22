@@ -167,6 +167,11 @@ export class GoalValueComputationService {
   /**
    * Compute expected value for a goal
    * Expected Value = P(goal → macro) × macro_value
+   *
+   * Priority:
+   * 1. Use explicit goal relationship if defined
+   * 2. Use explicit macro-conversion goal if exists
+   * 3. Auto-detect conversions from unified sources (Stripe, Shopify, etc.)
    */
   async computeExpectedValue(
     orgId: string,
@@ -196,7 +201,7 @@ export class GoalValueComputationService {
       };
     }
 
-    // Find downstream macro-conversion
+    // Find downstream macro-conversion from explicit relationship
     const relationship = await this.db
       .prepare(
         `
@@ -212,88 +217,318 @@ export class GoalValueComputationService {
       .bind(orgId, goalId)
       .first<any>();
 
-    if (!relationship) {
-      // No relationship defined, check for any macro goal to estimate
-      const macroGoal = await this.db
-        .prepare(
-          `
-        SELECT * FROM conversion_goals
-        WHERE organization_id = ? AND category = 'macro_conversion' AND is_primary = 1
-        LIMIT 1
-      `
-        )
-        .bind(orgId)
-        .first<any>();
-
-      if (!macroGoal) {
-        return {
-          goal_id: goalId,
-          value_method: "expected_value",
-          computed_value_cents: goal.fixed_value_cents || 0,
-          confidence_lower_cents: 0,
-          confidence_upper_cents: 0,
-          sample_size: 0,
-          computation_details: {
-            conversion_rate: 0,
-            downstream_value_cents: 0,
-          },
-        };
-      }
-
-      // Estimate conversion rate from historical data
-      const stats = await this.computeConversionStats(
+    if (relationship) {
+      // Use existing relationship
+      const stats = await this.getOrComputeStats(
         orgId,
         goalId,
-        macroGoal.id
+        relationship.downstream_goal_id
       );
       const macroValue =
-        macroGoal.fixed_value_cents || macroGoal.default_value_cents || 0;
+        relationship.fixed_value_cents || relationship.default_value_cents || 0;
+      const expectedValue = Math.round(stats.conversion_rate * macroValue);
+
+      const { lower, upper } = this.bayesianConfidenceInterval(
+        stats.prior_alpha,
+        stats.prior_beta,
+        0.95
+      );
+
+      return {
+        goal_id: goalId,
+        value_method: "expected_value",
+        computed_value_cents: expectedValue,
+        confidence_lower_cents: Math.round(lower * macroValue),
+        confidence_upper_cents: Math.round(upper * macroValue),
+        sample_size: stats.upstream_count,
+        computation_details: {
+          conversion_rate: stats.conversion_rate,
+          downstream_value_cents: macroValue,
+          bayesian_alpha: stats.prior_alpha,
+          bayesian_beta: stats.prior_beta,
+          source: "explicit_relationship",
+        },
+      };
+    }
+
+    // No explicit relationship - try to find macro goal
+    const macroGoal = await this.db
+      .prepare(
+        `
+      SELECT * FROM conversion_goals
+      WHERE organization_id = ? AND category = 'macro_conversion' AND is_primary = 1
+      LIMIT 1
+    `
+      )
+      .bind(orgId)
+      .first<any>();
+
+    if (macroGoal) {
+      const stats = await this.computeConversionStats(orgId, goalId, macroGoal.id);
+      const macroValue = macroGoal.fixed_value_cents || macroGoal.default_value_cents || 0;
       const expectedValue = Math.round(stats.conversion_rate * macroValue);
 
       return {
         goal_id: goalId,
         value_method: "expected_value",
         computed_value_cents: expectedValue,
-        confidence_lower_cents: Math.round(expectedValue * 0.7), // Rough CI
+        confidence_lower_cents: Math.round(expectedValue * 0.7),
         confidence_upper_cents: Math.round(expectedValue * 1.3),
         sample_size: stats.upstream_count,
         computation_details: {
           conversion_rate: stats.conversion_rate,
           downstream_value_cents: macroValue,
+          source: "macro_goal",
         },
       };
     }
 
-    // Use existing relationship
-    const stats = await this.getOrComputeStats(
-      orgId,
-      goalId,
-      relationship.downstream_goal_id
-    );
-    const macroValue =
-      relationship.fixed_value_cents || relationship.default_value_cents || 0;
-    const expectedValue = Math.round(stats.conversion_rate * macroValue);
+    // NO MACRO GOAL DEFINED - Auto-detect from unified conversions
+    // This handles the case where user only sets up micro-conversions
+    // but has Stripe/Shopify/etc. sending conversion data
+    const unifiedStats = await this.computeUnifiedConversionStats(orgId, goalId);
 
-    // Bayesian confidence interval using Beta distribution
-    const { lower, upper } = this.bayesianConfidenceInterval(
-      stats.prior_alpha,
-      stats.prior_beta,
-      0.95
-    );
+    if (unifiedStats.conversion_count > 0) {
+      const expectedValue = Math.round(unifiedStats.conversion_rate * unifiedStats.avg_value_cents);
 
+      const { lower, upper } = this.bayesianConfidenceInterval(
+        unifiedStats.prior_alpha,
+        unifiedStats.prior_beta,
+        0.95
+      );
+
+      return {
+        goal_id: goalId,
+        value_method: "expected_value",
+        computed_value_cents: expectedValue,
+        confidence_lower_cents: Math.round(lower * unifiedStats.avg_value_cents),
+        confidence_upper_cents: Math.round(upper * unifiedStats.avg_value_cents),
+        sample_size: unifiedStats.goal_count,
+        computation_details: {
+          conversion_rate: unifiedStats.conversion_rate,
+          downstream_value_cents: unifiedStats.avg_value_cents,
+          bayesian_alpha: unifiedStats.prior_alpha,
+          bayesian_beta: unifiedStats.prior_beta,
+          source: "unified_conversions",
+          conversion_sources: unifiedStats.sources,
+        },
+      };
+    }
+
+    // No conversion data available
     return {
       goal_id: goalId,
       value_method: "expected_value",
-      computed_value_cents: expectedValue,
-      confidence_lower_cents: Math.round(lower * macroValue),
-      confidence_upper_cents: Math.round(upper * macroValue),
-      sample_size: stats.upstream_count,
+      computed_value_cents: goal.fixed_value_cents || 0,
+      confidence_lower_cents: 0,
+      confidence_upper_cents: 0,
+      sample_size: 0,
       computation_details: {
-        conversion_rate: stats.conversion_rate,
-        downstream_value_cents: macroValue,
-        bayesian_alpha: stats.prior_alpha,
-        bayesian_beta: stats.prior_beta,
+        conversion_rate: 0,
+        downstream_value_cents: 0,
+        source: "no_data",
+        message: "No conversions detected. Connect Stripe/Shopify or define a macro-conversion goal.",
       },
+    };
+  }
+
+  /**
+   * Compute conversion stats from goal triggers to unified conversions
+   * This auto-detects conversions from Stripe, Shopify, etc. without requiring
+   * an explicit macro-conversion goal
+   */
+  async computeUnifiedConversionStats(
+    orgId: string,
+    goalId: string,
+    days: number = 90
+  ): Promise<{
+    goal_count: number;
+    conversion_count: number;
+    conversion_rate: number;
+    avg_value_cents: number;
+    prior_alpha: number;
+    prior_beta: number;
+    sources: string[];
+  }> {
+    const analyticsDb = this.analyticsDb || this.db;
+    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split("T")[0];
+
+    // Get the goal config to understand what we're tracking
+    const goal = await this.db
+      .prepare(`SELECT * FROM conversion_goals WHERE id = ?`)
+      .bind(goalId)
+      .first<any>();
+
+    if (!goal) {
+      return {
+        goal_count: 0,
+        conversion_count: 0,
+        conversion_rate: 0,
+        avg_value_cents: 0,
+        prior_alpha: 1,
+        prior_beta: 1,
+        sources: [],
+      };
+    }
+
+    // Count goal triggers (page views, events, etc.)
+    let goalCount = 0;
+    const pagePattern = this.extractPagePattern(goal);
+
+    if (goal.goal_type === "page_view" && pagePattern !== "%") {
+      // Count page views matching the pattern
+      try {
+        const pageResult = await analyticsDb
+          .prepare(
+            `
+          SELECT COUNT(*) as count FROM events
+          WHERE organization_id = ?
+            AND event_type = 'page_view'
+            AND page_path LIKE ?
+            AND timestamp >= ?
+        `
+          )
+          .bind(orgId, pagePattern, startDate)
+          .first<{ count: number }>();
+        goalCount = pageResult?.count || 0;
+      } catch {
+        // Events table might not exist, try hourly_metrics
+        const orgTag = await this.db
+          .prepare(`SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?`)
+          .bind(orgId)
+          .first<{ short_tag: string }>();
+
+        if (orgTag?.short_tag) {
+          const metricsResult = await analyticsDb
+            .prepare(
+              `
+            SELECT SUM(page_views) as count FROM hourly_metrics
+            WHERE org_tag = ? AND hour >= ?
+          `
+            )
+            .bind(orgTag.short_tag, startDate)
+            .first<{ count: number }>();
+          // Estimate based on total page views (rough approximation)
+          goalCount = Math.round((metricsResult?.count || 0) * 0.1); // Assume 10% are target pages
+        }
+      }
+    }
+
+    // Get unified conversions from all sources
+    let conversionCount = 0;
+    let totalValueCents = 0;
+    const sources: string[] = [];
+
+    // Check Stripe charges
+    try {
+      const stripeResult = await analyticsDb
+        .prepare(
+          `
+        SELECT COUNT(*) as count, COALESCE(SUM(amount_cents), 0) as total
+        FROM stripe_charges
+        WHERE organization_id = ?
+          AND status = 'succeeded'
+          AND created_at >= ?
+      `
+        )
+        .bind(orgId, startDate)
+        .first<{ count: number; total: number }>();
+
+      if (stripeResult && stripeResult.count > 0) {
+        conversionCount += stripeResult.count;
+        totalValueCents += stripeResult.total;
+        sources.push("stripe");
+      }
+    } catch {
+      // Table doesn't exist
+    }
+
+    // Check Shopify orders
+    try {
+      const shopifyResult = await analyticsDb
+        .prepare(
+          `
+        SELECT COUNT(*) as count, COALESCE(SUM(total_price_cents), 0) as total
+        FROM shopify_orders
+        WHERE organization_id = ?
+          AND financial_status = 'paid'
+          AND created_at >= ?
+      `
+        )
+        .bind(orgId, startDate)
+        .first<{ count: number; total: number }>();
+
+      if (shopifyResult && shopifyResult.count > 0) {
+        conversionCount += shopifyResult.count;
+        totalValueCents += shopifyResult.total;
+        sources.push("shopify");
+      }
+    } catch {
+      // Table doesn't exist
+    }
+
+    // Check conversions table (from tag events)
+    try {
+      const tagResult = await analyticsDb
+        .prepare(
+          `
+        SELECT COUNT(*) as count, COALESCE(SUM(value_cents), 0) as total
+        FROM conversions
+        WHERE organization_id = ?
+          AND conversion_timestamp >= ?
+      `
+        )
+        .bind(orgId, startDate)
+        .first<{ count: number; total: number }>();
+
+      if (tagResult && tagResult.count > 0) {
+        conversionCount += tagResult.count;
+        totalValueCents += tagResult.total;
+        sources.push("tag");
+      }
+    } catch {
+      // Table doesn't exist
+    }
+
+    // If no goal count but we have page views in hourly_metrics, estimate
+    if (goalCount === 0) {
+      const orgTag = await this.db
+        .prepare(`SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?`)
+        .bind(orgId)
+        .first<{ short_tag: string }>();
+
+      if (orgTag?.short_tag) {
+        try {
+          const sessionsResult = await analyticsDb
+            .prepare(
+              `
+            SELECT COALESCE(SUM(sessions), 0) as sessions FROM hourly_metrics
+            WHERE org_tag = ? AND hour >= ?
+          `
+            )
+            .bind(orgTag.short_tag, startDate)
+            .first<{ sessions: number }>();
+          // Use sessions as proxy for goal triggers
+          goalCount = sessionsResult?.sessions || 0;
+        } catch {
+          // Fallback
+        }
+      }
+    }
+
+    const conversionRate = goalCount > 0 ? conversionCount / goalCount : 0;
+    const avgValueCents = conversionCount > 0 ? Math.round(totalValueCents / conversionCount) : 0;
+
+    return {
+      goal_count: goalCount,
+      conversion_count: conversionCount,
+      conversion_rate: conversionRate,
+      avg_value_cents: avgValueCents,
+      prior_alpha: 1 + conversionCount,
+      prior_beta: 1 + Math.max(0, goalCount - conversionCount),
+      sources,
     };
   }
 
