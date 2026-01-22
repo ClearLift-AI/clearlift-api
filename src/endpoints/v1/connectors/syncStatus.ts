@@ -1,6 +1,6 @@
-import { OpenAPIRoute, Str, Num } from "chanfana";
+import { OpenAPIRoute, Str, Num, Bool } from "chanfana";
 import { z } from "zod";
-import { AppContext } from "../../../types";
+import { AppContext, Env } from "../../../types";
 
 // Response schemas
 const ConnectionStatusSchema = z.object({
@@ -181,6 +181,190 @@ export class GetSyncStatus extends OpenAPIRoute {
         error: latestJob.error_message,
         diagnostics: diagnostics
       } : null
+    }, 200);
+  }
+}
+
+/**
+ * GET /v1/sync-jobs/:job_id/status
+ *
+ * Get sync job status by job ID with optional re-queue for stuck jobs.
+ * Used for error recovery when jobs get lost in the queue.
+ */
+export class GetSyncJobStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["Sync Jobs"],
+    summary: "Get sync job status by job ID",
+    description: "Returns the status of a sync job. If the job is stuck (pending > 10 min), can optionally trigger a re-queue.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        job_id: Str({ description: "Sync job ID" })
+      }),
+      query: z.object({
+        requeue_if_stuck: z.string().optional().describe("Set to 'true' to re-queue the job if it's stuck in pending state")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Job status retrieved successfully",
+        schema: z.object({
+          job: z.object({
+            id: z.string(),
+            connection_id: z.string(),
+            organization_id: z.string(),
+            status: z.enum(['pending', 'syncing', 'completed', 'failed']),
+            job_type: z.string().nullable(),
+            created_at: z.string(),
+            started_at: z.string().nullable(),
+            completed_at: z.string().nullable(),
+            records_synced: z.number(),
+            error_message: z.string().nullable(),
+            is_stuck: z.boolean(),
+            age_minutes: z.number()
+          }),
+          requeued: z.boolean(),
+          message: z.string().optional()
+        })
+      },
+      "404": {
+        description: "Job not found"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const jobId = c.req.param("job_id");
+    const session = c.get("session");
+    const requeueIfStuck = c.req.query("requeue_if_stuck") === "true";
+
+    const STUCK_THRESHOLD_MINUTES = 10;
+    const MAX_RETRIES = 3;
+
+    // Get job info
+    const job = await c.env.DB.prepare(`
+      SELECT
+        sj.id, sj.connection_id, sj.organization_id, sj.status, sj.job_type,
+        sj.created_at, sj.started_at, sj.completed_at, sj.records_synced,
+        sj.error_message, sj.metadata,
+        pc.platform, pc.account_id
+      FROM sync_jobs sj
+      LEFT JOIN platform_connections pc ON sj.connection_id = pc.id
+      WHERE sj.id = ?
+    `).bind(jobId).first<{
+      id: string;
+      connection_id: string;
+      organization_id: string;
+      status: string;
+      job_type: string | null;
+      created_at: string;
+      started_at: string | null;
+      completed_at: string | null;
+      records_synced: number;
+      error_message: string | null;
+      metadata: string | null;
+      platform: string | null;
+      account_id: string | null;
+    }>();
+
+    if (!job) {
+      return c.json({ error: "Job not found" }, 404);
+    }
+
+    // Verify user has access to the organization
+    const { D1Adapter } = await import("../../../adapters/d1");
+    const d1 = new D1Adapter(c.env.DB);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, job.organization_id);
+
+    if (!hasAccess) {
+      return c.json({ error: "Access denied" }, 403);
+    }
+
+    // Calculate job age
+    const createdAt = new Date(job.created_at);
+    const ageMinutes = Math.floor((Date.now() - createdAt.getTime()) / (1000 * 60));
+    const isStuck = job.status === 'pending' && ageMinutes >= STUCK_THRESHOLD_MINUTES;
+
+    let requeued = false;
+    let message: string | undefined;
+
+    // Re-queue if requested and job is stuck
+    if (requeueIfStuck && isStuck && job.platform && job.account_id) {
+      const metadata = job.metadata ? JSON.parse(job.metadata) : {};
+      const retryCount = metadata.retry_count || 0;
+
+      if (retryCount >= MAX_RETRIES) {
+        // Too many retries - mark as failed
+        await c.env.DB.prepare(`
+          UPDATE sync_jobs
+          SET status = 'failed',
+              error_message = 'Job stuck after manual re-queue attempts',
+              completed_at = datetime('now'),
+              metadata = ?
+          WHERE id = ?
+        `).bind(
+          JSON.stringify({ ...metadata, retry_count: retryCount, failed_reason: 'max_retries_exceeded' }),
+          job.id
+        ).run();
+
+        message = `Job exceeded max retries (${MAX_RETRIES}), marked as failed`;
+      } else {
+        // Re-queue the job
+        const updatedMetadata = {
+          ...metadata,
+          retry_count: retryCount + 1,
+          last_retry: new Date().toISOString(),
+          requeued_by: session.user_id
+        };
+
+        await c.env.DB.prepare(`
+          UPDATE sync_jobs SET metadata = ? WHERE id = ?
+        `).bind(JSON.stringify(updatedMetadata), job.id).run();
+
+        try {
+          await c.env.SYNC_QUEUE.send({
+            job_id: job.id,
+            connection_id: job.connection_id,
+            organization_id: job.organization_id,
+            platform: job.platform,
+            account_id: job.account_id,
+            sync_window: metadata.sync_window || {
+              type: job.job_type || 'incremental',
+              start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+              end: new Date().toISOString()
+            },
+            metadata: updatedMetadata
+          });
+
+          requeued = true;
+          message = `Job re-queued successfully (attempt ${retryCount + 1}/${MAX_RETRIES})`;
+        } catch (queueErr) {
+          message = `Failed to re-queue job: ${queueErr instanceof Error ? queueErr.message : 'Unknown error'}`;
+        }
+      }
+    } else if (requeueIfStuck && !isStuck) {
+      message = `Job is not stuck (status: ${job.status}, age: ${ageMinutes} min)`;
+    } else if (requeueIfStuck && (!job.platform || !job.account_id)) {
+      message = `Cannot re-queue: missing connection info (platform or account_id)`;
+    }
+
+    return c.json({
+      job: {
+        id: job.id,
+        connection_id: job.connection_id,
+        organization_id: job.organization_id,
+        status: job.status,
+        job_type: job.job_type,
+        created_at: job.created_at,
+        started_at: job.started_at,
+        completed_at: job.completed_at,
+        records_synced: job.records_synced || 0,
+        error_message: job.error_message,
+        is_stuck: isStuck,
+        age_minutes: ageMinutes
+      },
+      requeued,
+      message
     }, 200);
   }
 }

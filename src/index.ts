@@ -147,7 +147,7 @@ import {
   TriggerResync,
   DisconnectPlatform
 } from "./endpoints/v1/connectors";
-import { GetSyncStatus } from "./endpoints/v1/connectors/syncStatus";
+import { GetSyncStatus, GetSyncJobStatus } from "./endpoints/v1/connectors/syncStatus";
 import {
   ConnectStripe,
   UpdateStripeConfig,
@@ -548,6 +548,9 @@ openapi.post("/v1/connectors/:provider/finalize", FinalizeOAuthConnection); // N
 openapi.delete("/v1/connectors/:connection_id", auth, DisconnectPlatform);
 openapi.get("/v1/connectors/:connection_id/sync-status", auth, GetSyncStatus);
 
+// Sync job status endpoint (for error recovery)
+openapi.get("/v1/sync-jobs/:job_id/status", auth, GetSyncJobStatus);
+
 // General connector settings endpoints
 openapi.get("/v1/connectors/:connection_id/settings", auth, GetConnectorSettings);
 openapi.patch("/v1/connectors/:connection_id/settings", auth, UpdateConnectorSettings);
@@ -669,7 +672,7 @@ export default {
 
   // Cleanup stale pending jobs - retry or fail them
   async cleanupStaleJobs(env: Env): Promise<void> {
-    const STALE_THRESHOLD_MINUTES = 30;  // Jobs pending > 30 min are stale
+    const STALE_THRESHOLD_MINUTES = 10;  // Jobs pending > 10 min are stale (reduced from 30 for faster recovery)
     const MAX_RETRIES = 3;               // Max retry attempts before marking failed
     const FAIL_THRESHOLD_HOURS = 2;      // Jobs pending > 2 hours are failed
 
