@@ -8,6 +8,8 @@ import { AnalysisLevel } from './llm-provider';
 
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed';
 
+export type StoppedReason = 'max_recommendations' | 'no_tool_calls' | 'max_iterations' | 'early_termination';
+
 export interface AnalysisJob {
   id: string;
   organization_id: string;
@@ -19,6 +21,8 @@ export interface AnalysisJob {
   current_level: AnalysisLevel | null;
   analysis_run_id: string | null;
   error_message: string | null;
+  stopped_reason: StoppedReason | null;
+  termination_reason: string | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -85,14 +89,21 @@ export class JobManager {
   /**
    * Complete a job successfully
    */
-  async completeJob(jobId: string, analysisRunId: string): Promise<void> {
+  async completeJob(
+    jobId: string,
+    analysisRunId: string,
+    stoppedReason?: StoppedReason,
+    terminationReason?: string
+  ): Promise<void> {
     await this.db.prepare(`
       UPDATE analysis_jobs
       SET status = 'completed',
           analysis_run_id = ?,
+          stopped_reason = ?,
+          termination_reason = ?,
           completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
-    `).bind(analysisRunId, jobId).run();
+    `).bind(analysisRunId, stoppedReason || null, terminationReason || null, jobId).run();
 
     // Check for webhook and trigger if set
     const job = await this.getJob(jobId);

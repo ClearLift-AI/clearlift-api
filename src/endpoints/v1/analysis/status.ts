@@ -39,7 +39,9 @@ export class GetAnalysisStatus extends OpenAPIRoute {
                   percent_complete: z.number().nullable()
                 }),
                 result: z.object({
-                  run_id: z.string()
+                  run_id: z.string(),
+                  stopped_reason: z.enum(['max_recommendations', 'no_tool_calls', 'max_iterations', 'early_termination']).optional(),
+                  termination_reason: z.string().optional()
                 }).optional(),
                 error: z.string().optional(),
                 created_at: z.string(),
@@ -91,7 +93,11 @@ export class GetAnalysisStatus extends OpenAPIRoute {
     };
 
     if (job.status === "completed" && job.analysis_run_id) {
-      response.result = { run_id: job.analysis_run_id };
+      response.result = {
+        run_id: job.analysis_run_id,
+        stopped_reason: job.stopped_reason || undefined,
+        termination_reason: job.termination_reason || undefined
+      };
     }
 
     if (job.status === "failed" && job.error_message) {

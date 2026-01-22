@@ -212,7 +212,8 @@ export interface AccumulatedInsightData {
  */
 export interface AgenticIterationResult {
   messages: any[];  // Conversation history
-  recommendations: any[];
+  recommendations: any[];  // All recommendations (insight + actions)
+  actionRecommendations?: any[];  // Just action recommendations (set_budget, set_status, etc.)
   shouldStop: boolean;
   stopReason?: 'max_recommendations' | 'no_tool_calls' | 'max_iterations' | 'early_termination';
   terminationReason?: string;

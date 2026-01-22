@@ -152,10 +152,14 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
 
     // Steps 7+: Agentic loop (dynamic iterations)
     const maxIterations = 200;
-    const maxRecommendations = config?.agentic?.maxRecommendations ?? 4;
+    // Separate limits: 1 insight (accumulated) + up to 3 action recommendations = 4 total max
+    const maxActionRecommendations = config?.agentic?.maxRecommendations
+      ? Math.min(config.agentic.maxRecommendations - 1, 3)  // Reserve 1 slot for insight
+      : 3;
     const enableExploration = config?.agentic?.enableExploration !== false;
 
     let recommendations: Recommendation[] = [];
+    let actionRecommendations: Recommendation[] = [];  // Track action recs separately
     let agenticMessages: any[] = [];
     let iterations = 0;
     let stoppedReason: 'max_recommendations' | 'no_tool_calls' | 'max_iterations' | 'early_termination' = 'max_iterations';
@@ -164,6 +168,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     // Track accumulated insight state across iterations
     let accumulatedInsightId: string | null = null;
     let accumulatedInsights: AccumulatedInsightData[] = [];
+    let hasInsight = false;  // Track if we've generated an insight
 
     // Initialize agentic loop context
     const agenticContext = await step.do('agentic_init', {
@@ -189,7 +194,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     agenticMessages = [{ role: 'user', content: agenticContext.contextPrompt }];
 
     // Run agentic iterations as separate steps
-    while (iterations < maxIterations && recommendations.length < maxRecommendations) {
+    // Loop continues until: we have an insight AND 3 action recs, OR max iterations, OR early termination
+    while (iterations < maxIterations && actionRecommendations.length < maxActionRecommendations) {
       iterations++;
 
       const iterResult = await step.do(`agentic_iteration_${iterations}`, {
@@ -202,20 +208,24 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           agenticMessages,
           agenticContext.systemPrompt,
           recommendations,
-          maxRecommendations,
+          actionRecommendations,
+          maxActionRecommendations,
           enableExploration,
           accumulatedInsightId,
-          accumulatedInsights
+          accumulatedInsights,
+          hasInsight
         );
       });
 
       // Update state from iteration result
       agenticMessages = iterResult.messages;
       recommendations = iterResult.recommendations;
+      actionRecommendations = iterResult.actionRecommendations || actionRecommendations;
 
       // Merge accumulated insight state
       if (iterResult.accumulatedInsightId) {
         accumulatedInsightId = iterResult.accumulatedInsightId;
+        hasInsight = true;
       }
       if (iterResult.accumulatedInsights) {
         accumulatedInsights = iterResult.accumulatedInsights;
@@ -254,7 +264,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     }, async () => {
       const jobs = new JobManager(this.env.AI_DB);
       await jobs.updateProgress(jobId, processedCount, 'recommendations');
-      await jobs.completeJob(jobId, runId);
+      await jobs.completeJob(jobId, runId, stoppedReason, terminationReason);
     });
 
     return {
@@ -672,7 +682,12 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     for (const [platform, summary] of Object.entries(platformSummaries)) {
       prompt += `### ${platform.charAt(0).toUpperCase() + platform.slice(1)}\n${summary}\n\n`;
     }
-    prompt += `Based on the analysis above, identify up to 4 actionable recommendations.`;
+    prompt += `Based on the analysis above:
+1. FIRST: Generate at least one insight using general_insight to capture your strategic observations
+2. THEN: Identify up to 3 specific action recommendations using set_budget, set_status, set_audience, or reallocate_budget
+3. FINALLY: Call terminate_analysis when complete
+
+Your output will be shown to users as a unified list: insight(s) first, then action recommendations.`;
     return prompt;
   }
 
@@ -695,23 +710,40 @@ CRITICAL - BUDGET vs SPEND:
 - SPEND is what was actually spent
 - ALWAYS use get_entity_budget to check actual budget before recommending changes.
 
-IMPORTANT RULES:
-1. PREFER actionable recommendations over general_insight
+## OUTPUT STRUCTURE (MANDATORY)
+Your analysis MUST produce:
+1. **ONE insight section** (REQUIRED) - Use general_insight to capture strategic observations. Multiple calls accumulate into a single document.
+2. **Up to 3 action recommendations** (optional) - Use set_budget, set_status, set_audience, or reallocate_budget for specific changes.
+
+The final output shown to users will be a unified list of up to 4 items: your accumulated insights (always shown first) plus any action recommendations.
+
+## INSIGHT REQUIREMENTS
+You MUST call general_insight at least once to provide strategic context. The insight should:
+- Summarize cross-platform patterns or overall account health
+- Note any data quality issues or gaps
+- Highlight seasonal trends or market observations
+- Include any strategic observations that don't fit the action tools
+
+## ACTION RECOMMENDATIONS
+For specific, executable changes:
+1. PREFER action tools (set_budget, set_status, set_audience, reallocate_budget) over general observations
 2. Focus on the most impactful changes first
 3. For budget changes, stay within 30% of current values
 4. For pausing: recommend for entities with poor ROAS (<1.5), high CPA, or declining trends
 5. Be specific about entities - use their actual IDs and names
-6. Only use general_insight for cross-platform patterns
 
-TOOL BEHAVIOR:
-- general_insight: Your insights ACCUMULATE into a single document. The first call creates it, subsequent calls append to it. All insights together count as ONE recommendation toward your limit. Use freely for observations.
-- terminate_analysis: Call this when you have made sufficient recommendations or determined no further actionable insights exist. This immediately ends the analysis loop.
+## TOOL BEHAVIOR
+- general_insight: REQUIRED at least once. All calls ACCUMULATE into a single document. Does NOT count toward your 3 action recommendation limit.
+- set_budget/set_status/set_audience/reallocate_budget: Up to 3 total action recommendations allowed.
+- terminate_analysis: Call this when you have generated an insight AND made sufficient action recommendations (or determined no further actionable items exist).
 
-WHEN TO USE terminate_analysis:
-1. You have made high-quality actionable recommendations
+## WHEN TO USE terminate_analysis
+1. You have generated at least one insight AND made appropriate action recommendations
 2. Data quality prevents meaningful further analysis
 3. All major opportunities have been addressed
-4. Continuing would produce low-confidence or repetitive suggestions`;
+4. Continuing would produce low-confidence or repetitive suggestions
+
+If you cannot find any actionable recommendations, you MUST still generate an insight explaining why (e.g., "Insufficient data for action recommendations" or "All campaigns performing within expected parameters").`;
 
     if (customInstructions?.trim()) {
       systemPrompt += `\n\n## CUSTOM BUSINESS CONTEXT\n${customInstructions.trim()}`;
@@ -749,14 +781,17 @@ WHEN TO USE terminate_analysis:
     messages: any[],
     systemPrompt: string,
     existingRecommendations: Recommendation[],
-    maxRecommendations: number,
+    existingActionRecommendations: Recommendation[],
+    maxActionRecommendations: number,
     enableExploration: boolean,
     existingAccumulatedInsightId: string | null,
-    existingAccumulatedInsights: AccumulatedInsightData[]
+    existingAccumulatedInsights: AccumulatedInsightData[],
+    existingHasInsight: boolean
   ): Promise<AgenticIterationResult> {
     // Clone accumulated insights array to avoid mutation
     let accumulatedInsightId = existingAccumulatedInsightId;
     let accumulatedInsights = [...existingAccumulatedInsights];
+    const actionRecommendations = [...existingActionRecommendations];
     const explorationExecutor = new ExplorationToolExecutor(this.env.ANALYTICS_DB);
 
     const tools = enableExploration
@@ -811,7 +846,7 @@ WHEN TO USE terminate_analysis:
     // Process tool uses
     const toolResults: any[] = [];
     const recommendations = [...existingRecommendations];
-    let hitMaxRecommendations = false;
+    let hitMaxActionRecommendations = false;
 
     for (const toolUse of toolUses) {
       // Handle terminate_analysis (control tool - NOT logged to DB)
@@ -838,7 +873,7 @@ WHEN TO USE terminate_analysis:
         };
       }
 
-      // Handle general_insight (accumulation logic)
+      // Handle general_insight (accumulation logic - does NOT count toward action limit)
       if (isGeneralInsightTool(toolUse.name)) {
         const input = toolUse.input;
 
@@ -853,22 +888,22 @@ WHEN TO USE terminate_analysis:
         });
 
         if (accumulatedInsightId) {
-          // UPDATE existing row - subsequent insights just append
+          // UPDATE existing row - subsequent insights just append (no limit)
           await this.updateAccumulatedInsight(orgId, accumulatedInsightId, accumulatedInsights);
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUse.id,
             content: JSON.stringify({
               status: 'appended',
-              message: `Insight appended to accumulated document (${accumulatedInsights.length} total)`,
+              message: `Insight appended to accumulated document (${accumulatedInsights.length} total). You can continue adding insights - they don't count toward your action recommendation limit.`,
               total_insights: accumulatedInsights.length
             })
           });
         } else {
-          // CREATE new row - only first one counts toward limit
+          // CREATE new row - insight is separate from action recommendations
           accumulatedInsightId = await this.createAccumulatedInsight(orgId, accumulatedInsights, runId);
 
-          // Add placeholder to recommendations count (counts as 1 toward limit)
+          // Add placeholder to recommendations list (for return value, but NOT for limit counting)
           recommendations.push({
             tool: 'accumulated_insight',
             platform: 'general',
@@ -886,14 +921,11 @@ WHEN TO USE terminate_analysis:
             tool_use_id: toolUse.id,
             content: JSON.stringify({
               status: 'created',
-              message: 'Accumulated insight document created. Additional insights will append to this document.',
-              total_insights: 1
+              message: 'Accumulated insight document created. Additional insights will append to this document. Insights are separate from action recommendations - you can add up to 3 action recommendations (set_budget, set_status, set_audience, reallocate_budget).',
+              total_insights: 1,
+              action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
             })
           });
-
-          if (recommendations.length >= maxRecommendations) {
-            hitMaxRecommendations = true;
-          }
         }
         continue;
       }
@@ -909,20 +941,25 @@ WHEN TO USE terminate_analysis:
         continue;
       }
 
-      // Handle other recommendation tools
-      if (isRecommendationTool(toolUse.name)) {
-        if (hitMaxRecommendations || recommendations.length >= maxRecommendations) {
-          hitMaxRecommendations = true;
+      // Handle action recommendation tools (set_budget, set_status, set_audience, reallocate_budget)
+      // These count toward the action limit, separate from insights
+      if (isRecommendationTool(toolUse.name) && !isGeneralInsightTool(toolUse.name) && !isTerminateAnalysisTool(toolUse.name)) {
+        if (hitMaxActionRecommendations || actionRecommendations.length >= maxActionRecommendations) {
+          hitMaxActionRecommendations = true;
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUse.id,
-            content: JSON.stringify({ status: 'skipped', message: 'Maximum recommendations reached' })
+            content: JSON.stringify({
+              status: 'skipped',
+              message: `Maximum action recommendations (${maxActionRecommendations}) reached. You can still add insights via general_insight.`
+            })
           });
           continue;
         }
 
         const rec = parseToolCallToRecommendation(toolUse.name, toolUse.input);
         recommendations.push(rec);
+        actionRecommendations.push(rec);  // Track action recs separately
 
         // Log to ai_decisions
         await this.logRecommendation(orgId, rec, runId);
@@ -930,11 +967,15 @@ WHEN TO USE terminate_analysis:
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
-          content: JSON.stringify({ status: 'logged', recommendation_count: recommendations.length })
+          content: JSON.stringify({
+            status: 'logged',
+            action_recommendation_count: actionRecommendations.length,
+            action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
+          })
         });
 
-        if (recommendations.length >= maxRecommendations) {
-          hitMaxRecommendations = true;
+        if (actionRecommendations.length >= maxActionRecommendations) {
+          hitMaxActionRecommendations = true;
         }
       }
     }
@@ -947,8 +988,9 @@ WHEN TO USE terminate_analysis:
     return {
       messages: updatedMessages,
       recommendations,
-      shouldStop: hitMaxRecommendations,
-      stopReason: hitMaxRecommendations ? 'max_recommendations' : undefined,
+      actionRecommendations,
+      shouldStop: hitMaxActionRecommendations,
+      stopReason: hitMaxActionRecommendations ? 'max_recommendations' : undefined,
       accumulatedInsightId: accumulatedInsightId || undefined,
       accumulatedInsights
     };
