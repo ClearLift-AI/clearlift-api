@@ -104,7 +104,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           end: new Date().toISOString().split('T')[0]
         };
 
-    console.log(`[Unified] Fetching data for org ${orgId}, date range: ${effectiveDateRange.start} to ${effectiveDateRange.end}`);
+    console.log(`[Unified] Fetching data for org ${orgId}, date range: ${effectiveDateRange.start} to ${effectiveDateRange.end}, platforms: ${JSON.stringify(activePlatforms)}`);
 
     if (!c.env.ANALYTICS_DB) {
       return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
@@ -119,6 +119,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         effectiveDateRange.end,
         activePlatforms
       );
+
+      console.log(`[Unified] D1 Summary: spend=${d1Summary.spend_cents}, impressions=${d1Summary.impressions}, campaigns=${d1Summary.campaigns}`);
+      console.log(`[Unified] By platform: ${JSON.stringify(by_platform)}`);
 
       const summary = {
         total_spend_cents: d1Summary.spend_cents,
@@ -164,6 +167,11 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         activePlatforms,
         effectiveDateRange
       );
+
+      console.log(`[Unified] Time series returned ${timeSeries.length} days of data`);
+      if (timeSeries.length > 0) {
+        console.log(`[Unified] First day: ${JSON.stringify(timeSeries[0])}`);
+      }
 
       return success(c, {
         summary: {

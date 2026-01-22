@@ -841,10 +841,26 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
     const dateRange = { start: dateFrom, end: dateTo };
 
-    // Check setup status for guidance
-    const setupStatus = await checkSetupStatus(c.env.DB, analyticsDb, orgId, dateRange);
-    const setupGuidance = buildDataQualityResponse(setupStatus);
-    console.log(`[Attribution] Setup: tag=${setupStatus.hasTrackingTag}, platforms=${setupStatus.connectedPlatforms.join(',')}, connectors=${setupStatus.connectedConnectors.join(',')}, completeness=${setupGuidance.completeness}%`);
+    // Check setup status for guidance (non-blocking - failures shouldn't break attribution)
+    let setupStatus: SetupStatus = {
+      hasTrackingTag: false,
+      hasAdPlatforms: false,
+      hasRevenueConnector: false,
+      hasClickIds: false,
+      hasUtmData: false,
+      connectedPlatforms: [],
+      connectedConnectors: []
+    };
+    let setupGuidance: DataQualityResponse;
+
+    try {
+      setupStatus = await checkSetupStatus(c.env.DB, analyticsDb, orgId, dateRange);
+      setupGuidance = buildDataQualityResponse(setupStatus);
+      console.log(`[Attribution] Setup: tag=${setupStatus.hasTrackingTag}, platforms=${setupStatus.connectedPlatforms.join(',')}, connectors=${setupStatus.connectedConnectors.join(',')}, completeness=${setupGuidance.completeness}%`);
+    } catch (setupErr) {
+      console.warn(`[Attribution] Setup check failed, using defaults:`, setupErr);
+      setupGuidance = buildDataQualityResponse(setupStatus);
+    }
 
     // Get org settings for defaults
     const d1 = new D1Adapter(c.env.DB);
