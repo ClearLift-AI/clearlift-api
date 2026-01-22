@@ -285,6 +285,9 @@ export class UpdateConversionGoal extends OpenAPIRoute {
       params: z.object({
         id: z.string()
       }),
+      query: z.object({
+        org_id: z.string().optional(),
+      }),
       body: {
         content: {
           "application/json": {
@@ -380,6 +383,44 @@ export class UpdateConversionGoal extends OpenAPIRoute {
       }
     }
 
+    // Enhanced goal fields
+    if (body.slug !== undefined) {
+      updates.push('slug = ?');
+      values.push(body.slug);
+    }
+    if (body.description !== undefined) {
+      updates.push('description = ?');
+      values.push(body.description);
+    }
+    if (body.goal_type !== undefined) {
+      updates.push('goal_type = ?');
+      values.push(body.goal_type);
+    }
+    if (body.revenue_sources !== undefined) {
+      updates.push('revenue_sources = ?');
+      values.push(JSON.stringify(body.revenue_sources));
+    }
+    if (body.event_filters !== undefined) {
+      updates.push('event_filters_v2 = ?');
+      values.push(JSON.stringify(body.event_filters));
+    }
+    if (body.display_order !== undefined) {
+      updates.push('display_order = ?');
+      values.push(body.display_order);
+    }
+    if (body.color !== undefined) {
+      updates.push('color = ?');
+      values.push(body.color);
+    }
+    if (body.icon !== undefined) {
+      updates.push('icon = ?');
+      values.push(body.icon);
+    }
+    if (body.is_active !== undefined) {
+      updates.push('is_active = ?');
+      values.push(body.is_active ? 1 : 0);
+    }
+
     if (updates.length > 0) {
       updates.push('updated_at = ?');
       values.push(new Date().toISOString());
@@ -406,7 +447,10 @@ export class DeleteConversionGoal extends OpenAPIRoute {
     request: {
       params: z.object({
         id: z.string()
-      })
+      }),
+      query: z.object({
+        org_id: z.string().optional(),
+      }),
     },
     responses: {
       "200": {
