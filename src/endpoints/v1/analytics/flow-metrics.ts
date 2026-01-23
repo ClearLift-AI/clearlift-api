@@ -25,6 +25,7 @@ interface StageMetrics {
   dropoff_rate: number;
   avg_time_to_next_hours: number | null;
   conversion_value_cents: number;
+  by_channel?: Record<string, number>; // Channel attribution breakdown
 }
 
 /**
@@ -74,6 +75,7 @@ Returns stage-by-stage metrics for the acquisition flow:
                   dropoff_rate: z.number(),
                   avg_time_to_next_hours: z.number().nullable(),
                   conversion_value_cents: z.number(),
+                  by_channel: z.record(z.string(), z.number()).optional(),
                 })),
                 summary: z.object({
                   total_stages: z.number(),
@@ -210,6 +212,33 @@ Returns stage-by-stage metrics for the acquisition flow:
 
       // 5. Query stage metrics based on connector type
       const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+
+      // Get channel distribution for session-level attribution
+      let channelDistribution: Record<string, number> = {};
+      let totalChannelEvents = 0;
+
+      if (orgTag) {
+        try {
+          const channelResult = await analyticsDb.prepare(`
+            SELECT by_channel FROM daily_metrics
+            WHERE org_tag = ? AND date >= ? AND date <= ?
+          `).bind(orgTag, startDateStr, endDateStr).all<{ by_channel: string | null }>();
+
+          for (const row of channelResult.results || []) {
+            if (row.by_channel) {
+              try {
+                const channels = JSON.parse(row.by_channel) as Record<string, number>;
+                for (const [channel, count] of Object.entries(channels)) {
+                  channelDistribution[channel] = (channelDistribution[channel] || 0) + count;
+                  totalChannelEvents += count;
+                }
+              } catch (e) {}
+            }
+          }
+        } catch (err) {
+          console.warn("[FlowMetrics] Failed to get channel distribution:", err);
+        }
+      }
 
       // Build stage metrics - query each connector's data source
       const stageMetrics: StageMetrics[] = [];
@@ -351,6 +380,40 @@ Returns stage-by-stage metrics for the acquisition flow:
           console.warn(`[FlowMetrics] Query failed for ${goal.name} (${connector}):`, err);
         }
 
+        // Calculate by_channel for this stage
+        let byChannel: Record<string, number> | undefined;
+
+        if (visitors > 0) {
+          if (connector === "google_ads") {
+            // Google Ads stage = 100% paid_search channel
+            byChannel = { paid_search: visitors };
+          } else if (connector === "facebook_ads" || connector === "tiktok_ads") {
+            // Social ad stages = 100% paid_social channel
+            byChannel = { paid_social: visitors };
+          } else if ((connector === "stripe" || connector === "shopify") && totalChannelEvents > 0) {
+            // Revenue stages - distribute based on channel proportions
+            // This attributes conversions proportionally to traffic channels
+            byChannel = {};
+            for (const [channel, eventCount] of Object.entries(channelDistribution)) {
+              const ratio = eventCount / totalChannelEvents;
+              const attributed = Math.round(conversions * ratio);
+              if (attributed > 0) {
+                byChannel[channel] = attributed;
+              }
+            }
+          } else if (connector === "clearlift_tag" && totalChannelEvents > 0) {
+            // Tag stages - distribute based on channel proportions
+            byChannel = {};
+            for (const [channel, eventCount] of Object.entries(channelDistribution)) {
+              const ratio = eventCount / totalChannelEvents;
+              const attributed = Math.round(visitors * ratio);
+              if (attributed > 0) {
+                byChannel[channel] = attributed;
+              }
+            }
+          }
+        }
+
         const metrics: StageMetrics = {
           id: goal.id,
           name: goal.name,
@@ -365,6 +428,7 @@ Returns stage-by-stage metrics for the acquisition flow:
           dropoff_rate: 0, // Calculate after all stages
           avg_time_to_next_hours: null,
           conversion_value_cents: isConversion ? (conversionValueCents || conversions * valueCents) : 0,
+          by_channel: byChannel,
         };
 
         stageMetrics.push(metrics);
