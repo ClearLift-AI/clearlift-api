@@ -324,6 +324,116 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       await jobs.completeJob(jobId, runId, stoppedReason, terminationReason);
     });
 
+    // Generate CAC predictions from recommendations with simulation data
+    // This populates the CAC Timeline chart with mathematically-calculated forecasts
+    await step.do('generate_cac_predictions', {
+      retries: { limit: 2, delay: '1 second' },
+      timeout: '30 seconds'
+    }, async () => {
+      // Get pending recommendations with simulation data
+      const recsResult = await this.env.AI_DB.prepare(`
+        SELECT id, simulation_data, predicted_impact
+        FROM ai_decisions
+        WHERE organization_id = ?
+          AND status = 'pending'
+          AND simulation_data IS NOT NULL
+      `).bind(orgId).all<{
+        id: string;
+        simulation_data: string;
+        predicted_impact: number;
+      }>();
+
+      if (!recsResult.results || recsResult.results.length === 0) {
+        console.log('[Analysis] No recommendations with simulation data to generate predictions');
+        return;
+      }
+
+      // Get current CAC from cac_history
+      const currentCacResult = await this.env.AI_DB.prepare(`
+        SELECT cac_cents FROM cac_history
+        WHERE organization_id = ?
+        ORDER BY date DESC
+        LIMIT 1
+      `).bind(orgId).first<{ cac_cents: number }>();
+
+      // If no CAC history, try to calculate from platform metrics
+      let currentCac = currentCacResult?.cac_cents || 0;
+      if (currentCac === 0) {
+        // Calculate from recent platform metrics
+        const metricsResult = await this.env.ANALYTICS_DB.prepare(`
+          SELECT SUM(spend_cents) as spend, SUM(conversions) as conversions
+          FROM (
+            SELECT spend_cents, conversions FROM facebook_campaign_daily_metrics
+            WHERE organization_id = ? AND metric_date >= date('now', '-7 days')
+            UNION ALL
+            SELECT spend_cents, conversions FROM google_campaign_daily_metrics
+            WHERE organization_id = ? AND metric_date >= date('now', '-7 days')
+            UNION ALL
+            SELECT spend_cents, conversions FROM tiktok_campaign_daily_metrics
+            WHERE organization_id = ? AND metric_date >= date('now', '-7 days')
+          )
+        `).bind(orgId, orgId, orgId).first<{ spend: number; conversions: number }>();
+
+        if (metricsResult?.conversions && metricsResult.conversions > 0) {
+          currentCac = Math.round(metricsResult.spend / metricsResult.conversions);
+        }
+      }
+
+      if (currentCac === 0) {
+        console.log('[Analysis] No CAC data available to generate predictions');
+        return;
+      }
+
+      // Calculate aggregate impact from all recommendations
+      let totalImpactPercent = 0;
+      const recommendationIds: string[] = [];
+
+      for (const rec of recsResult.results) {
+        totalImpactPercent += rec.predicted_impact || 0;
+        recommendationIds.push(rec.id);
+      }
+
+      // Generate predictions for next 3 days
+      const today = new Date();
+      for (let i = 1; i <= 3; i++) {
+        const predDate = new Date(today);
+        predDate.setDate(predDate.getDate() + i);
+        const dateStr = predDate.toISOString().split('T')[0];
+
+        // Linear interpolation of impact over 3 days
+        const dayImpact = (totalImpactPercent * i) / 3;
+        const predictedCac = Math.round(currentCac * (1 + dayImpact / 100));
+
+        await this.env.AI_DB.prepare(`
+          INSERT INTO cac_predictions (
+            organization_id, prediction_date, predicted_cac_cents,
+            recommendation_ids, analysis_run_id, assumptions
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(organization_id, prediction_date)
+          DO UPDATE SET
+            predicted_cac_cents = excluded.predicted_cac_cents,
+            recommendation_ids = excluded.recommendation_ids,
+            analysis_run_id = excluded.analysis_run_id,
+            assumptions = excluded.assumptions,
+            created_at = datetime('now')
+        `).bind(
+          orgId,
+          dateStr,
+          predictedCac,
+          JSON.stringify(recommendationIds),
+          runId,
+          JSON.stringify({
+            current_cac_cents: currentCac,
+            total_impact_percent: totalImpactPercent,
+            recommendation_count: recommendationIds.length
+          })
+        ).run();
+      }
+
+      console.log(`[Analysis] Generated CAC predictions: ${totalImpactPercent.toFixed(1)}% impact from ${recommendationIds.length} recommendations`);
+    });
+
     return {
       runId,
       crossPlatformSummary: finalSummary,
