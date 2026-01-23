@@ -41,6 +41,7 @@ import { GetSmartAttribution } from "./endpoints/v1/analytics/smart-attribution"
 import { GetTrackingLinkPerformance } from "./endpoints/v1/analytics/tracking-links";
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
+import { GetFlowMetrics, GetStageTransitions } from "./endpoints/v1/analytics/flow-metrics";
 import { GetEventsSyncStatus } from "./endpoints/v1/analytics/events-sync";
 import {
   GetD1MetricsSummary,
@@ -469,6 +470,10 @@ openapi.post("/v1/recommendations/seed", SeedFacebookDemoRecommendations); // In
 // User journey endpoints
 openapi.get("/v1/analytics/users/:userId/journey", auth, requireOrg, GetUserJourney);
 openapi.get("/v1/analytics/journeys/overview", auth, requireOrg, GetJourneysOverview);
+
+// Flow Builder analytics endpoints
+openapi.get("/v1/analytics/flow/metrics", auth, requireOrg, GetFlowMetrics);
+openapi.get("/v1/analytics/flow/stage/:stageId/transitions", auth, requireOrg, GetStageTransitions);
 
 // D1 Analytics endpoints (dev environment - pure Cloudflare)
 openapi.get("/v1/analytics/metrics/summary", auth, requireOrg, GetD1MetricsSummary);

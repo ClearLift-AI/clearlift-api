@@ -44,6 +44,12 @@ const ConversionGoalSchema = z.object({
   color: z.string().optional(),
   icon: z.string().optional(),
   is_active: z.boolean().optional(),
+  // Flow Builder fields
+  connector: z.string().optional(),              // 'clearlift_tag', 'stripe', 'shopify', etc.
+  connector_event_type: z.string().optional(),   // 'page_view', 'payment_success', etc.
+  is_conversion: z.union([z.boolean(), z.number()]).optional(), // Can be marked as conversion point
+  position_col: z.number().int().min(0).optional(), // Graph X position
+  position_row: z.number().int().min(0).optional(), // Graph Y position (funnel order)
 }).passthrough(); // Allow extra fields that may be sent by frontend
 
 const FilterRuleSchema = z.object({
@@ -111,10 +117,11 @@ export class ListConversionGoals extends OpenAPIRoute {
              is_primary, include_in_path, priority, created_at, updated_at,
              slug, description, goal_type, revenue_sources, event_filters_v2,
              value_type, fixed_value_cents, display_order, color, icon, is_active,
-             avg_deal_value_cents, close_rate_percent
+             avg_deal_value_cents, close_rate_percent,
+             connector, connector_event_type, is_conversion, position_col, position_row
       FROM conversion_goals
       WHERE organization_id = ?
-      ORDER BY COALESCE(display_order, priority) ASC, created_at DESC
+      ORDER BY COALESCE(position_row, display_order, priority) ASC, created_at DESC
     `).bind(orgId).all();
 
     // Parse JSON fields and include enhanced properties
@@ -142,6 +149,12 @@ export class ListConversionGoals extends OpenAPIRoute {
         // Calculated value based on value_type
         calculated_value_cents: calculatedResult.value_cents,
         value_formula: calculatedResult.formula_used,
+        // Flow Builder fields
+        connector: g.connector || null,
+        connector_event_type: g.connector_event_type || null,
+        is_conversion: Boolean(g.is_conversion),
+        position_col: g.position_col ?? 0,
+        position_row: g.position_row ?? null,
       };
     });
 
@@ -225,8 +238,9 @@ export class CreateConversionGoal extends OpenAPIRoute {
         value_type, fixed_value_cents, avg_deal_value_cents, close_rate_percent,
         slug, description, goal_type, revenue_sources, event_filters_v2,
         display_order, color, icon, is_active,
+        connector, connector_event_type, is_conversion, position_col, position_row,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
       orgId,
@@ -251,6 +265,11 @@ export class CreateConversionGoal extends OpenAPIRoute {
       body.color ?? null,
       body.icon ?? null,
       body.is_active !== false ? 1 : 0,
+      body.connector ?? null,
+      body.connector_event_type ?? null,
+      body.is_conversion ? 1 : 0,
+      body.position_col ?? 0,
+      body.position_row ?? null,
       now,
       now
     ).run();
@@ -271,6 +290,12 @@ export class CreateConversionGoal extends OpenAPIRoute {
       ...body,
       calculated_value_cents: calculatedResult.value_cents,
       value_formula: calculatedResult.formula_used,
+      // Normalize Flow Builder fields in response
+      connector: body.connector || null,
+      connector_event_type: body.connector_event_type || null,
+      is_conversion: Boolean(body.is_conversion),
+      position_col: body.position_col ?? 0,
+      position_row: body.position_row ?? null,
       created_at: now,
       updated_at: now,
     }, undefined, 201);
@@ -428,6 +453,28 @@ export class UpdateConversionGoal extends OpenAPIRoute {
     if (body.is_active !== undefined) {
       updates.push('is_active = ?');
       values.push(body.is_active ? 1 : 0);
+    }
+
+    // Flow Builder fields
+    if (body.connector !== undefined) {
+      updates.push('connector = ?');
+      values.push(body.connector);
+    }
+    if (body.connector_event_type !== undefined) {
+      updates.push('connector_event_type = ?');
+      values.push(body.connector_event_type);
+    }
+    if (body.is_conversion !== undefined) {
+      updates.push('is_conversion = ?');
+      values.push(body.is_conversion ? 1 : 0);
+    }
+    if (body.position_col !== undefined) {
+      updates.push('position_col = ?');
+      values.push(body.position_col);
+    }
+    if (body.position_row !== undefined) {
+      updates.push('position_row = ?');
+      values.push(body.position_row);
     }
 
     if (updates.length > 0) {
