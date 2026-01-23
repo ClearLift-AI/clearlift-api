@@ -36,21 +36,26 @@ const meta: RevenueSourceMeta = {
  * - One-time charges (billing_reason IS NULL)
  * - New subscriptions (billing_reason = 'subscription_create')
  * Excludes renewals (billing_reason = 'subscription_cycle')
+ *
+ * Status can be:
+ * - 'succeeded' for charge objects
+ * - 'active' for subscription data stored in charges table
  */
 const CONVERSION_COUNT_SQL = `
   SUM(CASE
-    WHEN status = 'succeeded'
+    WHEN status IN ('succeeded', 'active')
       AND (billing_reason IS NULL OR billing_reason = 'subscription_create')
     THEN 1 ELSE 0
   END)
 `;
 
 /**
- * SQL fragment for calculating net revenue (all succeeded charges)
+ * SQL fragment for calculating net revenue (all succeeded/active charges)
+ * Accepts both charge status 'succeeded' and subscription status 'active'
  */
 const NET_REVENUE_SQL = `
   SUM(CASE
-    WHEN status = 'succeeded'
+    WHEN status IN ('succeeded', 'active')
     THEN amount_cents - COALESCE(refund_cents, 0)
     ELSE 0
   END)
@@ -69,6 +74,8 @@ const stripeProvider: RevenueSourceProvider = {
   },
 
   async getSummary(db: D1Database, orgId: string, hours: number): Promise<RevenueSourceSummary> {
+    // Note: stripe_created_at is stored as ISO format (2026-01-22T16:14:37.000Z)
+    // We need to convert it to SQLite datetime format for comparison
     const result = await db.prepare(`
       SELECT
         COUNT(*) as total_charges,
@@ -77,7 +84,7 @@ const stripeProvider: RevenueSourceProvider = {
         COUNT(DISTINCT customer_id) as unique_customers
       FROM stripe_charges
       WHERE organization_id = ?
-        AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
+        AND datetime(replace(replace(stripe_created_at, 'T', ' '), 'Z', '')) >= datetime('now', '-' || ? || ' hours')
     `).bind(orgId, hours).first<{
       total_charges: number;
       conversions: number;
@@ -93,15 +100,16 @@ const stripeProvider: RevenueSourceProvider = {
   },
 
   async getTimeSeries(db: D1Database, orgId: string, hours: number): Promise<RevenueSourceTimeSeries[]> {
+    // Note: stripe_created_at is stored as ISO format, convert for comparison and grouping
     const result = await db.prepare(`
       SELECT
-        strftime('%Y-%m-%d %H:00:00', stripe_created_at) as bucket,
+        strftime('%Y-%m-%d %H:00:00', datetime(replace(replace(stripe_created_at, 'T', ' '), 'Z', ''))) as bucket,
         ${CONVERSION_COUNT_SQL} as conversions,
         ${NET_REVENUE_SQL} as net_revenue_cents
       FROM stripe_charges
       WHERE organization_id = ?
-        AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
-      GROUP BY strftime('%Y-%m-%d %H:00:00', stripe_created_at)
+        AND datetime(replace(replace(stripe_created_at, 'T', ' '), 'Z', '')) >= datetime('now', '-' || ? || ' hours')
+      GROUP BY strftime('%Y-%m-%d %H:00:00', datetime(replace(replace(stripe_created_at, 'T', ' '), 'Z', '')))
       ORDER BY bucket ASC
     `).bind(orgId, hours).all<{
       bucket: string;

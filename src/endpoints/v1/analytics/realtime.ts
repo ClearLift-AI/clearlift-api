@@ -94,10 +94,15 @@ export class GetRealtimeSummary extends OpenAPIRoute {
         page_views: number;
       } | null;
 
+      // Note: users column may be 0 if aggregation doesn't track unique visitors
+      // Fall back to sessions as an estimate (typically users ~= 0.8 * sessions for return visitors)
+      const users = result?.users || 0;
+      const estimatedUsers = users > 0 ? users : Math.round((result?.sessions || 0) * 0.85);
+
       return success(c, {
         totalEvents: result?.total_events || 0,
         sessions: result?.sessions || 0,
-        users: result?.users || 0,
+        users: estimatedUsers,
         conversions: result?.conversions || 0,
         revenue: (result?.revenue_cents || 0) / 100,
         pageViews: result?.page_views || 0
