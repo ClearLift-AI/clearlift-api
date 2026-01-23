@@ -424,7 +424,7 @@ Returns stage-by-stage metrics for the acquisition flow:
       // Count conversion stages
       const conversionStages = stageMetrics.filter(s => s.is_conversion).length;
 
-      // Get traffic source breakdown (Direct vs UTM)
+      // Get traffic source breakdown (Direct vs UTM) using by_channel from daily_metrics
       let trafficSources = {
         direct_visitors: 0,
         utm_visitors: 0,
@@ -433,40 +433,58 @@ Returns stage-by-stage metrics for the acquisition flow:
 
       if (orgTag) {
         try {
-          // Get total sessions from daily_metrics
-          const totalResult = await analyticsDb.prepare(`
-            SELECT COALESCE(SUM(sessions), 0) as total_sessions
+          // Get total sessions and channel breakdown from daily_metrics
+          const metricsResult = await analyticsDb.prepare(`
+            SELECT sessions, by_channel
             FROM daily_metrics
             WHERE org_tag = ?
               AND date >= ?
               AND date <= ?
-          `).bind(orgTag, startDateStr, endDateStr).first<{ total_sessions: number }>();
+          `).bind(orgTag, startDateStr, endDateStr).all<{ sessions: number; by_channel: string | null }>();
 
-          const totalSessions = totalResult?.total_sessions || 0;
+          let totalSessions = 0;
+          let directEvents = 0;
+          let utmEvents = 0; // non-ad-platform UTM (email, social, referral)
+          let paidEvents = 0;
 
-          // Get UTM sessions (has utm_source)
-          const utmResult = await analyticsDb.prepare(`
-            SELECT COALESCE(SUM(sessions), 0) as utm_sessions
-            FROM utm_performance
-            WHERE org_tag = ?
-              AND date >= ?
-              AND date <= ?
-              AND utm_source IS NOT NULL
-              AND utm_source != ''
-              AND utm_source NOT IN ('google', 'facebook', 'meta', 'tiktok', 'fb', 'ig')
-          `).bind(orgTag, startDateStr, endDateStr).first<{ utm_sessions: number }>();
+          for (const row of metricsResult.results || []) {
+            totalSessions += row.sessions || 0;
 
-          const utmSessions = utmResult?.utm_sessions || 0;
+            if (row.by_channel) {
+              try {
+                const channels = JSON.parse(row.by_channel) as Record<string, number>;
+                // by_channel values: direct, paid_search, paid_social, organic_search, organic_social, email, referral, display
+                directEvents += channels.direct || 0;
+                // UTM = organic social + email + referral (non-paid traffic with UTMs)
+                utmEvents += (channels.organic_social || 0) + (channels.email || 0) + (channels.referral || 0);
+                // Paid = paid_search + paid_social + display
+                paidEvents += (channels.paid_search || 0) + (channels.paid_social || 0) + (channels.display || 0);
+              } catch (e) {
+                // Invalid JSON, skip
+              }
+            }
+          }
 
-          // Calculate direct (total minus UTM minus ad platform clicks)
-          const adPlatformClicks = topOfFunnelVisitors; // Already calculated from ad stages
-          const directVisitors = Math.max(0, totalSessions - utmSessions - adPlatformClicks);
+          // Calculate approximate session counts from event ratios
+          // Total events = direct + utm + paid + organic_search
+          const totalEvents = directEvents + utmEvents + paidEvents;
+          if (totalEvents > 0 && totalSessions > 0) {
+            // Scale based on event proportions
+            const directRatio = directEvents / totalEvents;
+            const utmRatio = utmEvents / totalEvents;
 
-          trafficSources = {
-            direct_visitors: directVisitors,
-            utm_visitors: utmSessions,
-            total_visitors: totalSessions,
-          };
+            trafficSources = {
+              direct_visitors: Math.round(totalSessions * directRatio),
+              utm_visitors: Math.round(totalSessions * utmRatio),
+              total_visitors: totalSessions,
+            };
+          } else {
+            trafficSources = {
+              direct_visitors: totalSessions,
+              utm_visitors: 0,
+              total_visitors: totalSessions,
+            };
+          }
         } catch (err) {
           console.warn("[FlowMetrics] Failed to get traffic sources:", err);
         }
