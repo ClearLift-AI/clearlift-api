@@ -463,21 +463,69 @@ export class GetRealtimeEvents extends OpenAPIRoute {
     }
 
     try {
-      // Return recent hourly summaries
+      // Get recent hourly data with by_page breakdown to simulate individual events
       const result = await analyticsDb.prepare(`
         SELECT
           hour as timestamp,
-          total_events,
-          page_views,
-          sessions,
-          conversions
+          by_page,
+          by_device
         FROM hourly_metrics
         WHERE org_tag = ?
+          AND by_page IS NOT NULL
         ORDER BY hour DESC
-        LIMIT ?
-      `).bind(orgTagMapping.short_tag, limit).all();
+        LIMIT 10
+      `).bind(orgTagMapping.short_tag).all();
 
-      return success(c, result.results || []);
+      // Expand by_page into individual "events" for the live feed
+      const events: Array<{
+        timestamp: string;
+        event_type: string;
+        page_path: string;
+        device_type: string;
+        count: number;
+      }> = [];
+
+      for (const row of (result.results || []) as { timestamp: string; by_page: string; by_device: string | null }[]) {
+        try {
+          const pages = JSON.parse(row.by_page || '{}') as Record<string, number>;
+          const devices = row.by_device ? JSON.parse(row.by_device) as Record<string, number> : {};
+
+          // Determine primary device type
+          let primaryDevice = 'desktop';
+          let maxDeviceCount = 0;
+          for (const [device, count] of Object.entries(devices)) {
+            const deviceCount = typeof count === 'number' ? count : 0;
+            if (deviceCount > maxDeviceCount) {
+              maxDeviceCount = deviceCount;
+              primaryDevice = device;
+            }
+          }
+
+          // Create one "event" per page with count
+          for (const [page, data] of Object.entries(pages)) {
+            const count = typeof data === 'number' ? data : (data as any).events || 1;
+            events.push({
+              timestamp: row.timestamp,
+              event_type: 'page_view',
+              page_path: page,
+              device_type: primaryDevice,
+              count,
+            });
+          }
+        } catch (e) {
+          // Skip invalid JSON
+        }
+      }
+
+      // Sort by count (most popular pages first) within each hour, then limit
+      events.sort((a, b) => {
+        if (a.timestamp !== b.timestamp) {
+          return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+        }
+        return b.count - a.count;
+      });
+
+      return success(c, events.slice(0, limit));
     } catch (err) {
       console.error('[Realtime] Recent events query failed:', err);
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
