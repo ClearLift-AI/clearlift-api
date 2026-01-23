@@ -203,77 +203,131 @@ Returns stage-by-stage metrics for the acquisition flow:
       const startDateStr = startDate.toISOString().split("T")[0];
       const endDateStr = endDate.toISOString().split("T")[0];
 
-      // 5. Query stage metrics from journeys and goal_conversions
+      // 5. Query stage metrics based on connector type
       const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
 
-      // Build stage metrics
+      // Build stage metrics - query each connector's data source
       const stageMetrics: StageMetrics[] = [];
       let totalRevenueCents = 0;
-      let maxDropoffRate = 0;
-      let bottleneckStageId: string | null = null;
 
-      for (let i = 0; i < goals.length; i++) {
-        const goal = goals[i];
+      for (const goal of goals) {
         const isConversion = Boolean(goal.is_conversion) || goal.type === "conversion";
         const valueCents = goal.fixed_value_cents || goal.default_value_cents || 0;
+        const connector = goal.connector || "clearlift_tag";
 
-        // Query conversions for this goal
+        let visitors = 0;
         let conversions = 0;
         let conversionValueCents = 0;
 
-        if (orgTag) {
-          try {
-            // Query goal_conversions from ANALYTICS_DB
-            const convResult = await analyticsDb.prepare(`
+        try {
+          // Query based on connector type
+          if (connector === "google_ads") {
+            // Google Ads clicks
+            const result = await analyticsDb.prepare(`
+              SELECT COALESCE(SUM(m.clicks), 0) as clicks
+              FROM google_campaigns c
+              LEFT JOIN google_campaign_daily_metrics m
+                ON c.id = m.campaign_ref
+                AND m.metric_date >= ?
+                AND m.metric_date <= ?
+              WHERE c.organization_id = ?
+            `).bind(startDateStr, endDateStr, orgId).first<{ clicks: number }>();
+            visitors = result?.clicks || 0;
+            conversions = visitors; // For traffic stages, visitors = conversions
+          } else if (connector === "facebook_ads") {
+            // Facebook Ads clicks
+            const result = await analyticsDb.prepare(`
+              SELECT COALESCE(SUM(m.clicks), 0) as clicks
+              FROM facebook_campaigns c
+              LEFT JOIN facebook_campaign_daily_metrics m
+                ON c.id = m.campaign_ref
+                AND m.metric_date >= ?
+                AND m.metric_date <= ?
+              WHERE c.organization_id = ?
+            `).bind(startDateStr, endDateStr, orgId).first<{ clicks: number }>();
+            visitors = result?.clicks || 0;
+            conversions = visitors;
+          } else if (connector === "tiktok_ads") {
+            // TikTok Ads clicks
+            const result = await analyticsDb.prepare(`
+              SELECT COALESCE(SUM(m.clicks), 0) as clicks
+              FROM tiktok_campaigns c
+              LEFT JOIN tiktok_campaign_daily_metrics m
+                ON c.id = m.campaign_ref
+                AND m.metric_date >= ?
+                AND m.metric_date <= ?
+              WHERE c.organization_id = ?
+            `).bind(startDateStr, endDateStr, orgId).first<{ clicks: number }>();
+            visitors = result?.clicks || 0;
+            conversions = visitors;
+          } else if (connector === "stripe") {
+            // Stripe conversions (new subscriptions only)
+            const result = await analyticsDb.prepare(`
               SELECT
-                COUNT(*) as count,
-                COALESCE(SUM(value_cents), 0) as value_cents
-              FROM goal_conversions
-              WHERE goal_id = ?
-                AND conversion_timestamp >= ?
-                AND conversion_timestamp <= ?
-            `).bind(goal.id, `${startDateStr}T00:00:00Z`, `${endDateStr}T23:59:59Z`)
-              .first() as { count: number; value_cents: number } | null;
+                COUNT(*) as conversions,
+                COALESCE(SUM(amount_cents), 0) as revenue_cents
+              FROM stripe_charges
+              WHERE organization_id = ?
+                AND DATE(stripe_created_at) >= ?
+                AND DATE(stripe_created_at) <= ?
+                AND (
+                  billing_reason = 'subscription_create'
+                  OR (billing_reason IS NULL AND status = 'succeeded')
+                )
+            `).bind(orgId, startDateStr, endDateStr).first<{ conversions: number; revenue_cents: number }>();
+            conversions = result?.conversions || 0;
+            visitors = conversions;
+            conversionValueCents = result?.revenue_cents || 0;
+          } else if (connector === "shopify") {
+            // Shopify orders
+            const result = await analyticsDb.prepare(`
+              SELECT
+                COUNT(*) as conversions,
+                COALESCE(SUM(total_price_cents), 0) as revenue_cents
+              FROM shopify_orders
+              WHERE organization_id = ?
+                AND DATE(created_at) >= ?
+                AND DATE(created_at) <= ?
+            `).bind(orgId, startDateStr, endDateStr).first<{ conversions: number; revenue_cents: number }>();
+            conversions = result?.conversions || 0;
+            visitors = conversions;
+            conversionValueCents = result?.revenue_cents || 0;
+          } else if (connector === "clearlift_tag" && orgTag) {
+            // Tag events - query based on trigger_config
+            const triggerConfig = goal.trigger_config ? JSON.parse(goal.trigger_config) : {};
+            const eventType = goal.connector_event_type || triggerConfig.event_type || "page_view";
+            const pagePattern = triggerConfig.page_pattern || "";
 
-            conversions = convResult?.count || 0;
-            conversionValueCents = convResult?.value_cents || 0;
-          } catch (err) {
-            // Table may not exist
-            console.warn(`[FlowMetrics] Failed to query goal_conversions for ${goal.id}:`, err);
+            if (eventType === "page_view" && pagePattern) {
+              // Query page views matching pattern from analytics tables
+              const result = await analyticsDb.prepare(`
+                SELECT COUNT(DISTINCT session_id) as visitors
+                FROM utm_performance
+                WHERE org_tag = ?
+                  AND timestamp >= ?
+                  AND timestamp <= ?
+                  AND page_path LIKE ?
+              `).bind(orgTag, `${startDateStr}T00:00:00Z`, `${endDateStr}T23:59:59Z`, `%${pagePattern}%`)
+                .first<{ visitors: number }>();
+              visitors = result?.visitors || 0;
+              conversions = visitors;
+            } else {
+              // Fallback: estimate from UTM sessions
+              const result = await analyticsDb.prepare(`
+                SELECT COUNT(DISTINCT session_id) as sessions
+                FROM utm_performance
+                WHERE org_tag = ?
+                  AND timestamp >= ?
+                  AND timestamp <= ?
+              `).bind(orgTag, `${startDateStr}T00:00:00Z`, `${endDateStr}T23:59:59Z`)
+                .first<{ sessions: number }>();
+              visitors = result?.sessions || 0;
+              conversions = visitors;
+            }
           }
+        } catch (err) {
+          console.warn(`[FlowMetrics] Query failed for ${goal.name} (${connector}):`, err);
         }
-
-        // Estimate visitors based on funnel position
-        // In a real implementation, this would query events matching the goal's trigger_config
-        // For now, we estimate based on conversion rates
-        let visitors = conversions;
-
-        // If this is a later stage, estimate visitors from earlier stages
-        if (i > 0 && stageMetrics[i - 1]) {
-          const prevStage = stageMetrics[i - 1];
-          // Use previous stage visitors minus dropoff
-          visitors = Math.max(conversions, Math.floor(prevStage.visitors * 0.7)); // Estimate 30% dropoff
-        } else if (i === 0 && conversions > 0) {
-          // First stage - estimate total funnel entry
-          // Use a typical 5-10% conversion rate to estimate top of funnel
-          visitors = Math.max(conversions, conversions * 10);
-        }
-
-        // Calculate dropoff rate (compared to previous stage)
-        let dropoffRate = 0;
-        if (i > 0 && stageMetrics[i - 1] && stageMetrics[i - 1].visitors > 0) {
-          dropoffRate = Math.round((1 - visitors / stageMetrics[i - 1].visitors) * 100 * 100) / 100;
-          dropoffRate = Math.max(0, Math.min(100, dropoffRate));
-        }
-
-        // Track bottleneck (highest dropoff rate, excluding first stage)
-        if (i > 0 && dropoffRate > maxDropoffRate) {
-          maxDropoffRate = dropoffRate;
-          bottleneckStageId = goal.id;
-        }
-
-        // Estimate avg time to next (would need event timestamps in practice)
-        const avgTimeToNextHours: number | null = i < goals.length - 1 ? Math.random() * 24 + 1 : null;
 
         const metrics: StageMetrics = {
           id: goal.id,
@@ -281,13 +335,13 @@ Returns stage-by-stage metrics for the acquisition flow:
           type: goal.type,
           connector: goal.connector,
           connector_event_type: goal.connector_event_type,
-          position_row: goal.position_row ?? i,
+          position_row: goal.position_row ?? stageMetrics.length,
           position_col: goal.position_col ?? 0,
           is_conversion: isConversion,
           visitors,
           conversions,
-          dropoff_rate: dropoffRate,
-          avg_time_to_next_hours: avgTimeToNextHours ? Math.round(avgTimeToNextHours * 10) / 10 : null,
+          dropoff_rate: 0, // Calculate after all stages
+          avg_time_to_next_hours: null,
           conversion_value_cents: isConversion ? (conversionValueCents || conversions * valueCents) : 0,
         };
 
@@ -295,6 +349,42 @@ Returns stage-by-stage metrics for the acquisition flow:
 
         if (isConversion) {
           totalRevenueCents += metrics.conversion_value_cents;
+        }
+      }
+
+      // Calculate dropoff rates based on funnel position
+      // Group by position_row, then calculate dropoff between rows
+      const rowGroups = new Map<number, StageMetrics[]>();
+      for (const stage of stageMetrics) {
+        const row = stage.position_row;
+        if (!rowGroups.has(row)) rowGroups.set(row, []);
+        rowGroups.get(row)!.push(stage);
+      }
+
+      const sortedRows = Array.from(rowGroups.keys()).sort((a, b) => a - b);
+      let maxDropoffRate = 0;
+      let bottleneckStageId: string | null = null;
+
+      for (let i = 1; i < sortedRows.length; i++) {
+        const prevRow = sortedRows[i - 1];
+        const currRow = sortedRows[i];
+        const prevStages = rowGroups.get(prevRow) || [];
+        const currStages = rowGroups.get(currRow) || [];
+
+        // Sum visitors from previous row
+        const prevVisitors = prevStages.reduce((sum, s) => sum + s.visitors, 0);
+
+        // Calculate dropoff for each stage in current row
+        for (const stage of currStages) {
+          if (prevVisitors > 0) {
+            stage.dropoff_rate = Math.round((1 - stage.visitors / prevVisitors) * 100 * 10) / 10;
+            stage.dropoff_rate = Math.max(0, Math.min(100, stage.dropoff_rate));
+
+            if (stage.dropoff_rate > maxDropoffRate) {
+              maxDropoffRate = stage.dropoff_rate;
+              bottleneckStageId = stage.id;
+            }
+          }
         }
       }
 
