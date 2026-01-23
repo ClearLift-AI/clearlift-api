@@ -405,12 +405,15 @@ Returns stage-by-stage metrics for the acquisition flow:
         }
       }
 
-      // Calculate overall conversion rate (first stage visitors to final conversion)
-      const firstStageVisitors = stageMetrics[0]?.visitors || 0;
+      // Calculate overall conversion rate (top of funnel visitors to final conversion)
+      // Use sum of all row 0 (entry point) visitors, not just stageMetrics[0]
+      const topOfFunnelRow = sortedRows[0] ?? 0;
+      const topOfFunnelVisitors = (rowGroups.get(topOfFunnelRow) || [])
+        .reduce((sum, s) => sum + s.visitors, 0);
       const finalConversions = stageMetrics.filter(s => s.is_conversion)
         .reduce((sum, s) => sum + s.conversions, 0);
-      const overallConversionRate = firstStageVisitors > 0
-        ? Math.round((finalConversions / firstStageVisitors) * 100 * 100) / 100
+      const overallConversionRate = topOfFunnelVisitors > 0
+        ? Math.round((finalConversions / topOfFunnelVisitors) * 100 * 100) / 100
         : 0;
 
       // Count conversion stages
