@@ -299,29 +299,46 @@ Returns stage-by-stage metrics for the acquisition flow:
             const pagePattern = triggerConfig.page_pattern || "";
 
             if (eventType === "page_view" && pagePattern) {
-              // Query page views matching pattern from analytics tables
+              // Query page views from hourly_metrics.by_page JSON column
               const result = await analyticsDb.prepare(`
-                SELECT COUNT(DISTINCT session_id) as visitors
-                FROM utm_performance
+                SELECT by_page FROM hourly_metrics
                 WHERE org_tag = ?
-                  AND timestamp >= ?
-                  AND timestamp <= ?
-                  AND page_path LIKE ?
-              `).bind(orgTag, `${startDateStr}T00:00:00Z`, `${endDateStr}T23:59:59Z`, `%${pagePattern}%`)
-                .first<{ visitors: number }>();
-              visitors = result?.visitors || 0;
+                  AND DATE(hour) >= ?
+                  AND DATE(hour) <= ?
+                  AND by_page IS NOT NULL
+              `).bind(orgTag, startDateStr, endDateStr).all();
+
+              // Aggregate page views matching the pattern
+              let totalViews = 0;
+              for (const row of (result.results || []) as { by_page: string }[]) {
+                try {
+                  const pages = JSON.parse(row.by_page || '{}');
+                  for (const [page, data] of Object.entries(pages as Record<string, any>)) {
+                    // Check if page matches pattern (simple substring match)
+                    if (page.includes(pagePattern)) {
+                      if (typeof data === 'number') {
+                        totalViews += data;
+                      } else {
+                        totalViews += data.events || data.count || 0;
+                      }
+                    }
+                  }
+                } catch (e) {
+                  // Skip invalid JSON
+                }
+              }
+              visitors = totalViews;
               conversions = visitors;
             } else {
-              // Fallback: estimate from UTM sessions
+              // Fallback: get total page views from daily_metrics
               const result = await analyticsDb.prepare(`
-                SELECT COUNT(DISTINCT session_id) as sessions
-                FROM utm_performance
+                SELECT COALESCE(SUM(page_views), 0) as total_views
+                FROM daily_metrics
                 WHERE org_tag = ?
-                  AND timestamp >= ?
-                  AND timestamp <= ?
-              `).bind(orgTag, `${startDateStr}T00:00:00Z`, `${endDateStr}T23:59:59Z`)
-                .first<{ sessions: number }>();
-              visitors = result?.sessions || 0;
+                  AND date >= ?
+                  AND date <= ?
+              `).bind(orgTag, startDateStr, endDateStr).first<{ total_views: number }>();
+              visitors = result?.total_views || 0;
               conversions = visitors;
             }
           }
