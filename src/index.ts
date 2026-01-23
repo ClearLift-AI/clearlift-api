@@ -167,6 +167,22 @@ import {
   TestAttentiveConnection
 } from "./endpoints/v1/connectors/attentive";
 import {
+  ConnectLemonSqueezy,
+  TestLemonSqueezyConnection
+} from "./endpoints/v1/connectors/lemon-squeezy";
+import {
+  ConnectPaddle,
+  TestPaddleConnection
+} from "./endpoints/v1/connectors/paddle";
+import {
+  ConnectChargebee,
+  TestChargebeeConnection
+} from "./endpoints/v1/connectors/chargebee";
+import {
+  ConnectRecurly,
+  TestRecurlyConnection
+} from "./endpoints/v1/connectors/recurly";
+import {
   CreateFilterRule,
   ListFilterRules,
   UpdateFilterRule,
@@ -562,6 +578,22 @@ openapi.post("/v1/connectors/attentive/connect", auth, ConnectAttentive);
 openapi.put("/v1/connectors/attentive/:connection_id/config", auth, UpdateAttentiveConfig);
 openapi.post("/v1/connectors/attentive/:connection_id/sync", auth, TriggerAttentiveSync);
 openapi.post("/v1/connectors/attentive/:connection_id/test", auth, TestAttentiveConnection);
+
+// Lemon Squeezy-specific connector endpoints
+openapi.post("/v1/connectors/lemon-squeezy/connect", auth, ConnectLemonSqueezy);
+openapi.post("/v1/connectors/lemon-squeezy/:connection_id/test", auth, TestLemonSqueezyConnection);
+
+// Paddle-specific connector endpoints
+openapi.post("/v1/connectors/paddle/connect", auth, ConnectPaddle);
+openapi.post("/v1/connectors/paddle/:connection_id/test", auth, TestPaddleConnection);
+
+// Chargebee-specific connector endpoints
+openapi.post("/v1/connectors/chargebee/connect", auth, ConnectChargebee);
+openapi.post("/v1/connectors/chargebee/:connection_id/test", auth, TestChargebeeConnection);
+
+// Recurly-specific connector endpoints
+openapi.post("/v1/connectors/recurly/connect", auth, ConnectRecurly);
+openapi.post("/v1/connectors/recurly/:connection_id/test", auth, TestRecurlyConnection);
 
 // Generic OAuth provider endpoints (after platform-specific routes)
 openapi.post("/v1/connectors/:provider/connect", auth, InitiateOAuthFlow);
