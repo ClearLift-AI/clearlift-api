@@ -18,6 +18,7 @@ interface StageMetrics {
   connector: string | null;
   connector_event_type: string | null;
   position_row: number;
+  position_col: number;
   is_conversion: boolean;
   visitors: number;
   conversions: number;
@@ -66,6 +67,7 @@ Returns stage-by-stage metrics for the acquisition flow:
                   connector: z.string().nullable(),
                   connector_event_type: z.string().nullable(),
                   position_row: z.number(),
+                  position_col: z.number(),
                   is_conversion: z.boolean(),
                   visitors: z.number(),
                   conversions: z.number(),
@@ -115,11 +117,12 @@ Returns stage-by-stage metrics for the acquisition flow:
         SELECT
           id, name, type, connector, connector_event_type,
           COALESCE(position_row, priority, 0) as position_row,
+          COALESCE(position_col, 0) as position_col,
           is_conversion, default_value_cents, fixed_value_cents,
           value_type, trigger_config
         FROM conversion_goals
         WHERE organization_id = ? AND is_active = 1
-        ORDER BY position_row ASC, created_at ASC
+        ORDER BY position_row ASC, position_col ASC, created_at ASC
       `).bind(orgId).all<{
         id: string;
         name: string;
@@ -127,6 +130,7 @@ Returns stage-by-stage metrics for the acquisition flow:
         connector: string | null;
         connector_event_type: string | null;
         position_row: number;
+        position_col: number;
         is_conversion: number | null;
         default_value_cents: number;
         fixed_value_cents: number | null;
@@ -277,7 +281,8 @@ Returns stage-by-stage metrics for the acquisition flow:
           type: goal.type,
           connector: goal.connector,
           connector_event_type: goal.connector_event_type,
-          position_row: goal.position_row || i,
+          position_row: goal.position_row ?? i,
+          position_col: goal.position_col ?? 0,
           is_conversion: isConversion,
           visitors,
           conversions,
