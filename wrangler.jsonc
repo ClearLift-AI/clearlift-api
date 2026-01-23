@@ -205,7 +205,8 @@
       "vars": {
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
         "R2_BUCKET_NAME": "clearlift-db",
-        "R2_SQL_TABLE": "clearlift.event_data_v4_1"
+        "R2_SQL_TABLE": "clearlift.event_data_v4_1",
+        "USE_D1_ANALYTICS": "true"
       },
       "d1_databases": [
         {
@@ -219,6 +220,12 @@
           "database_name": "clearlift-ai-prod",
           "database_id": "3fb300f4-4523-4a29-9efc-955d1684f392",
           "migrations_dir": "migrations-ai"
+        },
+        {
+          "binding": "ANALYTICS_DB",
+          "database_name": "clearlift-analytics-prod",
+          "database_id": "a69beb57-92c9-489c-8f55-86205b613010",
+          "migrations_dir": "migrations-analytics"
         },
         // Platform data shards
         {
@@ -260,6 +267,13 @@
           "name": "attribution-workflow-local",
           "binding": "ATTRIBUTION_WORKFLOW",
           "class_name": "AttributionWorkflow"
+        }
+      ],
+      // KV namespace for local caching (emulated by wrangler)
+      "kv_namespaces": [
+        {
+          "binding": "CACHE",
+          "id": "5492358b37c14b7b935de58c8597e73f"
         }
       ]
       // No secrets_store_secrets - uses .dev.vars instead

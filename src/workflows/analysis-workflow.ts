@@ -27,7 +27,10 @@ import {
   serializeEntityTree,
   deserializeEntityTree,
   getEntitiesAtLevel,
-  createLimiter
+  createLimiter,
+  buildHierarchySkipSet,
+  generateHierarchySkipSummary,
+  isActiveStatus
 } from './analysis-helpers';
 import { EntityTreeBuilder, Entity, EntityLevel, Platform } from '../services/analysis/entity-tree';
 import { MetricsFetcher, TimeseriesMetric, DateRange } from '../services/analysis/metrics-fetcher';
@@ -50,6 +53,16 @@ import {
   isExplorationTool,
   ExplorationToolExecutor
 } from '../services/analysis/exploration-tools';
+import {
+  createSimulationCache,
+  executeSimulateChange,
+  executeRecommendationWithSimulation,
+  getToolsWithSimulation,
+  requiresSimulation,
+  SimulationCache,
+  ToolExecutionContext,
+  SIMULATE_CHANGE_TOOL
+} from '../services/analysis/simulation-executor';
 import { getSecret } from '../utils/secrets';
 
 /**
@@ -102,31 +115,52 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     let summariesByEntity: Record<string, string> = {};
     let processedCount = 0;
 
-    // Steps 2-5: Process each level
+    // Build hierarchy skip set - entities to skip because their parent is disabled
+    // This dramatically reduces LLM calls for accounts with many paused campaigns
+    const hierarchySkipSet = buildHierarchySkipSet(entityTree);
+    console.log(`[Analysis] Hierarchy skip set: ${hierarchySkipSet.size} entities will be skipped due to disabled parents`);
+
+    // Steps 2-5: Process each level in batches to avoid 1000 subrequest limit per WORKFLOW INSTANCE
+    // With skipLogging optimization: 1 LLM call + 2 D1 queries per entity = ~3 subrequests
+    // Plus 1 job update per batch. Target ~300 entities total per workflow instance.
+    // Use batch size 15 = ~45 subrequests per batch + overhead
+    const BATCH_SIZE = 15;
     const levels: AnalysisLevel[] = ['ad', 'adset', 'campaign', 'account'];
 
     for (const level of levels) {
-      const result = await step.do(`analyze_${level}s`, {
-        retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' },
-        timeout: '15 minutes'
-      }, async () => {
-        return await this.analyzeLevel(
-          orgId,
-          level as EntityLevel,
-          entityTree,
-          summariesByEntity,
-          dateRange,
-          runId,
-          days,
-          jobId,
-          processedCount,
-          config?.llm
-        );
-      });
+      const entities = getEntitiesAtLevel(entityTree, level as EntityLevel);
+      const totalBatches = Math.ceil(entities.length / BATCH_SIZE);
 
-      // Merge new summaries
-      summariesByEntity = { ...summariesByEntity, ...result.summaries };
-      processedCount = result.processedCount;
+      // Process entities in batches
+      for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+        const batchStart = batchIndex * BATCH_SIZE;
+        const batchEnd = Math.min(batchStart + BATCH_SIZE, entities.length);
+        const batchEntities = entities.slice(batchStart, batchEnd);
+
+        const result = await step.do(`analyze_${level}s_batch_${batchIndex + 1}`, {
+          retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' },
+          timeout: '10 minutes'
+        }, async () => {
+          return await this.analyzeLevelBatch(
+            orgId,
+            level as EntityLevel,
+            batchEntities,
+            summariesByEntity,
+            dateRange,
+            runId,
+            days,
+            jobId,
+            processedCount,
+            config?.llm,
+            hierarchySkipSet,
+            entityTree
+          );
+        });
+
+        // Merge new summaries
+        summariesByEntity = { ...summariesByEntity, ...result.summaries };
+        processedCount = result.processedCount;
+      }
     }
 
     // Step 6: Cross-platform summary
@@ -169,6 +203,11 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     let accumulatedInsightId: string | null = null;
     let accumulatedInsights: AccumulatedInsightData[] = [];
     let hasInsight = false;  // Track if we've generated an insight
+
+    // Create simulation cache for this analysis run (shared across iterations)
+    // This cache persists the simulation results so the LLM must acknowledge them
+    // before creating recommendations with REAL numbers instead of guessed ones.
+    const simulationCache = createSimulationCache();
 
     // Initialize agentic loop context
     const agenticContext = await step.do('agentic_init', {
@@ -213,7 +252,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           enableExploration,
           accumulatedInsightId,
           accumulatedInsights,
-          hasInsight
+          hasInsight,
+          simulationCache  // Pass simulation cache for enforced simulation before recommendations
         );
       });
 
@@ -283,17 +323,23 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
   /**
    * Analyze all entities at a specific level
    */
-  private async analyzeLevel(
+  /**
+   * Analyze a batch of entities at a specific level
+   * Split from analyzeLevel to avoid 1000 subrequest limit
+   */
+  private async analyzeLevelBatch(
     orgId: string,
     level: EntityLevel,
-    entityTree: SerializedEntityTree,
+    entities: SerializedEntity[],
     existingSummaries: Record<string, string>,
     dateRange: DateRange,
     runId: string,
     days: number,
     jobId: string,
     startingCount: number,
-    llmConfig?: LLMRuntimeConfig
+    llmConfig?: LLMRuntimeConfig,
+    hierarchySkipSet?: Set<string>,
+    entityTree?: SerializedEntityTree
   ): Promise<LevelAnalysisResult> {
     // Use D1 ANALYTICS_DB for metrics
     const metrics = new MetricsFetcher(this.env.ANALYTICS_DB);
@@ -307,43 +353,60 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     const logger = new AnalysisLogger(this.env.AI_DB);
     const jobs = new JobManager(this.env.AI_DB);
 
-    const entities = getEntitiesAtLevel(entityTree, level);
-    const limiter = createLimiter(2); // Max 2 concurrent LLM calls
+    const limiter = createLimiter(1); // Max 1 concurrent LLM call to stay under subrequest limit
 
     const summaries: Record<string, string> = {};
     let processedCount = startingCount;
 
-    // Process all entities at this level in parallel (with concurrency limit)
-    await Promise.all(
-      entities.map(entity =>
-        limiter(async () => {
-          const summary = await this.analyzeEntity(
-            orgId,
-            entity,
-            level as AnalysisLevel,
-            dateRange,
-            existingSummaries,
-            runId,
-            days,
-            metrics,
-            llm,
-            prompts,
-            logger,
-            llmConfig
-          );
+    // Process batch entities sequentially to minimize concurrent subrequests
+    // NOTE: Job progress is updated once at end of batch, not per entity (saves D1 calls)
+    let llmCallCount = 0;
+    let skippedCount = 0;
+    let hierarchySkippedCount = 0;
 
-          summaries[entity.id] = summary;
-          processedCount++;
-          await jobs.updateProgress(jobId, processedCount, level as AnalysisLevel);
-        })
-      )
-    );
+    for (const entity of entities) {
+      // Note: Hierarchy skip moved INSIDE analyzeEntity so we can check activity first
+      // If parent is disabled BUT entity had recent spend, we still want to analyze it
+
+      const summary = await this.analyzeEntity(
+        orgId,
+        entity,
+        level as AnalysisLevel,
+        dateRange,
+        existingSummaries,
+        runId,
+        days,
+        metrics,
+        llm,
+        prompts,
+        logger,
+        llmConfig,
+        true  // skipLogging - skip per-entity logging to reduce D1 calls
+      );
+
+      // Track if this was an LLM call or a skip (status-only summaries start with "Status:")
+      if (summary.startsWith('Status:')) {
+        skippedCount++;
+      } else {
+        llmCallCount++;
+      }
+
+      summaries[entity.id] = summary;
+      processedCount++;
+    }
+
+    // Log batch efficiency
+    console.log(`[Analysis] ${level} batch: ${llmCallCount} LLM calls, ${skippedCount} skipped (inactive/no data), ${hierarchySkippedCount} skipped (parent disabled)`);
+
+    // Single D1 update at end of batch (instead of per-entity)
+    await jobs.updateProgress(jobId, processedCount, level as AnalysisLevel);
 
     return { summaries, processedCount };
   }
 
   /**
    * Analyze a single entity
+   * @param skipLogging - if true, skip per-entity logging to reduce D1 calls
    */
   private async analyzeEntity(
     orgId: string,
@@ -357,7 +420,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     llm: LLMRouter,
     prompts: PromptManager,
     logger: AnalysisLogger,
-    llmConfig?: LLMRuntimeConfig
+    llmConfig?: LLMRuntimeConfig,
+    skipLogging: boolean = false
   ): Promise<string> {
     // Get metrics for this entity
     let entityMetrics: TimeseriesMetric[];
@@ -377,6 +441,38 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         dateRange
       );
     }
+
+    // === SKIP LLM only if NO activity in the analysis window ===
+    // Key insight: If entity had spend in last 7 days, analyze it even if now paused
+    // This helps understand recent performance before the pause
+    const hasActivity = entityMetrics.length > 0 && entityMetrics.some(m =>
+      (m.spend_cents && m.spend_cents > 0) ||
+      (m.impressions && m.impressions > 0)
+    );
+    const isActive = entity.status === 'ACTIVE' || entity.status === 'ENABLED';
+
+    // Only skip if there's NO activity to analyze
+    // If paused but had recent spend → still analyze to understand performance
+    if (!hasActivity) {
+      const statusInfo = isActive
+        ? `Status: ${entity.status} (no activity in ${days}-day window)`
+        : `Status: ${entity.status}`;
+
+      // For parent entities, still include child summary rollup
+      if (entity.children.length > 0) {
+        const activeChildren = entity.children.filter(c =>
+          c.status === 'ACTIVE' || c.status === 'ENABLED'
+        ).length;
+        const totalChildren = entity.children.length;
+        const childType = entity.level === 'campaign' ? 'ad sets' : entity.level === 'adset' ? 'ads' : 'children';
+        return `${statusInfo}. Contains ${activeChildren}/${totalChildren} active ${childType}.`;
+      }
+
+      return statusInfo;
+    }
+    // === END SKIP LLM ===
+
+    // If we get here, entity has activity - analyze with LLM even if currently paused
 
     // Get child summaries for non-leaf levels
     const childSummaries = entity.children.map(child => ({
@@ -418,35 +514,37 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       llmConfig
     );
 
-    // Log the call
-    await logger.logCall({
-      orgId,
-      level,
-      platform: entity.platform,
-      entityId: entity.id,
-      entityName: entity.name,
-      provider: response.provider,
-      model: response.model,
-      inputTokens: response.inputTokens,
-      outputTokens: response.outputTokens,
-      latencyMs: response.latencyMs,
-      prompt: userPrompt,
-      response: response.content,
-      analysisRunId: runId
-    });
+    // Log the call (skip in batch mode to reduce D1 calls)
+    if (!skipLogging) {
+      await logger.logCall({
+        orgId,
+        level,
+        platform: entity.platform,
+        entityId: entity.id,
+        entityName: entity.name,
+        provider: response.provider,
+        model: response.model,
+        inputTokens: response.inputTokens,
+        outputTokens: response.outputTokens,
+        latencyMs: response.latencyMs,
+        prompt: userPrompt,
+        response: response.content,
+        analysisRunId: runId
+      });
 
-    // Save summary
-    await this.saveSummary(
-      orgId,
-      runId,
-      level,
-      entity.platform,
-      entity.id,
-      entity.name,
-      response.content,
-      entityMetrics,
-      days
-    );
+      // Save summary (skip in batch mode to reduce D1 calls - summaries stored in workflow state)
+      await this.saveSummary(
+        orgId,
+        runId,
+        level,
+        entity.platform,
+        entity.id,
+        entity.name,
+        response.content,
+        entityMetrics,
+        days
+      );
+    }
 
     return response.content;
   }
@@ -732,9 +830,25 @@ For specific, executable changes:
 4. For pausing: recommend for entities with poor ROAS (<1.5), high CPA, or declining trends
 5. Be specific about entities - use their actual IDs and names
 
+## CRITICAL: SIMULATION REQUIRED FOR SET_BUDGET AND SET_STATUS
+Before using set_budget or set_status, you MUST first call simulate_change to get the REAL mathematical impact:
+
+1. Call simulate_change with the action (pause/enable/increase_budget/decrease_budget), entity_type, and entity_id
+2. Review the simulation results showing ACTUAL CAC impact calculated from historical data
+3. If the simulation supports your recommendation (CAC improves or tradeoff is acceptable), call set_budget/set_status
+4. The system will REJECT recommendations without simulation - it will auto-run the simulation and ask you to review
+
+DO NOT GUESS impact percentages. The simulation calculates them mathematically using:
+- For pause/enable: Simple subtraction/addition of entity's spend and conversions
+- For budget changes: Diminishing returns model fitted to historical efficiency data
+
+The simulation result will show you the EXACT impact and you must acknowledge it before proceeding.
+
 ## TOOL BEHAVIOR
+- simulate_change: Use BEFORE set_budget or set_status. Calculates real mathematical impact. Free to call multiple times.
 - general_insight: REQUIRED at least once. All calls ACCUMULATE into a single document. Does NOT count toward your 3 action recommendation limit.
-- set_budget/set_status/set_audience/reallocate_budget: Up to 3 total action recommendations allowed.
+- set_budget/set_status: REQUIRE simulation first. Up to 3 total action recommendations allowed.
+- set_audience/reallocate_budget: Up to 3 total action recommendations allowed.
 - terminate_analysis: Call this when you have generated an insight AND made sufficient action recommendations (or determined no further actionable items exist).
 
 ## WHEN TO USE terminate_analysis
@@ -786,7 +900,8 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     enableExploration: boolean,
     existingAccumulatedInsightId: string | null,
     existingAccumulatedInsights: AccumulatedInsightData[],
-    existingHasInsight: boolean
+    existingHasInsight: boolean,
+    simulationCache: SimulationCache  // Shared across iterations for simulation enforcement
   ): Promise<AgenticIterationResult> {
     // Clone accumulated insights array to avoid mutation
     let accumulatedInsightId = existingAccumulatedInsightId;
@@ -794,9 +909,12 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     const actionRecommendations = [...existingActionRecommendations];
     const explorationExecutor = new ExplorationToolExecutor(this.env.ANALYTICS_DB);
 
-    const tools = enableExploration
+    // Build tools list with simulate_change at the front
+    // This makes the LLM more likely to use it before making recommendations
+    const baseTools = enableExploration
       ? [...getAnthropicTools(), ...getExplorationTools()]
       : getAnthropicTools();
+    const tools = getToolsWithSimulation(baseTools);
 
     // Get API key
     const anthropicKey = await getSecret(this.env.ANTHROPIC_API_KEY);
@@ -941,6 +1059,31 @@ If you cannot find any actionable recommendations, you MUST still generate an in
         continue;
       }
 
+      // Handle simulate_change tool - this runs BEFORE recommendations
+      // The simulation cache is shared across iterations so LLM must acknowledge results
+      if (toolUse.name === 'simulate_change') {
+        const simContext: ToolExecutionContext = {
+          orgId,
+          analysisRunId: runId,
+          analyticsDb: this.env.ANALYTICS_DB,
+          aiDb: this.env.AI_DB,
+          simulationCache
+        };
+
+        const simResult = await executeSimulateChange(toolUse.input, simContext);
+
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify({
+            success: simResult.success,
+            message: simResult.message,
+            data: simResult.data
+          })
+        });
+        continue;
+      }
+
       // Handle action recommendation tools (set_budget, set_status, set_audience, reallocate_budget)
       // These count toward the action limit, separate from insights
       if (isRecommendationTool(toolUse.name) && !isGeneralInsightTool(toolUse.name) && !isTerminateAnalysisTool(toolUse.name)) {
@@ -957,6 +1100,69 @@ If you cannot find any actionable recommendations, you MUST still generate an in
           continue;
         }
 
+        // For set_status and set_budget, use simulation-required enforcement
+        // This FORCES the LLM to run simulate_change first, or the recommendation fails
+        if (requiresSimulation(toolUse.name)) {
+          const simContext: ToolExecutionContext = {
+            orgId,
+            analysisRunId: runId,
+            analyticsDb: this.env.ANALYTICS_DB,
+            aiDb: this.env.AI_DB,
+            simulationCache,
+            platform: toolUse.input.platform
+          };
+
+          const simResult = await executeRecommendationWithSimulation(
+            toolUse.name,
+            toolUse.input,
+            simContext
+          );
+
+          if (!simResult.success) {
+            // Simulation was required but not done - return error with simulation data
+            // The LLM must review the simulation and call the tool again
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({
+                status: 'simulation_required',
+                error: simResult.error,
+                message: simResult.message,
+                recommendation: simResult.recommendation  // PROCEED, RECONSIDER, or TRADEOFF
+              })
+            });
+            continue;
+          }
+
+          // Simulation was done, recommendation created with CALCULATED impact
+          const rec = parseToolCallToRecommendation(toolUse.name, {
+            ...toolUse.input,
+            // Override with calculated impact from simulation
+            predicted_impact: simResult.data?.calculated_impact
+          });
+          recommendations.push(rec);
+          actionRecommendations.push(rec);
+
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: JSON.stringify({
+              status: 'logged',
+              message: simResult.message,
+              recommendation_id: simResult.recommendation_id,
+              calculated_impact: simResult.data?.calculated_impact,
+              action_recommendation_count: actionRecommendations.length,
+              action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
+            })
+          });
+
+          if (actionRecommendations.length >= maxActionRecommendations) {
+            hitMaxActionRecommendations = true;
+          }
+          continue;
+        }
+
+        // For other tools (set_audience, reallocate_budget), use direct logging
         const rec = parseToolCallToRecommendation(toolUse.name, toolUse.input);
         recommendations.push(rec);
         actionRecommendations.push(rec);  // Track action recs separately

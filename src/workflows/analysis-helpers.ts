@@ -167,6 +167,90 @@ export function getEntitiesAtLevel(
 }
 
 /**
+ * Check if an entity's status is considered "active"
+ */
+export function isActiveStatus(status: string | undefined): boolean {
+  if (!status) return false;
+  const activeStatuses = ['ACTIVE', 'ENABLED', 'RUNNING', 'LIVE'];
+  return activeStatuses.includes(status.toUpperCase());
+}
+
+/**
+ * Build a map of entity IDs that should be skipped due to disabled parent hierarchy.
+ * If a campaign is disabled, all its ad sets and ads should be skipped.
+ * If an ad set is disabled, all its ads should be skipped.
+ *
+ * This dramatically reduces LLM calls for accounts with many paused campaigns.
+ */
+export function buildHierarchySkipSet(tree: SerializedEntityTree): Set<string> {
+  const skipSet = new Set<string>();
+
+  const markChildrenForSkip = (entity: SerializedEntity) => {
+    for (const child of entity.children) {
+      skipSet.add(child.id);
+      // Recursively mark all descendants
+      markChildrenForSkip(child);
+    }
+  };
+
+  // Traverse the tree and mark children of disabled entities
+  for (const [, account] of tree.accounts) {
+    // Check each campaign
+    for (const campaign of account.children) {
+      if (!isActiveStatus(campaign.status)) {
+        // Campaign is disabled - skip ALL its children (ad sets and ads)
+        markChildrenForSkip(campaign);
+      } else {
+        // Campaign is active - check ad sets
+        for (const adset of campaign.children) {
+          if (!isActiveStatus(adset.status)) {
+            // Ad set is disabled - skip its ads
+            markChildrenForSkip(adset);
+          }
+        }
+      }
+    }
+  }
+
+  return skipSet;
+}
+
+/**
+ * Generate a skip summary for an entity that's being skipped due to parent hierarchy
+ */
+export function generateHierarchySkipSummary(entity: SerializedEntity, tree: SerializedEntityTree): string {
+  // Find the disabled parent
+  const findDisabledAncestor = (e: SerializedEntity): SerializedEntity | null => {
+    if (!e.parentId) return null;
+
+    // Search for parent in tree
+    for (const [, account] of tree.accounts) {
+      if (account.id === e.parentId) {
+        return !isActiveStatus(account.status) ? account : null;
+      }
+      for (const campaign of account.children) {
+        if (campaign.id === e.parentId) {
+          return !isActiveStatus(campaign.status) ? campaign : findDisabledAncestor(campaign);
+        }
+        for (const adset of campaign.children) {
+          if (adset.id === e.parentId) {
+            return !isActiveStatus(adset.status) ? adset : findDisabledAncestor(adset);
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  const disabledAncestor = findDisabledAncestor(entity);
+  if (disabledAncestor) {
+    return `Status: SKIPPED (parent ${disabledAncestor.level} "${disabledAncestor.name}" is ${disabledAncestor.status || 'disabled'})`;
+  }
+
+  return `Status: SKIPPED (parent hierarchy disabled)`;
+}
+
+/**
  * Parameters for the analysis workflow
  */
 export interface AnalysisWorkflowParams {

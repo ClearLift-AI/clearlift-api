@@ -63,6 +63,11 @@ import {
   GetRealtimeGoalTimeSeries
 } from "./endpoints/v1/analytics/realtime";
 import {
+  GetCACTimeline,
+  GenerateCACPredictions,
+  BackfillCACHistory
+} from "./endpoints/v1/analytics/cac-timeline";
+import {
   GetFacebookCampaigns,
   GetFacebookAdSets,
   GetFacebookCreatives,
@@ -262,7 +267,6 @@ import {
   UpdateTrackingConfig,
   GenerateTrackingSnippet
 } from "./endpoints/v1/tracking-config";
-import { SeedFacebookDemoRecommendations } from "./endpoints/v1/recommendations";
 import {
   ListTrackingLinks,
   CreateTrackingLink,
@@ -464,9 +468,6 @@ openapi.post("/v1/analytics/identify", PostIdentify); // Internal - uses service
 openapi.post("/v1/analytics/identify/merge", PostIdentityMerge); // Internal
 openapi.get("/v1/analytics/identity/:anonymousId", auth, requireOrg, GetIdentityByAnonymousId);
 
-// Demo recommendations endpoint (Meta App Review)
-openapi.post("/v1/recommendations/seed", SeedFacebookDemoRecommendations); // Internal - called by queue-consumer
-
 // User journey endpoints
 openapi.get("/v1/analytics/users/:userId/journey", auth, requireOrg, GetUserJourney);
 openapi.get("/v1/analytics/journeys/overview", auth, requireOrg, GetJourneysOverview);
@@ -493,6 +494,11 @@ openapi.get("/v1/analytics/realtime/event-types", auth, requireOrg, GetRealtimeE
 openapi.get("/v1/analytics/realtime/stripe", auth, requireOrg, GetRealtimeStripe);
 openapi.get("/v1/analytics/realtime/goals", auth, requireOrg, GetRealtimeGoals);
 openapi.get("/v1/analytics/realtime/goals/:id/timeseries", auth, requireOrg, GetRealtimeGoalTimeSeries);
+
+// CAC Timeline endpoints (truthful predictions based on simulation data)
+openapi.get("/v1/analytics/cac/timeline", auth, requireOrg, GetCACTimeline);
+openapi.post("/v1/analytics/cac/generate", auth, requireOrg, GenerateCACPredictions);
+openapi.post("/v1/analytics/cac/backfill", auth, requireOrg, BackfillCACHistory);
 
 // Facebook Ads endpoints
 openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);
@@ -694,6 +700,10 @@ export default {
       for (const shard of result.shards) {
         console.log(`[Cron] Shard ${shard.shardId}: ${shard.success ? 'OK' : 'FAILED'} (${shard.duration_ms}ms)`);
       }
+
+      // Run CAC history backfill for all orgs (populates cac_history table)
+      console.log('[Cron] Running CAC history backfill...');
+      await this.backfillCACHistoryForAllOrgs(env);
     }
 
     // Stale job cleanup cron (runs every 15 minutes)
@@ -823,6 +833,97 @@ export default {
       console.log('[Cron] Stale job cleanup completed');
     } catch (err) {
       console.error('[Cron] Error during stale job cleanup:', err);
+    }
+  },
+
+  // Backfill CAC history for all organizations from platform-specific campaign metrics
+  async backfillCACHistoryForAllOrgs(env: Env): Promise<void> {
+    const DAYS_TO_BACKFILL = 30;
+
+    try {
+      // Get all unique org IDs from platform metrics tables (union across all platforms)
+      const orgsResult = await env.ANALYTICS_DB.prepare(`
+        SELECT DISTINCT organization_id FROM (
+          SELECT organization_id FROM facebook_campaign_daily_metrics WHERE metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
+          UNION
+          SELECT organization_id FROM google_campaign_daily_metrics WHERE metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
+          UNION
+          SELECT organization_id FROM tiktok_campaign_daily_metrics WHERE metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
+        )
+      `).all<{ organization_id: string }>();
+
+      const orgs = orgsResult.results || [];
+      console.log(`[Cron] Found ${orgs.length} orgs with campaign metrics for CAC backfill`);
+
+      let totalRowsInserted = 0;
+
+      for (const org of orgs) {
+        try {
+          // Query daily spend and conversions across all platforms for this org
+          const metricsResult = await env.ANALYTICS_DB.prepare(`
+            SELECT
+              metric_date as date,
+              SUM(spend_cents) as spend_cents,
+              SUM(conversions) as conversions
+            FROM (
+              SELECT metric_date, spend_cents, conversions FROM facebook_campaign_daily_metrics
+              WHERE organization_id = ? AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
+              UNION ALL
+              SELECT metric_date, spend_cents, conversions FROM google_campaign_daily_metrics
+              WHERE organization_id = ? AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
+              UNION ALL
+              SELECT metric_date, spend_cents, conversions FROM tiktok_campaign_daily_metrics
+              WHERE organization_id = ? AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
+            )
+            GROUP BY metric_date
+            ORDER BY metric_date ASC
+          `).bind(org.organization_id, org.organization_id, org.organization_id).all<{
+            date: string;
+            spend_cents: number;
+            conversions: number;
+          }>();
+
+          if (!metricsResult.results || metricsResult.results.length === 0) {
+            continue;
+          }
+
+          for (const row of metricsResult.results) {
+            if (row.conversions === 0) continue;
+
+            const cacCents = Math.round(row.spend_cents / row.conversions);
+
+            await env.AI_DB.prepare(`
+              INSERT INTO cac_history (
+                organization_id, date, spend_cents, conversions, revenue_cents, cac_cents
+              )
+              VALUES (?, ?, ?, ?, ?, ?)
+              ON CONFLICT(organization_id, date)
+              DO UPDATE SET
+                spend_cents = excluded.spend_cents,
+                conversions = excluded.conversions,
+                revenue_cents = excluded.revenue_cents,
+                cac_cents = excluded.cac_cents,
+                created_at = datetime('now')
+            `).bind(
+              org.organization_id,
+              row.date,
+              row.spend_cents,
+              row.conversions,
+              0, // revenue_cents - not available in campaign metrics, would need Stripe/Shopify
+              cacCents
+            ).run();
+
+            totalRowsInserted++;
+          }
+        } catch (orgErr) {
+          console.error(`[Cron] Error backfilling CAC for org ${org.organization_id}:`, orgErr);
+          // Continue with other orgs
+        }
+      }
+
+      console.log(`[Cron] CAC history backfill completed: ${totalRowsInserted} rows upserted across ${orgs.length} orgs`);
+    } catch (err) {
+      console.error('[Cron] Error during CAC history backfill:', err);
     }
   }
 };

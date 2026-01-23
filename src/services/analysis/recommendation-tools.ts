@@ -253,6 +253,126 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
     }
   },
   {
+    name: 'set_bid',
+    description: 'Recommend a bid or bidding strategy change for a campaign or ad set. Use when auction performance suggests bid adjustments could improve efficiency or scale.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        platform: {
+          type: 'string',
+          description: 'The ad platform',
+          enum: ['facebook', 'google', 'tiktok']
+        },
+        entity_type: {
+          type: 'string',
+          description: 'Type of entity to adjust',
+          enum: ['campaign', 'ad_set', 'ad_group']
+        },
+        entity_id: {
+          type: 'string',
+          description: 'ID of the campaign or ad set'
+        },
+        entity_name: {
+          type: 'string',
+          description: 'Name of the entity for display'
+        },
+        current_bid_cents: {
+          type: 'number',
+          description: 'Current bid cap in cents (if applicable)'
+        },
+        recommended_bid_cents: {
+          type: 'number',
+          description: 'Recommended new bid cap in cents'
+        },
+        current_strategy: {
+          type: 'string',
+          description: 'Current bidding strategy',
+          enum: ['manual_cpc', 'maximize_clicks', 'maximize_conversions', 'target_cpa', 'target_roas']
+        },
+        recommended_strategy: {
+          type: 'string',
+          description: 'Recommended bidding strategy',
+          enum: ['manual_cpc', 'maximize_clicks', 'maximize_conversions', 'target_cpa', 'target_roas']
+        },
+        target_cpa_cents: {
+          type: 'number',
+          description: 'Target CPA in cents (if recommending target_cpa strategy)'
+        },
+        reason: {
+          type: 'string',
+          description: 'Brief explanation for this recommendation'
+        },
+        predicted_impact: {
+          type: 'number',
+          description: 'Expected impact as percentage change (e.g., -10 for 10% CAC reduction)'
+        },
+        confidence: {
+          type: 'string',
+          description: 'Confidence level',
+          enum: ['low', 'medium', 'high']
+        }
+      },
+      required: ['platform', 'entity_type', 'entity_id', 'entity_name', 'reason', 'confidence']
+    }
+  },
+  {
+    name: 'set_schedule',
+    description: 'Recommend ad schedule (dayparting) changes for a campaign or ad set. Use when hourly or daily performance patterns suggest certain hours/days should be added or removed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        platform: {
+          type: 'string',
+          description: 'The ad platform',
+          enum: ['facebook', 'google', 'tiktok']
+        },
+        entity_type: {
+          type: 'string',
+          description: 'Type of entity to adjust',
+          enum: ['campaign', 'ad_set', 'ad_group']
+        },
+        entity_id: {
+          type: 'string',
+          description: 'ID of the campaign or ad set'
+        },
+        entity_name: {
+          type: 'string',
+          description: 'Name of the entity for display'
+        },
+        hours_to_add: {
+          type: 'array',
+          description: 'Hours (0-23) to add to the schedule'
+        },
+        hours_to_remove: {
+          type: 'array',
+          description: 'Hours (0-23) to remove from the schedule'
+        },
+        days_to_add: {
+          type: 'array',
+          description: 'Days to add (0=Sunday, 6=Saturday)'
+        },
+        days_to_remove: {
+          type: 'array',
+          description: 'Days to remove (0=Sunday, 6=Saturday)'
+        },
+        reason: {
+          type: 'string',
+          description: 'Brief explanation for this recommendation'
+        },
+        predicted_impact: {
+          type: 'number',
+          description: 'Expected impact as percentage change (e.g., -8 for 8% CAC reduction)'
+        },
+        confidence: {
+          type: 'string',
+          description: 'Confidence level',
+          enum: ['low', 'medium', 'high']
+        }
+      },
+      required: ['platform', 'entity_type', 'entity_id', 'entity_name', 'reason', 'confidence']
+    }
+  },
+  {
     name: 'general_insight',
     description: 'Surface strategic observations that CANNOT be addressed with set_budget, set_status, or set_audience. Examples: cross-platform attribution gaps, data quality issues, seasonal patterns. Do NOT use this for underperforming campaigns/ads - use set_status to recommend pausing those instead. NOTE: All general_insight calls ACCUMULATE into a single document and count as ONE recommendation toward your limit.',
     input_schema: {

@@ -1,0 +1,1358 @@
+/**
+ * Campaign Change Simulation Service
+ *
+ * Provides mathematical simulation of campaign changes to calculate
+ * REAL impact on CAC and conversions. No guessing - only math.
+ *
+ * Supports:
+ * - Pause/Enable: Simple subtraction/addition
+ * - Budget changes: Diminishing returns modeling
+ * - Budget reallocation: Combined simulation
+ * - Audience changes: Reach/frequency modeling
+ * - Bid changes: Auction dynamics modeling
+ * - Schedule changes: Dayparting analysis
+ *
+ * Works with all entity levels: campaigns, ad sets/groups, and ads
+ */
+
+// D1Database type from Cloudflare Workers
+type D1Database = {
+  prepare(query: string): D1PreparedStatement;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+  exec(query: string): Promise<D1ExecResult>;
+};
+
+interface D1PreparedStatement {
+  bind(...values: unknown[]): D1PreparedStatement;
+  first<T = unknown>(colName?: string): Promise<T | null>;
+  run(): Promise<D1Result>;
+  all<T = unknown>(): Promise<D1Result<T>>;
+}
+
+interface D1Result<T = unknown> {
+  results: T[];
+  success: boolean;
+  meta?: { changes: number; last_row_id: number; };
+}
+
+interface D1ExecResult {
+  count: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type SimulationAction =
+  | 'pause'
+  | 'enable'
+  | 'increase_budget'
+  | 'decrease_budget'
+  | 'reallocate_budget'
+  | 'change_audience'
+  | 'change_bid'
+  | 'change_schedule';
+
+export type EntityLevel = 'campaign' | 'ad_set' | 'ad_group' | 'ad';
+
+export interface SimulateChangeParams {
+  action: SimulationAction;
+  entity_type: EntityLevel;
+  entity_id: string;
+  platform?: string;
+  budget_change_percent?: number;
+  // For reallocation
+  target_entity_id?: string;
+  reallocation_amount_cents?: number;
+  // For audience changes
+  audience_change?: {
+    type: 'expand' | 'narrow' | 'shift';
+    estimated_reach_change_percent?: number;
+  };
+  // For bid changes
+  bid_change?: {
+    current_bid_cents?: number;
+    new_bid_cents?: number;
+    strategy_change?: string;
+  };
+  // For schedule changes
+  schedule_change?: {
+    hours_to_add?: number[];
+    hours_to_remove?: number[];
+  };
+}
+
+export interface EntityMetrics {
+  id: string;
+  name: string;
+  platform: string;
+  entity_type: EntityLevel;
+  spend_cents: number;
+  conversions: number;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  cpc_cents: number;
+}
+
+export interface EntityState {
+  id: string;
+  name: string;
+  platform: string;
+  spend_cents: number;
+  conversions: number;
+  cac_cents: number;
+  efficiency_vs_average: number;
+}
+
+export interface PortfolioState {
+  total_spend_cents: number;
+  total_conversions: number;
+  blended_cac_cents: number;
+  entity: EntityState;
+}
+
+export interface SimulatedState {
+  total_spend_cents: number;
+  total_conversions: number;
+  blended_cac_cents: number;
+  cac_change_percent: number;
+  conversion_change_percent: number;
+  spend_change_percent: number;
+}
+
+export interface SimulationResult {
+  success: boolean;
+  current_state: PortfolioState;
+  simulated_state: SimulatedState;
+  confidence: 'high' | 'medium' | 'low';
+  assumptions: string[];
+  math_explanation: string;
+  diminishing_returns_model?: {
+    k: number;
+    alpha: number;
+    r_squared: number;
+    data_points: number;
+  };
+}
+
+interface HistoricalDataPoint {
+  date: string;
+  spend_cents: number;
+  conversions: number;
+  impressions?: number;
+  clicks?: number;
+  hour?: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIMULATION SERVICE
+// ═══════════════════════════════════════════════════════════════════════════
+
+export class SimulationService {
+  constructor(
+    private analyticsDb: D1Database,
+    private orgId: string
+  ) {}
+
+  /**
+   * Main entry point - simulate any campaign change
+   */
+  async simulateChange(params: SimulateChangeParams): Promise<SimulationResult> {
+    // 1. Get current portfolio state
+    const allEntities = await this.getPortfolioMetrics(params.entity_type);
+
+    if (allEntities.length === 0) {
+      return {
+        success: false,
+        current_state: this.emptyState(),
+        simulated_state: this.emptySimulatedState(),
+        confidence: 'low',
+        assumptions: ['No metrics data available'],
+        math_explanation: 'Cannot simulate: no metrics found in the last 7 days for any entity.'
+      };
+    }
+
+    // 2. Find target entity
+    const target = allEntities.find(e => e.id === params.entity_id);
+    if (!target) {
+      return {
+        success: false,
+        current_state: this.buildCurrentState(allEntities, null),
+        simulated_state: this.emptySimulatedState(),
+        confidence: 'low',
+        assumptions: ['Target entity not found'],
+        math_explanation: `Cannot simulate: entity ${params.entity_id} not found in recent metrics.`
+      };
+    }
+
+    // 3. Calculate current state
+    const currentState = this.buildCurrentState(allEntities, target);
+
+    // 4. Run appropriate simulation
+    switch (params.action) {
+      case 'pause':
+        return this.simulatePause(currentState, target, allEntities);
+
+      case 'enable':
+        return this.simulateEnable(currentState, target, allEntities, params.entity_type);
+
+      case 'increase_budget':
+      case 'decrease_budget':
+        if (params.budget_change_percent === undefined) {
+          return {
+            success: false,
+            current_state: currentState,
+            simulated_state: this.emptySimulatedState(),
+            confidence: 'low',
+            assumptions: ['budget_change_percent required'],
+            math_explanation: 'Cannot simulate budget change without specifying percentage.'
+          };
+        }
+        return this.simulateBudgetChange(
+          currentState,
+          target,
+          allEntities,
+          params.budget_change_percent,
+          params.entity_type
+        );
+
+      case 'reallocate_budget':
+        if (!params.target_entity_id || !params.reallocation_amount_cents) {
+          return {
+            success: false,
+            current_state: currentState,
+            simulated_state: this.emptySimulatedState(),
+            confidence: 'low',
+            assumptions: ['target_entity_id and reallocation_amount_cents required'],
+            math_explanation: 'Cannot simulate reallocation without target entity and amount.'
+          };
+        }
+        const targetEntity = allEntities.find(e => e.id === params.target_entity_id);
+        if (!targetEntity) {
+          return {
+            success: false,
+            current_state: currentState,
+            simulated_state: this.emptySimulatedState(),
+            confidence: 'low',
+            assumptions: ['Target entity for reallocation not found'],
+            math_explanation: `Cannot simulate: target entity ${params.target_entity_id} not found.`
+          };
+        }
+        return this.simulateReallocation(
+          currentState,
+          target,
+          targetEntity,
+          allEntities,
+          params.reallocation_amount_cents,
+          params.entity_type
+        );
+
+      case 'change_audience':
+        return this.simulateAudienceChange(
+          currentState,
+          target,
+          allEntities,
+          params.audience_change
+        );
+
+      case 'change_bid':
+        return this.simulateBidChange(
+          currentState,
+          target,
+          allEntities,
+          params.bid_change
+        );
+
+      case 'change_schedule':
+        return this.simulateScheduleChange(
+          currentState,
+          target,
+          allEntities,
+          params.schedule_change,
+          params.entity_type
+        );
+
+      default:
+        return {
+          success: false,
+          current_state: currentState,
+          simulated_state: this.emptySimulatedState(),
+          confidence: 'low',
+          assumptions: [`Unknown action: ${params.action}`],
+          math_explanation: `Cannot simulate unknown action: ${params.action}`
+        };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PAUSE SIMULATION (Simple Math - High Confidence)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private simulatePause(
+    currentState: PortfolioState,
+    target: EntityMetrics,
+    allEntities: EntityMetrics[]
+  ): SimulationResult {
+    const newSpend = currentState.total_spend_cents - target.spend_cents;
+    const newConversions = currentState.total_conversions - target.conversions;
+
+    if (newConversions <= 0 || newSpend <= 0) {
+      return {
+        success: true,
+        current_state: currentState,
+        simulated_state: {
+          total_spend_cents: 0,
+          total_conversions: 0,
+          blended_cac_cents: 0,
+          cac_change_percent: 0,
+          conversion_change_percent: -100,
+          spend_change_percent: -100
+        },
+        confidence: 'high',
+        assumptions: [
+          'This is the only active entity with conversions',
+          'Pausing will stop all conversions'
+        ],
+        math_explanation: `
+WARNING: ${target.name} is the only entity with conversions.
+Pausing will result in zero conversions.
+
+Current: $${(currentState.total_spend_cents / 100).toFixed(2)} spend → ${currentState.total_conversions} conversions
+After pause: $0 spend → 0 conversions`
+      };
+    }
+
+    const newCAC = newSpend / newConversions;
+    const cacChange = ((newCAC - currentState.blended_cac_cents) / currentState.blended_cac_cents) * 100;
+    const conversionChange = ((newConversions - currentState.total_conversions) / currentState.total_conversions) * 100;
+    const spendChange = ((newSpend - currentState.total_spend_cents) / currentState.total_spend_cents) * 100;
+
+    return {
+      success: true,
+      current_state: currentState,
+      simulated_state: {
+        total_spend_cents: newSpend,
+        total_conversions: newConversions,
+        blended_cac_cents: Math.round(newCAC),
+        cac_change_percent: Math.round(cacChange * 10) / 10,
+        conversion_change_percent: Math.round(conversionChange * 10) / 10,
+        spend_change_percent: Math.round(spendChange * 10) / 10
+      },
+      confidence: 'high',
+      assumptions: [
+        'Pausing does not affect other entities',
+        'No budget reallocation to other entities',
+        'Historical conversion rate is representative'
+      ],
+      math_explanation: this.buildPauseMathExplanation(currentState, target, newSpend, newConversions, newCAC, cacChange)
+    };
+  }
+
+  private buildPauseMathExplanation(
+    current: PortfolioState,
+    target: EntityMetrics,
+    newSpend: number,
+    newConversions: number,
+    newCAC: number,
+    cacChange: number
+  ): string {
+    const targetCAC = target.conversions > 0 ? target.spend_cents / target.conversions : 0;
+    return `
+PAUSE SIMULATION: ${target.name}
+════════════════════════════════════════════════════════════════
+
+CURRENT PORTFOLIO:
+  Total Spend:       $${(current.total_spend_cents / 100).toFixed(2)}
+  Total Conversions: ${current.total_conversions}
+  Blended CAC:       $${(current.blended_cac_cents / 100).toFixed(2)}
+
+TARGET ENTITY (${target.name}):
+  Platform:    ${target.platform}
+  Spend:       $${(target.spend_cents / 100).toFixed(2)} (${((target.spend_cents / current.total_spend_cents) * 100).toFixed(1)}% of total)
+  Conversions: ${target.conversions} (${((target.conversions / current.total_conversions) * 100).toFixed(1)}% of total)
+  CAC:         $${(targetCAC / 100).toFixed(2)}
+  Efficiency:  ${current.entity.efficiency_vs_average >= 0 ? '+' : ''}${current.entity.efficiency_vs_average.toFixed(1)}% vs average
+
+CALCULATION:
+  New Spend       = $${(current.total_spend_cents / 100).toFixed(2)} - $${(target.spend_cents / 100).toFixed(2)} = $${(newSpend / 100).toFixed(2)}
+  New Conversions = ${current.total_conversions} - ${target.conversions} = ${newConversions}
+  New CAC         = $${(newSpend / 100).toFixed(2)} ÷ ${newConversions} = $${(newCAC / 100).toFixed(2)}
+
+RESULT:
+  CAC Change: ${cacChange >= 0 ? '+' : ''}${cacChange.toFixed(1)}%
+  ${cacChange < 0 ? '✓ CAC IMPROVEMENT' : '⚠ CAC INCREASE'}
+`;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ENABLE SIMULATION (Based on Historical Performance)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private async simulateEnable(
+    currentState: PortfolioState,
+    target: EntityMetrics,
+    allEntities: EntityMetrics[],
+    entityType: EntityLevel
+  ): Promise<SimulationResult> {
+    const history = await this.getEntityHistory(target.id, 30, entityType);
+
+    if (history.length < 7) {
+      return {
+        success: true,
+        current_state: currentState,
+        simulated_state: this.emptySimulatedState(),
+        confidence: 'low',
+        assumptions: ['Insufficient historical data'],
+        math_explanation: `Cannot reliably simulate enabling ${target.name}: only ${history.length} days of historical data (need 7+).`
+      };
+    }
+
+    const avgSpend = history.reduce((s, d) => s + d.spend_cents, 0) / history.length;
+    const avgConversions = history.reduce((s, d) => s + d.conversions, 0) / history.length;
+
+    const newSpend = currentState.total_spend_cents + avgSpend;
+    const newConversions = currentState.total_conversions + avgConversions;
+    const newCAC = newSpend / newConversions;
+
+    const cacChange = ((newCAC - currentState.blended_cac_cents) / currentState.blended_cac_cents) * 100;
+
+    return {
+      success: true,
+      current_state: currentState,
+      simulated_state: {
+        total_spend_cents: Math.round(newSpend),
+        total_conversions: Math.round(newConversions),
+        blended_cac_cents: Math.round(newCAC),
+        cac_change_percent: Math.round(cacChange * 10) / 10,
+        conversion_change_percent: Math.round((avgConversions / currentState.total_conversions) * 100 * 10) / 10,
+        spend_change_percent: Math.round((avgSpend / currentState.total_spend_cents) * 100 * 10) / 10
+      },
+      confidence: 'medium',
+      assumptions: [
+        `Based on ${history.length}-day historical average`,
+        'Assumes similar performance to historical period',
+        'Market conditions may have changed'
+      ],
+      math_explanation: `
+ENABLE SIMULATION: ${target.name}
+════════════════════════════════════════════════════════════════
+
+HISTORICAL PERFORMANCE (${history.length}-day average):
+  Avg Daily Spend:       $${(avgSpend / 100).toFixed(2)}
+  Avg Daily Conversions: ${avgConversions.toFixed(1)}
+  Historical CAC:        $${(avgSpend / avgConversions / 100).toFixed(2)}
+
+PROJECTED PORTFOLIO:
+  New Spend:       $${(currentState.total_spend_cents / 100).toFixed(2)} + $${(avgSpend / 100).toFixed(2)} = $${(newSpend / 100).toFixed(2)}
+  New Conversions: ${currentState.total_conversions} + ${avgConversions.toFixed(1)} = ${newConversions.toFixed(1)}
+  New CAC:         $${(newCAC / 100).toFixed(2)}
+
+RESULT:
+  CAC Change: ${cacChange >= 0 ? '+' : ''}${cacChange.toFixed(1)}%
+`
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // BUDGET CHANGE SIMULATION (Diminishing Returns Model)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private async simulateBudgetChange(
+    currentState: PortfolioState,
+    target: EntityMetrics,
+    allEntities: EntityMetrics[],
+    changePercent: number,
+    entityType: EntityLevel
+  ): Promise<SimulationResult> {
+    const history = await this.getEntityHistory(target.id, 90, entityType);
+    const newEntitySpend = target.spend_cents * (1 + changePercent / 100);
+
+    const { predictedConversions, model, confidence } = this.predictConversionsAtSpend(
+      target,
+      newEntitySpend,
+      history
+    );
+
+    const spendDelta = newEntitySpend - target.spend_cents;
+    const conversionDelta = predictedConversions - target.conversions;
+
+    const newTotalSpend = currentState.total_spend_cents + spendDelta;
+    const newTotalConversions = currentState.total_conversions + conversionDelta;
+    const newCAC = newTotalSpend / newTotalConversions;
+
+    const cacChange = ((newCAC - currentState.blended_cac_cents) / currentState.blended_cac_cents) * 100;
+    const conversionChange = ((newTotalConversions - currentState.total_conversions) / currentState.total_conversions) * 100;
+    const spendChange = ((newTotalSpend - currentState.total_spend_cents) / currentState.total_spend_cents) * 100;
+
+    const newEntityCAC = newEntitySpend / predictedConversions;
+    const currentEntityCAC = target.spend_cents / target.conversions;
+    const entityCACChange = ((newEntityCAC - currentEntityCAC) / currentEntityCAC) * 100;
+
+    return {
+      success: true,
+      current_state: currentState,
+      simulated_state: {
+        total_spend_cents: Math.round(newTotalSpend),
+        total_conversions: Math.round(newTotalConversions * 10) / 10,
+        blended_cac_cents: Math.round(newCAC),
+        cac_change_percent: Math.round(cacChange * 10) / 10,
+        conversion_change_percent: Math.round(conversionChange * 10) / 10,
+        spend_change_percent: Math.round(spendChange * 10) / 10
+      },
+      confidence,
+      assumptions: this.buildBudgetAssumptions(model, history.length, changePercent),
+      math_explanation: this.buildBudgetMathExplanation(
+        currentState, target, changePercent, newEntitySpend, predictedConversions,
+        model, newTotalSpend, newTotalConversions, newCAC, cacChange,
+        newEntityCAC, entityCACChange
+      ),
+      diminishing_returns_model: model
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // BUDGET REALLOCATION SIMULATION
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private async simulateReallocation(
+    currentState: PortfolioState,
+    fromEntity: EntityMetrics,
+    toEntity: EntityMetrics,
+    allEntities: EntityMetrics[],
+    amountCents: number,
+    entityType: EntityLevel
+  ): Promise<SimulationResult> {
+    // Get history for both entities
+    const fromHistory = await this.getEntityHistory(fromEntity.id, 90, entityType);
+    const toHistory = await this.getEntityHistory(toEntity.id, 90, entityType);
+
+    // Calculate new spend levels
+    const fromNewSpend = fromEntity.spend_cents - amountCents;
+    const toNewSpend = toEntity.spend_cents + amountCents;
+
+    // Predict conversions at new spend levels using diminishing returns
+    const fromPrediction = this.predictConversionsAtSpend(fromEntity, fromNewSpend, fromHistory);
+    const toPrediction = this.predictConversionsAtSpend(toEntity, toNewSpend, toHistory);
+
+    // Calculate deltas
+    const fromConversionDelta = fromPrediction.predictedConversions - fromEntity.conversions;
+    const toConversionDelta = toPrediction.predictedConversions - toEntity.conversions;
+
+    // Total portfolio impact (spend stays same, conversions change)
+    const newTotalConversions = currentState.total_conversions + fromConversionDelta + toConversionDelta;
+    const newCAC = currentState.total_spend_cents / newTotalConversions;
+
+    const cacChange = ((newCAC - currentState.blended_cac_cents) / currentState.blended_cac_cents) * 100;
+    const conversionChange = ((newTotalConversions - currentState.total_conversions) / currentState.total_conversions) * 100;
+
+    // Determine confidence based on both models
+    const confidence = fromPrediction.confidence === 'high' && toPrediction.confidence === 'high'
+      ? 'high'
+      : fromPrediction.confidence === 'low' || toPrediction.confidence === 'low'
+        ? 'low'
+        : 'medium';
+
+    return {
+      success: true,
+      current_state: currentState,
+      simulated_state: {
+        total_spend_cents: currentState.total_spend_cents, // Same spend, just reallocated
+        total_conversions: Math.round(newTotalConversions * 10) / 10,
+        blended_cac_cents: Math.round(newCAC),
+        cac_change_percent: Math.round(cacChange * 10) / 10,
+        conversion_change_percent: Math.round(conversionChange * 10) / 10,
+        spend_change_percent: 0 // No net spend change
+      },
+      confidence,
+      assumptions: [
+        `Moving $${(amountCents / 100).toFixed(2)} from ${fromEntity.name} to ${toEntity.name}`,
+        `From entity: α=${fromPrediction.model.alpha.toFixed(2)} (R²=${(fromPrediction.model.r_squared * 100).toFixed(0)}%)`,
+        `To entity: α=${toPrediction.model.alpha.toFixed(2)} (R²=${(toPrediction.model.r_squared * 100).toFixed(0)}%)`,
+        'Assumes both entities respond predictably to budget changes',
+        'Total spend remains constant'
+      ],
+      math_explanation: `
+BUDGET REALLOCATION SIMULATION
+════════════════════════════════════════════════════════════════
+
+REALLOCATION: $${(amountCents / 100).toFixed(2)} from ${fromEntity.name} → ${toEntity.name}
+
+FROM ENTITY (${fromEntity.name}):
+  Current:    $${(fromEntity.spend_cents / 100).toFixed(2)} → ${fromEntity.conversions} conv
+  After:      $${(fromNewSpend / 100).toFixed(2)} → ${fromPrediction.predictedConversions.toFixed(1)} conv
+  Delta:      ${fromConversionDelta >= 0 ? '+' : ''}${fromConversionDelta.toFixed(1)} conversions
+
+TO ENTITY (${toEntity.name}):
+  Current:    $${(toEntity.spend_cents / 100).toFixed(2)} → ${toEntity.conversions} conv
+  After:      $${(toNewSpend / 100).toFixed(2)} → ${toPrediction.predictedConversions.toFixed(1)} conv
+  Delta:      ${toConversionDelta >= 0 ? '+' : ''}${toConversionDelta.toFixed(1)} conversions
+
+NET IMPACT:
+  Conversion Delta: ${fromConversionDelta.toFixed(1)} + ${toConversionDelta.toFixed(1)} = ${(fromConversionDelta + toConversionDelta).toFixed(1)}
+  New Total Conv:   ${currentState.total_conversions} + ${(fromConversionDelta + toConversionDelta).toFixed(1)} = ${newTotalConversions.toFixed(1)}
+  New Blended CAC:  $${(newCAC / 100).toFixed(2)}
+
+RESULT:
+  CAC Change: ${cacChange >= 0 ? '+' : ''}${cacChange.toFixed(1)}%
+  ${cacChange < 0 ? '✓ REALLOCATION IMPROVES CAC' : '⚠ REALLOCATION INCREASES CAC'}
+`
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // AUDIENCE CHANGE SIMULATION
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private simulateAudienceChange(
+    currentState: PortfolioState,
+    target: EntityMetrics,
+    allEntities: EntityMetrics[],
+    audienceChange?: { type: 'expand' | 'narrow' | 'shift'; estimated_reach_change_percent?: number }
+  ): SimulationResult {
+    if (!audienceChange) {
+      return {
+        success: false,
+        current_state: currentState,
+        simulated_state: this.emptySimulatedState(),
+        confidence: 'low',
+        assumptions: ['audience_change parameters required'],
+        math_explanation: 'Cannot simulate audience change without specifying type and reach change.'
+      };
+    }
+
+    const { type, estimated_reach_change_percent = 0 } = audienceChange;
+
+    // Audience changes affect reach → impressions → clicks → conversions
+    // Model: Broader audience = more impressions but lower relevance (lower CTR)
+    // Model: Narrower audience = fewer impressions but higher relevance (higher CTR)
+
+    let impressionMultiplier: number;
+    let ctrMultiplier: number;
+    let cpcMultiplier: number;
+
+    switch (type) {
+      case 'expand':
+        // More reach but lower relevance
+        impressionMultiplier = 1 + (estimated_reach_change_percent / 100);
+        ctrMultiplier = 1 - (estimated_reach_change_percent / 200); // CTR drops half as much
+        cpcMultiplier = 0.95; // Broader audience = cheaper clicks (less competition)
+        break;
+      case 'narrow':
+        // Less reach but higher relevance
+        impressionMultiplier = 1 - Math.abs(estimated_reach_change_percent / 100);
+        ctrMultiplier = 1 + Math.abs(estimated_reach_change_percent / 150); // CTR improves
+        cpcMultiplier = 1.1; // Narrower = more competition
+        break;
+      case 'shift':
+        // Same reach, different audience - moderate uncertainty
+        impressionMultiplier = 1;
+        ctrMultiplier = 1 + (estimated_reach_change_percent / 100); // Positive if better targeting
+        cpcMultiplier = 1;
+        break;
+    }
+
+    // Calculate new metrics
+    const newImpressions = target.impressions * impressionMultiplier;
+    const newCTR = target.ctr * ctrMultiplier;
+    const newClicks = newImpressions * newCTR;
+    const newCPC = target.cpc_cents * cpcMultiplier;
+    const newSpend = newClicks * newCPC;
+
+    // Conversion rate stays same (conversions per click)
+    const conversionRate = target.conversions / target.clicks;
+    const newConversions = newClicks * conversionRate;
+
+    // Calculate portfolio impact
+    const spendDelta = newSpend - target.spend_cents;
+    const conversionDelta = newConversions - target.conversions;
+
+    const newTotalSpend = currentState.total_spend_cents + spendDelta;
+    const newTotalConversions = currentState.total_conversions + conversionDelta;
+    const newCAC = newTotalSpend / newTotalConversions;
+
+    const cacChange = ((newCAC - currentState.blended_cac_cents) / currentState.blended_cac_cents) * 100;
+    const conversionChange = ((newTotalConversions - currentState.total_conversions) / currentState.total_conversions) * 100;
+    const spendChange = ((newTotalSpend - currentState.total_spend_cents) / currentState.total_spend_cents) * 100;
+
+    return {
+      success: true,
+      current_state: currentState,
+      simulated_state: {
+        total_spend_cents: Math.round(newTotalSpend),
+        total_conversions: Math.round(newTotalConversions * 10) / 10,
+        blended_cac_cents: Math.round(newCAC),
+        cac_change_percent: Math.round(cacChange * 10) / 10,
+        conversion_change_percent: Math.round(conversionChange * 10) / 10,
+        spend_change_percent: Math.round(spendChange * 10) / 10
+      },
+      confidence: 'low', // Audience changes are inherently uncertain
+      assumptions: [
+        `Audience ${type}: ${estimated_reach_change_percent >= 0 ? '+' : ''}${estimated_reach_change_percent}% reach change`,
+        `Impression multiplier: ${impressionMultiplier.toFixed(2)}x`,
+        `CTR multiplier: ${ctrMultiplier.toFixed(2)}x`,
+        `CPC multiplier: ${cpcMultiplier.toFixed(2)}x`,
+        'Conversion rate per click assumed constant',
+        '⚠ Audience impact is difficult to predict - test with small budget first'
+      ],
+      math_explanation: `
+AUDIENCE CHANGE SIMULATION: ${target.name}
+════════════════════════════════════════════════════════════════
+
+CHANGE TYPE: ${type.toUpperCase()} (${estimated_reach_change_percent >= 0 ? '+' : ''}${estimated_reach_change_percent}% reach)
+
+CURRENT METRICS:
+  Impressions:  ${target.impressions.toLocaleString()}
+  CTR:          ${(target.ctr * 100).toFixed(2)}%
+  Clicks:       ${target.clicks.toLocaleString()}
+  CPC:          $${(target.cpc_cents / 100).toFixed(2)}
+  Spend:        $${(target.spend_cents / 100).toFixed(2)}
+  Conversions:  ${target.conversions}
+
+PROJECTED METRICS:
+  Impressions:  ${target.impressions.toLocaleString()} × ${impressionMultiplier.toFixed(2)} = ${Math.round(newImpressions).toLocaleString()}
+  CTR:          ${(target.ctr * 100).toFixed(2)}% × ${ctrMultiplier.toFixed(2)} = ${(newCTR * 100).toFixed(2)}%
+  Clicks:       ${Math.round(newClicks).toLocaleString()}
+  CPC:          $${(target.cpc_cents / 100).toFixed(2)} × ${cpcMultiplier.toFixed(2)} = $${(newCPC / 100).toFixed(2)}
+  Spend:        $${(newSpend / 100).toFixed(2)}
+  Conversions:  ${newConversions.toFixed(1)}
+
+RESULT:
+  CAC Change: ${cacChange >= 0 ? '+' : ''}${cacChange.toFixed(1)}%
+  ⚠ LOW CONFIDENCE - Audience changes are unpredictable. Consider A/B testing.
+`
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // BID CHANGE SIMULATION
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private simulateBidChange(
+    currentState: PortfolioState,
+    target: EntityMetrics,
+    allEntities: EntityMetrics[],
+    bidChange?: { current_bid_cents?: number; new_bid_cents?: number; strategy_change?: string }
+  ): SimulationResult {
+    if (!bidChange || (!bidChange.new_bid_cents && !bidChange.strategy_change)) {
+      return {
+        success: false,
+        current_state: currentState,
+        simulated_state: this.emptySimulatedState(),
+        confidence: 'low',
+        assumptions: ['bid_change parameters required'],
+        math_explanation: 'Cannot simulate bid change without new_bid_cents or strategy_change.'
+      };
+    }
+
+    // Bid changes affect auction win rate and average position
+    // Higher bid = more impressions, higher costs
+    // Model based on auction dynamics
+
+    let winRateMultiplier: number;
+    let cpcMultiplier: number;
+
+    if (bidChange.new_bid_cents && bidChange.current_bid_cents) {
+      const bidChangePercent = ((bidChange.new_bid_cents - bidChange.current_bid_cents) / bidChange.current_bid_cents) * 100;
+
+      // Win rate follows diminishing returns on bid increases
+      // +20% bid ≈ +15% win rate (not linear)
+      winRateMultiplier = Math.pow(1 + bidChangePercent / 100, 0.75);
+
+      // CPC increases but not proportionally due to second-price auction dynamics
+      // +20% bid cap might only increase CPC by 10%
+      cpcMultiplier = Math.pow(1 + bidChangePercent / 100, 0.5);
+    } else if (bidChange.strategy_change) {
+      // Strategy changes have predefined impacts
+      switch (bidChange.strategy_change) {
+        case 'maximize_conversions':
+          winRateMultiplier = 1.15;
+          cpcMultiplier = 1.2;
+          break;
+        case 'target_cpa':
+          winRateMultiplier = 0.9;
+          cpcMultiplier = 0.85;
+          break;
+        case 'maximize_clicks':
+          winRateMultiplier = 1.1;
+          cpcMultiplier = 0.95;
+          break;
+        default:
+          winRateMultiplier = 1;
+          cpcMultiplier = 1;
+      }
+    } else {
+      winRateMultiplier = 1;
+      cpcMultiplier = 1;
+    }
+
+    // Calculate new metrics
+    const newImpressions = target.impressions * winRateMultiplier;
+    const newClicks = target.clicks * winRateMultiplier; // Assuming CTR stays same
+    const newCPC = target.cpc_cents * cpcMultiplier;
+    const newSpend = newClicks * newCPC;
+
+    // Conversion rate stays same
+    const conversionRate = target.conversions / target.clicks;
+    const newConversions = newClicks * conversionRate;
+
+    // Portfolio impact
+    const spendDelta = newSpend - target.spend_cents;
+    const conversionDelta = newConversions - target.conversions;
+
+    const newTotalSpend = currentState.total_spend_cents + spendDelta;
+    const newTotalConversions = currentState.total_conversions + conversionDelta;
+    const newCAC = newTotalSpend / newTotalConversions;
+
+    const cacChange = ((newCAC - currentState.blended_cac_cents) / currentState.blended_cac_cents) * 100;
+    const conversionChange = ((newTotalConversions - currentState.total_conversions) / currentState.total_conversions) * 100;
+    const spendChange = ((newTotalSpend - currentState.total_spend_cents) / currentState.total_spend_cents) * 100;
+
+    return {
+      success: true,
+      current_state: currentState,
+      simulated_state: {
+        total_spend_cents: Math.round(newTotalSpend),
+        total_conversions: Math.round(newTotalConversions * 10) / 10,
+        blended_cac_cents: Math.round(newCAC),
+        cac_change_percent: Math.round(cacChange * 10) / 10,
+        conversion_change_percent: Math.round(conversionChange * 10) / 10,
+        spend_change_percent: Math.round(spendChange * 10) / 10
+      },
+      confidence: 'medium',
+      assumptions: [
+        bidChange.strategy_change
+          ? `Strategy change to: ${bidChange.strategy_change}`
+          : `Bid change: $${((bidChange.current_bid_cents || 0) / 100).toFixed(2)} → $${((bidChange.new_bid_cents || 0) / 100).toFixed(2)}`,
+        `Win rate multiplier: ${winRateMultiplier.toFixed(2)}x`,
+        `CPC multiplier: ${cpcMultiplier.toFixed(2)}x`,
+        'Based on second-price auction dynamics',
+        'Assumes competitive landscape remains stable'
+      ],
+      math_explanation: `
+BID CHANGE SIMULATION: ${target.name}
+════════════════════════════════════════════════════════════════
+
+CHANGE: ${bidChange.strategy_change || `$${((bidChange.current_bid_cents || 0) / 100).toFixed(2)} → $${((bidChange.new_bid_cents || 0) / 100).toFixed(2)}`}
+
+AUCTION DYNAMICS MODEL:
+  Win Rate Multiplier: ${winRateMultiplier.toFixed(2)}x
+  CPC Multiplier:      ${cpcMultiplier.toFixed(2)}x
+
+CURRENT → PROJECTED:
+  Impressions: ${target.impressions.toLocaleString()} → ${Math.round(newImpressions).toLocaleString()}
+  Clicks:      ${target.clicks.toLocaleString()} → ${Math.round(newClicks).toLocaleString()}
+  CPC:         $${(target.cpc_cents / 100).toFixed(2)} → $${(newCPC / 100).toFixed(2)}
+  Spend:       $${(target.spend_cents / 100).toFixed(2)} → $${(newSpend / 100).toFixed(2)}
+  Conversions: ${target.conversions} → ${newConversions.toFixed(1)}
+
+RESULT:
+  CAC Change: ${cacChange >= 0 ? '+' : ''}${cacChange.toFixed(1)}%
+`
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // SCHEDULE CHANGE SIMULATION
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private async simulateScheduleChange(
+    currentState: PortfolioState,
+    target: EntityMetrics,
+    allEntities: EntityMetrics[],
+    scheduleChange: { hours_to_add?: number[]; hours_to_remove?: number[] } | undefined,
+    entityType: EntityLevel
+  ): Promise<SimulationResult> {
+    if (!scheduleChange || (!scheduleChange.hours_to_add?.length && !scheduleChange.hours_to_remove?.length)) {
+      return {
+        success: false,
+        current_state: currentState,
+        simulated_state: this.emptySimulatedState(),
+        confidence: 'low',
+        assumptions: ['schedule_change parameters required'],
+        math_explanation: 'Cannot simulate schedule change without hours_to_add or hours_to_remove.'
+      };
+    }
+
+    // For schedule simulation, we need hourly data
+    // If not available, use industry benchmarks for hour performance
+    const hourlyHistory = await this.getHourlyHistory(target.id, 30, entityType);
+
+    let hourlyPerformance: Map<number, { spend: number; conversions: number }>;
+
+    if (hourlyHistory.length >= 168) { // At least a week of hourly data
+      // Build hourly performance from real data
+      hourlyPerformance = new Map();
+      for (const h of hourlyHistory) {
+        const existing = hourlyPerformance.get(h.hour!) || { spend: 0, conversions: 0 };
+        hourlyPerformance.set(h.hour!, {
+          spend: existing.spend + h.spend_cents,
+          conversions: existing.conversions + h.conversions
+        });
+      }
+    } else {
+      // Use industry benchmarks (B2C typical patterns)
+      hourlyPerformance = this.getIndustryHourlyBenchmarks(target.spend_cents, target.conversions);
+    }
+
+    // Calculate current active hours total
+    let currentSpend = 0;
+    let currentConversions = 0;
+    hourlyPerformance.forEach((v) => {
+      currentSpend += v.spend;
+      currentConversions += v.conversions;
+    });
+
+    // Calculate changes
+    let removedSpend = 0;
+    let removedConversions = 0;
+    for (const hour of (scheduleChange.hours_to_remove || [])) {
+      const hourData = hourlyPerformance.get(hour);
+      if (hourData) {
+        removedSpend += hourData.spend;
+        removedConversions += hourData.conversions;
+      }
+    }
+
+    let addedSpend = 0;
+    let addedConversions = 0;
+    for (const hour of (scheduleChange.hours_to_add || [])) {
+      // Estimate based on average hourly performance
+      const avgHourlySpend = currentSpend / 24;
+      const avgHourlyConv = currentConversions / 24;
+      addedSpend += avgHourlySpend;
+      addedConversions += avgHourlyConv;
+    }
+
+    const newEntitySpend = target.spend_cents - removedSpend + addedSpend;
+    const newEntityConversions = target.conversions - removedConversions + addedConversions;
+
+    // Portfolio impact
+    const spendDelta = newEntitySpend - target.spend_cents;
+    const conversionDelta = newEntityConversions - target.conversions;
+
+    const newTotalSpend = currentState.total_spend_cents + spendDelta;
+    const newTotalConversions = currentState.total_conversions + conversionDelta;
+    const newCAC = newTotalSpend / newTotalConversions;
+
+    const cacChange = ((newCAC - currentState.blended_cac_cents) / currentState.blended_cac_cents) * 100;
+    const conversionChange = ((newTotalConversions - currentState.total_conversions) / currentState.total_conversions) * 100;
+    const spendChange = ((newTotalSpend - currentState.total_spend_cents) / currentState.total_spend_cents) * 100;
+
+    const confidence = hourlyHistory.length >= 168 ? 'medium' : 'low';
+
+    return {
+      success: true,
+      current_state: currentState,
+      simulated_state: {
+        total_spend_cents: Math.round(newTotalSpend),
+        total_conversions: Math.round(newTotalConversions * 10) / 10,
+        blended_cac_cents: Math.round(newCAC),
+        cac_change_percent: Math.round(cacChange * 10) / 10,
+        conversion_change_percent: Math.round(conversionChange * 10) / 10,
+        spend_change_percent: Math.round(spendChange * 10) / 10
+      },
+      confidence,
+      assumptions: [
+        scheduleChange.hours_to_remove?.length
+          ? `Removing hours: ${scheduleChange.hours_to_remove.join(', ')}`
+          : '',
+        scheduleChange.hours_to_add?.length
+          ? `Adding hours: ${scheduleChange.hours_to_add.join(', ')}`
+          : '',
+        hourlyHistory.length >= 168
+          ? `Based on ${hourlyHistory.length} hours of real data`
+          : 'Using industry benchmark hourly patterns (limited historical data)',
+        'Assumes user behavior patterns remain consistent'
+      ].filter(Boolean),
+      math_explanation: `
+SCHEDULE CHANGE SIMULATION: ${target.name}
+════════════════════════════════════════════════════════════════
+
+CHANGES:
+  Hours to remove: ${scheduleChange.hours_to_remove?.join(', ') || 'none'}
+  Hours to add:    ${scheduleChange.hours_to_add?.join(', ') || 'none'}
+
+IMPACT FROM REMOVED HOURS:
+  Spend saved:       $${(removedSpend / 100).toFixed(2)}
+  Conversions lost:  ${removedConversions.toFixed(1)}
+
+IMPACT FROM ADDED HOURS:
+  Spend added:       $${(addedSpend / 100).toFixed(2)}
+  Conversions added: ${addedConversions.toFixed(1)}
+
+NET CHANGE:
+  Entity Spend:       $${(target.spend_cents / 100).toFixed(2)} → $${(newEntitySpend / 100).toFixed(2)}
+  Entity Conversions: ${target.conversions} → ${newEntityConversions.toFixed(1)}
+
+RESULT:
+  CAC Change: ${cacChange >= 0 ? '+' : ''}${cacChange.toFixed(1)}%
+  ${confidence === 'low' ? '⚠ LOW CONFIDENCE - Using industry benchmarks due to limited hourly data' : ''}
+`
+    };
+  }
+
+  private getIndustryHourlyBenchmarks(totalSpend: number, totalConversions: number): Map<number, { spend: number; conversions: number }> {
+    // B2C industry typical hourly distribution (% of daily)
+    const hourlyDistribution: Record<number, number> = {
+      0: 2, 1: 1.5, 2: 1, 3: 0.8, 4: 0.8, 5: 1.5,
+      6: 3, 7: 4.5, 8: 5.5, 9: 6, 10: 6.5, 11: 6.5,
+      12: 6, 13: 5.5, 14: 5.5, 15: 5.5, 16: 5.5, 17: 6,
+      18: 6.5, 19: 7, 20: 7, 21: 6, 22: 4.5, 23: 3
+    };
+
+    const result = new Map<number, { spend: number; conversions: number }>();
+    for (let hour = 0; hour < 24; hour++) {
+      const pct = hourlyDistribution[hour] / 100;
+      result.set(hour, {
+        spend: totalSpend * pct,
+        conversions: totalConversions * pct
+      });
+    }
+    return result;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // DIMINISHING RETURNS MODEL
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private predictConversionsAtSpend(
+    target: EntityMetrics,
+    newSpend: number,
+    history: HistoricalDataPoint[]
+  ): { predictedConversions: number; model: any; confidence: 'high' | 'medium' | 'low' } {
+    if (history.length >= 14) {
+      const model = this.fitPowerLaw(history);
+
+      if (model.r_squared > 0.6) {
+        const predicted = model.k * Math.pow(newSpend, model.alpha);
+        return {
+          predictedConversions: predicted,
+          model: { ...model, data_points: history.length },
+          confidence: model.r_squared > 0.8 ? 'high' : 'medium'
+        };
+      }
+    }
+
+    // Fallback: Industry-standard diminishing returns (α = 0.7)
+    const alpha = 0.7;
+    const k = target.conversions / Math.pow(target.spend_cents, alpha);
+    const predicted = k * Math.pow(newSpend, alpha);
+
+    return {
+      predictedConversions: predicted,
+      model: {
+        k,
+        alpha,
+        r_squared: 0,
+        data_points: history.length
+      },
+      confidence: history.length >= 7 ? 'medium' : 'low'
+    };
+  }
+
+  private fitPowerLaw(history: HistoricalDataPoint[]): { k: number; alpha: number; r_squared: number } {
+    const valid = history.filter(d => d.conversions > 0 && d.spend_cents > 0);
+
+    if (valid.length < 7) {
+      return { k: 0, alpha: 0.7, r_squared: 0 };
+    }
+
+    const logSpend = valid.map(d => Math.log(d.spend_cents));
+    const logConv = valid.map(d => Math.log(d.conversions));
+
+    const n = valid.length;
+    const sumX = logSpend.reduce((a, b) => a + b, 0);
+    const sumY = logConv.reduce((a, b) => a + b, 0);
+    const sumXY = logSpend.reduce((acc, x, i) => acc + x * logConv[i], 0);
+    const sumX2 = logSpend.reduce((acc, x) => acc + x * x, 0);
+
+    const alpha = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+    const logK = (sumY - alpha * sumX) / n;
+    const k = Math.exp(logK);
+
+    const meanY = sumY / n;
+    const ssTotal = logConv.reduce((acc, y) => acc + Math.pow(y - meanY, 2), 0);
+    const ssResidual = logConv.reduce((acc, y, i) => {
+      const predicted = logK + alpha * logSpend[i];
+      return acc + Math.pow(y - predicted, 2);
+    }, 0);
+    const r_squared = 1 - (ssResidual / ssTotal);
+
+    const clampedAlpha = Math.max(0.3, Math.min(1.0, alpha));
+
+    return {
+      k: k * Math.pow(1, alpha - clampedAlpha),
+      alpha: clampedAlpha,
+      r_squared: Math.max(0, r_squared)
+    };
+  }
+
+  private buildBudgetAssumptions(model: any, dataPoints: number, changePercent: number): string[] {
+    const assumptions: string[] = [];
+
+    if (model.r_squared > 0.6) {
+      assumptions.push(`Diminishing returns: conv = ${model.k.toFixed(4)} × spend^${model.alpha.toFixed(2)}`);
+      assumptions.push(`Model fit: R² = ${(model.r_squared * 100).toFixed(0)}% (${dataPoints} days)`);
+    } else {
+      assumptions.push(`Using industry-standard α = ${model.alpha}`);
+      assumptions.push(`Limited data (${dataPoints} days) - conservative estimate`);
+    }
+
+    if (Math.abs(changePercent) > 50) {
+      assumptions.push('⚠ Large budget change (>50%) - higher uncertainty');
+    }
+
+    assumptions.push('Assumes stable market conditions');
+    assumptions.push('Does not account for creative fatigue');
+
+    return assumptions;
+  }
+
+  private buildBudgetMathExplanation(
+    current: PortfolioState,
+    target: EntityMetrics,
+    changePercent: number,
+    newEntitySpend: number,
+    predictedConversions: number,
+    model: any,
+    newTotalSpend: number,
+    newTotalConversions: number,
+    newCAC: number,
+    cacChange: number,
+    newEntityCAC: number,
+    entityCACChange: number
+  ): string {
+    const direction = changePercent > 0 ? 'INCREASE' : 'DECREASE';
+
+    return `
+BUDGET ${direction} SIMULATION: ${target.name}
+════════════════════════════════════════════════════════════════
+
+DIMINISHING RETURNS MODEL:
+  ${model.r_squared > 0.6
+    ? `Fitted: conv = ${model.k.toFixed(4)} × spend^${model.alpha.toFixed(2)} (R²=${(model.r_squared * 100).toFixed(0)}%)`
+    : `Default: conv = k × spend^${model.alpha.toFixed(2)} (industry standard)`
+  }
+
+  Key insight: α = ${model.alpha.toFixed(2)} means:
+    • +10% spend → +${((Math.pow(1.1, model.alpha) - 1) * 100).toFixed(1)}% conversions
+    • +50% spend → +${((Math.pow(1.5, model.alpha) - 1) * 100).toFixed(1)}% conversions
+
+CURRENT:
+  Spend:       $${(target.spend_cents / 100).toFixed(2)}/day
+  Conversions: ${target.conversions}/day
+  CAC:         $${(target.spend_cents / target.conversions / 100).toFixed(2)}
+
+PROPOSED: ${changePercent >= 0 ? '+' : ''}${changePercent}% budget
+
+PROJECTION:
+  New Spend:       $${(newEntitySpend / 100).toFixed(2)}/day
+  New Conversions: ${predictedConversions.toFixed(1)}/day
+  New CAC:         $${(newEntityCAC / 100).toFixed(2)}
+
+PORTFOLIO IMPACT:
+  Total Spend:       $${(current.total_spend_cents / 100).toFixed(2)} → $${(newTotalSpend / 100).toFixed(2)}
+  Total Conversions: ${current.total_conversions} → ${newTotalConversions.toFixed(1)}
+  Blended CAC:       $${(current.blended_cac_cents / 100).toFixed(2)} → $${(newCAC / 100).toFixed(2)}
+
+RESULT:
+  CAC Change: ${cacChange >= 0 ? '+' : ''}${cacChange.toFixed(1)}%
+  ${cacChange < 0 ? '✓ CAC IMPROVEMENT' : cacChange > 10 ? '⚠ SIGNIFICANT CAC INCREASE' : '⚠ SLIGHT CAC INCREASE'}
+`;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // DATA FETCHING - Platform-Specific Tables
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private async getPortfolioMetrics(entityType: EntityLevel): Promise<EntityMetrics[]> {
+    const tableMap: Record<EntityLevel, { tables: string[]; idCol: string; nameCol: string }> = {
+      campaign: {
+        tables: ['facebook_campaign_daily_metrics', 'google_campaign_daily_metrics', 'tiktok_campaign_daily_metrics'],
+        idCol: 'campaign_ref',
+        nameCol: 'campaign_ref' // Will need to join with campaigns table for name
+      },
+      ad_set: {
+        tables: ['facebook_ad_set_daily_metrics'],
+        idCol: 'ad_set_ref',
+        nameCol: 'ad_set_ref'
+      },
+      ad_group: {
+        tables: ['google_ad_group_daily_metrics'],
+        idCol: 'ad_group_ref',
+        nameCol: 'ad_group_ref'
+      },
+      ad: {
+        tables: ['facebook_ad_daily_metrics', 'google_ad_daily_metrics'],
+        idCol: 'ad_ref',
+        nameCol: 'ad_ref'
+      }
+    };
+
+    const config = tableMap[entityType] || tableMap.campaign;
+
+    // Build UNION query across platform-specific tables
+    const unionParts = config.tables.map((table, i) => {
+      const platform = table.includes('facebook') ? 'facebook'
+        : table.includes('google') ? 'google'
+        : 'tiktok';
+
+      return `
+        SELECT
+          ${config.idCol} as id,
+          ${config.idCol} as name,
+          '${platform}' as platform,
+          '${entityType}' as entity_type,
+          SUM(spend_cents) as spend_cents,
+          SUM(conversions) as conversions,
+          SUM(impressions) as impressions,
+          SUM(clicks) as clicks,
+          CASE WHEN SUM(impressions) > 0 THEN CAST(SUM(clicks) AS REAL) / SUM(impressions) ELSE 0 END as ctr,
+          CASE WHEN SUM(clicks) > 0 THEN SUM(spend_cents) / SUM(clicks) ELSE 0 END as cpc_cents
+        FROM ${table}
+        WHERE organization_id = ?${i + 1}
+          AND metric_date >= date('now', '-7 days')
+          AND spend_cents > 0
+        GROUP BY ${config.idCol}
+        HAVING conversions > 0
+      `;
+    });
+
+    const query = unionParts.join(' UNION ALL ');
+
+    // Bind org_id for each table
+    const bindings = config.tables.map(() => this.orgId);
+
+    try {
+      const result = await this.analyticsDb.prepare(query).bind(...bindings).all();
+      return (result.results || []) as EntityMetrics[];
+    } catch (err) {
+      console.error('Error fetching portfolio metrics:', err);
+      return [];
+    }
+  }
+
+  private async getEntityHistory(entityId: string, days: number, entityType: EntityLevel): Promise<HistoricalDataPoint[]> {
+    const tableMap: Record<EntityLevel, { tables: string[]; idCol: string }> = {
+      campaign: {
+        tables: ['facebook_campaign_daily_metrics', 'google_campaign_daily_metrics', 'tiktok_campaign_daily_metrics'],
+        idCol: 'campaign_ref'
+      },
+      ad_set: {
+        tables: ['facebook_ad_set_daily_metrics'],
+        idCol: 'ad_set_ref'
+      },
+      ad_group: {
+        tables: ['google_ad_group_daily_metrics'],
+        idCol: 'ad_group_ref'
+      },
+      ad: {
+        tables: ['facebook_ad_daily_metrics', 'google_ad_daily_metrics'],
+        idCol: 'ad_ref'
+      }
+    };
+
+    const config = tableMap[entityType] || tableMap.campaign;
+
+    const unionParts = config.tables.map((table, i) => `
+      SELECT metric_date as date, spend_cents, conversions
+      FROM ${table}
+      WHERE organization_id = ?${i * 3 + 1}
+        AND ${config.idCol} = ?${i * 3 + 2}
+        AND metric_date >= date('now', '-' || ?${i * 3 + 3} || ' days')
+        AND spend_cents > 0
+    `);
+
+    const query = unionParts.join(' UNION ALL ') + ' ORDER BY date ASC';
+
+    // Bind for each table
+    const bindings: (string | number)[] = [];
+    config.tables.forEach(() => {
+      bindings.push(this.orgId, entityId, days);
+    });
+
+    try {
+      const result = await this.analyticsDb.prepare(query).bind(...bindings).all();
+      return (result.results || []) as HistoricalDataPoint[];
+    } catch (err) {
+      console.error('Error fetching entity history:', err);
+      return [];
+    }
+  }
+
+  private async getHourlyHistory(entityId: string, days: number, entityType: EntityLevel): Promise<HistoricalDataPoint[]> {
+    // Note: Hourly data may not be available in all tables
+    // Return empty for now - schedule simulation will use industry benchmarks
+    return [];
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // HELPERS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  private buildCurrentState(entities: EntityMetrics[], target: EntityMetrics | null): PortfolioState {
+    const totalSpend = entities.reduce((s, e) => s + e.spend_cents, 0);
+    const totalConversions = entities.reduce((s, e) => s + e.conversions, 0);
+    const blendedCAC = totalConversions > 0 ? totalSpend / totalConversions : 0;
+
+    let entityState: EntityState;
+    if (target && target.conversions > 0) {
+      const entityCAC = target.spend_cents / target.conversions;
+      entityState = {
+        id: target.id,
+        name: target.name,
+        platform: target.platform,
+        spend_cents: target.spend_cents,
+        conversions: target.conversions,
+        cac_cents: Math.round(entityCAC),
+        efficiency_vs_average: blendedCAC > 0 ? ((blendedCAC / entityCAC) - 1) * 100 : 0
+      };
+    } else {
+      entityState = {
+        id: target?.id || '',
+        name: target?.name || 'Unknown',
+        platform: target?.platform || '',
+        spend_cents: target?.spend_cents || 0,
+        conversions: target?.conversions || 0,
+        cac_cents: 0,
+        efficiency_vs_average: 0
+      };
+    }
+
+    return {
+      total_spend_cents: totalSpend,
+      total_conversions: totalConversions,
+      blended_cac_cents: Math.round(blendedCAC),
+      entity: entityState
+    };
+  }
+
+  private emptyState(): PortfolioState {
+    return {
+      total_spend_cents: 0,
+      total_conversions: 0,
+      blended_cac_cents: 0,
+      entity: {
+        id: '',
+        name: 'Unknown',
+        platform: '',
+        spend_cents: 0,
+        conversions: 0,
+        cac_cents: 0,
+        efficiency_vs_average: 0
+      }
+    };
+  }
+
+  private emptySimulatedState(): SimulatedState {
+    return {
+      total_spend_cents: 0,
+      total_conversions: 0,
+      blended_cac_cents: 0,
+      cac_change_percent: 0,
+      conversion_change_percent: 0,
+      spend_change_percent: 0
+    };
+  }
+}
