@@ -444,6 +444,7 @@ Returns stage-by-stage metrics for the acquisition flow:
 
           let totalSessions = 0;
           let directEvents = 0;
+          let organicSearchEvents = 0;
           let utmEvents = 0; // non-ad-platform UTM (email, social, referral)
           let paidEvents = 0;
 
@@ -455,6 +456,7 @@ Returns stage-by-stage metrics for the acquisition flow:
                 const channels = JSON.parse(row.by_channel) as Record<string, number>;
                 // by_channel values: direct, paid_search, paid_social, organic_search, organic_social, email, referral, display
                 directEvents += channels.direct || 0;
+                organicSearchEvents += channels.organic_search || 0;
                 // UTM = organic social + email + referral (non-paid traffic with UTMs)
                 utmEvents += (channels.organic_social || 0) + (channels.email || 0) + (channels.referral || 0);
                 // Paid = paid_search + paid_social + display
@@ -466,11 +468,12 @@ Returns stage-by-stage metrics for the acquisition flow:
           }
 
           // Calculate approximate session counts from event ratios
-          // Total events = direct + utm + paid + organic_search
-          const totalEvents = directEvents + utmEvents + paidEvents;
+          // Direct includes both "direct" and "organic_search" (no UTM params)
+          const directTotal = directEvents + organicSearchEvents;
+          const totalEvents = directTotal + utmEvents + paidEvents;
           if (totalEvents > 0 && totalSessions > 0) {
             // Scale based on event proportions
-            const directRatio = directEvents / totalEvents;
+            const directRatio = directTotal / totalEvents;
             const utmRatio = utmEvents / totalEvents;
 
             trafficSources = {
