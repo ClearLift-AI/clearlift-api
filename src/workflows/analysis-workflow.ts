@@ -87,6 +87,23 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     const { orgId, days, jobId, customInstructions, config } = event.payload;
     const runId = crypto.randomUUID().replace(/-/g, '');
 
+    // Step 0: Cleanup old pending recommendations to prevent duplicates
+    // This ensures each analysis run starts fresh, avoiding UI duplication
+    await step.do('cleanup_old_pending', {
+      retries: { limit: 2, delay: '1 second' },
+      timeout: '30 seconds'
+    }, async () => {
+      // Delete all pending recommendations for this org
+      // This prevents duplicate insights/recommendations from multiple runs
+      await this.env.AI_DB.prepare(`
+        DELETE FROM ai_decisions
+        WHERE organization_id = ?
+        AND status = 'pending'
+      `).bind(orgId).run();
+
+      console.log(`[Analysis] Cleaned up old pending recommendations for org ${orgId}`);
+    });
+
     // Calculate date range
     const endDate = new Date();
     const startDate = new Date();

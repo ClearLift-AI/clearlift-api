@@ -386,7 +386,10 @@ export class GetAIDecisions extends OpenAPIRoute {
       ...row,
       parameters: JSON.parse(row.parameters || '{}'),
       current_state: JSON.parse(row.current_state || '{}'),
-      supporting_data: JSON.parse(row.supporting_data || '{}')
+      supporting_data: JSON.parse(row.supporting_data || '{}'),
+      // Include simulation data for detailed display
+      simulation_data: row.simulation_data ? JSON.parse(row.simulation_data) : null,
+      simulation_confidence: row.simulation_confidence || null
     }));
 
     return success(c, decisions);
