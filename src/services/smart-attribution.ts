@@ -567,6 +567,11 @@ export class SmartAttributionService {
   /**
    * Get funnel position data for weighting attribution
    * Sessions that reached higher funnel positions (closer to conversion) get more credit
+   *
+   * This uses the same data sources as flow-metrics for consistency:
+   * - conversion_goals table for stage definitions
+   * - daily_metrics.by_channel for channel breakdown
+   * - Ad platform / connector queries for actual visitors per stage
    */
   private async getFunnelPositionData(
     orgId: string,
@@ -575,80 +580,128 @@ export class SmartAttributionService {
     endDate: string
   ): Promise<FunnelPositionData[]> {
     try {
-      // Get goal completion metrics with funnel position info
-      const result = await this.analyticsDb.prepare(`
+      // Get all goals/stages with their positions
+      const goalsResult = await this.mainDb.prepare(`
         SELECT
-          gcm.goal_id,
-          gcm.goal_name,
-          gcm.goal_type,
-          SUM(gcm.completions) as total_completions,
-          SUM(gcm.unique_visitors) as total_visitors,
-          SUM(gcm.downstream_conversions) as downstream_conversions,
-          AVG(gcm.downstream_conversion_rate) as avg_conversion_rate,
-          GROUP_CONCAT(gcm.by_channel) as by_channel_json
-        FROM goal_completion_metrics gcm
-        WHERE gcm.org_tag = ?
-          AND gcm.date >= ?
-          AND gcm.date <= ?
-        GROUP BY gcm.goal_id, gcm.goal_name, gcm.goal_type
-      `).bind(orgTag, startDate.split('T')[0], endDate.split('T')[0]).all();
+          id, name, type, connector, connector_event_type,
+          COALESCE(position_row, priority, 0) as position_row,
+          COALESCE(position_col, 0) as position_col,
+          is_conversion
+        FROM conversion_goals
+        WHERE organization_id = ? AND is_active = 1
+        ORDER BY position_row ASC, position_col ASC
+      `).bind(orgId).all<{
+        id: string;
+        name: string;
+        type: string;
+        connector: string | null;
+        connector_event_type: string | null;
+        position_row: number;
+        position_col: number;
+        is_conversion: number | null;
+      }>();
 
-      // Get funnel positions from main DB
-      const positionsResult = await this.mainDb.prepare(`
-        SELECT
-          g.id as goal_id,
-          r.funnel_position
-        FROM conversion_goals g
-        LEFT JOIN goal_relationships r ON r.upstream_goal_id = g.id
-        WHERE g.organization_id = ?
-          AND (g.is_active = 1 OR g.is_active IS NULL)
-      `).bind(orgId).all();
+      const goals = goalsResult.results || [];
+      if (goals.length === 0) {
+        return [];
+      }
 
-      // Build position lookup
-      const positionsByGoalId = new Map<string, number>();
-      for (const row of (positionsResult.results || []) as Array<{ goal_id: string; funnel_position: number | null }>) {
-        if (row.funnel_position) {
-          positionsByGoalId.set(row.goal_id, row.funnel_position);
+      // Get channel distribution from daily_metrics
+      const channelResult = await this.analyticsDb.prepare(`
+        SELECT by_channel FROM daily_metrics
+        WHERE org_tag = ? AND date >= ? AND date <= ?
+      `).bind(orgTag, startDate.split('T')[0], endDate.split('T')[0]).all<{ by_channel: string | null }>();
+
+      // Aggregate channel distribution
+      const channelDistribution: Record<string, number> = {};
+      let totalChannelEvents = 0;
+      for (const row of channelResult.results || []) {
+        if (row.by_channel) {
+          try {
+            const channels = JSON.parse(row.by_channel) as Record<string, number>;
+            for (const [channel, count] of Object.entries(channels)) {
+              channelDistribution[channel] = (channelDistribution[channel] || 0) + count;
+              totalChannelEvents += count;
+            }
+          } catch {}
         }
       }
 
       const funnelData: FunnelPositionData[] = [];
+      const maxRow = Math.max(...goals.map(g => g.position_row), 0);
 
-      for (const row of (result.results || []) as Array<{
-        goal_id: string;
-        goal_name: string;
-        goal_type: string;
-        total_completions: number;
-        total_visitors: number;
-        downstream_conversions: number;
-        avg_conversion_rate: number;
-        by_channel_json: string | null;
-      }>) {
-        // Parse and merge by_channel JSON arrays
+      for (const goal of goals) {
+        const connector = goal.connector || 'clearlift_tag';
+        let visitors = 0;
+
+        // Query visitors based on connector type (same logic as flow-metrics)
+        try {
+          if (connector === 'google_ads') {
+            const result = await this.analyticsDb.prepare(`
+              SELECT COALESCE(SUM(m.clicks), 0) as clicks
+              FROM google_campaigns c
+              LEFT JOIN google_campaign_daily_metrics m
+                ON c.id = m.campaign_ref AND m.metric_date >= ? AND m.metric_date <= ?
+              WHERE c.organization_id = ?
+            `).bind(startDate, endDate, orgId).first<{ clicks: number }>();
+            visitors = result?.clicks || 0;
+          } else if (connector === 'facebook_ads') {
+            const result = await this.analyticsDb.prepare(`
+              SELECT COALESCE(SUM(m.clicks), 0) as clicks
+              FROM facebook_campaigns c
+              LEFT JOIN facebook_campaign_daily_metrics m
+                ON c.id = m.campaign_ref AND m.metric_date >= ? AND m.metric_date <= ?
+              WHERE c.organization_id = ?
+            `).bind(startDate, endDate, orgId).first<{ clicks: number }>();
+            visitors = result?.clicks || 0;
+          } else if (connector === 'stripe') {
+            const result = await this.analyticsDb.prepare(`
+              SELECT COUNT(*) as conversions FROM stripe_charges
+              WHERE organization_id = ? AND DATE(stripe_created_at) >= ? AND DATE(stripe_created_at) <= ?
+                AND (billing_reason = 'subscription_create' OR (billing_reason IS NULL AND status = 'succeeded'))
+            `).bind(orgId, startDate, endDate).first<{ conversions: number }>();
+            visitors = result?.conversions || 0;
+          } else if (connector === 'shopify') {
+            const result = await this.analyticsDb.prepare(`
+              SELECT COUNT(*) as conversions FROM shopify_orders
+              WHERE organization_id = ? AND DATE(created_at) >= ? AND DATE(created_at) <= ?
+            `).bind(orgId, startDate, endDate).first<{ conversions: number }>();
+            visitors = result?.conversions || 0;
+          }
+        } catch {}
+
+        // Build by_channel for this goal
         const byChannel: Record<string, number> = {};
-        if (row.by_channel_json) {
-          try {
-            // GROUP_CONCAT produces comma-separated JSON objects
-            const jsonParts = row.by_channel_json.split('},{');
-            for (const part of jsonParts) {
-              const cleanJson = part.startsWith('{') ? part : '{' + part;
-              const finalJson = cleanJson.endsWith('}') ? cleanJson : cleanJson + '}';
-              const parsed = JSON.parse(finalJson);
-              for (const [channel, count] of Object.entries(parsed)) {
-                byChannel[channel] = (byChannel[channel] || 0) + (count as number);
+        if (visitors > 0) {
+          if (connector === 'google_ads') {
+            byChannel['paid_search'] = visitors;
+          } else if (connector === 'facebook_ads' || connector === 'tiktok_ads') {
+            byChannel['paid_social'] = visitors;
+          } else if (totalChannelEvents > 0) {
+            // Distribute based on channel proportions
+            for (const [channel, eventCount] of Object.entries(channelDistribution)) {
+              const ratio = eventCount / totalChannelEvents;
+              const attributed = Math.round(visitors * ratio);
+              if (attributed > 0) {
+                byChannel[channel] = attributed;
               }
             }
-          } catch {
-            // Ignore parse errors
           }
         }
 
+        // Funnel position = inverted row (higher row = closer to conversion = higher position)
+        // Position 0 = top of funnel, maxRow = bottom (conversion)
+        const funnelPosition = maxRow - goal.position_row + 1;
+
+        // Conversion rate approximation: stages closer to conversion get higher rate
+        const conversionRate = goal.is_conversion ? 1.0 : (funnelPosition / (maxRow + 1));
+
         funnelData.push({
-          goalId: row.goal_id,
-          goalName: row.goal_name,
-          funnelPosition: positionsByGoalId.get(row.goal_id) || 0,
-          conversionRate: row.avg_conversion_rate || 0,
-          visitorCount: row.total_visitors,
+          goalId: goal.id,
+          goalName: goal.name,
+          funnelPosition,
+          conversionRate,
+          visitorCount: visitors,
           byChannel,
         });
       }
@@ -656,7 +709,7 @@ export class SmartAttributionService {
       // Sort by funnel position (higher = closer to conversion)
       funnelData.sort((a, b) => b.funnelPosition - a.funnelPosition);
 
-      console.log(`[SmartAttribution] Funnel data: ${funnelData.length} goals with positions`);
+      console.log(`[SmartAttribution] Funnel data: ${funnelData.length} goals from flow builder`);
       return funnelData;
     } catch (err) {
       console.warn('[SmartAttribution] Failed to query funnel position data:', err);
