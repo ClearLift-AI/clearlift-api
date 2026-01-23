@@ -290,10 +290,15 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
               if (!aggregated[channel]) {
                 aggregated[channel] = { events: 0, sessions: 0, conversions: 0, revenue: 0 };
               }
-              aggregated[channel].events += data.events || 0;
-              aggregated[channel].sessions += data.sessions || 0;
-              aggregated[channel].conversions += data.conversions || 0;
-              aggregated[channel].revenue += (data.revenue_cents || 0) / 100;
+              // Handle both formats: simple count (number) or object with events property
+              if (typeof data === 'number') {
+                aggregated[channel].events += data;
+              } else {
+                aggregated[channel].events += data.events || 0;
+                aggregated[channel].sessions += data.sessions || 0;
+                aggregated[channel].conversions += data.conversions || 0;
+                aggregated[channel].revenue += (data.revenue_cents || 0) / 100;
+              }
             }
           } catch (e) {
             // Skip invalid JSON
@@ -324,10 +329,15 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
               if (!aggregated[device]) {
                 aggregated[device] = { events: 0, sessions: 0, conversions: 0, revenue: 0 };
               }
-              aggregated[device].events += data.events || 0;
-              aggregated[device].sessions += data.sessions || 0;
-              aggregated[device].conversions += data.conversions || 0;
-              aggregated[device].revenue += (data.revenue_cents || 0) / 100;
+              // Handle both formats: simple count (number) or object with events property
+              if (typeof data === 'number') {
+                aggregated[device].events += data;
+              } else {
+                aggregated[device].events += data.events || 0;
+                aggregated[device].sessions += data.sessions || 0;
+                aggregated[device].conversions += data.conversions || 0;
+                aggregated[device].revenue += (data.revenue_cents || 0) / 100;
+              }
             }
           } catch (e) {
             // Skip invalid JSON
