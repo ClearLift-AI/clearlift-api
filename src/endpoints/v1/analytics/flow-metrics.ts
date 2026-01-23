@@ -88,6 +88,11 @@ Returns stage-by-stage metrics for the acquisition flow:
                   has_branching: z.boolean(),
                   entry_points: z.number(),
                 }),
+                traffic_sources: z.object({
+                  direct_visitors: z.number(),
+                  utm_visitors: z.number(),
+                  total_visitors: z.number(),
+                }).optional(),
               }),
             }),
           },
@@ -419,6 +424,54 @@ Returns stage-by-stage metrics for the acquisition flow:
       // Count conversion stages
       const conversionStages = stageMetrics.filter(s => s.is_conversion).length;
 
+      // Get traffic source breakdown (Direct vs UTM)
+      let trafficSources = {
+        direct_visitors: 0,
+        utm_visitors: 0,
+        total_visitors: 0,
+      };
+
+      if (orgTag) {
+        try {
+          // Get total sessions from daily_metrics
+          const totalResult = await analyticsDb.prepare(`
+            SELECT COALESCE(SUM(sessions), 0) as total_sessions
+            FROM daily_metrics
+            WHERE org_tag = ?
+              AND date >= ?
+              AND date <= ?
+          `).bind(orgTag, startDateStr, endDateStr).first<{ total_sessions: number }>();
+
+          const totalSessions = totalResult?.total_sessions || 0;
+
+          // Get UTM sessions (has utm_source)
+          const utmResult = await analyticsDb.prepare(`
+            SELECT COALESCE(SUM(sessions), 0) as utm_sessions
+            FROM utm_performance
+            WHERE org_tag = ?
+              AND date >= ?
+              AND date <= ?
+              AND utm_source IS NOT NULL
+              AND utm_source != ''
+              AND utm_source NOT IN ('google', 'facebook', 'meta', 'tiktok', 'fb', 'ig')
+          `).bind(orgTag, startDateStr, endDateStr).first<{ utm_sessions: number }>();
+
+          const utmSessions = utmResult?.utm_sessions || 0;
+
+          // Calculate direct (total minus UTM minus ad platform clicks)
+          const adPlatformClicks = topOfFunnelVisitors; // Already calculated from ad stages
+          const directVisitors = Math.max(0, totalSessions - utmSessions - adPlatformClicks);
+
+          trafficSources = {
+            direct_visitors: directVisitors,
+            utm_visitors: utmSessions,
+            total_visitors: totalSessions,
+          };
+        } catch (err) {
+          console.warn("[FlowMetrics] Failed to get traffic sources:", err);
+        }
+      }
+
       return success(c, {
         stages: stageMetrics,
         summary: {
@@ -434,6 +487,7 @@ Returns stage-by-stage metrics for the acquisition flow:
           has_branching: hasBranching,
           entry_points: Math.max(1, entryPoints),
         },
+        traffic_sources: trafficSources,
       });
     } catch (err) {
       console.error("[FlowMetrics] Error:", err);
