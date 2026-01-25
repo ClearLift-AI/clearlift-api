@@ -9,6 +9,19 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { SmartAttributionService, type SignalType } from "../../../services/smart-attribution";
+import { StageMarkovService } from "../../../services/stage-markov";
+
+// Enhanced channel attribution with confidence
+interface EnhancedChannelAttribution {
+  visitors: number;
+  conversions: number;
+  confidence: number;
+  signal_type: SignalType;
+  explanation: string;
+  is_estimated: boolean;
+  estimation_reason: string | null;
+}
 
 // Stage metrics interface
 interface StageMetrics {
@@ -20,12 +33,16 @@ interface StageMetrics {
   position_row: number;
   position_col: number;
   is_conversion: boolean;
+  is_traffic_source: boolean; // True for ad platforms (google_ads, facebook_ads, tiktok_ads)
   visitors: number;
   conversions: number;
   dropoff_rate: number;
   avg_time_to_next_hours: number | null;
   conversion_value_cents: number;
   by_channel?: Record<string, number>; // Channel attribution breakdown
+  by_channel_enhanced?: Record<string, EnhancedChannelAttribution>; // Enhanced with confidence
+  removal_effect?: number; // Stage removal effect (Markov)
+  is_critical?: boolean; // True if removal_effect > 0.3
 }
 
 /**
@@ -51,6 +68,9 @@ Returns stage-by-stage metrics for the acquisition flow:
       query: z.object({
         org_id: z.string().optional().describe("Organization ID"),
         days: z.coerce.number().int().min(1).max(365).default(30).describe("Number of days to analyze"),
+        attribution_model: z.enum(["smart", "linear", "first_touch", "last_touch"]).default("smart").describe("Attribution model to use"),
+        include_model_comparison: z.coerce.boolean().default(false).describe("Include comparison across attribution models"),
+        include_removal_effects: z.coerce.boolean().default(true).describe("Include stage removal effects (Markov analysis)"),
       }),
     },
     responses: {
@@ -70,12 +90,24 @@ Returns stage-by-stage metrics for the acquisition flow:
                   position_row: z.number(),
                   position_col: z.number(),
                   is_conversion: z.boolean(),
+                  is_traffic_source: z.boolean(),
                   visitors: z.number(),
                   conversions: z.number(),
                   dropoff_rate: z.number(),
                   avg_time_to_next_hours: z.number().nullable(),
                   conversion_value_cents: z.number(),
                   by_channel: z.record(z.string(), z.number()).optional(),
+                  by_channel_enhanced: z.record(z.string(), z.object({
+                    visitors: z.number(),
+                    conversions: z.number(),
+                    confidence: z.number(),
+                    signal_type: z.string(),
+                    explanation: z.string(),
+                    is_estimated: z.boolean(),
+                    estimation_reason: z.string().nullable(),
+                  })).optional(),
+                  removal_effect: z.number().optional(),
+                  is_critical: z.boolean().optional(),
                 })),
                 summary: z.object({
                   total_stages: z.number(),
@@ -95,6 +127,16 @@ Returns stage-by-stage metrics for the acquisition flow:
                   utm_visitors: z.number(),
                   total_visitors: z.number(),
                 }).optional(),
+                attribution_summary: z.object({
+                  model_used: z.string(),
+                  avg_confidence: z.number(),
+                  data_completeness: z.number(),
+                }).optional(),
+                data_quality: z.object({
+                  recommendations: z.array(z.string()),
+                  has_smart_attribution: z.boolean(),
+                  critical_stages_count: z.number(),
+                }).optional(),
               }),
             }),
           },
@@ -106,6 +148,10 @@ Returns stage-by-stage metrics for the acquisition flow:
   async handle(c: AppContext) {
     const orgId = c.req.query("org_id") || c.get("org_id");
     const days = parseInt(c.req.query("days") || "30", 10);
+    const attributionModel = c.req.query("attribution_model") || "smart";
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const _includeModelComparison = c.req.query("include_model_comparison") === "true"; // Reserved for v2
+    const includeRemovalEffects = c.req.query("include_removal_effects") !== "false";
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
@@ -243,6 +289,7 @@ Returns stage-by-stage metrics for the acquisition flow:
       // Build stage metrics - query each connector's data source
       const stageMetrics: StageMetrics[] = [];
       let totalRevenueCents = 0;
+      let smartAttributionData: Awaited<ReturnType<SmartAttributionService['getSmartAttribution']>> | null = null;
 
       for (const goal of goals) {
         const isConversion = Boolean(goal.is_conversion) || goal.type === "conversion";
@@ -382,6 +429,7 @@ Returns stage-by-stage metrics for the acquisition flow:
 
         // Calculate by_channel for this stage
         let byChannel: Record<string, number> | undefined;
+        let byChannelEnhanced: Record<string, EnhancedChannelAttribution> | undefined;
 
         if (visitors > 0) {
           if (connector === "google_ads") {
@@ -390,9 +438,54 @@ Returns stage-by-stage metrics for the acquisition flow:
           } else if (connector === "facebook_ads" || connector === "tiktok_ads") {
             // Social ad stages = 100% paid_social channel
             byChannel = { paid_social: visitors };
+          } else if ((connector === "stripe" || connector === "shopify") && attributionModel === "smart") {
+            // Revenue stages - use SmartAttributionService for confidence-scored attribution
+            try {
+              const smartService = new SmartAttributionService(analyticsDb, c.env.DB);
+              const attribution = await smartService.getSmartAttribution(orgId, startDateStr, endDateStr);
+
+              if (attribution.attributions.length > 0 && attribution.summary.totalConversions > 0) {
+                byChannel = {};
+                byChannelEnhanced = {};
+
+                for (const attr of attribution.attributions) {
+                  const channelKey = attr.platform || attr.channel.toLowerCase().replace(/\s+/g, '_');
+                  const conversionShare = attr.conversions / attribution.summary.totalConversions;
+
+                  byChannel[channelKey] = Math.round(conversions * conversionShare);
+                  byChannelEnhanced[channelKey] = {
+                    visitors: Math.round(visitors * conversionShare),
+                    conversions: Math.round(conversions * conversionShare),
+                    confidence: attr.confidence,
+                    signal_type: attr.signalType,
+                    explanation: attr.explanation,
+                    is_estimated: attr.is_estimated,
+                    estimation_reason: attr.estimation_reason,
+                  };
+                }
+
+                // Store attribution metadata for summary
+                if (!smartAttributionData) {
+                  smartAttributionData = attribution;
+                }
+              }
+            } catch (err) {
+              console.warn(`[FlowMetrics] SmartAttribution failed for ${goal.name}:`, err);
+            }
+
+            // Fallback to proportional distribution if SmartAttribution failed
+            if (!byChannel && totalChannelEvents > 0) {
+              byChannel = {};
+              for (const [channel, eventCount] of Object.entries(channelDistribution)) {
+                const ratio = eventCount / totalChannelEvents;
+                const attributed = Math.round(conversions * ratio);
+                if (attributed > 0) {
+                  byChannel[channel] = attributed;
+                }
+              }
+            }
           } else if ((connector === "stripe" || connector === "shopify") && totalChannelEvents > 0) {
-            // Revenue stages - distribute based on channel proportions
-            // This attributes conversions proportionally to traffic channels
+            // Non-smart attribution: distribute based on channel proportions
             byChannel = {};
             for (const [channel, eventCount] of Object.entries(channelDistribution)) {
               const ratio = eventCount / totalChannelEvents;
@@ -414,6 +507,9 @@ Returns stage-by-stage metrics for the acquisition flow:
           }
         }
 
+        // Traffic sources are ad platforms - they're entry points, not funnel stages
+        const isTrafficSource = ["google_ads", "facebook_ads", "tiktok_ads"].includes(connector);
+
         const metrics: StageMetrics = {
           id: goal.id,
           name: goal.name,
@@ -423,12 +519,14 @@ Returns stage-by-stage metrics for the acquisition flow:
           position_row: goal.position_row ?? stageMetrics.length,
           position_col: goal.position_col ?? 0,
           is_conversion: isConversion,
+          is_traffic_source: isTrafficSource,
           visitors,
           conversions,
           dropoff_rate: 0, // Calculate after all stages
           avg_time_to_next_hours: null,
           conversion_value_cents: isConversion ? (conversionValueCents || conversions * valueCents) : 0,
           by_channel: byChannel,
+          by_channel_enhanced: byChannelEnhanced,
         };
 
         stageMetrics.push(metrics);
@@ -438,10 +536,22 @@ Returns stage-by-stage metrics for the acquisition flow:
         }
       }
 
-      // Calculate dropoff rates based on funnel position
-      // Group by position_row, then calculate dropoff between rows
+      // CRITICAL FIX: Separate traffic sources from funnel stages
+      // Ad platforms (google_ads, facebook_ads, tiktok_ads) are ENTRY POINTS, not funnel stages
+      // We cannot calculate dropoff from ad clicks to page views - they're not session-linked
+      const trafficSourceConnectors = new Set(["google_ads", "facebook_ads", "tiktok_ads"]);
+      const funnelStages = stageMetrics.filter(s => !trafficSourceConnectors.has(s.connector || ""));
+      const trafficSourceStages = stageMetrics.filter(s => trafficSourceConnectors.has(s.connector || ""));
+
+      // Mark traffic source stages as entry points (not part of dropoff calculation)
+      for (const stage of trafficSourceStages) {
+        stage.dropoff_rate = 0; // No dropoff - these are entry points
+      }
+
+      // Calculate dropoff rates only between funnel stages (not traffic sources)
+      // Group funnel stages by position_row
       const rowGroups = new Map<number, StageMetrics[]>();
-      for (const stage of stageMetrics) {
+      for (const stage of funnelStages) {
         const row = stage.position_row;
         if (!rowGroups.has(row)) rowGroups.set(row, []);
         rowGroups.get(row)!.push(stage);
@@ -457,7 +567,7 @@ Returns stage-by-stage metrics for the acquisition flow:
         const prevStages = rowGroups.get(prevRow) || [];
         const currStages = rowGroups.get(currRow) || [];
 
-        // Sum visitors from previous row
+        // Sum visitors from previous row of FUNNEL stages only
         const prevVisitors = prevStages.reduce((sum, s) => sum + s.visitors, 0);
 
         // Calculate dropoff for each stage in current row
@@ -474,12 +584,13 @@ Returns stage-by-stage metrics for the acquisition flow:
         }
       }
 
-      // Calculate overall conversion rate (top of funnel visitors to final conversion)
-      // Use sum of all row 0 (entry point) visitors, not just stageMetrics[0]
-      const topOfFunnelRow = sortedRows[0] ?? 0;
-      const topOfFunnelVisitors = (rowGroups.get(topOfFunnelRow) || [])
-        .reduce((sum, s) => sum + s.visitors, 0);
-      const finalConversions = stageMetrics.filter(s => s.is_conversion)
+      // Calculate overall conversion rate using FUNNEL stages only (not traffic sources)
+      // Top of funnel = first row of funnel stages (clearlift_tag, etc.), not ad platforms
+      const topOfFunnelRow = sortedRows[0];
+      const topOfFunnelVisitors = topOfFunnelRow !== undefined
+        ? (rowGroups.get(topOfFunnelRow) || []).reduce((sum, s) => sum + s.visitors, 0)
+        : 0;
+      const finalConversions = funnelStages.filter(s => s.is_conversion)
         .reduce((sum, s) => sum + s.conversions, 0);
       const overallConversionRate = topOfFunnelVisitors > 0
         ? Math.round((finalConversions / topOfFunnelVisitors) * 100 * 100) / 100
@@ -557,6 +668,90 @@ Returns stage-by-stage metrics for the acquisition flow:
         }
       }
 
+      // Calculate stage removal effects using Markov analysis
+      let criticalStagesCount = 0;
+      if (includeRemovalEffects && orgTag) {
+        try {
+          const markovService = new StageMarkovService(analyticsDb, c.env.DB);
+          const removalEffects = await markovService.getRemovalEffectsMap(
+            orgId,
+            orgTag,
+            startDateStr,
+            endDateStr
+          );
+
+          // Apply removal effects to stage metrics
+          for (const stage of stageMetrics) {
+            const removalEffect = removalEffects.get(stage.id);
+            if (removalEffect !== undefined) {
+              stage.removal_effect = removalEffect;
+              stage.is_critical = removalEffect > 0.3;
+              if (stage.is_critical) {
+                criticalStagesCount++;
+              }
+            }
+          }
+          console.log(`[FlowMetrics] Applied removal effects to ${removalEffects.size} stages, ${criticalStagesCount} critical`);
+        } catch (err) {
+          console.warn("[FlowMetrics] Failed to calculate removal effects:", err);
+        }
+      }
+
+      // Build attribution summary
+      let attributionSummary: { model_used: string; avg_confidence: number; data_completeness: number } | undefined;
+      if (smartAttributionData) {
+        const confidences = smartAttributionData.attributions.map(a => a.confidence);
+        const avgConfidence = confidences.length > 0
+          ? Math.round(confidences.reduce((sum, c) => sum + c, 0) / confidences.length)
+          : 0;
+
+        attributionSummary = {
+          model_used: attributionModel,
+          avg_confidence: avgConfidence,
+          data_completeness: smartAttributionData.summary.dataCompleteness,
+        };
+      }
+
+      // Build data quality recommendations based on actual data state
+      const recommendations: string[] = [];
+
+      // Check if we have any paid traffic in funnel stages (not traffic sources)
+      const funnelStagesOnly = stageMetrics.filter(s => !trafficSourceConnectors.has(s.connector || ""));
+      const hasPaidTrafficInFunnel = funnelStagesOnly.some(s =>
+        s.by_channel && (
+          (s.by_channel as Record<string, number>).paid_search > 0 ||
+          (s.by_channel as Record<string, number>).paid_social > 0
+        )
+      );
+
+      // Check if we have traffic source stages (ad platforms connected)
+      const hasAdPlatformConnected = trafficSourceStages.length > 0;
+      const totalAdClicks = trafficSourceStages.reduce((sum, s) => sum + s.visitors, 0);
+
+      // Contextual recommendations based on data quality
+      if (hasAdPlatformConnected && !hasPaidTrafficInFunnel && totalAdClicks > 10) {
+        // Ad platform connected with clicks, but no paid traffic showing in funnel
+        recommendations.push(
+          `${totalAdClicks} ad clicks detected but 0 linked to funnel sessions. ` +
+          "Check: (1) UTM/gclid/fbclid parameters in ad URLs, (2) Tag installed on landing pages, (3) No URL redirects stripping parameters"
+        );
+      }
+
+      if (!smartAttributionData) {
+        // No payment connector - can't do conversion attribution
+        if (conversionStages > 0 && totalRevenueCents === 0) {
+          recommendations.push("Connect Stripe or Shopify to track revenue and enable conversion attribution");
+        } else if (conversionStages === 0) {
+          recommendations.push("Add conversion goals (purchase, signup) to track funnel completion");
+        }
+      } else if (smartAttributionData.dataQuality.recommendations.length > 0) {
+        recommendations.push(...smartAttributionData.dataQuality.recommendations);
+      }
+
+      if (criticalStagesCount === 0 && stageMetrics.length > 2) {
+        recommendations.push("No critical stages identified - consider A/B testing to optimize funnel performance");
+      }
+
       return success(c, {
         stages: stageMetrics,
         summary: {
@@ -573,6 +768,12 @@ Returns stage-by-stage metrics for the acquisition flow:
           entry_points: Math.max(1, entryPoints),
         },
         traffic_sources: trafficSources,
+        attribution_summary: attributionSummary,
+        data_quality: {
+          recommendations,
+          has_smart_attribution: !!smartAttributionData,
+          critical_stages_count: criticalStagesCount,
+        },
       });
     } catch (err) {
       console.error("[FlowMetrics] Error:", err);
@@ -776,6 +977,55 @@ export class GetStageTransitions extends OpenAPIRoute {
 
       const droppedOff = Math.max(0, stageConversions - progressedCount);
 
+      // Query real timing data from funnel_transitions
+      let avgTimeFromPrevious: number | null = null;
+      let avgTimeToNext: number | null = null;
+
+      // Get org_tag for querying funnel_transitions
+      const tagMapping = await c.env.DB.prepare(`
+        SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
+      `).bind(orgId).first<{ short_tag: string }>();
+
+      if (tagMapping?.short_tag) {
+        const orgTag = tagMapping.short_tag;
+
+        // Query timing for transitions TO this stage (from previous stages)
+        if (inboundRels.results && inboundRels.results.length > 0) {
+          try {
+            const inboundTiming = await analyticsDb.prepare(`
+              SELECT AVG(avg_time_to_transition_hours) as avg_hours
+              FROM funnel_transitions
+              WHERE org_tag = ? AND to_id = ?
+                AND avg_time_to_transition_hours IS NOT NULL
+              ORDER BY period_start DESC
+              LIMIT 7
+            `).bind(orgTag, stageId).first<{ avg_hours: number | null }>();
+
+            avgTimeFromPrevious = inboundTiming?.avg_hours || null;
+          } catch (err) {
+            console.warn(`[StageTransitions] Failed to query inbound timing:`, err);
+          }
+        }
+
+        // Query timing for transitions FROM this stage (to next stages)
+        if (outboundRels.results && outboundRels.results.length > 0) {
+          try {
+            const outboundTiming = await analyticsDb.prepare(`
+              SELECT AVG(avg_time_to_transition_hours) as avg_hours
+              FROM funnel_transitions
+              WHERE org_tag = ? AND from_id = ?
+                AND avg_time_to_transition_hours IS NOT NULL
+              ORDER BY period_start DESC
+              LIMIT 7
+            `).bind(orgTag, stageId).first<{ avg_hours: number | null }>();
+
+            avgTimeToNext = outboundTiming?.avg_hours || null;
+          } catch (err) {
+            console.warn(`[StageTransitions] Failed to query outbound timing:`, err);
+          }
+        }
+      }
+
       return success(c, {
         stage_id: stage.id,
         stage_name: stage.name,
@@ -789,9 +1039,9 @@ export class GetStageTransitions extends OpenAPIRoute {
           by_destination: outboundDests,
         },
         timing: {
-          avg_time_from_previous_hours: Math.random() * 12 + 0.5, // Placeholder
-          avg_time_to_next_hours: outboundRels.results?.length ? Math.random() * 24 + 1 : null,
-          median_time_to_next_hours: outboundRels.results?.length ? Math.random() * 18 + 0.5 : null,
+          avg_time_from_previous_hours: avgTimeFromPrevious,
+          avg_time_to_next_hours: avgTimeToNext,
+          median_time_to_next_hours: null, // Median requires more complex query, keep as null for now
         },
       });
     } catch (err) {

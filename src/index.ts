@@ -65,7 +65,8 @@ import {
 import {
   GetCACTimeline,
   GenerateCACPredictions,
-  BackfillCACHistory
+  BackfillCACHistory,
+  ComputeCACBaselines
 } from "./endpoints/v1/analytics/cac-timeline";
 import {
   GetFacebookCampaigns,
@@ -515,6 +516,7 @@ openapi.get("/v1/analytics/realtime/goals/:id/timeseries", auth, requireOrg, Get
 openapi.get("/v1/analytics/cac/timeline", auth, requireOrg, GetCACTimeline);
 openapi.post("/v1/analytics/cac/generate", auth, requireOrg, GenerateCACPredictions);
 openapi.post("/v1/analytics/cac/backfill", auth, requireOrg, BackfillCACHistory);
+openapi.post("/v1/analytics/cac/compute-baselines", auth, requireOrg, ComputeCACBaselines);
 
 // Facebook Ads endpoints
 openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);

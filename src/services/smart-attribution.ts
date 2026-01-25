@@ -16,6 +16,8 @@
  * Key Principle: Use Best Available Signal - Never dilute with arbitrary splits
  */
 
+import { CacheService } from './cache';
+
 // Signal types ordered by confidence
 export type SignalType =
   | 'click_id'           // 100% - Click ID match (gclid, fbclid, ttclid)
@@ -62,6 +64,28 @@ export interface SmartAttribution {
   dataQuality: DataQualityLevel;
   signals: SignalAvailability;
   explanation: string;          // Human-readable attribution explanation
+  is_estimated: boolean;        // True when using probabilistic distribution, false for click ID matches
+  estimation_reason: string | null;  // Explanation when is_estimated=true
+}
+
+/**
+ * Calculate confidence score adjusted for sample size
+ *
+ * Base confidence comes from the signal type (click ID = 100, UTM = 85-95, etc.)
+ * This is then adjusted based on the number of observations:
+ * - 100+ samples: Full confidence (factor = 1.0)
+ * - 10 samples: Reduced confidence (factor = 0.8)
+ * - 1 sample: Minimum confidence (factor = 0.5)
+ *
+ * Formula: finalConfidence = baseConfidence × sampleSizeFactor
+ * where sampleSizeFactor = min(1, 0.5 + 0.5 × (log10(sampleSize + 1) / 2))
+ */
+function calculateConfidence(baseConfidence: number, sampleSize: number): number {
+  if (sampleSize <= 0) return Math.round(baseConfidence * 0.5);
+
+  // Sample size factor: 100+ = 1.0, 10 = 0.8, 1 = 0.5
+  const factor = Math.min(1, 0.5 + 0.5 * (Math.log10(sampleSize + 1) / 2));
+  return Math.round(baseConfidence * factor);
 }
 
 // UTM source to platform mapping
@@ -165,14 +189,17 @@ export interface SmartAttributionTimeSeriesEntry {
  * SmartAttributionService
  *
  * Queries multiple data sources and applies signal hierarchy for attribution.
+ * Supports optional KV caching for improved performance.
  */
 export class SmartAttributionService {
   private analyticsDb: D1Database;
   private mainDb: D1Database;
+  private cache: CacheService | null;
 
-  constructor(analyticsDb: D1Database, mainDb: D1Database) {
+  constructor(analyticsDb: D1Database, mainDb: D1Database, kv?: KVNamespace) {
     this.analyticsDb = analyticsDb;
     this.mainDb = mainDb;
+    this.cache = kv ? new CacheService(kv) : null;
   }
 
   /**
@@ -201,6 +228,22 @@ export class SmartAttributionService {
   }> {
     console.log(`[SmartAttribution] Starting for org=${orgId}, ${startDate} to ${endDate}`);
 
+    // Check cache first
+    if (this.cache) {
+      const cacheKey = CacheService.smartAttributionKey(orgId, startDate, endDate);
+      const cached = await this.cache.get<{
+        attributions: SmartAttribution[];
+        summary: { totalConversions: number; totalRevenue: number; dataCompleteness: number; signalBreakdown: Record<SignalType, { count: number; percentage: number }> };
+        timeSeries: SmartAttributionTimeSeriesEntry[];
+        dataQuality: { hasPlatformData: boolean; hasTagData: boolean; hasClickIds: boolean; hasConnectorData: boolean; recommendations: string[] };
+      }>(cacheKey);
+
+      if (cached) {
+        console.log(`[SmartAttribution] Cache hit for ${cacheKey}`);
+        return cached;
+      }
+    }
+
     // Get org_tag for analytics tables
     const orgTag = await this.getOrgTag(orgId);
     console.log(`[SmartAttribution] Resolved org_tag=${orgTag}`);
@@ -214,6 +257,7 @@ export class SmartAttributionService {
       dailyConnectorRevenue,
       dailyPlatformMetrics,
       clickIdStats,
+      clickLevelAttribution,
       funnelData,
     ] = await Promise.all([
       this.getPlatformMetrics(orgId, startDate, endDate),
@@ -223,17 +267,19 @@ export class SmartAttributionService {
       this.getDailyConnectorRevenue(orgId, startDate, endDate),
       this.getDailyPlatformMetrics(orgId, startDate, endDate),
       this.getClickIdStats(orgId, startDate, endDate),
+      this.getClickLevelAttribution(orgId, startDate, endDate),
       orgTag ? this.getFunnelPositionData(orgId, orgTag, startDate, endDate) : Promise.resolve([]),
     ]);
 
-    console.log(`[SmartAttribution] Data sources: platforms=${platformMetrics.length}, utm=${utmPerformance.length}, connectors=${connectorRevenue.length}, funnelSteps=${funnelData.length}`);
+    console.log(`[SmartAttribution] Data sources: platforms=${platformMetrics.length}, utm=${utmPerformance.length}, connectors=${connectorRevenue.length}, clickLevel=${clickLevelAttribution.length}, funnelSteps=${funnelData.length}`);
 
     // Build attribution using signal hierarchy with funnel weighting
     const attributions = this.buildAttributions(
       platformMetrics,
       utmPerformance,
       connectorRevenue,
-      funnelData
+      funnelData,
+      clickLevelAttribution
     );
 
     // Calculate summary
@@ -259,7 +305,18 @@ export class SmartAttributionService {
       clickIdStats
     );
 
-    return { attributions, summary, timeSeries, dataQuality };
+    const result = { attributions, summary, timeSeries, dataQuality };
+
+    // Cache the result for 5 minutes
+    if (this.cache) {
+      const cacheKey = CacheService.smartAttributionKey(orgId, startDate, endDate);
+      this.cache.set(cacheKey, result, 300).catch(err => {
+        console.error(`[SmartAttribution] Failed to cache result:`, err);
+      });
+      console.log(`[SmartAttribution] Cached result to ${cacheKey}`);
+    }
+
+    return result;
   }
 
   /**
@@ -718,6 +775,62 @@ export class SmartAttributionService {
   }
 
   /**
+   * Get click-level attribution data from conversion_attribution table
+   * This is pre-computed attribution data with click ID matches
+   */
+  private async getClickLevelAttribution(
+    orgId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<{
+    platform: string;
+    clickIdType: string | null;
+    model: string;
+    revenue: number;
+    conversions: number;
+    creditPercent: number;
+  }[]> {
+    try {
+      const result = await this.analyticsDb.prepare(`
+        SELECT
+          touchpoint_platform as platform,
+          click_id_type,
+          model,
+          SUM(credit_value_cents) / 100.0 as revenue,
+          COUNT(DISTINCT conversion_id) as conversions,
+          AVG(credit_percent) as avg_credit_percent
+        FROM conversion_attribution
+        WHERE organization_id = ?
+          AND touchpoint_timestamp >= ?
+          AND touchpoint_timestamp <= ?
+          AND click_id IS NOT NULL
+        GROUP BY touchpoint_platform, click_id_type, model
+      `).bind(orgId, startDate, endDate + 'T23:59:59Z').all();
+
+      const rows = (result.results || []) as Array<{
+        platform: string;
+        click_id_type: string | null;
+        model: string;
+        revenue: number;
+        conversions: number;
+        avg_credit_percent: number;
+      }>;
+
+      return rows.map(row => ({
+        platform: row.platform,
+        clickIdType: row.click_id_type,
+        model: row.model,
+        revenue: row.revenue || 0,
+        conversions: row.conversions || 0,
+        creditPercent: row.avg_credit_percent || 0,
+      }));
+    } catch (err) {
+      console.warn('[SmartAttribution] Failed to query click-level attribution:', err);
+      return [];
+    }
+  }
+
+  /**
    * Get click ID statistics from conversions table
    * Checks for gclid, fbclid, ttclid in the conversions
    */
@@ -764,6 +877,11 @@ export class SmartAttributionService {
   /**
    * Build attributions using signal hierarchy with funnel weighting
    *
+   * Priority order:
+   * 1. Click ID matches from conversion_attribution table (100% confidence, measured)
+   * 2. UTM-tracked conversions
+   * 3. Probabilistic distribution based on session share
+   *
    * Key insight: When we have connector revenue (Stripe/Shopify) but no direct
    * click-level attribution, we probabilistically distribute the revenue based
    * on session share WEIGHTED by funnel position. Sessions that reached higher
@@ -777,7 +895,15 @@ export class SmartAttributionService {
     platformMetrics: PlatformMetrics[],
     utmPerformance: UtmPerformance[],
     connectorRevenue: ConnectorRevenue[],
-    funnelData: FunnelPositionData[] = []
+    funnelData: FunnelPositionData[] = [],
+    clickLevelAttribution: {
+      platform: string;
+      clickIdType: string | null;
+      model: string;
+      revenue: number;
+      conversions: number;
+      creditPercent: number;
+    }[] = []
   ): SmartAttribution[] {
     const attributions: SmartAttribution[] = [];
 
@@ -787,6 +913,92 @@ export class SmartAttributionService {
     const hasConnectorData = totalConnectorConversions > 0;
 
     console.log(`[SmartAttribution] Connector totals: ${totalConnectorConversions} conversions, $${totalConnectorRevenue}`);
+
+    // PRIORITY 1: Process click-level attribution first (highest confidence)
+    // These are conversions with verified click ID matches - ground truth
+    const clickAttributedPlatforms = new Set<string>();
+    let clickAttributedConversions = 0;
+    let clickAttributedRevenue = 0;
+
+    if (clickLevelAttribution.length > 0) {
+      // Aggregate by platform (sum across models, preferring last_touch)
+      const clickByPlatform = new Map<string, {
+        revenue: number;
+        conversions: number;
+        clickIdTypes: Set<string>;
+      }>();
+
+      for (const click of clickLevelAttribution) {
+        if (!click.platform) continue;
+
+        const existing = clickByPlatform.get(click.platform);
+        if (existing) {
+          // Only add if this is last_touch model (avoid double counting)
+          if (click.model === 'last_touch') {
+            existing.revenue += click.revenue;
+            existing.conversions += click.conversions;
+          }
+          if (click.clickIdType) {
+            existing.clickIdTypes.add(click.clickIdType);
+          }
+        } else {
+          clickByPlatform.set(click.platform, {
+            revenue: click.model === 'last_touch' ? click.revenue : 0,
+            conversions: click.model === 'last_touch' ? click.conversions : 0,
+            clickIdTypes: new Set(click.clickIdType ? [click.clickIdType] : []),
+          });
+        }
+      }
+
+      for (const [platform, data] of clickByPlatform) {
+        if (data.conversions > 0) {
+          clickAttributedPlatforms.add(platform);
+          clickAttributedConversions += data.conversions;
+          clickAttributedRevenue += data.revenue;
+
+          const clickTypes = Array.from(data.clickIdTypes).join(', ');
+          const platformSpend = platformMetrics.find(p => p.platform === platform)?.spend || 0;
+
+          attributions.push({
+            channel: platform,
+            platform: platform,
+            medium: platform === 'google' ? 'cpc' : 'paid',
+            campaign: null,
+            conversions: data.conversions,
+            revenue: data.revenue,
+            confidence: 100,
+            signalType: 'click_id',
+            dataQuality: 'verified',
+            signals: {
+              platform: platform,
+              hasClickIds: true,
+              clickIdCount: data.conversions,
+              hasUtmMatches: false,
+              utmSessionCount: 0,
+              hasActiveSpend: platformSpend > 0,
+              spendAmount: platformSpend,
+              hasPlatformReported: true,
+              platformConversions: data.conversions,
+              platformRevenue: data.revenue,
+              hasTagData: true,
+              tagConversions: data.conversions,
+              tagRevenue: data.revenue
+            },
+            explanation: `${data.conversions} verified conversion(s) via ${clickTypes} click ID match. Ground truth attribution.`,
+            is_estimated: false,
+            estimation_reason: null
+          });
+
+          console.log(`[SmartAttribution] Click-level: ${platform} = ${data.conversions} conversions, $${data.revenue} (${clickTypes})`);
+        }
+      }
+    }
+
+    console.log(`[SmartAttribution] Click-attributed: ${clickAttributedConversions} conversions, $${clickAttributedRevenue}`);
+
+    // Adjust connector totals to exclude click-attributed conversions
+    const remainingConnectorConversions = Math.max(0, totalConnectorConversions - clickAttributedConversions);
+    const remainingConnectorRevenue = Math.max(0, totalConnectorRevenue - clickAttributedRevenue);
 
     // Create lookup maps for platform data
     const platformSpendByName = new Map<string, number>();
@@ -852,9 +1064,14 @@ export class SmartAttributionService {
     // Track which platforms have been processed via UTM
     const processedPlatforms = new Set<string>();
 
-    // Probabilistic distribution: When we have connector revenue but UTM data
+    // Add click-attributed platforms to processed set (already handled above)
+    for (const platform of clickAttributedPlatforms) {
+      processedPlatforms.add(platform);
+    }
+
+    // Probabilistic distribution: When we have remaining connector revenue but UTM data
     // doesn't have conversions, distribute based on session share
-    const useSessionBasedDistribution = hasConnectorData && totalUtmSessions > 0;
+    const useSessionBasedDistribution = remainingConnectorConversions > 0 && totalUtmSessions > 0;
 
     // Build funnel bonus lookup by channel
     // Channels with visitors at higher funnel positions get bonus weighting
@@ -931,51 +1148,67 @@ export class SmartAttributionService {
         funnelSuffix = ` Funnel-weighted: reached ${stepsText}${funnelInfo.steps.length > 2 ? '...' : ''}.`;
       }
 
+      // Track estimation status
+      let isEstimated = false;
+      let estimationReason: string | null = null;
+
       // If UTM has direct conversions, use those
       if (utm.conversions > 0) {
         conversions = utm.conversions;
         revenue = utm.revenue;
+        isEstimated = false; // Direct UTM-tracked conversions are measured, not estimated
+
+        // Use sample size (conversions) to adjust confidence
+        const sampleSize = utm.conversions;
 
         if (matchedPlatform && hasActiveSpend) {
           signalType = 'utm_with_spend';
-          confidence = 95;
+          confidence = calculateConfidence(95, sampleSize);
           dataQuality = 'corroborated';
           explanation = `${conversions} tracked conversion(s). UTM "${sourcesList}" matches ${matchedPlatform} with $${platformSpend.toFixed(0)} spend.${funnelSuffix}`;
         } else if (matchedPlatform) {
           signalType = 'utm_no_spend';
-          confidence = 90;
+          confidence = calculateConfidence(90, sampleSize);
           dataQuality = 'single_source';
           explanation = `${conversions} tracked conversion(s). UTM "${sourcesList}" matches ${matchedPlatform}, no active spend.${funnelSuffix}`;
         } else {
           signalType = 'utm_only';
-          confidence = 85;
+          confidence = calculateConfidence(85, sampleSize);
           dataQuality = 'single_source';
           explanation = `${conversions} tracked conversion(s) from "${sourcesList}".${funnelSuffix}`;
         }
       }
-      // Otherwise, probabilistically distribute connector revenue based on session share
+      // Otherwise, probabilistically distribute remaining connector revenue based on session share
       else if (useSessionBasedDistribution && sessionShare > 0) {
-        conversions = Math.round(totalConnectorConversions * sessionShare * 100) / 100;
-        revenue = Math.round(totalConnectorRevenue * sessionShare * 100) / 100;
+        conversions = Math.round(remainingConnectorConversions * sessionShare * 100) / 100;
+        revenue = Math.round(remainingConnectorRevenue * sessionShare * 100) / 100;
+        isEstimated = true; // Probabilistic distribution is estimated
+        estimationReason = funnelInfo && funnelInfo.bonus > 0
+          ? `Distributed ${(sessionShare * 100).toFixed(1)}% of connector revenue using funnel-weighted session share (no click ID match available)`
+          : `Distributed ${(sessionShare * 100).toFixed(1)}% of connector revenue by session proportion (no click ID match available)`;
 
         // Build share explanation - mention funnel weighting if applied
         const shareExplanation = funnelInfo && funnelInfo.bonus > 0
           ? `${(sessionShare * 100).toFixed(1)}% funnel-weighted share`
           : `${(sessionShare * 100).toFixed(1)}% of sessions`;
 
+        // Use session count as sample size for estimated attributions
+        const sampleSize = utm.sessions;
+        const hasFunnelBonus = funnelInfo && funnelInfo.bonus > 0;
+
         if (matchedPlatform && hasActiveSpend) {
           signalType = 'utm_with_spend';
-          confidence = funnelInfo && funnelInfo.bonus > 0 ? 80 : 75; // Slightly higher confidence with funnel data
+          confidence = calculateConfidence(hasFunnelBonus ? 80 : 75, sampleSize);
           dataQuality = 'estimated';
           explanation = `Est. ${conversions.toFixed(1)} conv. (${shareExplanation}). UTM "${sourcesList}" + ${matchedPlatform} spend corroborates.${funnelSuffix}`;
         } else if (matchedPlatform) {
           signalType = 'utm_no_spend';
-          confidence = funnelInfo && funnelInfo.bonus > 0 ? 75 : 70;
+          confidence = calculateConfidence(hasFunnelBonus ? 75 : 70, sampleSize);
           dataQuality = 'estimated';
           explanation = `Est. ${conversions.toFixed(1)} conv. (${shareExplanation}). UTM "${sourcesList}" matches ${matchedPlatform}.${funnelSuffix}`;
         } else {
           signalType = 'utm_only';
-          confidence = funnelInfo && funnelInfo.bonus > 0 ? 70 : 65;
+          confidence = calculateConfidence(hasFunnelBonus ? 70 : 65, sampleSize);
           dataQuality = 'estimated';
           explanation = `Est. ${conversions.toFixed(1)} conv. (${shareExplanation}) from "${sourcesList}".${funnelSuffix}`;
         }
@@ -984,8 +1217,10 @@ export class SmartAttributionService {
         conversions = 0;
         revenue = 0;
         signalType = 'utm_only';
-        confidence = 50;
+        confidence = calculateConfidence(50, utm.sessions);
         dataQuality = 'estimated';
+        isEstimated = true;
+        estimationReason = 'No conversion data available - only session count known';
         explanation = `${utm.sessions} sessions from "${sourcesList}", no conversion data available.`;
       }
 
@@ -1016,7 +1251,9 @@ export class SmartAttributionService {
             tagConversions: utm.conversions,
             tagRevenue: utm.revenue
           },
-          explanation
+          explanation,
+          is_estimated: isEstimated,
+          estimation_reason: estimationReason
         });
       }
     }
@@ -1027,6 +1264,8 @@ export class SmartAttributionService {
       if (processedPlatforms.has(pm.platform)) continue;
 
       if (pm.conversions > 0 || pm.spend > 0) {
+        // Use platform conversions as sample size
+        const sampleSize = pm.conversions > 0 ? pm.conversions : pm.clicks;
         attributions.push({
           channel: pm.platform,
           platform: pm.platform,
@@ -1034,7 +1273,7 @@ export class SmartAttributionService {
           campaign: null,
           conversions: pm.conversions,
           revenue: pm.revenue,
-          confidence: 70,
+          confidence: calculateConfidence(70, sampleSize),
           signalType: 'platform_only',
           dataQuality: 'single_source',
           signals: {
@@ -1052,7 +1291,9 @@ export class SmartAttributionService {
             tagConversions: 0,
             tagRevenue: 0
           },
-          explanation: `Platform self-reported ${pm.conversions} conversion(s) with $${pm.spend.toFixed(0)} spend. No tag verification.`
+          explanation: `Platform self-reported ${pm.conversions} conversion(s) with $${pm.spend.toFixed(0)} spend. No tag verification.`,
+          is_estimated: false, // Platform-reported data is not estimated
+          estimation_reason: null
         });
       }
     }
@@ -1063,6 +1304,7 @@ export class SmartAttributionService {
 
     // Account for sessions without UTM (direct traffic)
     // If we have connector conversions but didn't distribute all of them
+    // Use the original totals (not remaining) since attributions now include click-attributed
     if (hasConnectorData) {
       const unattributedConversions = Math.max(0, totalConnectorConversions - totalAttributedConversions);
       const unattributedRevenue = Math.max(0, totalConnectorRevenue - totalAttributedRevenue);
@@ -1093,7 +1335,9 @@ export class SmartAttributionService {
             tagConversions: 0,
             tagRevenue: 0
           },
-          explanation: `${unattributedConversions.toFixed(1)} conversion(s) without UTM tracking. Direct traffic or missing attribution.`
+          explanation: `${unattributedConversions.toFixed(1)} conversion(s) without UTM tracking. Direct traffic or missing attribution.`,
+          is_estimated: true,
+          estimation_reason: 'Remainder after attributing to known channels - no UTM or click ID data available'
         });
       }
     }

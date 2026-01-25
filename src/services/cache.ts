@@ -111,6 +111,26 @@ export class CacheService {
   }
 
   /**
+   * Cache key for smart attribution results
+   * @param orgId - Organization ID
+   * @param startDate - Start date (YYYY-MM-DD)
+   * @param endDate - End date (YYYY-MM-DD)
+   */
+  static smartAttributionKey(orgId: string, startDate: string, endDate: string): string {
+    return `org:${orgId}:smart_attr:${startDate}:${endDate}`;
+  }
+
+  /**
+   * Cache key for Markov stage analysis results
+   * @param orgId - Organization ID
+   * @param startDate - Start date (YYYY-MM-DD)
+   * @param endDate - End date (YYYY-MM-DD)
+   */
+  static stageMarkovKey(orgId: string, startDate: string, endDate: string): string {
+    return `org:${orgId}:stage_markov:${startDate}:${endDate}`;
+  }
+
+  /**
    * Invalidate all caches for an organization
    */
   async invalidateOrg(orgId: string): Promise<void> {

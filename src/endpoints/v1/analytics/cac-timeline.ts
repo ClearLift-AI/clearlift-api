@@ -322,6 +322,264 @@ export class GenerateCACPredictions extends OpenAPIRoute {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// POST /v1/analytics/cac/compute-baselines
+// ═══════════════════════════════════════════════════════════════════════════
+// Mathematically computes "Without ClearLift" baselines using trend extrapolation
+
+export class ComputeCACBaselines extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Compute CAC baselines using trend extrapolation",
+    description: "Calculates counterfactual CAC (without AI) using linear regression on pre-AI period",
+    operationId: "compute-cac-baselines",
+    security: [{ bearerAuth: [] }],
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              org_id: z.string(),
+              days: z.number().min(7).max(90).optional().default(30)
+            })
+          }
+        }
+      }
+    },
+    responses: {
+      200: { description: "Baselines computed" }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { org_id, days } = data.body;
+
+    try {
+      // 1. Find when AI recommendations were first accepted
+      const firstDecisionResult = await c.env.AI_DB.prepare(`
+        SELECT MIN(applied_at) as first_ai_date
+        FROM ai_decisions
+        WHERE organization_id = ?
+          AND status = 'approved'
+          AND applied_at IS NOT NULL
+      `).bind(org_id).first<{ first_ai_date: string | null }>();
+
+      const firstAIDate = firstDecisionResult?.first_ai_date;
+
+      // 2. Get all CAC history
+      const historyResult = await c.env.AI_DB.prepare(`
+        SELECT date, cac_cents, spend_cents, conversions
+        FROM cac_history
+        WHERE organization_id = ?
+        ORDER BY date ASC
+      `).bind(org_id).all<{
+        date: string;
+        cac_cents: number;
+        spend_cents: number;
+        conversions: number;
+      }>();
+
+      if (!historyResult.results || historyResult.results.length < 3) {
+        return success(c, {
+          success: true,
+          message: 'Insufficient CAC history for baseline computation (need at least 3 days)',
+          baselines_created: 0
+        });
+      }
+
+      const allData = historyResult.results;
+
+      // 3. Split into pre-AI and post-AI periods
+      let preAIData: typeof allData = [];
+      let postAIData: typeof allData = [];
+
+      if (firstAIDate) {
+        preAIData = allData.filter(d => d.date < firstAIDate);
+        postAIData = allData.filter(d => d.date >= firstAIDate);
+      } else {
+        // No AI decisions yet - use first 70% as "pre-AI" to establish trend
+        const splitIdx = Math.floor(allData.length * 0.7);
+        preAIData = allData.slice(0, splitIdx);
+        postAIData = allData.slice(splitIdx);
+      }
+
+      if (preAIData.length < 3) {
+        // Not enough pre-AI data - use overall average as baseline
+        const avgCAC = allData.reduce((sum, d) => sum + d.cac_cents, 0) / allData.length;
+
+        let baselinesCreated = 0;
+        for (const day of allData.slice(-days)) {
+          await this.upsertBaseline(c.env.AI_DB, org_id, day.date, day.cac_cents, Math.round(avgCAC), 'average', {
+            method: 'insufficient_pre_ai_data',
+            average_cac_cents: avgCAC
+          });
+          baselinesCreated++;
+        }
+
+        return success(c, {
+          success: true,
+          method: 'average',
+          message: 'Used average CAC as baseline (insufficient pre-AI data)',
+          baselines_created: baselinesCreated,
+          average_cac: avgCAC / 100
+        });
+      }
+
+      // 4. Calculate linear regression on pre-AI period
+      // y = mx + b, where x is day index, y is CAC
+      const { slope, intercept, r_squared } = this.linearRegression(preAIData.map((d, i) => ({
+        x: i,
+        y: d.cac_cents
+      })));
+
+      console.log(`[CACBaselines] Linear regression: slope=${slope.toFixed(2)}, intercept=${intercept.toFixed(2)}, R²=${r_squared.toFixed(3)}`);
+
+      // 5. Extrapolate baseline for each post-AI day
+      let baselinesCreated = 0;
+      const preAILength = preAIData.length;
+
+      for (let i = 0; i < postAIData.length && i < days; i++) {
+        const day = postAIData[i];
+        const dayIndex = preAILength + i;
+
+        // Extrapolated baseline = trend continuation
+        let baselineCAC = slope * dayIndex + intercept;
+
+        // Apply decay factor - trends don't continue linearly forever
+        // After 14 days, assume trend flattens by 50%
+        const daysFromStart = i;
+        const decayFactor = Math.max(0.5, 1 - (daysFromStart / 28) * 0.5);
+        const decayedSlope = slope * decayFactor;
+        baselineCAC = decayedSlope * dayIndex + intercept;
+
+        // Ensure baseline is positive and reasonable (within 3x of actual)
+        baselineCAC = Math.max(baselineCAC, day.cac_cents * 0.5);
+        baselineCAC = Math.min(baselineCAC, day.cac_cents * 3);
+
+        await this.upsertBaseline(c.env.AI_DB, org_id, day.date, day.cac_cents, Math.round(baselineCAC), 'trend_extrapolation', {
+          slope,
+          intercept,
+          r_squared,
+          decay_factor: decayFactor,
+          day_index: dayIndex
+        });
+        baselinesCreated++;
+      }
+
+      // 6. Get accepted decisions to show impact
+      const decisionsResult = await c.env.AI_DB.prepare(`
+        SELECT id, recommended_action, impact
+        FROM ai_decisions
+        WHERE organization_id = ?
+          AND status = 'approved'
+      `).bind(org_id).all<{ id: string; recommended_action: string; impact: number }>();
+
+      const totalImpact = (decisionsResult.results || []).reduce((sum, d) => sum + (d.impact || 0), 0);
+
+      return success(c, {
+        success: true,
+        method: 'trend_extrapolation',
+        baselines_created: baselinesCreated,
+        regression: {
+          slope: slope / 100, // Convert to dollars per day
+          intercept: intercept / 100,
+          r_squared,
+          interpretation: slope > 0
+            ? `CAC was increasing by $${(slope / 100).toFixed(2)}/day before ClearLift`
+            : `CAC was decreasing by $${(Math.abs(slope) / 100).toFixed(2)}/day before ClearLift`
+        },
+        ai_impact: {
+          first_ai_date: firstAIDate,
+          accepted_decisions: decisionsResult.results?.length || 0,
+          total_impact_percent: totalImpact
+        }
+      });
+
+    } catch (err) {
+      console.error('CAC baseline computation error:', err);
+      return error(c, 'CAC_BASELINE_ERROR', 'Failed to compute CAC baselines', 500);
+    }
+  }
+
+  /**
+   * Linear regression: y = mx + b
+   */
+  private linearRegression(points: Array<{ x: number; y: number }>): {
+    slope: number;
+    intercept: number;
+    r_squared: number;
+  } {
+    const n = points.length;
+    if (n === 0) return { slope: 0, intercept: 0, r_squared: 0 };
+
+    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+
+    for (const { x, y } of points) {
+      sumX += x;
+      sumY += y;
+      sumXY += x * y;
+      sumX2 += x * x;
+      sumY2 += y * y;
+    }
+
+    const denominator = n * sumX2 - sumX * sumX;
+    if (denominator === 0) return { slope: 0, intercept: sumY / n, r_squared: 0 };
+
+    const slope = (n * sumXY - sumX * sumY) / denominator;
+    const intercept = (sumY - slope * sumX) / n;
+
+    // Calculate R² (coefficient of determination)
+    const yMean = sumY / n;
+    let ssTotal = 0, ssResidual = 0;
+
+    for (const { x, y } of points) {
+      const yPredicted = slope * x + intercept;
+      ssTotal += (y - yMean) ** 2;
+      ssResidual += (y - yPredicted) ** 2;
+    }
+
+    const r_squared = ssTotal === 0 ? 0 : 1 - (ssResidual / ssTotal);
+
+    return { slope, intercept, r_squared };
+  }
+
+  /**
+   * Upsert a baseline record
+   */
+  private async upsertBaseline(
+    db: D1Database,
+    orgId: string,
+    date: string,
+    actualCacCents: number,
+    baselineCacCents: number,
+    method: string,
+    calculationData: Record<string, any>
+  ): Promise<void> {
+    await db.prepare(`
+      INSERT INTO cac_baselines (
+        organization_id, baseline_date, actual_cac_cents, baseline_cac_cents,
+        calculation_method, calculation_data
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(organization_id, baseline_date)
+      DO UPDATE SET
+        actual_cac_cents = excluded.actual_cac_cents,
+        baseline_cac_cents = excluded.baseline_cac_cents,
+        calculation_method = excluded.calculation_method,
+        calculation_data = excluded.calculation_data,
+        created_at = datetime('now')
+    `).bind(
+      orgId,
+      date,
+      actualCacCents,
+      baselineCacCents,
+      method,
+      JSON.stringify(calculationData)
+    ).run();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // POST /v1/analytics/cac/backfill
 // ═══════════════════════════════════════════════════════════════════════════
 
