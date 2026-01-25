@@ -92,22 +92,6 @@ export function getEffectiveGoalValue(goal: ConversionGoal): number {
 }
 
 /**
- * Format value in dollars for display
- *
- * @param valueCents - Value in cents
- * @returns Formatted string (e.g., "$500.00")
- */
-export function formatGoalValue(valueCents: number): string {
-  const dollars = valueCents / 100;
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  }).format(dollars);
-}
-
-/**
  * Validate goal value configuration
  *
  * @param goal - The conversion goal to validate

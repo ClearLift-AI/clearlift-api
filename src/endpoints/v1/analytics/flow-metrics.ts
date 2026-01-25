@@ -161,7 +161,7 @@ Returns stage-by-stage metrics for the acquisition flow:
       // 1. Get organization settings (flow mode)
       const org = await c.env.DB.prepare(`
         SELECT flow_mode FROM organizations WHERE id = ?
-      `).bind(orgId).first<{ flow_mode: string | null }>();
+      `).bind(orgId).first() as { flow_mode: string | null } | null;
 
       const flowMode = (org?.flow_mode || "simple") as "simple" | "advanced";
 
@@ -176,7 +176,7 @@ Returns stage-by-stage metrics for the acquisition flow:
         FROM conversion_goals
         WHERE organization_id = ? AND is_active = 1
         ORDER BY position_row ASC, position_col ASC, created_at ASC
-      `).bind(orgId).all<{
+      `).bind(orgId).all() as D1Result<{
         id: string;
         name: string;
         type: string;
@@ -189,7 +189,7 @@ Returns stage-by-stage metrics for the acquisition flow:
         fixed_value_cents: number | null;
         value_type: string | null;
         trigger_config: string | null;
-      }>();
+      }>;
 
       const goals = goalsResult.results || [];
 
@@ -217,11 +217,11 @@ Returns stage-by-stage metrics for the acquisition flow:
         SELECT upstream_goal_id, downstream_goal_id, funnel_position
         FROM goal_relationships
         WHERE organization_id = ?
-      `).bind(orgId).all<{
+      `).bind(orgId).all() as D1Result<{
         upstream_goal_id: string;
         downstream_goal_id: string;
         funnel_position: number | null;
-      }>();
+      }>;
 
       const relationships = relationshipsResult.results || [];
 
@@ -245,7 +245,7 @@ Returns stage-by-stage metrics for the acquisition flow:
       // 4. Get org tag for querying analytics
       const tagMapping = await c.env.DB.prepare(`
         SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-      `).bind(orgId).first<{ short_tag: string }>();
+      `).bind(orgId).first() as { short_tag: string } | null;
 
       const orgTag = tagMapping?.short_tag;
 
@@ -268,7 +268,7 @@ Returns stage-by-stage metrics for the acquisition flow:
           const channelResult = await analyticsDb.prepare(`
             SELECT by_channel FROM daily_metrics
             WHERE org_tag = ? AND date >= ? AND date <= ?
-          `).bind(orgTag, startDateStr, endDateStr).all<{ by_channel: string | null }>();
+          `).bind(orgTag, startDateStr, endDateStr).all() as D1Result<{ by_channel: string | null }>;
 
           for (const row of channelResult.results || []) {
             if (row.by_channel) {
@@ -312,7 +312,7 @@ Returns stage-by-stage metrics for the acquisition flow:
                 AND m.metric_date >= ?
                 AND m.metric_date <= ?
               WHERE c.organization_id = ?
-            `).bind(startDateStr, endDateStr, orgId).first<{ clicks: number }>();
+            `).bind(startDateStr, endDateStr, orgId).first() as { clicks: number } | null;
             visitors = result?.clicks || 0;
             conversions = visitors; // For traffic stages, visitors = conversions
           } else if (connector === "facebook_ads") {
@@ -325,7 +325,7 @@ Returns stage-by-stage metrics for the acquisition flow:
                 AND m.metric_date >= ?
                 AND m.metric_date <= ?
               WHERE c.organization_id = ?
-            `).bind(startDateStr, endDateStr, orgId).first<{ clicks: number }>();
+            `).bind(startDateStr, endDateStr, orgId).first() as { clicks: number } | null;
             visitors = result?.clicks || 0;
             conversions = visitors;
           } else if (connector === "tiktok_ads") {
@@ -338,7 +338,7 @@ Returns stage-by-stage metrics for the acquisition flow:
                 AND m.metric_date >= ?
                 AND m.metric_date <= ?
               WHERE c.organization_id = ?
-            `).bind(startDateStr, endDateStr, orgId).first<{ clicks: number }>();
+            `).bind(startDateStr, endDateStr, orgId).first() as { clicks: number } | null;
             visitors = result?.clicks || 0;
             conversions = visitors;
           } else if (connector === "stripe") {
@@ -355,7 +355,7 @@ Returns stage-by-stage metrics for the acquisition flow:
                   billing_reason = 'subscription_create'
                   OR (billing_reason IS NULL AND status = 'succeeded')
                 )
-            `).bind(orgId, startDateStr, endDateStr).first<{ conversions: number; revenue_cents: number }>();
+            `).bind(orgId, startDateStr, endDateStr).first() as { conversions: number; revenue_cents: number } | null;
             conversions = result?.conversions || 0;
             visitors = conversions;
             conversionValueCents = result?.revenue_cents || 0;
@@ -369,7 +369,7 @@ Returns stage-by-stage metrics for the acquisition flow:
               WHERE organization_id = ?
                 AND DATE(created_at) >= ?
                 AND DATE(created_at) <= ?
-            `).bind(orgId, startDateStr, endDateStr).first<{ conversions: number; revenue_cents: number }>();
+            `).bind(orgId, startDateStr, endDateStr).first() as { conversions: number; revenue_cents: number } | null;
             conversions = result?.conversions || 0;
             visitors = conversions;
             conversionValueCents = result?.revenue_cents || 0;
@@ -418,7 +418,7 @@ Returns stage-by-stage metrics for the acquisition flow:
                 WHERE org_tag = ?
                   AND date >= ?
                   AND date <= ?
-              `).bind(orgTag, startDateStr, endDateStr).first<{ total_views: number }>();
+              `).bind(orgTag, startDateStr, endDateStr).first() as { total_views: number } | null;
               visitors = result?.total_views || 0;
               conversions = visitors;
             }
@@ -615,7 +615,7 @@ Returns stage-by-stage metrics for the acquisition flow:
             WHERE org_tag = ?
               AND date >= ?
               AND date <= ?
-          `).bind(orgTag, startDateStr, endDateStr).all<{ sessions: number; by_channel: string | null }>();
+          `).bind(orgTag, startDateStr, endDateStr).all() as D1Result<{ sessions: number; by_channel: string | null }>;
 
           let totalSessions = 0;
           let directEvents = 0;
@@ -859,13 +859,13 @@ export class GetStageTransitions extends OpenAPIRoute {
         SELECT id, name, type, connector, connector_event_type
         FROM conversion_goals
         WHERE id = ? AND organization_id = ? AND is_active = 1
-      `).bind(stageId, orgId).first<{
+      `).bind(stageId, orgId).first() as {
         id: string;
         name: string;
         type: string;
         connector: string | null;
         connector_event_type: string | null;
-      }>();
+      } | null;
 
       if (!stage) {
         return error(c, "STAGE_NOT_FOUND", "Stage not found", 404);
@@ -877,14 +877,14 @@ export class GetStageTransitions extends OpenAPIRoute {
         FROM goal_relationships gr
         JOIN conversion_goals g ON gr.upstream_goal_id = g.id
         WHERE gr.downstream_goal_id = ? AND gr.organization_id = ?
-      `).bind(stageId, orgId).all<{ upstream_goal_id: string; upstream_name: string }>();
+      `).bind(stageId, orgId).all() as D1Result<{ upstream_goal_id: string; upstream_name: string }>;
 
       const outboundRels = await c.env.DB.prepare(`
         SELECT gr.downstream_goal_id, g.name as downstream_name
         FROM goal_relationships gr
         JOIN conversion_goals g ON gr.downstream_goal_id = g.id
         WHERE gr.upstream_goal_id = ? AND gr.organization_id = ?
-      `).bind(stageId, orgId).all<{ downstream_goal_id: string; downstream_name: string }>();
+      `).bind(stageId, orgId).all() as D1Result<{ downstream_goal_id: string; downstream_name: string }>;
 
       // Calculate date range
       const endDate = new Date();
@@ -984,7 +984,7 @@ export class GetStageTransitions extends OpenAPIRoute {
       // Get org_tag for querying funnel_transitions
       const tagMapping = await c.env.DB.prepare(`
         SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-      `).bind(orgId).first<{ short_tag: string }>();
+      `).bind(orgId).first() as { short_tag: string } | null;
 
       if (tagMapping?.short_tag) {
         const orgTag = tagMapping.short_tag;
@@ -999,7 +999,7 @@ export class GetStageTransitions extends OpenAPIRoute {
                 AND avg_time_to_transition_hours IS NOT NULL
               ORDER BY period_start DESC
               LIMIT 7
-            `).bind(orgTag, stageId).first<{ avg_hours: number | null }>();
+            `).bind(orgTag, stageId).first() as { avg_hours: number | null } | null;
 
             avgTimeFromPrevious = inboundTiming?.avg_hours || null;
           } catch (err) {
@@ -1017,7 +1017,7 @@ export class GetStageTransitions extends OpenAPIRoute {
                 AND avg_time_to_transition_hours IS NOT NULL
               ORDER BY period_start DESC
               LIMIT 7
-            `).bind(orgTag, stageId).first<{ avg_hours: number | null }>();
+            `).bind(orgTag, stageId).first() as { avg_hours: number | null } | null;
 
             avgTimeToNext = outboundTiming?.avg_hours || null;
           } catch (err) {
