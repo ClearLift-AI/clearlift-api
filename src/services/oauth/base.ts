@@ -1,5 +1,10 @@
 /**
- * Base OAuth 2.0 Provider (RFC 9700 Compliant - 2025)
+ * CANONICAL: Base OAuth 2.0 Provider (RFC 9700 Compliant - 2025)
+ *
+ * This is the canonical OAuth implementation with all provider types defined.
+ * A copy exists in clearlift-cron/shared/oauth/base.ts for workflow use.
+ *
+ * @see clearlift-cron/docs/SHARED_CODE.md section 9 for documentation
  *
  * Abstract class for OAuth 2.0 flows with different providers.
  * Implements OAuth 2.0 Security Best Current Practice (BCP 214).

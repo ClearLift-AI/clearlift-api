@@ -1,31 +1,39 @@
 import { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
+// Re-export canonical types for backward compatibility
+export type {
+  ApiResponse,
+  ApiSuccessResponse,
+  ApiErrorResponse,
+  ResponseMeta
+} from "../types/response";
+
+import type { ApiResponse as ApiResponseType } from "../types/response";
+
 type StatusCode = ContentfulStatusCode;
 
 /**
  * Standard API response utilities
+ *
+ * Uses canonical types from src/types/response.ts
+ * Includes request_id in meta for SOC 2 compliance.
  */
 
-export interface ApiResponse<T = any> {
-  success: boolean;
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
-    details?: any;
-  };
-  meta?: {
-    timestamp: string;
-    count?: number;
-    page?: number;
-    total?: number;
-    [key: string]: any;
-  };
+/**
+ * Get request_id from context (set by audit middleware) or generate one.
+ */
+export function getRequestId(c: Context): string {
+  // Try to get from context variable (set by audit middleware)
+  const requestId = c.get('request_id') as string | undefined;
+  if (requestId) return requestId;
+
+  // Fall back to header or generate new
+  return c.req.header("X-Request-Id") || crypto.randomUUID();
 }
 
 /**
- * Send success response
+ * Send success response with request_id in meta.
  */
 export function success<T>(
   c: Context,
@@ -33,12 +41,13 @@ export function success<T>(
   meta?: Record<string, any>,
   statusCode: StatusCode = 200
 ) {
-  return c.json<ApiResponse<T>>(
+  return c.json<ApiResponseType<T>>(
     {
       success: true,
       data,
       meta: {
         timestamp: new Date().toISOString(),
+        request_id: getRequestId(c),
         ...meta
       }
     },
@@ -47,7 +56,7 @@ export function success<T>(
 }
 
 /**
- * Send error response
+ * Send error response with request_id in meta.
  */
 export function error(
   c: Context,
@@ -56,7 +65,7 @@ export function error(
   statusCode: StatusCode = 500,
   details?: any
 ) {
-  return c.json<ApiResponse>(
+  return c.json<ApiResponseType>(
     {
       success: false,
       error: {
@@ -65,7 +74,8 @@ export function error(
         details
       },
       meta: {
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        request_id: getRequestId(c)
       }
     },
     statusCode

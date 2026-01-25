@@ -4,10 +4,16 @@
  * Provides AES-GCM encryption for sensitive data stored in D1.
  * Uses envelope encryption pattern with master key from Cloudflare Secrets Store.
  *
+ * NOTE: This is a simplified version. The canonical implementation with
+ * comprehensive error handling and validation is in clearlift-cron.
+ *
+ * @see clearlift-cron/shared/utils/crypto.ts (canonical - better error handling)
+ * @see clearlift-cron/docs/SHARED_CODE.md section 8 for differences
+ *
  * Features:
  * - Authenticated encryption (AES-256-GCM)
  * - Random IV per encryption
- * - Search-friendly hashing for exact-match lookups
+ * - Search-friendly hashing for exact-match lookups (64-bit)
  * - Zero external dependencies (uses Web Crypto API)
  */
 

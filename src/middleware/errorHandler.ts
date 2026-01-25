@@ -1,4 +1,6 @@
 import { Context } from "hono";
+import type { ApiErrorResponse, ApiSuccessResponse } from "../types/response";
+import { getRequestId } from "../utils/response";
 
 type StatusCode = number;
 
@@ -14,51 +16,33 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * Standard error response format
- */
-export interface ErrorResponse {
-  success: false;
-  error: {
-    code: string;
-    message: string;
-    details?: any;
-    timestamp: string;
-    request_id?: string;
-  };
-}
-
-/**
- * Standard success response format
- */
-export interface SuccessResponse<T = any> {
-  success: true;
-  data: T;
-  meta?: {
-    timestamp: string;
-    count?: number;
-    page?: number;
-    total?: number;
-    request_id?: string;
-  };
-}
+// Re-export canonical types for backward compatibility
+// NOTE: ErrorResponse and SuccessResponse are now deprecated.
+// Use ApiErrorResponse and ApiSuccessResponse from ../types/response instead.
+export type { ApiErrorResponse as ErrorResponse } from "../types/response";
+export type { ApiSuccessResponse as SuccessResponse } from "../types/response";
 
 /**
  * Global error handler
+ *
+ * Uses canonical ApiErrorResponse from types/response.ts.
+ * Consistent meta structure with request_id for tracing.
  */
 export function errorHandler(error: Error, c: Context): Response {
   console.error("Error:", error);
 
-  const requestId = c.req.header("X-Request-Id") || crypto.randomUUID();
+  const requestId = getRequestId(c);
 
   // Handle known API errors
   if (error instanceof ApiError) {
-    const response: ErrorResponse = {
+    const response: ApiErrorResponse = {
       success: false,
       error: {
         code: error.code,
         message: error.message,
-        details: error.details,
+        details: error.details
+      },
+      meta: {
         timestamp: new Date().toISOString(),
         request_id: requestId
       }
@@ -69,12 +53,14 @@ export function errorHandler(error: Error, c: Context): Response {
 
   // Handle validation errors from Zod
   if (error.name === "ZodError") {
-    const response: ErrorResponse = {
+    const response: ApiErrorResponse = {
       success: false,
       error: {
         code: "VALIDATION_ERROR",
         message: "Invalid request data",
-        details: (error as any).errors,
+        details: (error as any).errors
+      },
+      meta: {
         timestamp: new Date().toISOString(),
         request_id: requestId
       }
@@ -85,11 +71,13 @@ export function errorHandler(error: Error, c: Context): Response {
 
   // Handle database errors
   if (error.message?.includes("D1_") || error.message?.includes("SQLITE")) {
-    const response: ErrorResponse = {
+    const response: ApiErrorResponse = {
       success: false,
       error: {
         code: "DATABASE_ERROR",
-        message: "Database operation failed",
+        message: "Database operation failed"
+      },
+      meta: {
         timestamp: new Date().toISOString(),
         request_id: requestId
       }
@@ -99,12 +87,14 @@ export function errorHandler(error: Error, c: Context): Response {
   }
 
   // Default error response
-  const response: ErrorResponse = {
+  const response: ApiErrorResponse = {
     success: false,
     error: {
       code: "INTERNAL_ERROR",
       message: "An unexpected error occurred",
-      details: process.env.NODE_ENV === "development" ? error.message : undefined,
+      details: process.env.NODE_ENV === "development" ? error.message : undefined
+    },
+    meta: {
       timestamp: new Date().toISOString(),
       request_id: requestId
     }
@@ -115,13 +105,15 @@ export function errorHandler(error: Error, c: Context): Response {
 
 /**
  * Helper to create success responses
+ * @deprecated Use success() from utils/response.ts which includes request_id
  */
-export function successResponse<T>(data: T, meta?: any): SuccessResponse<T> {
+export function successResponse<T>(data: T, meta?: any): ApiSuccessResponse<T> {
   return {
     success: true,
     data,
     meta: {
       timestamp: new Date().toISOString(),
+      request_id: '', // Caller should provide via context
       ...meta
     }
   };
