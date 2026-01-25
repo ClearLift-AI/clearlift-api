@@ -91,6 +91,114 @@ async function checkSetupStatus(
   };
 }
 
+/**
+ * Verification metrics for linked conversions
+ */
+interface VerificationMetrics {
+  verified_count: number;
+  avg_confidence: number;
+  link_method_breakdown: { direct_link: number; email_hash: number; time_proximity: number };
+  total_connector_conversions: number;
+  verification_rate: number;
+}
+
+/**
+ * Check verification status of conversions.
+ * Returns metrics about linked conversions from ConversionLinkingWorkflow.
+ */
+async function checkVerificationStatus(
+  analyticsDb: D1Database,
+  orgId: string,
+  dateRange: { start: string; end: string }
+): Promise<VerificationMetrics> {
+  try {
+    // Get total connector conversions
+    const totalResult = await analyticsDb.prepare(`
+      SELECT COUNT(*) as total_count
+      FROM conversions
+      WHERE organization_id = ?
+        AND source_platform IN ('stripe', 'shopify')
+        AND conversion_timestamp >= ?
+        AND conversion_timestamp <= ?
+    `).bind(orgId, dateRange.start, dateRange.end + 'T23:59:59Z').first<{ total_count: number }>();
+
+    const totalConnectorConversions = totalResult?.total_count || 0;
+
+    if (totalConnectorConversions === 0) {
+      return {
+        verified_count: 0,
+        avg_confidence: 0,
+        link_method_breakdown: { direct_link: 0, email_hash: 0, time_proximity: 0 },
+        total_connector_conversions: 0,
+        verification_rate: 0
+      };
+    }
+
+    // Get linked conversions (with link_confidence >= 0.7)
+    const linkedResult = await analyticsDb.prepare(`
+      SELECT
+        COUNT(*) as verified_count,
+        AVG(link_confidence) as avg_confidence
+      FROM conversions
+      WHERE organization_id = ?
+        AND linked_goal_id IS NOT NULL
+        AND link_confidence >= 0.7
+        AND conversion_timestamp >= ?
+        AND conversion_timestamp <= ?
+    `).bind(orgId, dateRange.start, dateRange.end + 'T23:59:59Z').first<{
+      verified_count: number;
+      avg_confidence: number;
+    }>();
+
+    const verifiedCount = linkedResult?.verified_count || 0;
+    const avgConfidence = linkedResult?.avg_confidence || 0;
+
+    // Get link method breakdown
+    const breakdownResult = await analyticsDb.prepare(`
+      SELECT link_method, COUNT(*) as count
+      FROM conversions
+      WHERE organization_id = ?
+        AND linked_goal_id IS NOT NULL
+        AND link_confidence >= 0.7
+        AND conversion_timestamp >= ?
+        AND conversion_timestamp <= ?
+      GROUP BY link_method
+    `).bind(orgId, dateRange.start, dateRange.end + 'T23:59:59Z').all<{
+      link_method: string;
+      count: number;
+    }>();
+
+    const breakdown = { direct_link: 0, email_hash: 0, time_proximity: 0 };
+    for (const row of breakdownResult.results || []) {
+      if (row.link_method === 'direct_link') breakdown.direct_link = row.count;
+      else if (row.link_method === 'email_hash') breakdown.email_hash = row.count;
+      else if (row.link_method === 'time_proximity') breakdown.time_proximity = row.count;
+    }
+
+    const verificationRate = totalConnectorConversions > 0
+      ? (verifiedCount / totalConnectorConversions) * 100
+      : 0;
+
+    return {
+      verified_count: verifiedCount,
+      avg_confidence: avgConfidence,
+      link_method_breakdown: breakdown,
+      total_connector_conversions: totalConnectorConversions,
+      verification_rate: verificationRate
+    };
+  } catch (err) {
+    // Table might not exist or query failed
+    console.error(`[Attribution] Verification check failed:`, err);
+    return {
+      verified_count: 0,
+      avg_confidence: 0,
+      link_method_breakdown: { direct_link: 0, email_hash: 0, time_proximity: 0 },
+      total_connector_conversions: 0,
+      verification_rate: 0
+    };
+  }
+}
+
 const AttributionModelEnum = z.enum([
   'platform',       // Self-reported by ad platforms (no attribution calculation)
   'first_touch',
@@ -899,6 +1007,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     let dataQuality: DataQuality = 'platform_reported';
     let fallbackSource: string | null = null;
     const warnings: DataWarning[] = [];
+    let verificationMetrics: VerificationMetrics | null = null;
 
     if (conversionSource === 'connectors' || conversionSource === 'all') {
       // Query unified revenue sources (Stripe, Shopify, Jobber, etc.)
@@ -912,6 +1021,23 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
 
         if (revenueData.summary.conversions > 0) {
           const connectorAttributions = buildConnectorAttributions(revenueData);
+
+          // Check verification status - are conversions linked to goals?
+          verificationMetrics = await checkVerificationStatus(analyticsDb, orgId, dateRange);
+
+          // Determine if data quality is "verified" (linked to goals with high confidence)
+          // Requirements: at least 10 verified conversions, 70%+ avg confidence, 50%+ verification rate
+          const isVerified =
+            verificationMetrics.verified_count >= 10 &&
+            verificationMetrics.avg_confidence >= 0.7 &&
+            verificationMetrics.verification_rate >= 50;
+
+          if (isVerified) {
+            dataQuality = 'verified' as DataQuality;
+            console.log(`[Attribution] Data quality: VERIFIED (${verificationMetrics.verified_count} linked conversions, ${verificationMetrics.verification_rate.toFixed(1)}% rate)`);
+          } else {
+            console.log(`[Attribution] Data quality: connector_only (verification: ${verificationMetrics.verified_count} linked, ${verificationMetrics.verification_rate.toFixed(1)}% rate)`);
+          }
           console.log(`[Attribution] Found ${connectorAttributions.summary.total_conversions} connector conversions, $${connectorAttributions.summary.total_revenue} revenue`);
 
           if (conversionSource === 'all') {
@@ -1001,7 +1127,14 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         event_count: 0,
         conversion_count: attributionData.summary.total_conversions,
         fallback_source: fallbackSource,
-        conversion_source_setting: conversionSource === 'all' ? settingsSource : conversionSource
+        conversion_source_setting: conversionSource === 'all' ? settingsSource : conversionSource,
+        // Verification metrics when conversions are linked to goals via ConversionLinkingWorkflow
+        verification: verificationMetrics ? {
+          verified_conversion_count: verificationMetrics.verified_count,
+          avg_link_confidence: verificationMetrics.avg_confidence,
+          link_method_breakdown: verificationMetrics.link_method_breakdown,
+          verification_rate: verificationMetrics.verification_rate
+        } : undefined
       },
       attributions: attributionData.attributions,
       summary: {

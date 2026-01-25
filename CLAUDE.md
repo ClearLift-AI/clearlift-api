@@ -539,8 +539,24 @@ Users can override via Settings UI (stored in `ai_optimization_settings.llm_*` c
 | `llm-router.ts` | Routes to Claude/Gemini based on level or config |
 | `hierarchical-analyzer.ts` | Orchestrates bottom-up analysis |
 | `agentic-loop.ts` | Tool-calling loop for recommendations |
+| `exploration-tools.ts` | AI exploration tools for verified conversion analysis |
 | `anthropic-client.ts` | Claude API integration |
 | `gemini-client.ts` | Gemini API integration |
+
+### AI Exploration Tools for Verified Conversions
+
+The AI analysis engine has two tools for analyzing linked/verified conversions:
+
+**`query_conversions_by_goal`**
+- Groups verified conversions by goal with confidence scores
+- Supports grouping by: day, goal, or link_method
+- Returns goal-to-revenue relationships with avg confidence
+
+**`compare_platform_vs_verified_conversions`**
+- Compares platform-reported vs verified Stripe/Shopify conversions
+- Calculates inflation factor and true ROAS
+- Shows link quality breakdown (direct_link, email_hash, time_proximity)
+- Essential for understanding if platform data is overstated
 
 ### Analysis API Endpoints
 
@@ -603,6 +619,34 @@ POST /v1/analytics/attribution/run         # Start workflow (returns job_id)
 GET  /v1/analytics/attribution/status/:id  # Poll job status
 GET  /v1/analytics/attribution/computed    # Get pre-computed results by model
 GET  /v1/analytics/attribution             # Main attribution endpoint (reads from pre-computed)
+```
+
+### Data Quality Levels
+
+The attribution endpoint returns a `data_quality` field with quality assessment:
+
+| Quality | Description | Requirements |
+|---------|-------------|--------------|
+| `verified` | Conversions linked to goals with high confidence | ≥10 verified conversions, ≥70% avg confidence, ≥50% verification rate |
+| `connector_only` | Using Stripe/Shopify data without goal linking | Has connector conversions but not linked to goals |
+| `tracked` | Using tag event data | Has tag events with conversions |
+| `estimated` | Mixed data quality | Partial data available |
+| `platform_reported` | Ad platform self-reported data only | No verified/tracked conversions |
+
+When quality is `verified` or `connector_only`, the response includes verification metrics:
+
+```json
+{
+  "data_quality": {
+    "quality": "verified",
+    "verification": {
+      "verified_conversion_count": 47,
+      "avg_link_confidence": 0.85,
+      "link_method_breakdown": { "direct_link": 12, "email_hash": 28, "time_proximity": 7 },
+      "verification_rate": 78.3
+    }
+  }
+}
 ```
 
 ### Models
@@ -694,175 +738,89 @@ const weight = Math.pow(0.5, daysBeforeConversion / 7);
 
 ---
 
-## Project Completion Roadmap
+## Project Completion Status
 
-This section documents remaining work to fully wire the ClearLift platform. See `clearlift-cron/docs/SHARED_CODE.md §19` for the comprehensive cross-repo roadmap.
+**Last Updated:** January 2026
 
-### Migrations Required (This Repo)
+See `clearlift-cron/docs/SHARED_CODE.md §19` for the comprehensive cross-repo implementation details.
 
-Create these new migrations in `migrations-analytics/`:
+### Migrations Created
 
-#### 1. `0015_add_conversion_linking.sql`
+| Migration | Purpose | Status |
+|-----------|---------|--------|
+| `0017_add_conversion_linking.sql` | Adds linking columns to conversions table | ✅ Created |
+| `0018_journey_analytics_table.sql` | Creates journey_analytics table | ✅ Created |
 
-Adds columns to link Stripe conversions to tag goals:
+**Note:** `customer_identities` already existed in migration 0014. `shopify_orders` already existed in migration 0006.
 
-```sql
-ALTER TABLE conversions ADD COLUMN linked_goal_id TEXT;
-ALTER TABLE conversions ADD COLUMN link_confidence REAL DEFAULT 1.0;
-ALTER TABLE conversions ADD COLUMN link_method TEXT;
-ALTER TABLE conversions ADD COLUMN linked_at TEXT;
+### Backend Workflows (clearlift-cron)
 
-CREATE INDEX idx_conversions_unlinked ON conversions(linked_goal_id) WHERE linked_goal_id IS NULL;
-```
+The following workflows are now implemented:
 
-#### 2. `0016_customer_identities.sql`
+| Workflow | Purpose | Status |
+|----------|---------|--------|
+| `IdentityExtractionWorkflow` | Populates `customer_identities` from Stripe + tag events | ✅ Implemented |
+| `ConversionLinkingWorkflow` | Links Stripe/Shopify conversions to tag goals | ✅ Implemented |
+| Shopify sync/aggregation | Writes to `shopify_orders` and `conversions` tables | ✅ Enabled |
 
-Enables email-based attribution matching:
+### Verification Queries
 
-```sql
-CREATE TABLE IF NOT EXISTS customer_identities (
-  id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL,
-  email_hash TEXT NOT NULL,
-  anonymous_id TEXT,
-  session_id TEXT,
-  device_fingerprint_id TEXT,
-  first_seen TEXT NOT NULL,
-  last_seen TEXT NOT NULL,
-  UNIQUE(organization_id, email_hash)
-);
-```
-
-#### 3. `0017_journey_analytics.sql`
-
-Stores computed journey data for dashboard:
+After workflows run, verify data flow:
 
 ```sql
-CREATE TABLE IF NOT EXISTS journey_analytics (
-  id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL,
-  journey_id TEXT NOT NULL,
-  anonymous_id TEXT NOT NULL,
-  channel_path TEXT NOT NULL,
-  path_length INTEGER NOT NULL,
-  has_conversion INTEGER DEFAULT 0,
-  conversion_count INTEGER DEFAULT 0,
-  total_value_cents INTEGER DEFAULT 0,
-  first_touch_channel TEXT,
-  last_touch_channel TEXT,
-  attribution_model_credits TEXT,
-  computed_at TEXT NOT NULL,
-  UNIQUE(organization_id, journey_id)
-);
-```
+-- Verify customer identities populated
+SELECT COUNT(*) FROM customer_identities;
 
-#### 4. `0018_shopify_tables.sql`
+-- Verify journey analytics populated
+SELECT COUNT(*) FROM journey_analytics WHERE converting_sessions > 0;
 
-Enables Shopify order sync:
-
-```sql
-CREATE TABLE IF NOT EXISTS shopify_orders (
-  id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL,
-  shopify_order_id TEXT NOT NULL,
-  customer_email_hash TEXT,
-  total_price_cents INTEGER NOT NULL,
-  currency TEXT DEFAULT 'USD',
-  financial_status TEXT,
-  utm_source TEXT,
-  utm_medium TEXT,
-  utm_campaign TEXT,
-  note_attributes TEXT,
-  created_at TEXT NOT NULL,
-  UNIQUE(organization_id, shopify_order_id)
-);
-```
-
-### API Changes Required
-
-#### 1. Attribution Endpoint Updates
-
-**File:** `src/endpoints/v1/analytics/attribution.ts`
-
-The `GetJourneyAnalytics` endpoint (line ~2212) currently queries an empty table. After `journey_analytics` is populated by clearlift-cron, verify the query works:
-
-```typescript
-// Should return data after probabilistic attribution workflow runs
-const journeys = await env.ANALYTICS_DB.prepare(`
-  SELECT * FROM journey_analytics
-  WHERE organization_id = ?
-  ORDER BY computed_at DESC
-  LIMIT 100
-`).bind(orgId).all();
-```
-
-#### 2. Unified Conversions View
-
-Add a new endpoint or update existing attribution endpoint to use the unified view:
-
-```typescript
-// New helper in attribution.ts
-async function getUnifiedConversions(orgId: string, startDate: string, endDate: string) {
-  return env.ANALYTICS_DB.prepare(`
-    SELECT * FROM unified_conversions
-    WHERE organization_id = ?
-      AND conversion_timestamp >= ?
-      AND conversion_timestamp < ?
-  `).bind(orgId, startDate, endDate).all();
-}
-```
-
-### Workflow Updates Required
-
-#### Attribution Workflow Data Source
-
-**File:** `src/workflows/attribution-workflow.ts`
-
-Currently reads from `conversion_attribution` table. After conversion linking is implemented, update to read from `unified_conversions`:
-
-```typescript
-// Step 1: fetch_paths - update query
-const paths = await env.ANALYTICS_DB.prepare(`
-  SELECT
-    uc.organization_id,
-    uc.goal_id,
-    uc.value_cents,
-    ja.channel_path,
-    ja.first_touch_channel,
-    ja.last_touch_channel
-  FROM unified_conversions uc
-  JOIN journey_analytics ja ON uc.organization_id = ja.organization_id
-    AND uc.anonymous_id = ja.anonymous_id
-  WHERE uc.organization_id = ?
-    AND uc.conversion_timestamp >= datetime('now', '-30 days')
-`).bind(orgId).all();
-```
-
-### Verification After Implementation
-
-Run these queries to verify migrations and data flow:
-
-```sql
--- After applying migrations
-.tables  -- Should show: customer_identities, journey_analytics, shopify_orders
-
--- After clearlift-cron identity extraction runs
-SELECT COUNT(*) FROM customer_identities;  -- Should be > 0
-
--- After clearlift-cron probabilistic attribution runs
-SELECT COUNT(*) FROM journey_analytics WHERE has_conversion = 1;  -- Should be > 0
-
--- After conversion linking workflow runs
-SELECT link_method, COUNT(*) FROM conversions
+-- Verify conversion linking working
+SELECT link_method, COUNT(*), AVG(link_confidence)
+FROM conversions
 WHERE linked_goal_id IS NOT NULL
-GROUP BY link_method;  -- Should show 'direct', 'email_hash', 'time_proximity'
+GROUP BY link_method;
+
+-- Verify Shopify orders synced
+SELECT COUNT(*) FROM shopify_orders;
 ```
 
-### Dependencies
+---
 
-This repo depends on clearlift-cron workflows to populate:
-- `customer_identities` (IdentityExtractionWorkflow)
-- `journey_analytics` (ProbabilisticAttributionWorkflow)
-- `conversions.linked_goal_id` (ConversionLinkingWorkflow)
+## Connector System & Gaps
 
-Coordinate with clearlift-cron implementation. See `SHARED_CODE.md §19` for workflow pseudocode.
+### Current Active Connectors
+
+| Connector | Type | Sync |
+|-----------|------|------|
+| Google Ads | Ad Platform | D1 every 15 min |
+| Meta Ads | Ad Platform | D1 every 15 min |
+| TikTok Ads | Ad Platform | D1 every 15 min |
+| Stripe | Revenue | D1 every 15 min |
+| Shopify | Revenue | D1 every 15 min |
+| Jobber | Revenue | D1 every 15 min |
+
+### Vertical Coverage Summary
+
+- ✅ **Full:** E-commerce, SaaS (direct), Marketplaces
+- ⚠️ **Partial:** B2B SaaS, Local Services, Lead Gen (missing CRM/phone)
+- ❌ **None:** Mobile Apps, Local Businesses
+
+### Connector Roadmap
+
+| Phase | Connectors | Impact |
+|-------|------------|--------|
+| **1 (CRM)** | HubSpot, Salesforce | Unlocks B2B SaaS, Lead Gen |
+| **2 (Comms)** | CallRail, Calendly | Unlocks Local Services |
+| **3 (Ads)** | LinkedIn Marketing | Better B2B attribution |
+| **4 (Creator)** | ConvertKit, Kajabi | Niche verticals |
+
+### Architecture Notes for New Connectors
+
+All connectors should implement:
+- OAuth or API key authentication
+- `fetchData()` for sync
+- `writeToD1()` for storage
+- `extractIdentities()` for attribution linking
+- `matchGoals()` for conversion linking
+
+See `clearlift-cron/docs/SHARED_CODE.md §20` for full roadmap.

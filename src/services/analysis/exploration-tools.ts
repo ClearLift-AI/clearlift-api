@@ -425,6 +425,70 @@ export const EXPLORATION_TOOLS = {
       },
       required: ['platform', 'entity_type', 'entity_id']
     }
+  },
+
+  query_conversions_by_goal: {
+    name: 'query_conversions_by_goal',
+    description: 'Query verified conversions grouped by conversion goal. Shows linked Stripe/Shopify conversions with their confidence scores and link methods. Use this to understand which conversion goals generate real revenue vs platform-reported conversions.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days: {
+          type: 'number',
+          minimum: 1,
+          maximum: 90,
+          description: 'Number of days of historical data'
+        },
+        min_confidence: {
+          type: 'number',
+          minimum: 0,
+          maximum: 1,
+          description: 'Minimum link confidence threshold (0.0 - 1.0, default: 0.7)'
+        },
+        group_by: {
+          type: 'string',
+          enum: ['day', 'goal', 'link_method'],
+          description: 'How to group results (default: goal)'
+        },
+        goal_id: {
+          type: 'string',
+          description: 'Optional: Filter to specific goal ID'
+        }
+      },
+      required: ['days']
+    }
+  },
+
+  compare_platform_vs_verified_conversions: {
+    name: 'compare_platform_vs_verified_conversions',
+    description: 'Compare platform-reported conversions against verified Stripe/Shopify conversions. Shows inflation factor between what ad platforms claim vs actual linked revenue. Essential for calculating true ROAS and understanding attribution accuracy.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days: {
+          type: 'number',
+          minimum: 1,
+          maximum: 90,
+          description: 'Number of days to analyze'
+        },
+        min_confidence: {
+          type: 'number',
+          minimum: 0,
+          maximum: 1,
+          description: 'Minimum link confidence threshold (0.0 - 1.0, default: 0.7)'
+        },
+        platforms: {
+          type: 'array',
+          items: { type: 'string', enum: ['facebook', 'google', 'tiktok', 'all'] },
+          description: 'Ad platforms to include'
+        },
+        include_link_breakdown: {
+          type: 'boolean',
+          description: 'Include breakdown by link method (direct_link, email_hash, time_proximity)'
+        }
+      },
+      required: ['days']
+    }
   }
 };
 
@@ -548,6 +612,20 @@ interface GetEntityBudgetInput {
   entity_id: string;
 }
 
+interface QueryConversionsByGoalInput {
+  days: number;
+  min_confidence?: number;
+  group_by?: 'day' | 'goal' | 'link_method';
+  goal_id?: string;
+}
+
+interface ComparePlatformVsVerifiedInput {
+  days: number;
+  min_confidence?: number;
+  platforms?: Array<'facebook' | 'google' | 'tiktok' | 'all'>;
+  include_link_breakdown?: boolean;
+}
+
 /**
  * Exploration Tool Executor
  * Uses D1 ANALYTICS_DB for all queries
@@ -590,6 +668,10 @@ export class ExplorationToolExecutor {
           return this.calculatePercentageChange(input as CalculatePercentageChangeInput);
         case 'get_entity_budget':
           return await this.getEntityBudget(input as GetEntityBudgetInput, orgId);
+        case 'query_conversions_by_goal':
+          return await this.queryConversionsByGoal(input as QueryConversionsByGoalInput, orgId);
+        case 'compare_platform_vs_verified_conversions':
+          return await this.comparePlatformVsVerified(input as ComparePlatformVsVerifiedInput, orgId);
         default:
           return { success: false, error: `Unknown exploration tool: ${toolName}` };
       }
@@ -1621,6 +1703,414 @@ export class ExplorationToolExecutor {
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
     }
+  }
+
+  /**
+   * Query verified conversions grouped by goal
+   * Uses the conversions table with linked_goal_id populated by ConversionLinkingWorkflow
+   */
+  private async queryConversionsByGoal(
+    input: QueryConversionsByGoalInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { days, min_confidence = 0.7, group_by = 'goal', goal_id } = input;
+
+    // Build date range
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+
+    try {
+      // Query conversions with linked goals from D1
+      let sql = `
+        SELECT
+          c.conversion_id,
+          c.linked_goal_id,
+          c.link_method,
+          c.link_confidence,
+          c.value_cents,
+          c.currency,
+          c.conversion_timestamp,
+          c.source_platform,
+          g.name as goal_name,
+          g.event_type as goal_event_type
+        FROM conversions c
+        LEFT JOIN conversion_goals g ON g.id = c.linked_goal_id
+        WHERE c.organization_id = ?
+          AND c.linked_goal_id IS NOT NULL
+          AND c.link_confidence >= ?
+          AND c.conversion_timestamp >= ?
+          AND c.conversion_timestamp <= ?
+      `;
+      const params: any[] = [orgId, min_confidence, startStr, endStr + 'T23:59:59Z'];
+
+      if (goal_id) {
+        sql += ` AND c.linked_goal_id = ?`;
+        params.push(goal_id);
+      }
+
+      sql += ` ORDER BY c.conversion_timestamp DESC`;
+
+      const result = await this.db.prepare(sql).bind(...params).all<{
+        conversion_id: string;
+        linked_goal_id: string;
+        link_method: string;
+        link_confidence: number;
+        value_cents: number;
+        currency: string;
+        conversion_timestamp: string;
+        source_platform: string;
+        goal_name: string;
+        goal_event_type: string;
+      }>();
+
+      const conversions = result.results || [];
+
+      if (conversions.length === 0) {
+        return {
+          success: true,
+          data: {
+            summary: {
+              verified_conversions: 0,
+              total_value: '$0.00',
+              avg_confidence: 0,
+              note: 'No linked conversions found. Run ConversionLinkingWorkflow to populate data.'
+            },
+            by_goal: [],
+            by_link_method: {}
+          }
+        };
+      }
+
+      // Group by the requested dimension
+      let groupedData: any;
+
+      if (group_by === 'goal') {
+        groupedData = this.groupConversionsByGoal(conversions);
+      } else if (group_by === 'day') {
+        groupedData = this.groupConversionsByDay(conversions);
+      } else if (group_by === 'link_method') {
+        groupedData = this.groupConversionsByLinkMethod(conversions);
+      }
+
+      // Calculate summary metrics
+      const totalValue = conversions.reduce((sum, c) => sum + (c.value_cents || 0), 0);
+      const avgConfidence = conversions.reduce((sum, c) => sum + (c.link_confidence || 0), 0) / conversions.length;
+
+      // Calculate link method breakdown
+      const linkMethodBreakdown = this.groupConversionsByLinkMethod(conversions);
+
+      return {
+        success: true,
+        data: {
+          summary: {
+            verified_conversions: conversions.length,
+            total_value_cents: totalValue,
+            total_value: '$' + (totalValue / 100).toFixed(2),
+            avg_confidence: avgConfidence.toFixed(2),
+            date_range: { start: startStr, end: endStr }
+          },
+          [`by_${group_by}`]: groupedData,
+          link_method_breakdown: linkMethodBreakdown
+        }
+      };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Query failed';
+      if (errorMessage.includes('no such table')) {
+        return {
+          success: true,
+          data: {
+            summary: { verified_conversions: 0, note: 'Conversions table not found in ANALYTICS_DB' },
+            by_goal: []
+          }
+        };
+      }
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  /**
+   * Compare platform-reported vs verified conversions
+   * Shows inflation factor and true ROAS
+   */
+  private async comparePlatformVsVerified(
+    input: ComparePlatformVsVerifiedInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { days, min_confidence = 0.7, platforms = ['all'], include_link_breakdown = false } = input;
+
+    // Build date range
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+
+    try {
+      // Determine which platforms to query
+      const platformsToQuery = platforms.includes('all')
+        ? ['facebook', 'google', 'tiktok']
+        : platforms.filter(p => p !== 'all');
+
+      // Fetch platform-reported metrics (spend, conversions, conversion value)
+      const platformData = await Promise.all(
+        platformsToQuery.map(async (platform) => {
+          const tableInfo = this.getMetricsTableInfo(platform, 'campaign');
+          if (!tableInfo) return {
+            platform,
+            spend_cents: 0,
+            platform_conversions: 0,
+            platform_conversion_value_cents: 0
+          };
+
+          const sql = `
+            SELECT
+              SUM(spend_cents) as spend_cents,
+              SUM(conversions) as conversions,
+              SUM(conversion_value_cents) as conversion_value_cents
+            FROM ${tableInfo.table}
+            WHERE organization_id = ?
+              AND metric_date >= ?
+              AND metric_date <= ?
+          `;
+          const result = await this.db.prepare(sql).bind(orgId, startStr, endStr).first<{
+            spend_cents: number | null;
+            conversions: number | null;
+            conversion_value_cents: number | null;
+          }>();
+
+          return {
+            platform,
+            spend_cents: result?.spend_cents || 0,
+            platform_conversions: result?.conversions || 0,
+            platform_conversion_value_cents: result?.conversion_value_cents || 0
+          };
+        })
+      );
+
+      // Fetch verified conversions (linked to goals with sufficient confidence)
+      const verifiedSql = `
+        SELECT
+          COUNT(*) as verified_count,
+          SUM(value_cents) as verified_value_cents,
+          AVG(link_confidence) as avg_confidence,
+          link_method
+        FROM conversions
+        WHERE organization_id = ?
+          AND linked_goal_id IS NOT NULL
+          AND link_confidence >= ?
+          AND conversion_timestamp >= ?
+          AND conversion_timestamp <= ?
+        GROUP BY link_method
+      `;
+      const verifiedResult = await this.db.prepare(verifiedSql)
+        .bind(orgId, min_confidence, startStr, endStr + 'T23:59:59Z')
+        .all<{
+          verified_count: number;
+          verified_value_cents: number;
+          avg_confidence: number;
+          link_method: string;
+        }>();
+
+      const verifiedData = verifiedResult.results || [];
+
+      // Also get total connector conversions (not just linked)
+      const connectorSql = `
+        SELECT COUNT(*) as total_count, SUM(value_cents) as total_value_cents
+        FROM conversions
+        WHERE organization_id = ?
+          AND source_platform IN ('stripe', 'shopify')
+          AND conversion_timestamp >= ?
+          AND conversion_timestamp <= ?
+      `;
+      const connectorResult = await this.db.prepare(connectorSql)
+        .bind(orgId, startStr, endStr + 'T23:59:59Z')
+        .first<{ total_count: number; total_value_cents: number }>();
+
+      // Calculate totals
+      const totalSpend = platformData.reduce((sum, p) => sum + p.spend_cents, 0);
+      const totalPlatformConversions = platformData.reduce((sum, p) => sum + p.platform_conversions, 0);
+      const totalPlatformRevenue = platformData.reduce((sum, p) => sum + p.platform_conversion_value_cents, 0);
+
+      const totalVerifiedCount = verifiedData.reduce((sum, v) => sum + v.verified_count, 0);
+      const totalVerifiedValue = verifiedData.reduce((sum, v) => sum + v.verified_value_cents, 0);
+      const avgConfidence = verifiedData.length > 0
+        ? verifiedData.reduce((sum, v) => sum + (v.avg_confidence * v.verified_count), 0) / totalVerifiedCount
+        : 0;
+
+      const totalConnectorConversions = connectorResult?.total_count || 0;
+      const totalConnectorValue = connectorResult?.total_value_cents || 0;
+
+      // Calculate key metrics
+      const platformRoas = totalSpend > 0 ? totalPlatformRevenue / totalSpend : 0;
+      const trueRoas = totalSpend > 0 ? totalVerifiedValue / totalSpend : 0;
+      const inflationFactor = totalVerifiedValue > 0 && totalPlatformRevenue > 0
+        ? totalPlatformRevenue / totalVerifiedValue
+        : 1;
+      const verificationRate = totalConnectorConversions > 0
+        ? (totalVerifiedCount / totalConnectorConversions) * 100
+        : 0;
+
+      const response: any = {
+        summary: {
+          date_range: { start: startStr, end: endStr },
+          total_spend: '$' + (totalSpend / 100).toFixed(2),
+          // Platform-reported metrics
+          platform_reported: {
+            conversions: totalPlatformConversions,
+            revenue: '$' + (totalPlatformRevenue / 100).toFixed(2),
+            roas: platformRoas.toFixed(2)
+          },
+          // Verified metrics (linked to goals)
+          verified: {
+            conversions: totalVerifiedCount,
+            revenue: '$' + (totalVerifiedValue / 100).toFixed(2),
+            roas: trueRoas.toFixed(2),
+            avg_confidence: avgConfidence.toFixed(2)
+          },
+          // Analysis
+          analysis: {
+            inflation_factor: inflationFactor.toFixed(2) + 'x',
+            platform_overstates_by: totalPlatformRevenue > 0 && totalVerifiedValue > 0
+              ? (((totalPlatformRevenue - totalVerifiedValue) / totalVerifiedValue) * 100).toFixed(1) + '%'
+              : 'N/A',
+            true_roas_vs_reported: platformRoas > 0
+              ? ((trueRoas / platformRoas) * 100).toFixed(1) + '%'
+              : 'N/A'
+          },
+          // Verification metrics
+          verification: {
+            total_connector_conversions: totalConnectorConversions,
+            linked_conversions: totalVerifiedCount,
+            unlinked_conversions: totalConnectorConversions - totalVerifiedCount,
+            verification_rate: verificationRate.toFixed(1) + '%'
+          }
+        },
+        by_platform: platformData.map(p => ({
+          platform: p.platform,
+          spend: '$' + (p.spend_cents / 100).toFixed(2),
+          platform_conversions: p.platform_conversions,
+          platform_revenue: '$' + (p.platform_conversion_value_cents / 100).toFixed(2),
+          platform_roas: p.spend_cents > 0
+            ? (p.platform_conversion_value_cents / p.spend_cents).toFixed(2)
+            : '0'
+        }))
+      };
+
+      // Add link method breakdown if requested
+      if (include_link_breakdown) {
+        response.by_link_method = verifiedData.map(v => ({
+          link_method: v.link_method,
+          conversions: v.verified_count,
+          revenue: '$' + (v.verified_value_cents / 100).toFixed(2),
+          avg_confidence: v.avg_confidence.toFixed(2),
+          pct_of_verified: totalVerifiedCount > 0
+            ? ((v.verified_count / totalVerifiedCount) * 100).toFixed(1) + '%'
+            : '0%'
+        }));
+      }
+
+      return { success: true, data: response };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Query failed';
+      if (errorMessage.includes('no such table')) {
+        return {
+          success: true,
+          data: {
+            summary: {
+              note: 'Conversions table not found. Run ConversionLinkingWorkflow to populate data.'
+            },
+            by_platform: []
+          }
+        };
+      }
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  /**
+   * Group conversions by goal
+   */
+  private groupConversionsByGoal(conversions: any[]): any[] {
+    const byGoal = new Map<string, { conversions: number; value_cents: number; avg_confidence: number; confidences: number[] }>();
+
+    for (const c of conversions) {
+      const goalId = c.linked_goal_id || 'unlinked';
+      if (!byGoal.has(goalId)) {
+        byGoal.set(goalId, { conversions: 0, value_cents: 0, avg_confidence: 0, confidences: [] });
+      }
+      const g = byGoal.get(goalId)!;
+      g.conversions += 1;
+      g.value_cents += c.value_cents || 0;
+      g.confidences.push(c.link_confidence || 0);
+    }
+
+    return Array.from(byGoal.entries()).map(([goalId, data]) => {
+      const matchingConversion = conversions.find(c => c.linked_goal_id === goalId);
+      return {
+        goal_id: goalId,
+        goal_name: matchingConversion?.goal_name || 'Unknown',
+        goal_event_type: matchingConversion?.goal_event_type || 'unknown',
+        conversions: data.conversions,
+        value: '$' + (data.value_cents / 100).toFixed(2),
+        avg_confidence: (data.confidences.reduce((a, b) => a + b, 0) / data.confidences.length).toFixed(2)
+      };
+    }).sort((a, b) => b.conversions - a.conversions);
+  }
+
+  /**
+   * Group conversions by day
+   */
+  private groupConversionsByDay(conversions: any[]): any[] {
+    const byDay = new Map<string, { conversions: number; value_cents: number }>();
+
+    for (const c of conversions) {
+      const date = c.conversion_timestamp?.split('T')[0] || 'unknown';
+      if (!byDay.has(date)) {
+        byDay.set(date, { conversions: 0, value_cents: 0 });
+      }
+      const d = byDay.get(date)!;
+      d.conversions += 1;
+      d.value_cents += c.value_cents || 0;
+    }
+
+    return Array.from(byDay.entries())
+      .map(([date, data]) => ({
+        date,
+        conversions: data.conversions,
+        value: '$' + (data.value_cents / 100).toFixed(2)
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  /**
+   * Group conversions by link method
+   */
+  private groupConversionsByLinkMethod(conversions: any[]): Record<string, { conversions: number; value: string; avg_confidence: string }> {
+    const byMethod = new Map<string, { conversions: number; value_cents: number; confidences: number[] }>();
+
+    for (const c of conversions) {
+      const method = c.link_method || 'unknown';
+      if (!byMethod.has(method)) {
+        byMethod.set(method, { conversions: 0, value_cents: 0, confidences: [] });
+      }
+      const m = byMethod.get(method)!;
+      m.conversions += 1;
+      m.value_cents += c.value_cents || 0;
+      m.confidences.push(c.link_confidence || 0);
+    }
+
+    const result: Record<string, { conversions: number; value: string; avg_confidence: string }> = {};
+    for (const [method, data] of byMethod.entries()) {
+      result[method] = {
+        conversions: data.conversions,
+        value: '$' + (data.value_cents / 100).toFixed(2),
+        avg_confidence: (data.confidences.reduce((a, b) => a + b, 0) / data.confidences.length).toFixed(2)
+      };
+    }
+    return result;
   }
 
   // Helper methods
