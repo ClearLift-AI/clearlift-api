@@ -852,3 +852,69 @@ All connectors should implement:
 - `matchGoals()` for conversion linking
 
 See `clearlift-cron/docs/SHARED_CODE.md §20` for full roadmap.
+
+---
+
+## Connector Registry
+
+**Status:** ✅ Implemented (January 2026)
+
+The connector registry provides dynamic connector definitions loaded from D1 instead of hardcoded values.
+
+### Endpoint
+
+```
+GET /v1/connectors/registry
+```
+
+Returns all connector definitions with their:
+- Events schema (available event types + fields)
+- Icon metadata (name, color)
+- Category and type classifications
+- Active/beta status
+
+### Type Definitions
+
+**Location:** `src/services/connector-registry.ts`
+
+```typescript
+// 16 connector types
+export type ConnectorType =
+  | 'ad_platform' | 'crm' | 'communication' | 'ecommerce' | 'payments'
+  | 'support' | 'scheduling' | 'forms' | 'events' | 'analytics'
+  | 'accounting' | 'attribution' | 'reviews' | 'affiliate' | 'social'
+  | 'field_service';
+
+// 12 UI grouping categories
+export type ConnectorCategory =
+  | 'advertising' | 'sales' | 'marketing' | 'commerce' | 'operations'
+  | 'analytics' | 'finance' | 'communication' | 'ecommerce' | 'payments'
+  | 'crm' | 'field_service';
+```
+
+### Migration
+
+**File:** `migrations/0069_seed_extended_connectors.sql`
+
+Seeds 25+ connector definitions across 15 categories:
+- **CRM:** HubSpot, Salesforce, Pipedrive
+- **Communication:** Klaviyo, Mailchimp, Attentive
+- **Support:** Zendesk, Intercom
+- **Scheduling:** Calendly, Acuity
+- **Forms:** Typeform, JotForm
+- **Accounting:** QuickBooks, Xero
+- **Attribution:** AppsFlyer, Adjust
+- **Reviews:** G2, Trustpilot
+- **Affiliate:** Impact, PartnerStack
+- **Social:** LinkedIn Pages, Instagram Business
+- **Payments:** Lemon Squeezy, Paddle, Chargebee, Recurly
+- **Ad Platform:** LinkedIn Ads
+
+New connectors are seeded with `is_active: false, is_beta: true` until sync handlers are implemented.
+
+### Dashboard Integration
+
+The Flow Builder now uses `ConnectorRegistryContext` instead of the deprecated `CONNECTOR_EVENTS` constant. This enables:
+- Dynamic connector discovery from the API
+- SSR fallback with 25+ FALLBACK_CONNECTORS
+- Grouped dropdown UI (Connected / Available to Connect / Coming Soon)
