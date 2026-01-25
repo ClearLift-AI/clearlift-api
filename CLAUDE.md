@@ -34,16 +34,44 @@ This API uses **two separate D1 databases** for isolation between operational an
 
 A third D1 database for pre-aggregated analytics (sub-millisecond queries):
 
-| Binding | Database Name | Purpose |
-|---------|--------------|---------|
-| `ANALYTICS_DB` | clearlift-analytics-dev | Aggregated metrics, attribution, journeys |
+| Binding | Database Name | Migrations Dir | Purpose |
+|---------|--------------|----------------|---------|
+| `ANALYTICS_DB` | clearlift-analytics-dev | `migrations-analytics/` | Aggregated metrics, attribution, journeys |
 
-**Tables:**
+**Legacy Tables (per-platform):**
 - `hourly_metrics`, `daily_metrics` - Pre-aggregated event metrics
 - `utm_performance` - UTM campaign attribution
 - `attribution_results` - Multi-touch attribution
 - `journeys`, `channel_transitions` - Customer journey analysis
 - `google_campaigns`, `facebook_campaigns`, `tiktok_campaigns` - Platform data (sync'd from queue-consumer)
+
+**Unified Tables (new - supports 100+ connectors):**
+
+| Migration | Category | Tables | Status |
+|-----------|----------|--------|--------|
+| 0019 | Ad Platforms | `ad_campaigns`, `ad_groups`, `ads`, `ad_metrics` | ✅ Implemented |
+| 0020 | CRM | `crm_contacts`, `crm_companies`, `crm_deals`, `crm_activities` | ✅ Implemented |
+| 0021 | Communication | `comm_campaigns`, `comm_subscribers`, `comm_engagements` | ✅ Implemented |
+| 0022 | E-commerce | `ecommerce_customers`, `_orders`, `_order_items`, `_products`, `_refunds` | 🔧 Stubbed |
+| 0023 | Payments | `payments_customers`, `_subscriptions`, `_transactions`, `_invoices`, `_plans` | 🔧 Stubbed |
+| 0024 | Support | `support_customers`, `_tickets`, `_conversations`, `_messages` | 🔧 Stubbed |
+| 0025 | Scheduling | `scheduling_customers`, `_services`, `_appointments`, `_availability` | 🔧 Stubbed |
+| 0026 | Forms | `forms_definitions`, `_submissions`, `_responses` | 🔧 Stubbed |
+| 0027 | Events | `events_definitions`, `_registrations`, `_attendees`, `_recordings` | 🔧 Stubbed |
+| 0028 | Analytics | `analytics_users`, `_sessions`, `_events`, `_page_views` | 🔧 Stubbed |
+| 0029 | Accounting | `accounting_customers`, `_invoices`, `_expenses`, `_payments`, `_accounts` | 🔧 Stubbed |
+| 0030 | Attribution | `attribution_installs`, `_events`, `_revenue`, `_cohorts` | 🔧 Stubbed |
+| 0031 | Reviews | `reviews_profiles`, `_items`, `_responses`, `_aggregates` | 🔧 Stubbed |
+| 0032 | Affiliate | `affiliate_partners`, `_referrals`, `_conversions`, `_payouts` | 🔧 Stubbed |
+| 0033 | Social | `social_profiles`, `_posts`, `_followers`, `_engagements`, `_metrics` | 🔧 Stubbed |
+
+**Status Legend:**
+- ✅ **Implemented**: Schema + D1UnifiedService methods + DataWriter methods + dual-write active
+- 🔧 **Stubbed**: Schema + D1UnifiedService methods + types defined, no connectors using them yet
+
+The unified tables use a `platform`/`source_platform` column to distinguish source and `platform_fields`/`properties` JSON for platform-specific data.
+
+See `clearlift-cron/docs/SHARED_CODE.md §21` for full unified architecture documentation.
 
 #### D1 Sharding Infrastructure (SHARD_0-3)
 
