@@ -7,6 +7,7 @@ import { GoogleAdsOAuthProvider } from "../../services/oauth/google";
 import { FacebookAdsOAuthProvider } from "../../services/oauth/facebook";
 import { ShopifyOAuthProvider } from "../../services/oauth/shopify";
 import { JobberOAuthProvider } from "../../services/oauth/jobber";
+import { HubSpotOAuthProvider } from "../../services/oauth/hubspot";
 import { success, error } from "../../utils/response";
 import { getSecret } from "../../utils/secrets";
 
@@ -174,7 +175,7 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot'])
       }),
       body: contentJson(
         z.object({
@@ -335,6 +336,18 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
           redirectUri
         );
       }
+      case 'hubspot': {
+        const clientId = await getSecret(c.env.HUBSPOT_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.HUBSPOT_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
+          throw new Error('HubSpot OAuth credentials not configured');
+        }
+        return new HubSpotOAuthProvider(
+          clientId,
+          clientSecret,
+          redirectUri
+        );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -351,7 +364,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     operationId: "handle-oauth-callback",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot'])
       }),
       query: z.object({
         code: z.string(),
@@ -579,6 +592,18 @@ export class HandleOAuthCallback extends OpenAPIRoute {
           redirectUri
         );
       }
+      case 'hubspot': {
+        const clientId = await getSecret(c.env.HUBSPOT_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.HUBSPOT_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
+          throw new Error('HubSpot OAuth credentials not configured');
+        }
+        return new HubSpotOAuthProvider(
+          clientId,
+          clientSecret,
+          redirectUri
+        );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -597,7 +622,7 @@ export class MockOAuthCallback extends OpenAPIRoute {
     operationId: "mock-oauth-callback",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot'])
       }),
       query: z.object({
         state: z.string()

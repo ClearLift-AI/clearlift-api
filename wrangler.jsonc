@@ -96,6 +96,16 @@
       "binding": "JOBBER_CLIENT_SECRET",
       "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
       "secret_name": "JOBBER_CLIENT_SECRET"
+    },
+    {
+      "binding": "HUBSPOT_CLIENT_ID",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "HUBSPOT_CLIENT_ID"
+    },
+    {
+      "binding": "HUBSPOT_CLIENT_SECRET",
+      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+      "secret_name": "HUBSPOT_CLIENT_SECRET"
     }
   ],
 
@@ -409,6 +419,16 @@
           "binding": "JOBBER_CLIENT_SECRET",
           "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
           "secret_name": "JOBBER_CLIENT_SECRET"
+        },
+        {
+          "binding": "HUBSPOT_CLIENT_ID",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "HUBSPOT_CLIENT_ID"
+        },
+        {
+          "binding": "HUBSPOT_CLIENT_SECRET",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "HUBSPOT_CLIENT_SECRET"
         }
       ]
     },
@@ -553,6 +573,16 @@
           "binding": "JOBBER_CLIENT_SECRET",
           "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
           "secret_name": "JOBBER_CLIENT_SECRET"
+        },
+        {
+          "binding": "HUBSPOT_CLIENT_ID",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "HUBSPOT_CLIENT_ID"
+        },
+        {
+          "binding": "HUBSPOT_CLIENT_SECRET",
+          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
+          "secret_name": "HUBSPOT_CLIENT_SECRET"
         }
       ]
     }
