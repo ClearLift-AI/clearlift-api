@@ -497,13 +497,17 @@ export class GetD1ChannelTransitions extends OpenAPIRoute {
   public schema = {
     tags: ["Analytics"],
     summary: "Get channel transitions from D1",
-    description: "Fetches Markov transition matrix from D1 ANALYTICS_DB",
+    description: "Fetches Markov transition matrix from D1 ANALYTICS_DB with optional filtering",
     operationId: "get-d1-channel-transitions",
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
         org_id: z.string().describe("Organization ID"),
-        period_start: z.string().optional().describe("Period start date (ISO 8601)")
+        period_start: z.string().optional().describe("Filter by period start date (ISO 8601)"),
+        period_end: z.string().optional().describe("Filter by period end date (ISO 8601)"),
+        from_channel: z.string().optional().describe("Filter by source channel"),
+        to_channel: z.string().optional().describe("Filter by destination channel"),
+        min_count: z.string().optional().describe("Minimum transition count to include")
       })
     },
     responses: {
@@ -529,6 +533,11 @@ export class GetD1ChannelTransitions extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const orgId = c.get("org_id" as any) as string;
     const periodStart = c.req.query("period_start");
+    const periodEnd = c.req.query("period_end");
+    const fromChannel = c.req.query("from_channel");
+    const toChannel = c.req.query("to_channel");
+    const minCountStr = c.req.query("min_count");
+    const minCount = minCountStr ? parseInt(minCountStr, 10) : undefined;
 
     if (!c.env.ANALYTICS_DB) {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
@@ -543,7 +552,13 @@ export class GetD1ChannelTransitions extends OpenAPIRoute {
     }
 
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const transitions = await analyticsService.getChannelTransitions(orgTagMapping.short_tag, periodStart);
+    const transitions = await analyticsService.getChannelTransitions(orgTagMapping.short_tag, {
+      periodStart,
+      periodEnd,
+      fromChannel,
+      toChannel,
+      minCount
+    });
 
     const data = transitions.map(t => ({
       fromChannel: t.from_channel,

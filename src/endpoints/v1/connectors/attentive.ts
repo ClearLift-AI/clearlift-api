@@ -71,6 +71,10 @@ export class ConnectAttentive extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
+    // BLOCKED: Attentive integration is not yet ready for production
+    // The queue-consumer does not have sync handlers for Attentive data
+    return error(c, "SERVICE_UNAVAILABLE", "Attentive integration is temporarily unavailable. This feature is coming soon.", 503);
+
     const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
     const {

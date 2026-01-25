@@ -5,8 +5,10 @@
  */
 
 import { AnalysisLevel } from './llm-provider';
+import { JobStatus } from '../../types';
 
-export type JobStatus = 'pending' | 'running' | 'completed' | 'failed';
+// Re-export for backward compatibility
+export type { JobStatus } from '../../types';
 
 export type StoppedReason = 'max_recommendations' | 'no_tool_calls' | 'max_iterations' | 'early_termination';
 

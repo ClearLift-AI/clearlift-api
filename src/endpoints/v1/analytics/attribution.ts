@@ -22,6 +22,7 @@ import {
 } from "../../../services/attribution-models";
 // Import from providers to ensure all revenue sources are registered
 import { getCombinedRevenueByDateRange, CombinedRevenueResult } from "../../../services/revenue-sources/providers";
+import { AD_PLATFORM_IDS, ACTIVE_REVENUE_PLATFORM_IDS } from "../../../config/platforms";
 
 /**
  * Check organization setup status for attribution.
@@ -45,8 +46,8 @@ async function checkSetupStatus(
   const connectedPlatforms = (platformsResult.results || []).map(r => r.platform);
 
   // Separate ad platforms from revenue connectors
-  const adPlatforms = connectedPlatforms.filter(p => ['google', 'facebook', 'tiktok', 'microsoft', 'linkedin'].includes(p));
-  const revenueConnectors = connectedPlatforms.filter(p => ['stripe', 'shopify', 'jobber'].includes(p));
+  const adPlatforms = connectedPlatforms.filter(p => AD_PLATFORM_IDS.includes(p as any));
+  const revenueConnectors = connectedPlatforms.filter(p => ACTIVE_REVENUE_PLATFORM_IDS.includes(p as any));
 
   // Check for UTM data (only if tag is configured)
   let hasUtmData = false;

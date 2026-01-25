@@ -8,6 +8,7 @@ import {
   type ConversionRecord
 } from "../../../schemas/analytics";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
+import { AD_PLATFORM_IDS, ACTIVE_REVENUE_PLATFORM_IDS } from "../../../config/platforms";
 
 /**
  * Check setup status for conversions
@@ -27,8 +28,8 @@ async function checkConversionSetupStatus(
   `).bind(orgId).all<{ platform: string }>();
   const connectedPlatforms = (platformsResult.results || []).map(r => r.platform);
 
-  const adPlatforms = connectedPlatforms.filter(p => ['google', 'facebook', 'tiktok', 'microsoft', 'linkedin'].includes(p));
-  const revenueConnectors = connectedPlatforms.filter(p => ['stripe', 'shopify', 'jobber'].includes(p));
+  const adPlatforms = connectedPlatforms.filter(p => AD_PLATFORM_IDS.includes(p as any));
+  const revenueConnectors = connectedPlatforms.filter(p => ACTIVE_REVENUE_PLATFORM_IDS.includes(p as any));
 
   return {
     hasTrackingTag: !!tagMapping?.short_tag,

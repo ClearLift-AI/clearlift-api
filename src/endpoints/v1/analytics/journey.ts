@@ -15,6 +15,7 @@ import { AppContext, SetupStatus, DataQualityResponse, buildDataQualityResponse 
 import { success, error } from "../../../utils/response";
 import { D1Adapter } from "../../../adapters/d1";
 import { getCombinedRevenueByDateRange } from "../../../services/revenue-sources";
+import { AD_PLATFORM_IDS, ACTIVE_REVENUE_PLATFORM_IDS } from "../../../config/platforms";
 
 /**
  * Check setup status for journey analytics
@@ -34,8 +35,8 @@ async function checkJourneySetupStatus(
   `).bind(orgId).all<{ platform: string }>();
   const connectedPlatforms = (platformsResult.results || []).map(r => r.platform);
 
-  const adPlatforms = connectedPlatforms.filter(p => ['google', 'facebook', 'tiktok', 'microsoft', 'linkedin'].includes(p));
-  const revenueConnectors = connectedPlatforms.filter(p => ['stripe', 'shopify', 'jobber'].includes(p));
+  const adPlatforms = connectedPlatforms.filter(p => AD_PLATFORM_IDS.includes(p as any));
+  const revenueConnectors = connectedPlatforms.filter(p => ACTIVE_REVENUE_PLATFORM_IDS.includes(p as any));
 
   return {
     hasTrackingTag: !!tagMapping?.short_tag,

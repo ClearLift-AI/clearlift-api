@@ -429,8 +429,18 @@ export class D1AnalyticsService {
 
   /**
    * Get channel transitions for Markov visualization
+   * Returns Markov transition matrix with probabilities
    */
-  async getChannelTransitions(orgTag: string, periodStart?: string): Promise<{
+  async getChannelTransitions(
+    orgTag: string,
+    options: {
+      periodStart?: string;
+      periodEnd?: string;
+      fromChannel?: string;
+      toChannel?: string;
+      minCount?: number;
+    } = {}
+  ): Promise<{
     from_channel: string;
     to_channel: string;
     probability: number;
@@ -443,9 +453,29 @@ export class D1AnalyticsService {
     `;
     const params: unknown[] = [orgTag];
 
-    if (periodStart) {
-      query += ` AND period_start = ?`;
-      params.push(periodStart);
+    if (options.periodStart) {
+      query += ` AND period_start >= ?`;
+      params.push(options.periodStart);
+    }
+
+    if (options.periodEnd) {
+      query += ` AND period_end <= ?`;
+      params.push(options.periodEnd);
+    }
+
+    if (options.fromChannel) {
+      query += ` AND from_channel = ?`;
+      params.push(options.fromChannel);
+    }
+
+    if (options.toChannel) {
+      query += ` AND to_channel = ?`;
+      params.push(options.toChannel);
+    }
+
+    if (options.minCount !== undefined && options.minCount > 0) {
+      query += ` AND transition_count >= ?`;
+      params.push(options.minCount);
     }
 
     query += ` ORDER BY transition_count DESC`;

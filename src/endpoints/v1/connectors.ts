@@ -208,6 +208,12 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     const { provider } = data.params;
     const { organization_id, redirect_uri, shop_domain } = data.body;
 
+    // BLOCKED: Jobber integration is not yet ready for production
+    // The queue-consumer does not have sync handlers for Jobber data
+    if (provider === 'jobber') {
+      return error(c, "SERVICE_UNAVAILABLE", "Jobber integration is temporarily unavailable. This feature is coming soon.", 503);
+    }
+
     // Shopify requires shop_domain
     if (provider === 'shopify') {
       if (!shop_domain) {

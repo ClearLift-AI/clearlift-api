@@ -5,6 +5,27 @@ import { Session } from "./middleware/auth";
 // It includes all D1 databases, SecretsStoreSecret bindings, Queue bindings, etc.
 // Do NOT redeclare Env here as it will conflict with the generated types.
 
+// =============================================================================
+// Common Status Types
+// Mirror of clearlift-cron/shared/types/index.ts - keep in sync
+// =============================================================================
+
+/**
+ * Generic job/task status for sync jobs, analysis jobs, etc.
+ * Use this for any async operation that progresses through these states.
+ */
+export type JobStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+/**
+ * Array form of JobStatus for use in validation schemas.
+ */
+export const JOB_STATUS_VALUES = ['pending', 'running', 'completed', 'failed'] as const;
+
+/**
+ * Alias for connector sync status (same as JobStatus).
+ */
+export type SyncStatus = JobStatus;
+
 // Define context variables that can be set/get
 type Variables = {
   session: Session;
