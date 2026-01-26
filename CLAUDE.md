@@ -873,6 +873,89 @@ See `clearlift-cron/docs/SHARED_CODE.md §20` for full roadmap.
 
 ---
 
+## Infrastructure Improvements (January 2026)
+
+Five foundational backend improvements enabling the UI overhaul and scaling to 100+ connectors.
+
+### New Services
+
+| Service | File | Purpose |
+|---------|------|---------|
+| FunnelGraphService | `src/services/funnel-graph.ts` | OR/AND funnel branching, path validation |
+| ConversionValueService | `src/services/conversion-value.ts` | Multi-goal value allocation |
+| GoalGroupService | `src/services/conversion-value.ts` | Goal group management |
+
+### New Migrations
+
+| Migration | Purpose |
+|-----------|---------|
+| `0071_add_webhook_endpoints.sql` | Webhook ingestion infrastructure |
+| `0072_add_funnel_branching.sql` | OR/AND relationships, flow tags, branch points |
+| `0073_add_multi_conversion.sql` | Goal groups, value allocations |
+
+### Webhook Ingestion (Phase 2)
+
+**New Tables:**
+- `webhook_endpoints` - Endpoint configuration per org/connector
+- `webhook_events` - Incoming events with deduplication
+- `webhook_delivery_log` - Delivery attempt tracking
+
+**Endpoints:**
+- `POST /v1/webhooks/:connector/:event` - Receive webhooks
+- `GET/POST/DELETE /v1/webhooks` - Manage endpoints
+- `GET /v1/webhooks/:id/events` - Get events
+
+**Handlers:** `src/endpoints/v1/webhooks/handlers.ts`
+- StripeWebhookHandler - Stripe signature verification
+- ShopifyWebhookHandler - HMAC verification
+- HubSpotWebhookHandler - v1/v3 signature verification
+
+### Funnel Branching (Phase 4)
+
+**New Columns on `goal_relationships`:**
+- `relationship_operator` - 'OR' or 'AND'
+- `flow_tag` - Tags like 'self_serve', 'sales_led'
+- `is_exclusive` - Mutually exclusive paths
+
+**New Tables:**
+- `goal_branches` - Branch points (split/join)
+- `acquisition_instances` - Traffic source instances
+- `conversion_configs` - Conversion event configuration
+
+**Endpoints:**
+- `GET /v1/goals/graph` - Full funnel graph for Flow Builder
+- `POST /v1/goals/relationships/v2` - Create with OR/AND
+- `POST /v1/goals/branch` - Create split point
+- `POST /v1/goals/merge` - Create join point
+- `GET /v1/goals/paths` - Valid paths to a goal
+
+### Multi-Conversion (Phase 5)
+
+**New Tables:**
+- `goal_groups` - Logical groupings (e.g., "All Revenue Events")
+- `goal_group_members` - Maps goals to groups with weights
+- `conversion_value_allocations` - Tracks value distribution
+
+**New Columns on `conversions`:**
+- `goal_ids` - JSON array of matched goals
+- `goal_values` - JSON object: {goal_id: value_cents}
+- `attribution_group_id` - Link to goal group
+
+**Endpoints:**
+- `GET/POST /v1/goals/groups` - List/create groups
+- `GET/PUT /v1/goals/groups/:id/members` - Manage members
+- `POST /v1/goals/groups/:id/default` - Set default attribution
+- `DELETE /v1/goals/groups/:id` - Delete group
+
+**Allocation Methods:**
+- `equal` - Split evenly across matched goals
+- `weighted` - Use weights from goal_group_members
+- `explicit` - Use each goal's fixed_value_cents
+
+See `clearlift-cron/docs/SHARED_CODE.md §24` for complete documentation.
+
+---
+
 ## Connector Registry
 
 **Status:** ✅ Implemented (January 2026)

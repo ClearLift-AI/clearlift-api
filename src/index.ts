@@ -277,6 +277,21 @@ import {
   GoalConfigOptions
 } from "./endpoints/v1/goals/config";
 import {
+  GetFunnelGraph,
+  CreateGoalRelationshipV2,
+  CreateGoalBranch,
+  CreateGoalMerge,
+  GetValidPaths
+} from "./endpoints/v1/goals/graph";
+import {
+  ListGoalGroups,
+  CreateGoalGroup,
+  GetGoalGroupMembers,
+  UpdateGoalGroupMembers,
+  SetDefaultAttributionGroup,
+  DeleteGoalGroup
+} from "./endpoints/v1/goals/groups";
+import {
   RunAnalysis,
   GetAnalysisStatus,
   GetLatestAnalysis,
@@ -294,6 +309,13 @@ import {
   DeleteTrackingLink,
   GetTrackingLink
 } from "./endpoints/v1/tracking-links";
+import {
+  ReceiveWebhook,
+  ListWebhookEndpoints,
+  CreateWebhookEndpoint,
+  DeleteWebhookEndpoint,
+  GetWebhookEvents
+} from "./endpoints/v1/webhooks";
 
 // Import types
 import { Session } from "./middleware/auth";
@@ -696,12 +718,34 @@ openapi.post("/v1/goals/:id/compute-value", auth, requireOrg, ComputeGoalValue);
 openapi.get("/v1/goals/:id/conversion-stats", auth, requireOrg, GetGoalConversionStats);
 openapi.post("/v1/goals/recompute-all", auth, requireOrg, RecomputeAllGoalValues);
 
+// Funnel Graph endpoints (Phase 4: Funnel Branching)
+openapi.get("/v1/goals/graph", auth, requireOrg, GetFunnelGraph);
+openapi.post("/v1/goals/relationships/v2", auth, requireOrg, requireOrgAdmin, CreateGoalRelationshipV2);
+openapi.post("/v1/goals/branch", auth, requireOrg, requireOrgAdmin, CreateGoalBranch);
+openapi.post("/v1/goals/merge", auth, requireOrg, requireOrgAdmin, CreateGoalMerge);
+openapi.get("/v1/goals/paths", auth, requireOrg, GetValidPaths);
+
+// Goal Groups endpoints (Phase 5: Multi-Conversion)
+openapi.get("/v1/goals/groups", auth, requireOrg, ListGoalGroups);
+openapi.post("/v1/goals/groups", auth, requireOrg, requireOrgAdmin, CreateGoalGroup);
+openapi.get("/v1/goals/groups/:id/members", auth, requireOrg, GetGoalGroupMembers);
+openapi.put("/v1/goals/groups/:id/members", auth, requireOrg, requireOrgAdmin, UpdateGoalGroupMembers);
+openapi.post("/v1/goals/groups/:id/default", auth, requireOrg, requireOrgAdmin, SetDefaultAttributionGroup);
+openapi.delete("/v1/goals/groups/:id", auth, requireOrg, requireOrgAdmin, DeleteGoalGroup);
+
 // AI Analysis endpoints (hierarchical insights)
 openapi.post("/v1/analysis/run", auth, requireOrg, RunAnalysis);
 openapi.get("/v1/analysis/status/:job_id", auth, requireOrg, GetAnalysisStatus);
 openapi.get("/v1/analysis/latest", auth, requireOrg, GetLatestAnalysis);
 openapi.get("/v1/analysis/entity/:level/:entity_id", auth, requireOrg, GetEntityAnalysis);
 
+// Webhook endpoints (no auth required for receiving webhooks - uses signature verification)
+openapi.post("/v1/webhooks/:connector", ReceiveWebhook);
+// Webhook management endpoints (requires auth)
+openapi.get("/v1/webhooks/endpoints", auth, requireOrg, ListWebhookEndpoints);
+openapi.post("/v1/webhooks/endpoints", auth, requireOrg, CreateWebhookEndpoint);
+openapi.delete("/v1/webhooks/endpoints/:id", auth, requireOrg, DeleteWebhookEndpoint);
+openapi.get("/v1/webhooks/events", auth, requireOrg, GetWebhookEvents);
 
 // Import aggregation service for scheduled tasks
 import { AggregationService } from './services/aggregation-service';
