@@ -202,42 +202,46 @@ export class GetFacebookAdSets extends OpenAPIRoute {
     const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     try {
-      // Query ad sets from D1 with metrics
+      // Query ad sets from unified ad_groups table with metrics
+      // Facebook's "ad_sets" map to "ad_groups" in unified tables
       let sql = `
         SELECT
-          a.id,
-          a.ad_set_id,
-          a.ad_set_name,
-          a.ad_set_status,
-          a.campaign_id,
-          a.daily_budget_cents,
-          a.lifetime_budget_cents,
-          a.targeting,
-          a.updated_at,
+          ag.id,
+          ag.ad_group_id as ad_set_id,
+          ag.ad_group_name as ad_set_name,
+          ag.ad_group_status as ad_set_status,
+          ag.campaign_id,
+          ag.daily_budget_cents,
+          ag.lifetime_budget_cents,
+          ag.targeting,
+          ag.updated_at,
           COALESCE(SUM(m.impressions), 0) as impressions,
           COALESCE(SUM(m.clicks), 0) as clicks,
           COALESCE(SUM(m.spend_cents), 0) as spend_cents,
           COALESCE(SUM(m.conversions), 0) as conversions
-        FROM facebook_ad_sets a
-        LEFT JOIN facebook_ad_set_daily_metrics m
-          ON a.id = m.ad_set_ref
+        FROM ad_groups ag
+        LEFT JOIN ad_metrics m
+          ON ag.id = m.entity_ref
+          AND m.entity_type = 'ad_group'
           AND m.metric_date >= ?
           AND m.metric_date <= ?
-        WHERE a.organization_id = ?
+        WHERE ag.organization_id = ? AND ag.platform = 'facebook'
       `;
       const params: any[] = [startDate, endDate, orgId];
 
       if (query.query.campaign_id) {
-        sql += ` AND a.campaign_id = ?`;
+        sql += ` AND ag.campaign_id = ?`;
         params.push(query.query.campaign_id);
       }
 
       if (query.query.status) {
-        sql += ` AND a.ad_set_status = ?`;
-        params.push(query.query.status);
+        // Map frontend status to unified status
+        const statusMap: Record<string, string> = { 'ACTIVE': 'active', 'PAUSED': 'paused', 'DELETED': 'deleted', 'ARCHIVED': 'archived' };
+        sql += ` AND ag.ad_group_status = ?`;
+        params.push(statusMap[query.query.status] || query.query.status.toLowerCase());
       }
 
-      sql += ` GROUP BY a.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
+      sql += ` GROUP BY ag.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
       params.push(query.query.limit, query.query.offset);
 
       const result = await c.env.ANALYTICS_DB.prepare(sql).bind(...params).all<any>();
@@ -304,12 +308,11 @@ export class GetFacebookCreatives extends OpenAPIRoute {
     }
 
     try {
-      // Query creatives from D1 (creatives are stored in facebook_ads table)
-      // Only query columns that exist in the table
+      // Query creatives from unified ads table
       const sql = `
         SELECT ad_id, ad_name, creative_id, updated_at
-        FROM facebook_ads
-        WHERE organization_id = ?
+        FROM ads
+        WHERE organization_id = ? AND platform = 'facebook'
         ORDER BY updated_at DESC
         LIMIT ? OFFSET ?
       `;
@@ -376,7 +379,7 @@ export class GetFacebookAds extends OpenAPIRoute {
     const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     try {
-      // Query ads from D1 with metrics
+      // Query ads from unified ads table with metrics
       let sql = `
         SELECT
           a.id,
@@ -384,19 +387,20 @@ export class GetFacebookAds extends OpenAPIRoute {
           a.ad_name,
           a.ad_status,
           a.campaign_id,
-          a.ad_set_id,
+          a.ad_group_id as ad_set_id,
           a.creative_id,
           a.updated_at,
           COALESCE(SUM(m.impressions), 0) as impressions,
           COALESCE(SUM(m.clicks), 0) as clicks,
           COALESCE(SUM(m.spend_cents), 0) as spend_cents,
           COALESCE(SUM(m.conversions), 0) as conversions
-        FROM facebook_ads a
-        LEFT JOIN facebook_ad_daily_metrics m
-          ON a.id = m.ad_ref
+        FROM ads a
+        LEFT JOIN ad_metrics m
+          ON a.id = m.entity_ref
+          AND m.entity_type = 'ad'
           AND m.metric_date >= ?
           AND m.metric_date <= ?
-        WHERE a.organization_id = ?
+        WHERE a.organization_id = ? AND a.platform = 'facebook'
       `;
       const params: any[] = [startDate, endDate, orgId];
 
@@ -406,13 +410,16 @@ export class GetFacebookAds extends OpenAPIRoute {
       }
 
       if (query.query.ad_set_id) {
-        sql += ` AND a.ad_set_id = ?`;
+        // In unified tables, ad_set_id is stored as ad_group_id
+        sql += ` AND a.ad_group_id = ?`;
         params.push(query.query.ad_set_id);
       }
 
       if (query.query.status) {
+        // Map frontend status to unified status
+        const statusMap: Record<string, string> = { 'ACTIVE': 'active', 'PAUSED': 'paused', 'DELETED': 'deleted', 'ARCHIVED': 'archived' };
         sql += ` AND a.ad_status = ?`;
-        params.push(query.query.status);
+        params.push(statusMap[query.query.status] || query.query.status.toLowerCase());
       }
 
       sql += ` GROUP BY a.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
@@ -488,43 +495,48 @@ export class GetFacebookMetrics extends OpenAPIRoute {
     const { start_date, end_date, level, limit, offset } = query.query;
 
     try {
-      // Determine table based on level
-      const tableMap: Record<string, { table: string; refColumn: string; idFilter?: string }> = {
-        campaign: { table: 'facebook_campaign_daily_metrics', refColumn: 'campaign_ref' },
-        ad_set: { table: 'facebook_ad_set_daily_metrics', refColumn: 'ad_set_ref' },
-        ad: { table: 'facebook_ad_daily_metrics', refColumn: 'ad_ref' }
+      // Use unified tables with platform filter
+      // Map Facebook's "ad_set" level to unified "ad_group" entity type
+      const entityTypeMap: Record<string, string> = {
+        campaign: 'campaign',
+        ad_set: 'ad_group',  // Facebook ad_sets are unified ad_groups
+        ad: 'ad'
       };
+      const entityType = entityTypeMap[level];
 
-      const tableInfo = tableMap[level];
-
-      // Join with entity table to get name for display
-      const entityTableMap: Record<string, { table: string; nameColumn: string; idColumn: string }> = {
-        campaign: { table: 'facebook_campaigns', nameColumn: 'campaign_name', idColumn: 'id' },
-        ad_set: { table: 'facebook_ad_sets', nameColumn: 'ad_set_name', idColumn: 'id' },
-        ad: { table: 'facebook_ads', nameColumn: 'ad_name', idColumn: 'id' }
+      // Entity table mapping for unified tables
+      const entityTableMap: Record<string, { table: string; nameColumn: string }> = {
+        campaign: { table: 'ad_campaigns', nameColumn: 'campaign_name' },
+        ad_set: { table: 'ad_groups', nameColumn: 'ad_group_name' },
+        ad: { table: 'ads', nameColumn: 'ad_name' }
       };
       const entityInfo = entityTableMap[level];
 
       let sql = `
-        SELECT m.metric_date, m.${tableInfo.refColumn} as entity_ref,
+        SELECT m.metric_date, m.entity_ref,
                m.impressions, m.clicks, m.spend_cents, m.conversions,
                e.${entityInfo.nameColumn} as entity_name
-        FROM ${tableInfo.table} m
-        LEFT JOIN ${entityInfo.table} e ON m.${tableInfo.refColumn} = e.${entityInfo.idColumn}
+        FROM ad_metrics m
+        LEFT JOIN ${entityInfo.table} e ON m.entity_ref = e.id
         WHERE m.organization_id = ?
+          AND m.platform = 'facebook'
+          AND m.entity_type = ?
           AND m.metric_date >= ? AND m.metric_date <= ?
       `;
-      const params: any[] = [orgId, start_date, end_date];
+      const params: any[] = [orgId, entityType, start_date, end_date];
 
-      // Add entity filters
-      if (level === 'campaign' && query.query.campaign_id) {
-        sql += ` AND ${tableInfo.refColumn} = ?`;
+      // Add entity filters via joined entity table
+      if (query.query.campaign_id) {
+        sql += ` AND e.campaign_id = ?`;
         params.push(query.query.campaign_id);
-      } else if (level === 'ad_set' && query.query.ad_set_id) {
-        sql += ` AND ${tableInfo.refColumn} = ?`;
+      }
+      if (level === 'ad_set' && query.query.ad_set_id) {
+        // Filter by ad_group_id (unified equivalent of ad_set_id)
+        sql += ` AND e.ad_group_id = ?`;
         params.push(query.query.ad_set_id);
-      } else if (level === 'ad' && query.query.ad_id) {
-        sql += ` AND ${tableInfo.refColumn} = ?`;
+      }
+      if (level === 'ad' && query.query.ad_id) {
+        sql += ` AND e.ad_id = ?`;
         params.push(query.query.ad_id);
       }
 

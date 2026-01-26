@@ -40,6 +40,7 @@ export interface SerializedEntityTree {
   organizationId: string;
   accounts: Array<[string, SerializedEntity]>;
   totalEntities: number;
+  platforms: string[];  // Active platforms discovered
 }
 
 /**
@@ -120,7 +121,8 @@ export function serializeEntityTree(tree: EntityTree): SerializedEntityTree {
   return {
     organizationId: tree.organizationId,
     accounts: accountsArray,
-    totalEntities: tree.totalEntities
+    totalEntities: tree.totalEntities,
+    platforms: tree.platforms || []
   };
 }
 
@@ -137,7 +139,8 @@ export function deserializeEntityTree(serialized: SerializedEntityTree): EntityT
   return {
     organizationId: serialized.organizationId,
     accounts,
-    totalEntities: serialized.totalEntities
+    totalEntities: serialized.totalEntities,
+    platforms: serialized.platforms || []
   };
 }
 

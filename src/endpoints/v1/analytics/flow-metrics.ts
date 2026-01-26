@@ -301,44 +301,44 @@ Returns stage-by-stage metrics for the acquisition flow:
         let conversionValueCents = 0;
 
         try {
-          // Query based on connector type
+          // Query based on connector type (using unified ad_metrics table)
           if (connector === "google_ads") {
-            // Google Ads clicks
+            // Google Ads clicks from unified ad_metrics
             const result = await analyticsDb.prepare(`
               SELECT COALESCE(SUM(m.clicks), 0) as clicks
-              FROM google_campaigns c
-              LEFT JOIN google_campaign_daily_metrics m
-                ON c.id = m.campaign_ref
+              FROM ad_metrics m
+              WHERE m.organization_id = ?
+                AND m.platform = 'google'
+                AND m.entity_type = 'campaign'
                 AND m.metric_date >= ?
                 AND m.metric_date <= ?
-              WHERE c.organization_id = ?
-            `).bind(startDateStr, endDateStr, orgId).first() as { clicks: number } | null;
+            `).bind(orgId, startDateStr, endDateStr).first() as { clicks: number } | null;
             visitors = result?.clicks || 0;
             conversions = visitors; // For traffic stages, visitors = conversions
           } else if (connector === "facebook_ads") {
-            // Facebook Ads clicks
+            // Facebook Ads clicks from unified ad_metrics
             const result = await analyticsDb.prepare(`
               SELECT COALESCE(SUM(m.clicks), 0) as clicks
-              FROM facebook_campaigns c
-              LEFT JOIN facebook_campaign_daily_metrics m
-                ON c.id = m.campaign_ref
+              FROM ad_metrics m
+              WHERE m.organization_id = ?
+                AND m.platform = 'facebook'
+                AND m.entity_type = 'campaign'
                 AND m.metric_date >= ?
                 AND m.metric_date <= ?
-              WHERE c.organization_id = ?
-            `).bind(startDateStr, endDateStr, orgId).first() as { clicks: number } | null;
+            `).bind(orgId, startDateStr, endDateStr).first() as { clicks: number } | null;
             visitors = result?.clicks || 0;
             conversions = visitors;
           } else if (connector === "tiktok_ads") {
-            // TikTok Ads clicks
+            // TikTok Ads clicks from unified ad_metrics
             const result = await analyticsDb.prepare(`
               SELECT COALESCE(SUM(m.clicks), 0) as clicks
-              FROM tiktok_campaigns c
-              LEFT JOIN tiktok_campaign_daily_metrics m
-                ON c.id = m.campaign_ref
+              FROM ad_metrics m
+              WHERE m.organization_id = ?
+                AND m.platform = 'tiktok'
+                AND m.entity_type = 'campaign'
                 AND m.metric_date >= ?
                 AND m.metric_date <= ?
-              WHERE c.organization_id = ?
-            `).bind(startDateStr, endDateStr, orgId).first() as { clicks: number } | null;
+            `).bind(orgId, startDateStr, endDateStr).first() as { clicks: number } | null;
             visitors = result?.clicks || 0;
             conversions = visitors;
           } else if (connector === "stripe") {

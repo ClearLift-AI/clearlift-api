@@ -50,14 +50,13 @@ interface D1ExecResult {
 export const EXPLORATION_TOOLS = {
   query_metrics: {
     name: 'query_metrics',
-    description: 'Query performance metrics for a specific ad entity. Use this to investigate performance data before making recommendations.',
+    description: 'Query performance metrics for a specific ad entity. Use this to investigate performance data before making recommendations. Supports any ad platform that has data synced (google, facebook, tiktok, linkedin, etc.).',
     input_schema: {
       type: 'object' as const,
       properties: {
         platform: {
           type: 'string',
-          enum: ['facebook', 'google', 'tiktok'],
-          description: 'The ad platform'
+          description: 'The ad platform (google, facebook, tiktok, linkedin, microsoft, pinterest, snapchat, twitter, etc.)'
         },
         entity_type: {
           type: 'string',
@@ -90,14 +89,13 @@ export const EXPLORATION_TOOLS = {
 
   compare_entities: {
     name: 'compare_entities',
-    description: 'Compare performance metrics across multiple entities of the same type. Useful for identifying winners and losers.',
+    description: 'Compare performance metrics across multiple entities of the same type. Useful for identifying winners and losers. Supports any ad platform.',
     input_schema: {
       type: 'object' as const,
       properties: {
         platform: {
           type: 'string',
-          enum: ['facebook', 'google', 'tiktok'],
-          description: 'The ad platform'
+          description: 'The ad platform (google, facebook, tiktok, linkedin, microsoft, pinterest, snapchat, twitter, etc.)'
         },
         entity_type: {
           type: 'string',
@@ -128,14 +126,13 @@ export const EXPLORATION_TOOLS = {
 
   get_creative_details: {
     name: 'get_creative_details',
-    description: 'Get details about an ad creative including copy, media, and performance indicators.',
+    description: 'Get details about an ad creative including copy, media, and performance indicators. Supports any ad platform.',
     input_schema: {
       type: 'object' as const,
       properties: {
         platform: {
           type: 'string',
-          enum: ['facebook', 'google', 'tiktok'],
-          description: 'The ad platform'
+          description: 'The ad platform (google, facebook, tiktok, linkedin, microsoft, pinterest, snapchat, twitter, etc.)'
         },
         ad_id: {
           type: 'string',
@@ -148,14 +145,13 @@ export const EXPLORATION_TOOLS = {
 
   get_audience_breakdown: {
     name: 'get_audience_breakdown',
-    description: 'Get targeting/audience breakdown for an ad set or campaign. Shows age, gender, placement, device, or geo performance.',
+    description: 'Get targeting/audience breakdown for an ad set or campaign. Shows age, gender, placement, device, or geo performance. Supports any ad platform.',
     input_schema: {
       type: 'object' as const,
       properties: {
         platform: {
           type: 'string',
-          enum: ['facebook', 'google', 'tiktok'],
-          description: 'The ad platform'
+          description: 'The ad platform (google, facebook, tiktok, linkedin, microsoft, pinterest, snapchat, twitter, etc.)'
         },
         entity_type: {
           type: 'string',
@@ -489,6 +485,148 @@ export const EXPLORATION_TOOLS = {
       },
       required: ['days']
     }
+  },
+
+  // ========================================================================
+  // NEW TOOLS FOR UNIFIED DATA ACCESS
+  // Added as part of AI-to-unified-data wiring (Jan 2026)
+  // ========================================================================
+
+  query_events: {
+    name: 'query_events',
+    description: 'Query clickstream events from the ClearLift tag or tracking links. Get page views, goal completions, form submissions, and other tracked events. Essential for understanding user behavior and funnel progression.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        event_types: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Event types to query: page_view, goal_completed, form_submit, click, session_start, add_to_cart, checkout_started, purchase_completed, custom events'
+        },
+        days: {
+          type: 'number',
+          minimum: 1,
+          maximum: 90,
+          description: 'Number of days of historical data'
+        },
+        page_paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: Filter to specific page paths (supports wildcards like /blog/*)'
+        },
+        goal_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: Filter to specific conversion goal IDs'
+        },
+        group_by: {
+          type: 'string',
+          enum: ['day', 'event_type', 'page_path', 'source', 'utm_campaign'],
+          description: 'Optional: Group results by dimension'
+        },
+        include_sessions: {
+          type: 'boolean',
+          description: 'Include session-level aggregations (unique sessions, avg session duration)'
+        }
+      },
+      required: ['days']
+    }
+  },
+
+  query_crm_pipeline: {
+    name: 'query_crm_pipeline',
+    description: 'Query CRM deal/opportunity pipeline data. Shows deals by stage, value, and progression. Use this to understand sales pipeline health and connect ad spend to revenue.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days: {
+          type: 'number',
+          minimum: 1,
+          maximum: 180,
+          description: 'Number of days of historical data'
+        },
+        stages: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: Filter to specific pipeline stages'
+        },
+        status: {
+          type: 'string',
+          enum: ['all', 'open', 'won', 'lost'],
+          description: 'Optional: Filter by deal status'
+        },
+        min_value_cents: {
+          type: 'number',
+          description: 'Optional: Minimum deal value in cents'
+        },
+        include_attribution: {
+          type: 'boolean',
+          description: 'Include marketing attribution data (utm_source, first_touch_channel)'
+        },
+        group_by: {
+          type: 'string',
+          enum: ['day', 'stage', 'source', 'owner'],
+          description: 'Optional: Group results by dimension'
+        }
+      },
+      required: ['days']
+    }
+  },
+
+  query_unified_data: {
+    name: 'query_unified_data',
+    description: 'Query data from any connector type using unified tables. Supports ad platforms, revenue sources (Stripe/Shopify), CRM, and communication platforms. Use this for cross-connector analysis.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        connector_type: {
+          type: 'string',
+          enum: ['ad_platform', 'payments', 'ecommerce', 'crm', 'communication', 'field_service'],
+          description: 'Type of connector data to query'
+        },
+        platform: {
+          type: 'string',
+          description: 'Optional: Specific platform to filter (e.g., google, stripe, hubspot)'
+        },
+        days: {
+          type: 'number',
+          minimum: 1,
+          maximum: 90,
+          description: 'Number of days of historical data'
+        },
+        metrics: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Metrics to retrieve (depends on connector_type)'
+        },
+        group_by: {
+          type: 'string',
+          enum: ['day', 'platform', 'campaign', 'product', 'channel'],
+          description: 'Optional: Group results by dimension'
+        }
+      },
+      required: ['connector_type', 'days']
+    }
+  },
+
+  list_active_connectors: {
+    name: 'list_active_connectors',
+    description: 'List all active connectors for this organization. Shows which data sources are connected and have data available. Use this before querying specific platforms to know what data is available.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        connector_type: {
+          type: 'string',
+          enum: ['ad_platform', 'payments', 'ecommerce', 'crm', 'communication', 'field_service', 'all'],
+          description: 'Optional: Filter by connector type (default: all)'
+        },
+        include_data_stats: {
+          type: 'boolean',
+          description: 'Include basic data statistics (last sync, record counts)'
+        }
+      },
+      required: []
+    }
   }
 };
 
@@ -626,9 +764,45 @@ interface ComparePlatformVsVerifiedInput {
   include_link_breakdown?: boolean;
 }
 
+// ========================================================================
+// NEW INTERFACES FOR UNIFIED DATA ACCESS TOOLS
+// ========================================================================
+
+interface QueryEventsInput {
+  event_types?: string[];
+  days: number;
+  page_paths?: string[];
+  goal_ids?: string[];
+  group_by?: 'day' | 'event_type' | 'page_path' | 'source' | 'utm_campaign';
+  include_sessions?: boolean;
+}
+
+interface QueryCrmPipelineInput {
+  days: number;
+  stages?: string[];
+  status?: 'all' | 'open' | 'won' | 'lost';
+  min_value_cents?: number;
+  include_attribution?: boolean;
+  group_by?: 'day' | 'stage' | 'source' | 'owner';
+}
+
+interface QueryUnifiedDataInput {
+  connector_type: 'ad_platform' | 'payments' | 'ecommerce' | 'crm' | 'communication' | 'field_service';
+  platform?: string;
+  days: number;
+  metrics?: string[];
+  group_by?: 'day' | 'platform' | 'campaign' | 'product' | 'channel';
+}
+
+interface ListActiveConnectorsInput {
+  connector_type?: 'ad_platform' | 'payments' | 'ecommerce' | 'crm' | 'communication' | 'field_service' | 'all';
+  include_data_stats?: boolean;
+}
+
 /**
  * Exploration Tool Executor
  * Uses D1 ANALYTICS_DB for all queries
+ * UPDATED: Now supports unified tables and dynamic platform discovery
  */
 export class ExplorationToolExecutor {
   constructor(private db: D1Database) {}
@@ -672,6 +846,15 @@ export class ExplorationToolExecutor {
           return await this.queryConversionsByGoal(input as QueryConversionsByGoalInput, orgId);
         case 'compare_platform_vs_verified_conversions':
           return await this.comparePlatformVsVerified(input as ComparePlatformVsVerifiedInput, orgId);
+        // New unified data access tools
+        case 'query_events':
+          return await this.queryEvents(input as QueryEventsInput, orgId);
+        case 'query_crm_pipeline':
+          return await this.queryCrmPipeline(input as QueryCrmPipelineInput, orgId);
+        case 'query_unified_data':
+          return await this.queryUnifiedData(input as QueryUnifiedDataInput, orgId);
+        case 'list_active_connectors':
+          return await this.listActiveConnectors(input as ListActiveConnectorsInput, orgId);
         default:
           return { success: false, error: `Unknown exploration tool: ${toolName}` };
       }
@@ -689,11 +872,6 @@ export class ExplorationToolExecutor {
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     const { platform, entity_type, entity_id, metrics, days, include_verified_revenue } = input;
 
-    const tableInfo = this.getMetricsTableInfo(platform, entity_type);
-    if (!tableInfo) {
-      return { success: false, error: `Unsupported platform/entity for metrics: ${platform}/${entity_type}` };
-    }
-
     // Build date range
     const endDate = new Date();
     const startDate = new Date();
@@ -701,25 +879,60 @@ export class ExplorationToolExecutor {
     const startStr = startDate.toISOString().split('T')[0];
     const endStr = endDate.toISOString().split('T')[0];
 
-    // D1 SQL query
-    const sql = `
-      SELECT metric_date, spend_cents, impressions, clicks, conversions, conversion_value_cents
-      FROM ${tableInfo.table}
-      WHERE ${tableInfo.idColumn} = ? AND organization_id = ?
-        AND metric_date >= ? AND metric_date <= ?
-      ORDER BY metric_date ASC
-    `;
-
     try {
-      const result = await this.db.prepare(sql).bind(entity_id, orgId, startStr, endStr).all<{
+      // Try unified tables first (ad_metrics)
+      const hasUnified = await this.hasUnifiedData(orgId, platform);
+      let data: Array<{
         metric_date: string;
         spend_cents: number;
         impressions: number;
         clicks: number;
         conversions: number;
         conversion_value_cents: number;
-      }>();
-      const data = result.results || [];
+      }> = [];
+
+      if (hasUnified) {
+        // Use unified ad_metrics table
+        const { query, params } = this.buildUnifiedMetricsQuery(platform, entity_type, entity_id, days, orgId);
+        const result = await this.db.prepare(query).bind(...params).all<{
+          metric_date: string;
+          impressions: number;
+          clicks: number;
+          spend_cents: number;
+          conversions: number;
+          conversion_value_cents: number;
+          ctr: number;
+          cpc_cents: number;
+          cpm_cents: number;
+          extra_metrics: string | null;
+        }>();
+        data = result.results || [];
+      } else {
+        // Fall back to legacy platform-specific tables
+        const tableInfo = this.getMetricsTableInfo(platform, entity_type);
+        if (!tableInfo) {
+          return { success: false, error: `Unsupported platform/entity for metrics: ${platform}/${entity_type}` };
+        }
+
+        // D1 SQL query for legacy tables
+        const sql = `
+          SELECT metric_date, spend_cents, impressions, clicks, conversions, conversion_value_cents
+          FROM ${tableInfo.table}
+          WHERE ${tableInfo.idColumn} = ? AND organization_id = ?
+            AND metric_date >= ? AND metric_date <= ?
+          ORDER BY metric_date ASC
+        `;
+
+        const result = await this.db.prepare(sql).bind(entity_id, orgId, startStr, endStr).all<{
+          metric_date: string;
+          spend_cents: number;
+          impressions: number;
+          clicks: number;
+          conversions: number;
+          conversion_value_cents: number;
+        }>();
+        data = result.results || [];
+      }
 
       // Enrich with derived metrics
       const enrichedData = this.enrichMetrics(data || [], metrics);
@@ -2116,41 +2329,120 @@ export class ExplorationToolExecutor {
   // Helper methods
 
   /**
-   * Get METRICS table info (for queryMetrics, compareEntities)
-   * These tables have daily performance data with metric_date column
-   * Updated for D1 ANALYTICS_DB table naming
+   * Check if unified tables have data for this platform/org combination
+   * Used to determine whether to use unified or legacy tables
    */
-  private getMetricsTableInfo(platform: string, entityType: string): { table: string; idColumn: string } | null {
-    // D1 table names use platform prefix: {platform}_{entity}_daily_metrics
-    const tables: Record<string, Record<string, { table: string; idColumn: string }>> = {
-      facebook: {
-        ad: { table: 'facebook_ad_daily_metrics', idColumn: 'ad_ref' },
-        adset: { table: 'facebook_ad_set_daily_metrics', idColumn: 'ad_set_ref' },
-        campaign: { table: 'facebook_campaign_daily_metrics', idColumn: 'campaign_ref' }
-      },
-      google: {
-        ad: { table: 'google_ad_daily_metrics', idColumn: 'ad_ref' },
-        adset: { table: 'google_ad_group_daily_metrics', idColumn: 'ad_group_ref' },
-        campaign: { table: 'google_campaign_daily_metrics', idColumn: 'campaign_ref' }
-      },
-      tiktok: {
-        ad: { table: 'tiktok_ad_daily_metrics', idColumn: 'ad_ref' },
-        adset: { table: 'tiktok_ad_group_daily_metrics', idColumn: 'ad_group_ref' },
-        campaign: { table: 'tiktok_campaign_daily_metrics', idColumn: 'campaign_ref' }
+  private async hasUnifiedData(orgId: string, platform?: string): Promise<boolean> {
+    try {
+      let query = 'SELECT 1 FROM ad_metrics WHERE organization_id = ?';
+      const params: any[] = [orgId];
+
+      if (platform) {
+        query += ' AND platform = ?';
+        params.push(platform);
       }
+
+      query += ' LIMIT 1';
+
+      const result = await this.db.prepare(query).bind(...params).first();
+      return !!result;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Get METRICS table info (for queryMetrics, compareEntities)
+   * All platforms now use unified ad_metrics table (Jan 2026 migration complete)
+   */
+  private getMetricsTableInfo(platform: string, entityType: string): { table: string; idColumn: string; unified: boolean } | null {
+    // Map entity type to unified entity_type value
+    const validEntityTypes: Record<string, string> = {
+      ad: 'ad',
+      adset: 'ad_group',
+      campaign: 'campaign'
     };
 
-    return tables[platform]?.[entityType] || null;
+    // All platforms use unified ad_metrics table
+    if (validEntityTypes[entityType]) {
+      return {
+        table: 'ad_metrics',
+        idColumn: 'entity_ref',
+        unified: true
+      };
+    }
+
+    return null; // Invalid entity type
+  }
+
+  /**
+   * Build unified metrics query
+   * Queries ad_metrics table with platform and entity_type filters
+   */
+  private buildUnifiedMetricsQuery(
+    platform: string,
+    entityType: string,
+    entityId: string,
+    days: number,
+    orgId: string
+  ): { query: string; params: any[] } {
+    // Map our entity type to unified entity_type value
+    const unifiedEntityType: Record<string, string> = {
+      ad: 'ad',
+      adset: 'ad_group',
+      campaign: 'campaign'
+    };
+
+    const dateFrom = new Date();
+    dateFrom.setDate(dateFrom.getDate() - days);
+    const dateFromStr = dateFrom.toISOString().split('T')[0];
+
+    const query = `
+      SELECT
+        metric_date,
+        impressions,
+        clicks,
+        spend_cents,
+        conversions,
+        conversion_value_cents,
+        ctr,
+        cpc_cents,
+        cpm_cents,
+        extra_metrics
+      FROM ad_metrics
+      WHERE organization_id = ?
+        AND platform = ?
+        AND entity_type = ?
+        AND entity_ref = ?
+        AND metric_date >= ?
+      ORDER BY metric_date DESC
+    `;
+
+    return {
+      query,
+      params: [orgId, platform, unifiedEntityType[entityType] || entityType, entityId, dateFromStr]
+    };
   }
 
   /**
    * Get ENTITY table info (for getCreativeDetails, getAudienceBreakdown)
-   * These tables have entity metadata like name, status, targeting
-   * Updated for D1 ANALYTICS_DB table naming
+   * UPDATED: Now uses unified tables (ad_campaigns, ad_groups, ads) for all platforms
+   * Falls back to legacy platform-specific tables for backward compatibility
    */
-  private getEntityTableInfo(platform: string, entityType: string): { table: string; idColumn: string } | null {
-    // D1 table names use platform prefix: {platform}_{entity_type}s
-    const tables: Record<string, Record<string, { table: string; idColumn: string }>> = {
+  private getEntityTableInfo(platform: string, entityType: string): { table: string; idColumn: string; unified: boolean } | null {
+    // Unified tables
+    const unifiedTables: Record<string, { table: string; idColumn: string }> = {
+      ad: { table: 'ads', idColumn: 'ad_id' },
+      adset: { table: 'ad_groups', idColumn: 'ad_group_id' },
+      campaign: { table: 'ad_campaigns', idColumn: 'campaign_id' }
+    };
+
+    if (unifiedTables[entityType]) {
+      return { ...unifiedTables[entityType], unified: true };
+    }
+
+    // Legacy fallback
+    const legacyTables: Record<string, Record<string, { table: string; idColumn: string }>> = {
       facebook: {
         ad: { table: 'facebook_ads', idColumn: 'ad_id' },
         adset: { table: 'facebook_ad_sets', idColumn: 'ad_set_id' },
@@ -2171,7 +2463,40 @@ export class ExplorationToolExecutor {
       }
     };
 
-    return tables[platform]?.[entityType] || null;
+    const legacy = legacyTables[platform]?.[entityType];
+    return legacy ? { ...legacy, unified: false } : null;
+  }
+
+  /**
+   * Build unified entity query (for getCreativeDetails, etc.)
+   */
+  private buildUnifiedEntityQuery(
+    platform: string,
+    entityType: string,
+    entityId: string,
+    orgId: string
+  ): { query: string; params: any[] } | null {
+    const tableMap: Record<string, { table: string; idColumn: string }> = {
+      ad: { table: 'ads', idColumn: 'ad_id' },
+      adset: { table: 'ad_groups', idColumn: 'ad_group_id' },
+      campaign: { table: 'ad_campaigns', idColumn: 'campaign_id' }
+    };
+
+    const tableInfo = tableMap[entityType];
+    if (!tableInfo) return null;
+
+    const query = `
+      SELECT *
+      FROM ${tableInfo.table}
+      WHERE organization_id = ?
+        AND platform = ?
+        AND ${tableInfo.idColumn} = ?
+    `;
+
+    return {
+      query,
+      params: [orgId, platform, entityId]
+    };
   }
 
   private enrichMetrics(data: any[], requestedMetrics: string[]): any[] {
@@ -2585,5 +2910,647 @@ export class ExplorationToolExecutor {
     }
 
     return curve;
+  }
+
+  // ========================================================================
+  // NEW UNIFIED DATA ACCESS TOOLS
+  // Added as part of AI-to-unified-data wiring (Jan 2026)
+  // ========================================================================
+
+  /**
+   * Query clickstream events from D1
+   * Supports daily_metrics, goal_conversions, and hourly_metrics tables
+   */
+  private async queryEvents(
+    input: QueryEventsInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { event_types, days, page_paths, goal_ids, group_by, include_sessions } = input;
+
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startStr = startDate.toISOString().split('T')[0];
+
+    try {
+      const response: any = {
+        days,
+        filters: { event_types, page_paths, goal_ids }
+      };
+
+      // Query daily metrics for overall event counts
+      const dailyResult = await this.db.prepare(`
+        SELECT
+          metric_date,
+          SUM(total_visits) as page_views,
+          SUM(unique_visitors) as unique_visitors,
+          SUM(total_conversions) as conversions,
+          SUM(total_conversion_value) as conversion_value_cents
+        FROM daily_metrics
+        WHERE organization_id = ?
+          AND metric_date >= ?
+        GROUP BY metric_date
+        ORDER BY metric_date DESC
+      `).bind(orgId, startStr).all<{
+        metric_date: string;
+        page_views: number;
+        unique_visitors: number;
+        conversions: number;
+        conversion_value_cents: number;
+      }>();
+
+      response.daily_summary = dailyResult.results || [];
+
+      // Query goal conversions if looking for specific goals or conversions
+      if (goal_ids?.length || event_types?.includes('goal_completed')) {
+        let goalQuery = `
+          SELECT
+            gc.goal_id,
+            g.name as goal_name,
+            COUNT(*) as conversion_count,
+            SUM(gc.value_cents) as total_value_cents
+          FROM goal_conversions gc
+          LEFT JOIN conversion_goals g ON gc.goal_id = g.id
+          WHERE gc.organization_id = ?
+            AND gc.converted_at >= ?
+        `;
+        const params: any[] = [orgId, startStr + 'T00:00:00Z'];
+
+        if (goal_ids?.length) {
+          goalQuery += ` AND gc.goal_id IN (${goal_ids.map(() => '?').join(',')})`;
+          params.push(...goal_ids);
+        }
+
+        goalQuery += ' GROUP BY gc.goal_id, g.name';
+
+        const goalResult = await this.db.prepare(goalQuery).bind(...params).all<{
+          goal_id: string;
+          goal_name: string | null;
+          conversion_count: number;
+          total_value_cents: number | null;
+        }>();
+
+        response.goal_conversions = (goalResult.results || []).map(r => ({
+          goal_id: r.goal_id,
+          goal_name: r.goal_name,
+          conversions: r.conversion_count,
+          value: r.total_value_cents ? '$' + (r.total_value_cents / 100).toFixed(2) : '$0.00'
+        }));
+      }
+
+      // Include session data if requested
+      if (include_sessions) {
+        const sessionResult = await this.db.prepare(`
+          SELECT
+            COUNT(DISTINCT session_id) as total_sessions,
+            SUM(total_visits) as total_page_views,
+            ROUND(AVG(total_visits * 1.0 / NULLIF(unique_visitors, 0)), 2) as avg_pages_per_visitor
+          FROM daily_metrics
+          WHERE organization_id = ?
+            AND metric_date >= ?
+        `).bind(orgId, startStr).first<{
+          total_sessions: number;
+          total_page_views: number;
+          avg_pages_per_visitor: number | null;
+        }>();
+
+        response.session_stats = sessionResult || { total_sessions: 0, total_page_views: 0, avg_pages_per_visitor: null };
+      }
+
+      // Calculate summary
+      const daily = response.daily_summary || [];
+      response.summary = {
+        total_page_views: daily.reduce((sum: number, d: any) => sum + (d.page_views || 0), 0),
+        total_unique_visitors: daily.reduce((sum: number, d: any) => sum + (d.unique_visitors || 0), 0),
+        total_conversions: daily.reduce((sum: number, d: any) => sum + (d.conversions || 0), 0),
+        total_conversion_value: '$' + (daily.reduce((sum: number, d: any) => sum + (d.conversion_value_cents || 0), 0) / 100).toFixed(2),
+        days_with_data: daily.length
+      };
+
+      return { success: true, data: response };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+    }
+  }
+
+  /**
+   * Query CRM pipeline data from unified tables
+   * Uses crm_deals table for deal/opportunity data
+   */
+  private async queryCrmPipeline(
+    input: QueryCrmPipelineInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { days, stages, status, min_value_cents, include_attribution, group_by } = input;
+
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startStr = startDate.toISOString().split('T')[0];
+
+    try {
+      // Build dynamic query
+      let query = `
+        SELECT
+          id,
+          platform,
+          deal_id,
+          deal_name,
+          stage,
+          status,
+          value_cents,
+          owner_name,
+          source,
+          utm_source,
+          utm_campaign,
+          created_at,
+          closed_at
+        FROM crm_deals
+        WHERE organization_id = ?
+          AND created_at >= ?
+      `;
+      const params: any[] = [orgId, startStr + 'T00:00:00Z'];
+
+      if (stages?.length) {
+        query += ` AND stage IN (${stages.map(() => '?').join(',')})`;
+        params.push(...stages);
+      }
+
+      if (status && status !== 'all') {
+        query += ' AND status = ?';
+        params.push(status);
+      }
+
+      if (min_value_cents) {
+        query += ' AND value_cents >= ?';
+        params.push(min_value_cents);
+      }
+
+      query += ' ORDER BY created_at DESC LIMIT 500';
+
+      const result = await this.db.prepare(query).bind(...params).all<{
+        id: string;
+        platform: string;
+        deal_id: string;
+        deal_name: string | null;
+        stage: string;
+        status: string;
+        value_cents: number | null;
+        owner_name: string | null;
+        source: string | null;
+        utm_source: string | null;
+        utm_campaign: string | null;
+        created_at: string;
+        closed_at: string | null;
+      }>();
+
+      const deals = result.results || [];
+
+      // Calculate pipeline summary
+      const summary = {
+        total_deals: deals.length,
+        total_value: '$' + (deals.reduce((sum, d) => sum + (d.value_cents || 0), 0) / 100).toFixed(2),
+        won_deals: deals.filter(d => d.status === 'won').length,
+        won_value: '$' + (deals.filter(d => d.status === 'won').reduce((sum, d) => sum + (d.value_cents || 0), 0) / 100).toFixed(2),
+        lost_deals: deals.filter(d => d.status === 'lost').length,
+        open_deals: deals.filter(d => d.status === 'open').length
+      };
+
+      // Group by dimension if requested
+      let grouped: any = null;
+      if (group_by) {
+        const groups = new Map<string, { count: number; value_cents: number }>();
+
+        for (const deal of deals) {
+          let key: string;
+          switch (group_by) {
+            case 'day':
+              key = deal.created_at.split('T')[0];
+              break;
+            case 'stage':
+              key = deal.stage || 'unknown';
+              break;
+            case 'source':
+              key = deal.source || deal.utm_source || 'unknown';
+              break;
+            case 'owner':
+              key = deal.owner_name || 'unassigned';
+              break;
+            default:
+              key = 'all';
+          }
+
+          if (!groups.has(key)) {
+            groups.set(key, { count: 0, value_cents: 0 });
+          }
+          const entry = groups.get(key)!;
+          entry.count += 1;
+          entry.value_cents += deal.value_cents || 0;
+        }
+
+        grouped = Array.from(groups.entries()).map(([key, data]) => ({
+          [group_by]: key,
+          deals: data.count,
+          value: '$' + (data.value_cents / 100).toFixed(2)
+        }));
+      }
+
+      // Build response
+      const response: any = {
+        days,
+        filters: { stages, status, min_value_cents },
+        summary,
+        deals: deals.slice(0, 50).map(d => ({
+          deal_id: d.deal_id,
+          name: d.deal_name,
+          stage: d.stage,
+          status: d.status,
+          value: d.value_cents ? '$' + (d.value_cents / 100).toFixed(2) : null,
+          owner: d.owner_name,
+          created_at: d.created_at,
+          ...(include_attribution ? {
+            source: d.source,
+            utm_source: d.utm_source,
+            utm_campaign: d.utm_campaign
+          } : {})
+        }))
+      };
+
+      if (grouped) {
+        response.grouped = grouped;
+      }
+
+      return { success: true, data: response };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+    }
+  }
+
+  /**
+   * Query unified data from any connector type
+   * Supports ad_platform, payments, ecommerce, crm, etc.
+   */
+  private async queryUnifiedData(
+    input: QueryUnifiedDataInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { connector_type, platform, days, metrics, group_by } = input;
+
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startStr = startDate.toISOString().split('T')[0];
+
+    try {
+      let response: any = {
+        connector_type,
+        platform: platform || 'all',
+        days
+      };
+
+      switch (connector_type) {
+        case 'ad_platform': {
+          // Query unified ad_metrics table
+          let query = `
+            SELECT
+              platform,
+              SUM(impressions) as impressions,
+              SUM(clicks) as clicks,
+              SUM(spend_cents) as spend_cents,
+              SUM(conversions) as conversions,
+              SUM(conversion_value_cents) as conversion_value_cents
+            FROM ad_metrics
+            WHERE organization_id = ?
+              AND metric_date >= ?
+          `;
+          const params: any[] = [orgId, startStr];
+
+          if (platform) {
+            query += ' AND platform = ?';
+            params.push(platform);
+          }
+
+          query += ' GROUP BY platform';
+
+          const result = await this.db.prepare(query).bind(...params).all<{
+            platform: string;
+            impressions: number;
+            clicks: number;
+            spend_cents: number;
+            conversions: number;
+            conversion_value_cents: number;
+          }>();
+
+          response.platforms = (result.results || []).map(r => ({
+            platform: r.platform,
+            impressions: r.impressions,
+            clicks: r.clicks,
+            spend: '$' + (r.spend_cents / 100).toFixed(2),
+            conversions: r.conversions,
+            conversion_value: '$' + (r.conversion_value_cents / 100).toFixed(2),
+            ctr: r.impressions > 0 ? ((r.clicks / r.impressions) * 100).toFixed(2) + '%' : '0%',
+            cpc: r.clicks > 0 ? '$' + ((r.spend_cents / 100) / r.clicks).toFixed(2) : '$0'
+          }));
+          break;
+        }
+
+        case 'payments':
+        case 'ecommerce': {
+          // Query conversions table for revenue data
+          let query = `
+            SELECT
+              source,
+              COUNT(*) as count,
+              SUM(value_cents) as total_cents
+            FROM conversions
+            WHERE organization_id = ?
+              AND created_at >= ?
+          `;
+          const params: any[] = [orgId, startStr + 'T00:00:00Z'];
+
+          if (platform) {
+            query += ' AND source = ?';
+            params.push(platform);
+          }
+
+          query += ' GROUP BY source';
+
+          const result = await this.db.prepare(query).bind(...params).all<{
+            source: string;
+            count: number;
+            total_cents: number | null;
+          }>();
+
+          response.sources = (result.results || []).map(r => ({
+            source: r.source,
+            conversions: r.count,
+            revenue: '$' + ((r.total_cents || 0) / 100).toFixed(2)
+          }));
+          break;
+        }
+
+        case 'crm': {
+          // Query crm_deals table
+          let query = `
+            SELECT
+              platform,
+              COUNT(*) as deals,
+              SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) as won,
+              SUM(value_cents) as total_value_cents
+            FROM crm_deals
+            WHERE organization_id = ?
+              AND created_at >= ?
+          `;
+          const params: any[] = [orgId, startStr + 'T00:00:00Z'];
+
+          if (platform) {
+            query += ' AND platform = ?';
+            params.push(platform);
+          }
+
+          query += ' GROUP BY platform';
+
+          const result = await this.db.prepare(query).bind(...params).all<{
+            platform: string;
+            deals: number;
+            won: number;
+            total_value_cents: number | null;
+          }>();
+
+          response.platforms = (result.results || []).map(r => ({
+            platform: r.platform,
+            total_deals: r.deals,
+            won_deals: r.won,
+            total_value: '$' + ((r.total_value_cents || 0) / 100).toFixed(2),
+            win_rate: r.deals > 0 ? ((r.won / r.deals) * 100).toFixed(0) + '%' : '0%'
+          }));
+          break;
+        }
+
+        case 'communication': {
+          // Query comm_campaigns table if it exists
+          let query = `
+            SELECT
+              platform,
+              COUNT(*) as campaigns,
+              SUM(sent_count) as total_sent,
+              SUM(open_count) as total_opens,
+              SUM(click_count) as total_clicks
+            FROM comm_campaigns
+            WHERE organization_id = ?
+              AND sent_at >= ?
+          `;
+          const params: any[] = [orgId, startStr + 'T00:00:00Z'];
+
+          if (platform) {
+            query += ' AND platform = ?';
+            params.push(platform);
+          }
+
+          query += ' GROUP BY platform';
+
+          try {
+            const result = await this.db.prepare(query).bind(...params).all<{
+              platform: string;
+              campaigns: number;
+              total_sent: number | null;
+              total_opens: number | null;
+              total_clicks: number | null;
+            }>();
+
+            response.platforms = (result.results || []).map(r => ({
+              platform: r.platform,
+              campaigns: r.campaigns,
+              sent: r.total_sent || 0,
+              opens: r.total_opens || 0,
+              clicks: r.total_clicks || 0,
+              open_rate: r.total_sent ? ((r.total_opens || 0) / r.total_sent * 100).toFixed(1) + '%' : '0%'
+            }));
+          } catch {
+            response.platforms = [];
+            response.note = 'No communication campaign data available';
+          }
+          break;
+        }
+
+        case 'field_service': {
+          // Query field service jobs (Jobber)
+          let query = `
+            SELECT
+              COUNT(*) as jobs,
+              SUM(total_price_cents) as revenue_cents,
+              COUNT(DISTINCT customer_id) as customers
+            FROM field_service_jobs
+            WHERE organization_id = ?
+              AND job_date >= ?
+          `;
+          const params: any[] = [orgId, startStr];
+
+          if (platform) {
+            query += ' AND platform = ?';
+            params.push(platform);
+          }
+
+          try {
+            const result = await this.db.prepare(query).bind(...params).first<{
+              jobs: number;
+              revenue_cents: number | null;
+              customers: number;
+            }>();
+
+            response.summary = {
+              jobs: result?.jobs || 0,
+              revenue: '$' + ((result?.revenue_cents || 0) / 100).toFixed(2),
+              unique_customers: result?.customers || 0
+            };
+          } catch {
+            response.summary = { jobs: 0, revenue: '$0.00', unique_customers: 0 };
+            response.note = 'No field service data available';
+          }
+          break;
+        }
+
+        default:
+          return { success: false, error: `Unsupported connector type: ${connector_type}` };
+      }
+
+      return { success: true, data: response };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+    }
+  }
+
+  /**
+   * List active connectors for an organization
+   * Returns which data sources have data available
+   */
+  private async listActiveConnectors(
+    input: ListActiveConnectorsInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { connector_type, include_data_stats } = input;
+
+    try {
+      const connectors: Array<{
+        type: string;
+        platform: string;
+        has_data: boolean;
+        record_count?: number;
+        last_sync?: string;
+      }> = [];
+
+      // Check ad platforms (unified tables)
+      if (!connector_type || connector_type === 'all' || connector_type === 'ad_platform') {
+        const adResult = await this.db.prepare(`
+          SELECT platform, COUNT(*) as count, MAX(last_synced_at) as last_sync
+          FROM ad_campaigns
+          WHERE organization_id = ?
+          GROUP BY platform
+        `).bind(orgId).all<{ platform: string; count: number; last_sync: string | null }>();
+
+        for (const r of adResult.results || []) {
+          connectors.push({
+            type: 'ad_platform',
+            platform: r.platform,
+            has_data: r.count > 0,
+            ...(include_data_stats ? { record_count: r.count, last_sync: r.last_sync || undefined } : {})
+          });
+        }
+
+        // Also check legacy tables for backward compatibility
+        const legacyPlatforms = ['google', 'facebook', 'tiktok'];
+        const legacyTables = ['google_campaigns', 'facebook_campaigns', 'tiktok_campaigns'];
+
+        for (let i = 0; i < legacyPlatforms.length; i++) {
+          const exists = connectors.some(c => c.platform === legacyPlatforms[i]);
+          if (!exists) {
+            try {
+              const check = await this.db.prepare(`
+                SELECT COUNT(*) as count FROM ${legacyTables[i]} WHERE organization_id = ?
+              `).bind(orgId).first<{ count: number }>();
+
+              if (check && check.count > 0) {
+                connectors.push({
+                  type: 'ad_platform',
+                  platform: legacyPlatforms[i],
+                  has_data: true,
+                  ...(include_data_stats ? { record_count: check.count } : {})
+                });
+              }
+            } catch {
+              // Table doesn't exist, skip
+            }
+          }
+        }
+      }
+
+      // Check revenue sources
+      if (!connector_type || connector_type === 'all' || connector_type === 'payments' || connector_type === 'ecommerce') {
+        const revenueResult = await this.db.prepare(`
+          SELECT source, COUNT(*) as count, MAX(created_at) as last_sync
+          FROM conversions
+          WHERE organization_id = ?
+          GROUP BY source
+        `).bind(orgId).all<{ source: string; count: number; last_sync: string | null }>();
+
+        for (const r of revenueResult.results || []) {
+          connectors.push({
+            type: ['shopify'].includes(r.source) ? 'ecommerce' : 'payments',
+            platform: r.source,
+            has_data: r.count > 0,
+            ...(include_data_stats ? { record_count: r.count, last_sync: r.last_sync || undefined } : {})
+          });
+        }
+      }
+
+      // Check CRM
+      if (!connector_type || connector_type === 'all' || connector_type === 'crm') {
+        try {
+          const crmResult = await this.db.prepare(`
+            SELECT platform, COUNT(*) as count, MAX(created_at) as last_sync
+            FROM crm_deals
+            WHERE organization_id = ?
+            GROUP BY platform
+          `).bind(orgId).all<{ platform: string; count: number; last_sync: string | null }>();
+
+          for (const r of crmResult.results || []) {
+            connectors.push({
+              type: 'crm',
+              platform: r.platform,
+              has_data: r.count > 0,
+              ...(include_data_stats ? { record_count: r.count, last_sync: r.last_sync || undefined } : {})
+            });
+          }
+        } catch {
+          // CRM table doesn't exist yet
+        }
+      }
+
+      // Check events/tag
+      if (!connector_type || connector_type === 'all') {
+        const eventsResult = await this.db.prepare(`
+          SELECT COUNT(*) as count, MAX(metric_date) as last_date
+          FROM daily_metrics
+          WHERE organization_id = ?
+        `).bind(orgId).first<{ count: number; last_date: string | null }>();
+
+        if (eventsResult && eventsResult.count > 0) {
+          connectors.push({
+            type: 'events',
+            platform: 'clearlift_tag',
+            has_data: true,
+            ...(include_data_stats ? { record_count: eventsResult.count, last_sync: eventsResult.last_date || undefined } : {})
+          });
+        }
+      }
+
+      return {
+        success: true,
+        data: {
+          organization_id: orgId,
+          total_connectors: connectors.length,
+          connectors: connectors.sort((a, b) => a.type.localeCompare(b.type))
+        }
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+    }
   }
 }

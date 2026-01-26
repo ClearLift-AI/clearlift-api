@@ -1167,65 +1167,40 @@ RESULT:
   // ═══════════════════════════════════════════════════════════════════════
 
   private async getPortfolioMetrics(entityType: EntityLevel): Promise<EntityMetrics[]> {
-    const tableMap: Record<EntityLevel, { tables: string[]; idCol: string; nameCol: string }> = {
-      campaign: {
-        tables: ['facebook_campaign_daily_metrics', 'google_campaign_daily_metrics', 'tiktok_campaign_daily_metrics'],
-        idCol: 'campaign_ref',
-        nameCol: 'campaign_ref' // Will need to join with campaigns table for name
-      },
-      ad_set: {
-        tables: ['facebook_ad_set_daily_metrics'],
-        idCol: 'ad_set_ref',
-        nameCol: 'ad_set_ref'
-      },
-      ad_group: {
-        tables: ['google_ad_group_daily_metrics'],
-        idCol: 'ad_group_ref',
-        nameCol: 'ad_group_ref'
-      },
-      ad: {
-        tables: ['facebook_ad_daily_metrics', 'google_ad_daily_metrics'],
-        idCol: 'ad_ref',
-        nameCol: 'ad_ref'
-      }
+    // Map entity level to unified ad_metrics entity_type
+    const entityTypeMap: Record<EntityLevel, string> = {
+      campaign: 'campaign',
+      ad_set: 'ad_group',    // Facebook ad_sets are unified as ad_groups
+      ad_group: 'ad_group',
+      ad: 'ad'
     };
 
-    const config = tableMap[entityType] || tableMap.campaign;
+    const unifiedEntityType = entityTypeMap[entityType] || 'campaign';
 
-    // Build UNION query across platform-specific tables
-    const unionParts = config.tables.map((table, i) => {
-      const platform = table.includes('facebook') ? 'facebook'
-        : table.includes('google') ? 'google'
-        : 'tiktok';
-
-      return `
-        SELECT
-          ${config.idCol} as id,
-          ${config.idCol} as name,
-          '${platform}' as platform,
-          '${entityType}' as entity_type,
-          SUM(spend_cents) as spend_cents,
-          SUM(conversions) as conversions,
-          SUM(impressions) as impressions,
-          SUM(clicks) as clicks,
-          CASE WHEN SUM(impressions) > 0 THEN CAST(SUM(clicks) AS REAL) / SUM(impressions) ELSE 0 END as ctr,
-          CASE WHEN SUM(clicks) > 0 THEN SUM(spend_cents) / SUM(clicks) ELSE 0 END as cpc_cents
-        FROM ${table}
-        WHERE organization_id = ?${i + 1}
-          AND metric_date >= date('now', '-7 days')
-          AND spend_cents > 0
-        GROUP BY ${config.idCol}
-        HAVING conversions > 0
-      `;
-    });
-
-    const query = unionParts.join(' UNION ALL ');
-
-    // Bind org_id for each table
-    const bindings = config.tables.map(() => this.orgId);
+    // Query unified ad_metrics table for all platforms
+    const query = `
+      SELECT
+        entity_ref as id,
+        entity_ref as name,
+        platform,
+        '${entityType}' as entity_type,
+        SUM(spend_cents) as spend_cents,
+        SUM(conversions) as conversions,
+        SUM(impressions) as impressions,
+        SUM(clicks) as clicks,
+        CASE WHEN SUM(impressions) > 0 THEN CAST(SUM(clicks) AS REAL) / SUM(impressions) ELSE 0 END as ctr,
+        CASE WHEN SUM(clicks) > 0 THEN SUM(spend_cents) / SUM(clicks) ELSE 0 END as cpc_cents
+      FROM ad_metrics
+      WHERE organization_id = ?
+        AND entity_type = '${unifiedEntityType}'
+        AND metric_date >= date('now', '-7 days')
+        AND spend_cents > 0
+      GROUP BY entity_ref, platform
+      HAVING conversions > 0
+    `;
 
     try {
-      const result = await this.analyticsDb.prepare(query).bind(...bindings).all();
+      const result = await this.analyticsDb.prepare(query).bind(this.orgId).all();
       return (result.results || []) as EntityMetrics[];
     } catch (err) {
       console.error('Error fetching portfolio metrics:', err);
@@ -1234,46 +1209,32 @@ RESULT:
   }
 
   private async getEntityHistory(entityId: string, days: number, entityType: EntityLevel): Promise<HistoricalDataPoint[]> {
-    const tableMap: Record<EntityLevel, { tables: string[]; idCol: string }> = {
-      campaign: {
-        tables: ['facebook_campaign_daily_metrics', 'google_campaign_daily_metrics', 'tiktok_campaign_daily_metrics'],
-        idCol: 'campaign_ref'
-      },
-      ad_set: {
-        tables: ['facebook_ad_set_daily_metrics'],
-        idCol: 'ad_set_ref'
-      },
-      ad_group: {
-        tables: ['google_ad_group_daily_metrics'],
-        idCol: 'ad_group_ref'
-      },
-      ad: {
-        tables: ['facebook_ad_daily_metrics', 'google_ad_daily_metrics'],
-        idCol: 'ad_ref'
-      }
+    // Map entity level to unified ad_metrics entity_type
+    const entityTypeMap: Record<EntityLevel, string> = {
+      campaign: 'campaign',
+      ad_set: 'ad_group',    // Facebook ad_sets are unified as ad_groups
+      ad_group: 'ad_group',
+      ad: 'ad'
     };
 
-    const config = tableMap[entityType] || tableMap.campaign;
+    const unifiedEntityType = entityTypeMap[entityType] || 'campaign';
 
-    const unionParts = config.tables.map((table, i) => `
+    // Query unified ad_metrics table for entity history
+    const query = `
       SELECT metric_date as date, spend_cents, conversions
-      FROM ${table}
-      WHERE organization_id = ?${i * 3 + 1}
-        AND ${config.idCol} = ?${i * 3 + 2}
-        AND metric_date >= date('now', '-' || ?${i * 3 + 3} || ' days')
+      FROM ad_metrics
+      WHERE organization_id = ?
+        AND entity_ref = ?
+        AND entity_type = ?
+        AND metric_date >= date('now', '-' || ? || ' days')
         AND spend_cents > 0
-    `);
-
-    const query = unionParts.join(' UNION ALL ') + ' ORDER BY date ASC';
-
-    // Bind for each table
-    const bindings: (string | number)[] = [];
-    config.tables.forEach(() => {
-      bindings.push(this.orgId, entityId, days);
-    });
+      ORDER BY date ASC
+    `;
 
     try {
-      const result = await this.analyticsDb.prepare(query).bind(...bindings).all();
+      const result = await this.analyticsDb.prepare(query)
+        .bind(this.orgId, entityId, unifiedEntityType, days)
+        .all();
       return (result.results || []) as HistoricalDataPoint[];
     } catch (err) {
       console.error('Error fetching entity history:', err);

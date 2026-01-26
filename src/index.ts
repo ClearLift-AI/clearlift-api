@@ -156,6 +156,14 @@ import {
 } from "./endpoints/v1/connectors";
 import { GetSyncStatus, GetSyncJobStatus } from "./endpoints/v1/connectors/syncStatus";
 import {
+  ListConnectorRegistry,
+  GetConnectorFromRegistry,
+  GetConnectorEvents,
+  GetPlatformIds,
+  AdminCreateConnector,
+  AdminUpdateConnector
+} from "./endpoints/v1/connectors/registry";
+import {
   ConnectStripe,
   UpdateStripeConfig,
   TriggerStripeSync,
@@ -564,6 +572,16 @@ openapi.post("/v1/onboarding/start", auth, StartOnboarding);
 openapi.post("/v1/onboarding/complete-step", auth, CompleteOnboardingStep);
 openapi.post("/v1/onboarding/reset", auth, ResetOnboarding);
 
+// Connector Registry endpoints (public - no auth required for reading)
+openapi.get("/v1/connectors/registry", ListConnectorRegistry);
+openapi.get("/v1/connectors/registry/types/:type/platform-ids", GetPlatformIds);
+openapi.get("/v1/connectors/registry/:provider", GetConnectorFromRegistry);
+openapi.get("/v1/connectors/registry/:provider/events", GetConnectorEvents);
+
+// Admin Connector Registry endpoints
+openapi.post("/v1/admin/connectors/registry", auth, AdminCreateConnector);
+openapi.patch("/v1/admin/connectors/registry/:provider", auth, AdminUpdateConnector);
+
 // Connector endpoints
 openapi.get("/v1/connectors", auth, ListConnectors);
 openapi.get("/v1/connectors/connected", auth, ListConnectedPlatforms);
@@ -870,20 +888,17 @@ export default {
     }
   },
 
-  // Backfill CAC history for all organizations from platform-specific campaign metrics
+  // Backfill CAC history for all organizations from unified ad_metrics table
   async backfillCACHistoryForAllOrgs(env: Env): Promise<void> {
     const DAYS_TO_BACKFILL = 30;
 
     try {
-      // Get all unique org IDs from platform metrics tables (union across all platforms)
+      // Get all unique org IDs from unified ad_metrics table
       const orgsResult = await env.ANALYTICS_DB.prepare(`
-        SELECT DISTINCT organization_id FROM (
-          SELECT organization_id FROM facebook_campaign_daily_metrics WHERE metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
-          UNION
-          SELECT organization_id FROM google_campaign_daily_metrics WHERE metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
-          UNION
-          SELECT organization_id FROM tiktok_campaign_daily_metrics WHERE metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
-        )
+        SELECT DISTINCT organization_id
+        FROM ad_metrics
+        WHERE entity_type = 'campaign'
+          AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
       `).all<{ organization_id: string }>();
 
       const orgs = orgsResult.results || [];
@@ -893,25 +908,19 @@ export default {
 
       for (const org of orgs) {
         try {
-          // Query daily spend and conversions across all platforms for this org
+          // Query daily spend and conversions from unified ad_metrics for this org
           const metricsResult = await env.ANALYTICS_DB.prepare(`
             SELECT
               metric_date as date,
               SUM(spend_cents) as spend_cents,
               SUM(conversions) as conversions
-            FROM (
-              SELECT metric_date, spend_cents, conversions FROM facebook_campaign_daily_metrics
-              WHERE organization_id = ? AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
-              UNION ALL
-              SELECT metric_date, spend_cents, conversions FROM google_campaign_daily_metrics
-              WHERE organization_id = ? AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
-              UNION ALL
-              SELECT metric_date, spend_cents, conversions FROM tiktok_campaign_daily_metrics
-              WHERE organization_id = ? AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
-            )
+            FROM ad_metrics
+            WHERE organization_id = ?
+              AND entity_type = 'campaign'
+              AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
             GROUP BY metric_date
             ORDER BY metric_date ASC
-          `).bind(org.organization_id, org.organization_id, org.organization_id).all<{
+          `).bind(org.organization_id).all<{
             date: string;
             spend_cents: number;
             conversions: number;

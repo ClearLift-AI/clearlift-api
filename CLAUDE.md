@@ -66,8 +66,26 @@ A third D1 database for pre-aggregated analytics (sub-millisecond queries):
 | 0033 | Social | `social_profiles`, `_posts`, `_followers`, `_engagements`, `_metrics` | 🔧 Stubbed |
 
 **Status Legend:**
-- ✅ **Implemented**: Schema + D1UnifiedService methods + DataWriter methods + dual-write active
+- ✅ **Implemented**: Schema + service methods + connectors writing to unified tables (unified-only, no legacy writes)
 - 🔧 **Stubbed**: Schema + D1UnifiedService methods + types defined, no connectors using them yet
+
+**Migration Status (Jan 2026):** Ad platforms (Google, Facebook, TikTok) fully migrated - all writes and reads use unified tables only.
+
+**API files migrated to unified `ad_metrics`:**
+- `src/services/d1-analytics.ts` - `getGoogleCampaignMetrics()` and all platform methods
+- `src/endpoints/v1/analytics/platforms.ts` - Cross-platform time series
+- `src/endpoints/v1/analytics/cac-timeline.ts` - CAC backfill queries
+- `src/endpoints/v1/analytics/flow-metrics.ts` - Flow stage metrics
+- `src/workflows/analysis-workflow.ts` - CAC calculation
+- `src/workflows/attribution-workflow.ts` - Click attribution
+- `src/services/analysis/metrics-fetcher.ts` - AI metrics fetching
+- `src/services/analysis/simulation-service.ts` - Budget simulation
+- `src/services/analysis/exploration-tools.ts` - AI exploration
+- `src/index.ts` - CAC history backfill cron
+
+**Deprecated tables (legacy daily metrics - no longer written or read):**
+- `google_campaign_daily_metrics`, `facebook_campaign_daily_metrics`, `tiktok_campaign_daily_metrics`
+- `*_ad_group_daily_metrics`, `*_ad_set_daily_metrics`, `*_ad_daily_metrics`
 
 The unified tables use a `platform`/`source_platform` column to distinguish source and `platform_fields`/`properties` JSON for platform-specific data.
 

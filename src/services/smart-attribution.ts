@@ -345,22 +345,26 @@ export class SmartAttributionService {
   ): Promise<PlatformMetrics[]> {
     const results: PlatformMetrics[] = [];
 
-    // Query Google Ads
+    // Query all ad platforms from unified tables in a single query
     try {
-      const googleResult = await this.analyticsDb.prepare(`
+      const platformResults = await this.analyticsDb.prepare(`
         SELECT
+          c.platform,
           COALESCE(SUM(m.spend_cents), 0) / 100.0 as spend,
           COALESCE(SUM(m.impressions), 0) as impressions,
           COALESCE(SUM(m.clicks), 0) as clicks,
           COALESCE(SUM(m.conversions), 0) as conversions,
           COALESCE(SUM(m.conversion_value_cents), 0) / 100.0 as revenue
-        FROM google_campaigns c
-        LEFT JOIN google_campaign_daily_metrics m
+        FROM ad_campaigns c
+        LEFT JOIN ad_metrics m
           ON c.id = m.campaign_ref
+          AND m.entity_type = 'campaign'
           AND m.metric_date >= ?
           AND m.metric_date <= ?
         WHERE c.organization_id = ?
-      `).bind(startDate, endDate, orgId).first<{
+        GROUP BY c.platform
+      `).bind(startDate, endDate, orgId).all<{
+        platform: string;
         spend: number;
         impressions: number;
         clicks: number;
@@ -368,92 +372,20 @@ export class SmartAttributionService {
         revenue: number;
       }>();
 
-      if (googleResult && (googleResult.spend > 0 || googleResult.conversions > 0)) {
-        results.push({
-          platform: 'google',
-          spend: googleResult.spend || 0,
-          impressions: googleResult.impressions || 0,
-          clicks: googleResult.clicks || 0,
-          conversions: googleResult.conversions || 0,
-          revenue: googleResult.revenue || 0,
-        });
+      for (const row of platformResults.results) {
+        if (row.spend > 0 || row.conversions > 0) {
+          results.push({
+            platform: row.platform,
+            spend: row.spend || 0,
+            impressions: row.impressions || 0,
+            clicks: row.clicks || 0,
+            conversions: row.conversions || 0,
+            revenue: row.revenue || 0,
+          });
+        }
       }
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query google:', err);
-    }
-
-    // Query Facebook Ads
-    try {
-      const facebookResult = await this.analyticsDb.prepare(`
-        SELECT
-          COALESCE(SUM(m.spend_cents), 0) / 100.0 as spend,
-          COALESCE(SUM(m.impressions), 0) as impressions,
-          COALESCE(SUM(m.clicks), 0) as clicks,
-          COALESCE(SUM(m.conversions), 0) as conversions,
-          0 as revenue
-        FROM facebook_campaigns c
-        LEFT JOIN facebook_campaign_daily_metrics m
-          ON c.id = m.campaign_ref
-          AND m.metric_date >= ?
-          AND m.metric_date <= ?
-        WHERE c.organization_id = ?
-      `).bind(startDate, endDate, orgId).first<{
-        spend: number;
-        impressions: number;
-        clicks: number;
-        conversions: number;
-        revenue: number;
-      }>();
-
-      if (facebookResult && (facebookResult.spend > 0 || facebookResult.conversions > 0)) {
-        results.push({
-          platform: 'facebook',
-          spend: facebookResult.spend || 0,
-          impressions: facebookResult.impressions || 0,
-          clicks: facebookResult.clicks || 0,
-          conversions: facebookResult.conversions || 0,
-          revenue: facebookResult.revenue || 0,
-        });
-      }
-    } catch (err) {
-      console.warn('[SmartAttribution] Failed to query facebook:', err);
-    }
-
-    // Query TikTok Ads
-    try {
-      const tiktokResult = await this.analyticsDb.prepare(`
-        SELECT
-          COALESCE(SUM(m.spend_cents), 0) / 100.0 as spend,
-          COALESCE(SUM(m.impressions), 0) as impressions,
-          COALESCE(SUM(m.clicks), 0) as clicks,
-          COALESCE(SUM(m.conversions), 0) as conversions,
-          COALESCE(SUM(m.conversion_value_cents), 0) / 100.0 as revenue
-        FROM tiktok_campaigns c
-        LEFT JOIN tiktok_campaign_daily_metrics m
-          ON c.id = m.campaign_ref
-          AND m.metric_date >= ?
-          AND m.metric_date <= ?
-        WHERE c.organization_id = ?
-      `).bind(startDate, endDate, orgId).first<{
-        spend: number;
-        impressions: number;
-        clicks: number;
-        conversions: number;
-        revenue: number;
-      }>();
-
-      if (tiktokResult && (tiktokResult.spend > 0 || tiktokResult.conversions > 0)) {
-        results.push({
-          platform: 'tiktok',
-          spend: tiktokResult.spend || 0,
-          impressions: tiktokResult.impressions || 0,
-          clicks: tiktokResult.clicks || 0,
-          conversions: tiktokResult.conversions || 0,
-          revenue: tiktokResult.revenue || 0,
-        });
-      }
-    } catch (err) {
-      console.warn('[SmartAttribution] Failed to query tiktok:', err);
+      console.warn('[SmartAttribution] Failed to query platform metrics from unified tables:', err);
     }
 
     return results;
@@ -693,23 +625,19 @@ export class SmartAttributionService {
 
         // Query visitors based on connector type (same logic as flow-metrics)
         try {
-          if (connector === 'google_ads') {
+          if (connector === 'google_ads' || connector === 'facebook_ads' || connector === 'tiktok_ads') {
+            // Map connector name to platform name
+            const platform = connector === 'google_ads' ? 'google' : connector === 'facebook_ads' ? 'facebook' : 'tiktok';
             const result = await this.analyticsDb.prepare(`
               SELECT COALESCE(SUM(m.clicks), 0) as clicks
-              FROM google_campaigns c
-              LEFT JOIN google_campaign_daily_metrics m
-                ON c.id = m.campaign_ref AND m.metric_date >= ? AND m.metric_date <= ?
-              WHERE c.organization_id = ?
-            `).bind(startDate, endDate, orgId).first<{ clicks: number }>();
-            visitors = result?.clicks || 0;
-          } else if (connector === 'facebook_ads') {
-            const result = await this.analyticsDb.prepare(`
-              SELECT COALESCE(SUM(m.clicks), 0) as clicks
-              FROM facebook_campaigns c
-              LEFT JOIN facebook_campaign_daily_metrics m
-                ON c.id = m.campaign_ref AND m.metric_date >= ? AND m.metric_date <= ?
-              WHERE c.organization_id = ?
-            `).bind(startDate, endDate, orgId).first<{ clicks: number }>();
+              FROM ad_campaigns c
+              LEFT JOIN ad_metrics m
+                ON c.id = m.campaign_ref
+                AND m.entity_type = 'campaign'
+                AND m.metric_date >= ?
+                AND m.metric_date <= ?
+              WHERE c.organization_id = ? AND c.platform = ?
+            `).bind(startDate, endDate, orgId, platform).first<{ clicks: number }>();
             visitors = result?.clicks || 0;
           } else if (connector === 'stripe') {
             const result = await this.analyticsDb.prepare(`
@@ -1546,112 +1474,43 @@ export class SmartAttributionService {
   ): Promise<DailyPlatformMetrics[]> {
     const results: DailyPlatformMetrics[] = [];
 
-    // Query Google Ads daily
+    // Query all platforms from unified tables in a single query
     try {
-      const googleResult = await this.analyticsDb.prepare(`
+      const platformResults = await this.analyticsDb.prepare(`
         SELECT
+          c.platform,
           m.metric_date as date,
           COALESCE(SUM(m.spend_cents), 0) / 100.0 as spend,
           COALESCE(SUM(m.conversions), 0) as conversions,
           COALESCE(SUM(m.conversion_value_cents), 0) / 100.0 as revenue
-        FROM google_campaigns c
-        JOIN google_campaign_daily_metrics m
+        FROM ad_campaigns c
+        JOIN ad_metrics m
           ON c.id = m.campaign_ref
+          AND m.entity_type = 'campaign'
         WHERE c.organization_id = ?
           AND m.metric_date >= ?
           AND m.metric_date <= ?
-        GROUP BY m.metric_date
+        GROUP BY c.platform, m.metric_date
         ORDER BY m.metric_date
       `).bind(orgId, startDate, endDate).all<{
+        platform: string;
         date: string;
         spend: number;
         conversions: number;
         revenue: number;
       }>();
 
-      for (const r of googleResult.results || []) {
+      for (const r of platformResults.results || []) {
         results.push({
           date: r.date,
-          platform: 'google',
+          platform: r.platform,
           spend: r.spend || 0,
           conversions: r.conversions || 0,
           revenue: r.revenue || 0,
         });
       }
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query daily google metrics:', err);
-    }
-
-    // Query Facebook Ads daily
-    try {
-      const facebookResult = await this.analyticsDb.prepare(`
-        SELECT
-          m.metric_date as date,
-          COALESCE(SUM(m.spend_cents), 0) / 100.0 as spend,
-          COALESCE(SUM(m.conversions), 0) as conversions,
-          0 as revenue
-        FROM facebook_campaigns c
-        JOIN facebook_campaign_daily_metrics m
-          ON c.id = m.campaign_ref
-        WHERE c.organization_id = ?
-          AND m.metric_date >= ?
-          AND m.metric_date <= ?
-        GROUP BY m.metric_date
-        ORDER BY m.metric_date
-      `).bind(orgId, startDate, endDate).all<{
-        date: string;
-        spend: number;
-        conversions: number;
-        revenue: number;
-      }>();
-
-      for (const r of facebookResult.results || []) {
-        results.push({
-          date: r.date,
-          platform: 'facebook',
-          spend: r.spend || 0,
-          conversions: r.conversions || 0,
-          revenue: r.revenue || 0,
-        });
-      }
-    } catch (err) {
-      console.warn('[SmartAttribution] Failed to query daily facebook metrics:', err);
-    }
-
-    // Query TikTok Ads daily
-    try {
-      const tiktokResult = await this.analyticsDb.prepare(`
-        SELECT
-          m.metric_date as date,
-          COALESCE(SUM(m.spend_cents), 0) / 100.0 as spend,
-          COALESCE(SUM(m.conversions), 0) as conversions,
-          COALESCE(SUM(m.conversion_value_cents), 0) / 100.0 as revenue
-        FROM tiktok_campaigns c
-        JOIN tiktok_campaign_daily_metrics m
-          ON c.id = m.campaign_ref
-        WHERE c.organization_id = ?
-          AND m.metric_date >= ?
-          AND m.metric_date <= ?
-        GROUP BY m.metric_date
-        ORDER BY m.metric_date
-      `).bind(orgId, startDate, endDate).all<{
-        date: string;
-        spend: number;
-        conversions: number;
-        revenue: number;
-      }>();
-
-      for (const r of tiktokResult.results || []) {
-        results.push({
-          date: r.date,
-          platform: 'tiktok',
-          spend: r.spend || 0,
-          conversions: r.conversions || 0,
-          revenue: r.revenue || 0,
-        });
-      }
-    } catch (err) {
-      console.warn('[SmartAttribution] Failed to query daily tiktok metrics:', err);
+      console.warn('[SmartAttribution] Failed to query daily platform metrics from unified tables:', err);
     }
 
     return results;

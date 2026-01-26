@@ -324,30 +324,23 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
       };
     }
 
-    // Get recent ad clicks to attribute
+    // Get recent ad clicks to attribute (using unified ad_metrics table)
     const clicksResult = await this.env.ANALYTICS_DB.prepare(`
       SELECT
-        platform,
-        campaign_name,
-        ad_set_name,
-        date,
-        clicks
-      FROM (
-        SELECT 'facebook' as platform, campaign_name, ad_set_name, date, clicks
-        FROM facebook_daily_metrics
-        WHERE organization_id = ? AND date >= ?
-        UNION ALL
-        SELECT 'google' as platform, campaign_name, ad_group_name as ad_set_name, date, clicks
-        FROM google_daily_metrics
-        WHERE organization_id = ? AND date >= ?
-        UNION ALL
-        SELECT 'tiktok' as platform, campaign_name, ad_group_name as ad_set_name, date, clicks
-        FROM tiktok_daily_metrics
-        WHERE organization_id = ? AND date >= ?
-      )
-      WHERE clicks > 0
-      ORDER BY date
-    `).bind(orgId, cutoffStr, orgId, cutoffStr, orgId, cutoffStr).all<{
+        m.platform,
+        c.campaign_name,
+        g.ad_group_name as ad_set_name,
+        m.metric_date as date,
+        m.clicks
+      FROM ad_metrics m
+      JOIN ad_campaigns c ON m.campaign_ref = c.id
+      LEFT JOIN ad_groups g ON m.entity_type = 'ad_group' AND m.entity_ref = g.id
+      WHERE m.organization_id = ?
+        AND m.metric_date >= ?
+        AND m.entity_type IN ('campaign', 'ad_group')
+        AND m.clicks > 0
+      ORDER BY m.metric_date
+    `).bind(orgId, cutoffStr).all<{
       platform: string;
       campaign_name: string;
       ad_set_name: string | null;

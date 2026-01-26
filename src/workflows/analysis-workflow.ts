@@ -359,20 +359,14 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       // If no CAC history, try to calculate from platform metrics
       let currentCac = currentCacResult?.cac_cents || 0;
       if (currentCac === 0) {
-        // Calculate from recent platform metrics
+        // Calculate from recent platform metrics using unified ad_metrics table
         const metricsResult = await this.env.ANALYTICS_DB.prepare(`
           SELECT SUM(spend_cents) as spend, SUM(conversions) as conversions
-          FROM (
-            SELECT spend_cents, conversions FROM facebook_campaign_daily_metrics
-            WHERE organization_id = ? AND metric_date >= date('now', '-7 days')
-            UNION ALL
-            SELECT spend_cents, conversions FROM google_campaign_daily_metrics
-            WHERE organization_id = ? AND metric_date >= date('now', '-7 days')
-            UNION ALL
-            SELECT spend_cents, conversions FROM tiktok_campaign_daily_metrics
-            WHERE organization_id = ? AND metric_date >= date('now', '-7 days')
-          )
-        `).bind(orgId, orgId, orgId).first<{ spend: number; conversions: number }>();
+          FROM ad_metrics
+          WHERE organization_id = ?
+            AND entity_type = 'campaign'
+            AND metric_date >= date('now', '-7 days')
+        `).bind(orgId).first<{ spend: number; conversions: number }>();
 
         if (metricsResult?.conversions && metricsResult.conversions > 0) {
           currentCac = Math.round(metricsResult.spend / metricsResult.conversions);

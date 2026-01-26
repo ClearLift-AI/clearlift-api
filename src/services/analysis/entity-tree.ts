@@ -4,11 +4,16 @@
  * Builds hierarchical tree of ad entities from D1 ANALYTICS_DB.
  * Normalizes platform differences (Meta adset = Google ad_group).
  * Uses Sessions API for read replication support.
+ *
+ * UPDATED: Now queries unified tables (ad_campaigns, ad_groups, ads)
+ * and uses connector registry for dynamic platform discovery.
+ * This allows AI to discover any connector without code changes.
  */
 
 // D1 types (D1Database, D1DatabaseSession, etc.) come from worker-configuration.d.ts
 
-export type Platform = 'google' | 'facebook' | 'tiktok';
+// Dynamic platform type - no longer limited to hardcoded values
+export type Platform = string;
 export type EntityLevel = 'ad' | 'adset' | 'campaign' | 'account';
 
 export interface Entity {
@@ -17,7 +22,7 @@ export interface Entity {
   name: string;
   platform: Platform;
   level: EntityLevel;
-  status: 'ENABLED' | 'PAUSED' | 'REMOVED' | string;
+  status: 'active' | 'paused' | 'archived' | 'deleted' | string;  // Normalized status
   parentId?: string;  // Reference to parent entity's id
   children: Entity[];
   accountId?: string;  // For linking to account
@@ -34,44 +39,454 @@ export interface EntityTree {
   organizationId: string;
   accounts: Map<string, AccountEntity>;  // key: platform_accountId
   totalEntities: number;
+  platforms: string[];  // Active platforms discovered
 }
 
 export class EntityTreeBuilder {
   private session: D1DatabaseSession;
+  private mainDb?: D1Database;  // For connector registry queries
 
-  constructor(db: D1Database) {
+  constructor(db: D1Database, mainDb?: D1Database) {
     // Use Sessions API for read replication support
     this.session = db.withSession('first-unconstrained');
+    this.mainDb = mainDb;
+  }
+
+  /**
+   * Get active ad platforms from connector registry or database
+   */
+  private async getActivePlatforms(orgId: string): Promise<string[]> {
+    // Query unified tables to discover which platforms have data for this org
+    const result = await this.session.prepare(`
+      SELECT DISTINCT platform FROM ad_campaigns
+      WHERE organization_id = ?
+    `).bind(orgId).all<{ platform: string }>();
+
+    const platforms = (result.results || []).map(r => r.platform);
+
+    // If no data in unified tables, fall back to checking legacy tables
+    if (platforms.length === 0) {
+      const legacyPlatforms: string[] = [];
+
+      // Check Google
+      const googleCheck = await this.session.prepare(`
+        SELECT 1 FROM google_campaigns WHERE organization_id = ? LIMIT 1
+      `).bind(orgId).first();
+      if (googleCheck) legacyPlatforms.push('google');
+
+      // Check Facebook
+      const fbCheck = await this.session.prepare(`
+        SELECT 1 FROM facebook_campaigns WHERE organization_id = ? LIMIT 1
+      `).bind(orgId).first();
+      if (fbCheck) legacyPlatforms.push('facebook');
+
+      // Check TikTok
+      const tiktokCheck = await this.session.prepare(`
+        SELECT 1 FROM tiktok_campaigns WHERE organization_id = ? LIMIT 1
+      `).bind(orgId).first();
+      if (tiktokCheck) legacyPlatforms.push('tiktok');
+
+      return legacyPlatforms;
+    }
+
+    return platforms;
   }
 
   /**
    * Build complete entity tree for an organization
+   * Now uses unified tables and dynamic platform discovery
    */
   async buildTree(orgId: string): Promise<EntityTree> {
+    // Discover active platforms dynamically
+    const platforms = await this.getActivePlatforms(orgId);
+
     const tree: EntityTree = {
       organizationId: orgId,
       accounts: new Map(),
-      totalEntities: 0
+      totalEntities: 0,
+      platforms
     };
 
-    // Build trees for each platform in parallel
-    const [googleTree, facebookTree] = await Promise.all([
-      this.buildGoogleTree(orgId),
-      this.buildFacebookTree(orgId)
-    ]);
+    // First try to build from unified tables
+    const unifiedTree = await this.buildUnifiedTree(orgId);
 
-    // Merge into main tree
-    for (const [key, account] of googleTree) {
-      tree.accounts.set(key, account);
-    }
-    for (const [key, account] of facebookTree) {
-      tree.accounts.set(key, account);
+    if (unifiedTree.size > 0) {
+      // Use unified tables
+      for (const [key, account] of unifiedTree) {
+        tree.accounts.set(key, account);
+      }
+    } else {
+      // Fall back to legacy platform-specific tables
+      const treeBuildPromises: Promise<Map<string, AccountEntity>>[] = [];
+
+      if (platforms.includes('google')) {
+        treeBuildPromises.push(this.buildGoogleTree(orgId));
+      }
+      if (platforms.includes('facebook')) {
+        treeBuildPromises.push(this.buildFacebookTree(orgId));
+      }
+      if (platforms.includes('tiktok')) {
+        treeBuildPromises.push(this.buildTikTokTree(orgId));
+      }
+
+      const trees = await Promise.all(treeBuildPromises);
+
+      for (const platformTree of trees) {
+        for (const [key, account] of platformTree) {
+          tree.accounts.set(key, account);
+        }
+      }
     }
 
     // Count total entities
     tree.totalEntities = this.countEntities(tree);
 
     return tree;
+  }
+
+  /**
+   * Build entity tree from unified tables (ad_campaigns, ad_groups, ads)
+   * This is the primary method - works for any platform
+   */
+  private async buildUnifiedTree(orgId: string): Promise<Map<string, AccountEntity>> {
+    const accounts = new Map<string, AccountEntity>();
+
+    // Fetch all campaigns from unified table
+    const campaignsResult = await this.session.prepare(`
+      SELECT id, platform, account_id, campaign_id, campaign_name, campaign_status
+      FROM ad_campaigns
+      WHERE organization_id = ?
+    `).bind(orgId).all<{
+      id: string;
+      platform: string;
+      account_id: string;
+      campaign_id: string;
+      campaign_name: string;
+      campaign_status: string;
+    }>();
+    const campaigns = campaignsResult.results || [];
+
+    if (campaigns.length === 0) return accounts;
+
+    // Fetch all ad groups from unified table
+    const adGroupsResult = await this.session.prepare(`
+      SELECT id, platform, account_id, campaign_id, campaign_ref, ad_group_id, ad_group_name, ad_group_status
+      FROM ad_groups
+      WHERE organization_id = ?
+    `).bind(orgId).all<{
+      id: string;
+      platform: string;
+      account_id: string;
+      campaign_id: string;
+      campaign_ref: string;
+      ad_group_id: string;
+      ad_group_name: string;
+      ad_group_status: string;
+    }>();
+    const adGroups = adGroupsResult.results || [];
+
+    // Fetch all ads from unified table
+    const adsResult = await this.session.prepare(`
+      SELECT id, platform, account_id, campaign_id, ad_group_id, ad_group_ref, ad_id, ad_name, ad_status
+      FROM ads
+      WHERE organization_id = ?
+    `).bind(orgId).all<{
+      id: string;
+      platform: string;
+      account_id: string;
+      campaign_id: string;
+      ad_group_id: string;
+      ad_group_ref: string;
+      ad_id: string;
+      ad_name: string;
+      ad_status: string;
+    }>();
+    const ads = adsResult.results || [];
+
+    // Index by platform and account
+    const campaignsByPlatformAccount = new Map<string, typeof campaigns>();
+    for (const c of campaigns) {
+      const key = `${c.platform}_${c.account_id}`;
+      const list = campaignsByPlatformAccount.get(key) || [];
+      list.push(c);
+      campaignsByPlatformAccount.set(key, list);
+    }
+
+    const adGroupsByCampaignRef = new Map<string, typeof adGroups>();
+    for (const ag of adGroups) {
+      const list = adGroupsByCampaignRef.get(ag.campaign_ref) || [];
+      list.push(ag);
+      adGroupsByCampaignRef.set(ag.campaign_ref, list);
+    }
+
+    const adsByAdGroupRef = new Map<string, typeof ads>();
+    for (const a of ads) {
+      const list = adsByAdGroupRef.get(a.ad_group_ref) || [];
+      list.push(a);
+      adsByAdGroupRef.set(a.ad_group_ref, list);
+    }
+
+    // Build tree for each platform_account combination
+    for (const [platformAccountKey, accountCampaigns] of campaignsByPlatformAccount) {
+      const [platform, accountId] = this.parsePlatformAccountKey(platformAccountKey);
+      const accountKey = platformAccountKey;
+
+      // Create account entity
+      const account: AccountEntity = {
+        id: accountKey,
+        externalId: accountId,
+        name: this.getPlatformDisplayName(platform) + ' ' + accountId,
+        platform,
+        level: 'account',
+        status: 'active',
+        customerId: platform === 'google' ? accountId : undefined,
+        adAccountId: platform !== 'google' ? accountId : undefined,
+        children: []
+      };
+
+      // Build campaign entities
+      for (const campaign of accountCampaigns) {
+        const campaignEntity: Entity = {
+          id: campaign.id,
+          externalId: campaign.campaign_id,
+          name: campaign.campaign_name,
+          platform,
+          level: 'campaign',
+          status: campaign.campaign_status,
+          parentId: accountKey,
+          accountId,
+          children: []
+        };
+
+        // Build ad group entities (using campaign_ref for lookup)
+        const campaignAdGroups = adGroupsByCampaignRef.get(campaign.id) || [];
+        for (const adGroup of campaignAdGroups) {
+          const adGroupEntity: Entity = {
+            id: adGroup.id,
+            externalId: adGroup.ad_group_id,
+            name: adGroup.ad_group_name,
+            platform,
+            level: 'adset',  // Normalized
+            status: adGroup.ad_group_status,
+            parentId: campaign.id,
+            accountId,
+            children: []
+          };
+
+          // Build ad entities (using ad_group_ref for lookup)
+          const groupAds = adsByAdGroupRef.get(adGroup.id) || [];
+          for (const ad of groupAds) {
+            const adEntity: Entity = {
+              id: ad.id,
+              externalId: ad.ad_id,
+              name: ad.ad_name || `Ad ${ad.ad_id}`,
+              platform,
+              level: 'ad',
+              status: ad.ad_status,
+              parentId: adGroup.id,
+              accountId,
+              children: []
+            };
+            adGroupEntity.children.push(adEntity);
+          }
+
+          campaignEntity.children.push(adGroupEntity);
+        }
+
+        account.children.push(campaignEntity);
+      }
+
+      accounts.set(accountKey, account);
+    }
+
+    return accounts;
+  }
+
+  /**
+   * Parse platform_accountId key back into components
+   */
+  private parsePlatformAccountKey(key: string): [string, string] {
+    const underscoreIndex = key.indexOf('_');
+    if (underscoreIndex === -1) return [key, ''];
+    return [key.substring(0, underscoreIndex), key.substring(underscoreIndex + 1)];
+  }
+
+  /**
+   * Get display name for platform
+   */
+  private getPlatformDisplayName(platform: string): string {
+    const names: Record<string, string> = {
+      google: 'Google Ads',
+      facebook: 'Meta Ads',
+      tiktok: 'TikTok Ads',
+      linkedin: 'LinkedIn Ads',
+      twitter: 'Twitter Ads',
+      pinterest: 'Pinterest Ads',
+      snapchat: 'Snapchat Ads',
+      microsoft: 'Microsoft Ads'
+    };
+    return names[platform] || `${platform.charAt(0).toUpperCase() + platform.slice(1)} Ads`;
+  }
+
+  /**
+   * Build TikTok entity tree from legacy D1 tables
+   * (Added to support TikTok in legacy fallback)
+   */
+  private async buildTikTokTree(orgId: string): Promise<Map<string, AccountEntity>> {
+    const accounts = new Map<string, AccountEntity>();
+
+    try {
+      // Fetch all campaigns from D1
+      const campaignsResult = await this.session.prepare(`
+        SELECT id, advertiser_id, campaign_id, campaign_name, campaign_status
+        FROM tiktok_campaigns
+        WHERE organization_id = ?
+      `).bind(orgId).all<{
+        id: string;
+        advertiser_id: string;
+        campaign_id: string;
+        campaign_name: string;
+        campaign_status: string;
+      }>();
+      const campaigns = campaignsResult.results || [];
+
+      // Fetch all ad groups from D1
+      const adGroupsResult = await this.session.prepare(`
+        SELECT id, advertiser_id, campaign_id, ad_group_id, ad_group_name, ad_group_status
+        FROM tiktok_ad_groups
+        WHERE organization_id = ?
+      `).bind(orgId).all<{
+        id: string;
+        advertiser_id: string;
+        campaign_id: string;
+        ad_group_id: string;
+        ad_group_name: string;
+        ad_group_status: string;
+      }>();
+      const adGroups = adGroupsResult.results || [];
+
+      // Fetch all ads from D1
+      const adsResult = await this.session.prepare(`
+        SELECT id, advertiser_id, campaign_id, ad_group_id, ad_id, ad_name, ad_status
+        FROM tiktok_ads
+        WHERE organization_id = ?
+      `).bind(orgId).all<{
+        id: string;
+        advertiser_id: string;
+        campaign_id: string;
+        ad_group_id: string;
+        ad_id: string;
+        ad_name: string;
+        ad_status: string;
+      }>();
+      const ads = adsResult.results || [];
+
+      // Index data
+      const campaignsByAdvertiser = new Map<string, typeof campaigns>();
+      for (const c of campaigns) {
+        const list = campaignsByAdvertiser.get(c.advertiser_id) || [];
+        list.push(c);
+        campaignsByAdvertiser.set(c.advertiser_id, list);
+      }
+
+      const adGroupsByCampaign = new Map<string, typeof adGroups>();
+      for (const ag of adGroups) {
+        const list = adGroupsByCampaign.get(ag.campaign_id) || [];
+        list.push(ag);
+        adGroupsByCampaign.set(ag.campaign_id, list);
+      }
+
+      const adsByAdGroup = new Map<string, typeof ads>();
+      for (const a of ads) {
+        const list = adsByAdGroup.get(a.ad_group_id) || [];
+        list.push(a);
+        adsByAdGroup.set(a.ad_group_id, list);
+      }
+
+      // Build tree
+      for (const advertiserId of campaignsByAdvertiser.keys()) {
+        const accountKey = `tiktok_${advertiserId}`;
+
+        const account: AccountEntity = {
+          id: accountKey,
+          externalId: advertiserId,
+          name: `TikTok Ads ${advertiserId}`,
+          platform: 'tiktok',
+          level: 'account',
+          status: 'active',
+          adAccountId: advertiserId,
+          children: []
+        };
+
+        const accountCampaigns = campaignsByAdvertiser.get(advertiserId) || [];
+        for (const campaign of accountCampaigns) {
+          const campaignEntity: Entity = {
+            id: campaign.id,
+            externalId: campaign.campaign_id,
+            name: campaign.campaign_name,
+            platform: 'tiktok',
+            level: 'campaign',
+            status: this.normalizeTikTokStatus(campaign.campaign_status),
+            parentId: accountKey,
+            accountId: advertiserId,
+            children: []
+          };
+
+          const campaignAdGroups = adGroupsByCampaign.get(campaign.campaign_id) || [];
+          for (const adGroup of campaignAdGroups) {
+            const adGroupEntity: Entity = {
+              id: adGroup.id,
+              externalId: adGroup.ad_group_id,
+              name: adGroup.ad_group_name,
+              platform: 'tiktok',
+              level: 'adset',
+              status: this.normalizeTikTokStatus(adGroup.ad_group_status),
+              parentId: campaign.id,
+              accountId: advertiserId,
+              children: []
+            };
+
+            const groupAds = adsByAdGroup.get(adGroup.ad_group_id) || [];
+            for (const ad of groupAds) {
+              const adEntity: Entity = {
+                id: ad.id,
+                externalId: ad.ad_id,
+                name: ad.ad_name || `Ad ${ad.ad_id}`,
+                platform: 'tiktok',
+                level: 'ad',
+                status: this.normalizeTikTokStatus(ad.ad_status),
+                parentId: adGroup.id,
+                accountId: advertiserId,
+                children: []
+              };
+              adGroupEntity.children.push(adEntity);
+            }
+
+            campaignEntity.children.push(adGroupEntity);
+          }
+
+          account.children.push(campaignEntity);
+        }
+
+        accounts.set(accountKey, account);
+      }
+    } catch {
+      // TikTok tables may not exist, return empty
+    }
+
+    return accounts;
+  }
+
+  /**
+   * Normalize TikTok status values
+   */
+  private normalizeTikTokStatus(status: string): string {
+    const statusMap: Record<string, string> = {
+      ENABLE: 'active',
+      DISABLE: 'paused',
+      DELETE: 'deleted'
+    };
+    return statusMap[status?.toUpperCase()] || status?.toLowerCase() || 'unknown';
   }
 
   /**

@@ -256,15 +256,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     const normalizedPlatforms = platforms.map(p => p.toLowerCase().replace('_ads', ''));
     const uniquePlatforms = [...new Set(normalizedPlatforms.map(p => p === 'meta' ? 'facebook' : p))];
 
+    // Use unified ad_metrics table for all platforms
     for (const platform of uniquePlatforms) {
-      const tableMap: Record<string, string> = {
-        google: 'google_campaign_daily_metrics',
-        facebook: 'facebook_campaign_daily_metrics',
-        tiktok: 'tiktok_campaign_daily_metrics'
-      };
-
-      const tableName = tableMap[platform];
-      if (!tableName) continue;
+      if (!['google', 'facebook', 'tiktok'].includes(platform)) continue;
 
       unionParts.push(`
         SELECT
@@ -274,8 +268,10 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           SUM(clicks) as clicks,
           SUM(spend_cents) as spend_cents,
           SUM(conversions) as conversions
-        FROM ${tableName}
+        FROM ad_metrics
         WHERE organization_id = ?
+          AND platform = '${platform}'
+          AND entity_type = 'campaign'
           AND metric_date >= ? AND metric_date <= ?
         GROUP BY metric_date
       `);

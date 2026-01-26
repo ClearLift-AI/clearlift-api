@@ -612,22 +612,16 @@ export class BackfillCACHistory extends OpenAPIRoute {
     const { org_id, days } = data.body;
 
     try {
-      // Query daily spend and conversions across all platform-specific tables
+      // Query daily spend and conversions from unified ad_metrics table
       const metricsResult = await c.env.ANALYTICS_DB.prepare(`
         SELECT
           metric_date as date,
           SUM(spend_cents) as spend_cents,
           SUM(conversions) as conversions
-        FROM (
-          SELECT metric_date, spend_cents, conversions FROM facebook_campaign_daily_metrics
-          WHERE organization_id = ?1 AND metric_date >= date('now', '-' || ?2 || ' days')
-          UNION ALL
-          SELECT metric_date, spend_cents, conversions FROM google_campaign_daily_metrics
-          WHERE organization_id = ?1 AND metric_date >= date('now', '-' || ?2 || ' days')
-          UNION ALL
-          SELECT metric_date, spend_cents, conversions FROM tiktok_campaign_daily_metrics
-          WHERE organization_id = ?1 AND metric_date >= date('now', '-' || ?2 || ' days')
-        )
+        FROM ad_metrics
+        WHERE organization_id = ?1
+          AND entity_type = 'campaign'
+          AND metric_date >= date('now', '-' || ?2 || ' days')
         GROUP BY metric_date
         ORDER BY metric_date ASC
       `).bind(org_id, days).all<{

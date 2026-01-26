@@ -169,29 +169,31 @@ export class MetricsFetcher {
    * Get metrics table name for platform/level (D1 ANALYTICS_DB)
    */
   private getMetricsTable(platform: Platform, level: EntityLevel): string | null {
-    // D1 table names use platform prefix
-    const tables: Record<Platform, Record<EntityLevel, string | null>> = {
-      google: {
-        ad: 'google_ad_daily_metrics',
-        adset: 'google_ad_group_daily_metrics',
-        campaign: 'google_campaign_daily_metrics',
-        account: null  // Aggregate from campaigns
-      },
-      facebook: {
-        ad: 'facebook_ad_daily_metrics',
-        adset: 'facebook_ad_set_daily_metrics',
-        campaign: 'facebook_campaign_daily_metrics',
-        account: null  // Aggregate from campaigns
-      },
-      tiktok: {
-        ad: null, // TikTok ad-level metrics not yet implemented
-        adset: null, // TikTok ad group metrics not yet implemented
-        campaign: 'tiktok_campaign_daily_metrics',
-        account: null
-      }
+    // All platforms now use unified ad_metrics table
+    // Return 'ad_metrics' for all valid platform/level combinations
+    const validLevels: Record<Platform, EntityLevel[]> = {
+      google: ['ad', 'adset', 'campaign'],
+      facebook: ['ad', 'adset', 'campaign'],
+      tiktok: ['ad', 'adset', 'campaign']
     };
 
-    return tables[platform]?.[level] || null;
+    if (level === 'account') return null; // Account level aggregates from campaigns
+    if (!validLevels[platform]?.includes(level)) return null;
+
+    return 'ad_metrics'; // All use unified table now
+  }
+
+  /**
+   * Get entity_type value for unified ad_metrics table
+   */
+  private getEntityType(level: EntityLevel): string | null {
+    const mapping: Record<EntityLevel, string | null> = {
+      ad: 'ad',
+      adset: 'ad_group', // Facebook ad_sets are unified as ad_groups
+      campaign: 'campaign',
+      account: null
+    };
+    return mapping[level] || null;
   }
 
   /**

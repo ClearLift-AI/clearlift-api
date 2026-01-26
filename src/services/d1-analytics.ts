@@ -528,10 +528,25 @@ export class D1AnalyticsService {
     startDate: string,
     endDate: string
   ): Promise<GoogleCampaignMetricsRow[]> {
+    // Query unified ad_metrics table for Google campaign metrics
     const result = await this.session.prepare(`
-      SELECT m.*
-      FROM google_campaign_daily_metrics m
+      SELECT
+        m.id,
+        m.organization_id,
+        m.entity_ref as campaign_ref,
+        m.metric_date,
+        m.impressions,
+        m.clicks,
+        m.spend_cents,
+        m.conversions,
+        m.conversion_value_cents,
+        CASE WHEN m.impressions > 0 THEN CAST(m.clicks AS REAL) / m.impressions ELSE 0 END as ctr,
+        CASE WHEN m.clicks > 0 THEN m.spend_cents / m.clicks ELSE 0 END as cpc_cents,
+        CASE WHEN m.impressions > 0 THEN (m.spend_cents * 1000.0) / m.impressions ELSE 0 END as cpm_cents
+      FROM ad_metrics m
       WHERE m.organization_id = ?
+        AND m.platform = 'google'
+        AND m.entity_type = 'campaign'
         AND m.metric_date >= ?
         AND m.metric_date <= ?
       ORDER BY m.metric_date DESC
@@ -549,30 +564,34 @@ export class D1AnalyticsService {
     endDate: string,
     options: { status?: string; limit?: number; offset?: number } = {}
   ): Promise<CampaignWithMetrics[]> {
+    // Query unified tables
     let query = `
       SELECT
         c.id,
         c.campaign_id,
         c.campaign_name,
         c.campaign_status as status,
-        c.last_synced_at,
+        c.updated_at as last_synced_at,
         COALESCE(SUM(m.impressions), 0) as impressions,
         COALESCE(SUM(m.clicks), 0) as clicks,
         COALESCE(SUM(m.spend_cents), 0) as spend_cents,
         COALESCE(SUM(m.conversions), 0) as conversions,
         COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents
-      FROM google_campaigns c
-      LEFT JOIN google_campaign_daily_metrics m
-        ON c.id = m.campaign_ref
+      FROM ad_campaigns c
+      LEFT JOIN ad_metrics m
+        ON c.id = m.entity_ref
+        AND m.entity_type = 'campaign'
         AND m.metric_date >= ?
         AND m.metric_date <= ?
-      WHERE c.organization_id = ?
+      WHERE c.organization_id = ? AND c.platform = 'google'
     `;
     const params: unknown[] = [startDate, endDate, orgId];
 
     if (options.status) {
+      // Map frontend status to unified status
+      const statusMap: Record<string, string> = { 'ENABLED': 'active', 'PAUSED': 'paused', 'REMOVED': 'deleted' };
       query += ` AND c.campaign_status = ?`;
-      params.push(options.status);
+      params.push(statusMap[options.status] || options.status.toLowerCase());
     }
 
     query += ` GROUP BY c.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
@@ -601,6 +620,7 @@ export class D1AnalyticsService {
    * Get Google Ads summary for an organization
    */
   async getGoogleSummary(orgId: string, startDate: string, endDate: string): Promise<PlatformSummary> {
+    // Query unified tables
     const result = await this.session.prepare(`
       SELECT
         COALESCE(SUM(m.spend_cents), 0) as spend_cents,
@@ -609,12 +629,13 @@ export class D1AnalyticsService {
         COALESCE(SUM(m.conversions), 0) as conversions,
         COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents,
         COUNT(DISTINCT c.id) as campaigns
-      FROM google_campaigns c
-      LEFT JOIN google_campaign_daily_metrics m
-        ON c.id = m.campaign_ref
+      FROM ad_campaigns c
+      LEFT JOIN ad_metrics m
+        ON c.id = m.entity_ref
+        AND m.entity_type = 'campaign'
         AND m.metric_date >= ?
         AND m.metric_date <= ?
-      WHERE c.organization_id = ?
+      WHERE c.organization_id = ? AND c.platform = 'google'
     `).bind(startDate, endDate, orgId).first<PlatformSummary>();
 
     return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
@@ -631,15 +652,21 @@ export class D1AnalyticsService {
     orgId: string,
     options: { status?: string; limit?: number; offset?: number } = {}
   ): Promise<FacebookCampaignRow[]> {
+    // Query unified tables (returning legacy-compatible format)
     let query = `
-      SELECT * FROM facebook_campaigns
-      WHERE organization_id = ?
+      SELECT
+        id, organization_id, account_id, campaign_id, campaign_name,
+        campaign_status, objective, daily_budget_cents, lifetime_budget_cents,
+        updated_at as last_synced_at, created_at, updated_at
+      FROM ad_campaigns
+      WHERE organization_id = ? AND platform = 'facebook'
     `;
     const params: unknown[] = [orgId];
 
     if (options.status) {
+      const statusMap: Record<string, string> = { 'ACTIVE': 'active', 'PAUSED': 'paused', 'DELETED': 'deleted', 'ARCHIVED': 'archived' };
       query += ` AND campaign_status = ?`;
-      params.push(options.status);
+      params.push(statusMap[options.status] || options.status.toLowerCase());
     }
 
     query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
@@ -658,30 +685,33 @@ export class D1AnalyticsService {
     endDate: string,
     options: { status?: string; limit?: number; offset?: number } = {}
   ): Promise<CampaignWithMetrics[]> {
+    // Query unified tables
     let query = `
       SELECT
         c.id,
         c.campaign_id,
         c.campaign_name,
         c.campaign_status as status,
-        c.last_synced_at,
+        c.updated_at as last_synced_at,
         COALESCE(SUM(m.impressions), 0) as impressions,
         COALESCE(SUM(m.clicks), 0) as clicks,
         COALESCE(SUM(m.spend_cents), 0) as spend_cents,
         COALESCE(SUM(m.conversions), 0) as conversions,
-        0 as conversion_value_cents
-      FROM facebook_campaigns c
-      LEFT JOIN facebook_campaign_daily_metrics m
-        ON c.id = m.campaign_ref
+        COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents
+      FROM ad_campaigns c
+      LEFT JOIN ad_metrics m
+        ON c.id = m.entity_ref
+        AND m.entity_type = 'campaign'
         AND m.metric_date >= ?
         AND m.metric_date <= ?
-      WHERE c.organization_id = ?
+      WHERE c.organization_id = ? AND c.platform = 'facebook'
     `;
     const params: unknown[] = [startDate, endDate, orgId];
 
     if (options.status) {
+      const statusMap: Record<string, string> = { 'ACTIVE': 'active', 'PAUSED': 'paused', 'DELETED': 'deleted', 'ARCHIVED': 'archived' };
       query += ` AND c.campaign_status = ?`;
-      params.push(options.status);
+      params.push(statusMap[options.status] || options.status.toLowerCase());
     }
 
     query += ` GROUP BY c.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
@@ -710,20 +740,22 @@ export class D1AnalyticsService {
    * Get Facebook Ads summary for an organization
    */
   async getFacebookSummary(orgId: string, startDate: string, endDate: string): Promise<PlatformSummary> {
+    // Query unified tables
     const result = await this.session.prepare(`
       SELECT
         COALESCE(SUM(m.spend_cents), 0) as spend_cents,
         COALESCE(SUM(m.impressions), 0) as impressions,
         COALESCE(SUM(m.clicks), 0) as clicks,
         COALESCE(SUM(m.conversions), 0) as conversions,
-        0 as conversion_value_cents,
+        COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents,
         COUNT(DISTINCT c.id) as campaigns
-      FROM facebook_campaigns c
-      LEFT JOIN facebook_campaign_daily_metrics m
-        ON c.id = m.campaign_ref
+      FROM ad_campaigns c
+      LEFT JOIN ad_metrics m
+        ON c.id = m.entity_ref
+        AND m.entity_type = 'campaign'
         AND m.metric_date >= ?
         AND m.metric_date <= ?
-      WHERE c.organization_id = ?
+      WHERE c.organization_id = ? AND c.platform = 'facebook'
     `).bind(startDate, endDate, orgId).first<PlatformSummary>();
 
     return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
@@ -740,15 +772,21 @@ export class D1AnalyticsService {
     orgId: string,
     options: { status?: string; limit?: number; offset?: number } = {}
   ): Promise<TikTokCampaignRow[]> {
+    // Query unified tables (returning legacy-compatible format)
     let query = `
-      SELECT * FROM tiktok_campaigns
-      WHERE organization_id = ?
+      SELECT
+        id, organization_id, account_id as advertiser_id, campaign_id, campaign_name,
+        campaign_status, objective, budget_mode, budget_cents,
+        updated_at as last_synced_at, created_at, updated_at
+      FROM ad_campaigns
+      WHERE organization_id = ? AND platform = 'tiktok'
     `;
     const params: unknown[] = [orgId];
 
     if (options.status) {
+      const statusMap: Record<string, string> = { 'ACTIVE': 'active', 'PAUSED': 'paused', 'DELETED': 'deleted' };
       query += ` AND campaign_status = ?`;
-      params.push(options.status);
+      params.push(statusMap[options.status] || options.status.toLowerCase());
     }
 
     query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
@@ -767,30 +805,33 @@ export class D1AnalyticsService {
     endDate: string,
     options: { status?: string; limit?: number; offset?: number } = {}
   ): Promise<CampaignWithMetrics[]> {
+    // Query unified tables
     let query = `
       SELECT
         c.id,
         c.campaign_id,
         c.campaign_name,
         c.campaign_status as status,
-        c.last_synced_at,
+        c.updated_at as last_synced_at,
         COALESCE(SUM(m.impressions), 0) as impressions,
         COALESCE(SUM(m.clicks), 0) as clicks,
         COALESCE(SUM(m.spend_cents), 0) as spend_cents,
         COALESCE(SUM(m.conversions), 0) as conversions,
-        0 as conversion_value_cents
-      FROM tiktok_campaigns c
-      LEFT JOIN tiktok_campaign_daily_metrics m
-        ON c.id = m.campaign_ref
+        COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents
+      FROM ad_campaigns c
+      LEFT JOIN ad_metrics m
+        ON c.id = m.entity_ref
+        AND m.entity_type = 'campaign'
         AND m.metric_date >= ?
         AND m.metric_date <= ?
-      WHERE c.organization_id = ?
+      WHERE c.organization_id = ? AND c.platform = 'tiktok'
     `;
     const params: unknown[] = [startDate, endDate, orgId];
 
     if (options.status) {
+      const statusMap: Record<string, string> = { 'ACTIVE': 'active', 'PAUSED': 'paused', 'DELETED': 'deleted' };
       query += ` AND c.campaign_status = ?`;
-      params.push(options.status);
+      params.push(statusMap[options.status] || options.status.toLowerCase());
     }
 
     query += ` GROUP BY c.id ORDER BY spend_cents DESC LIMIT ? OFFSET ?`;
@@ -819,20 +860,22 @@ export class D1AnalyticsService {
    * Get TikTok Ads summary for an organization
    */
   async getTikTokSummary(orgId: string, startDate: string, endDate: string): Promise<PlatformSummary> {
+    // Query unified tables
     const result = await this.session.prepare(`
       SELECT
         COALESCE(SUM(m.spend_cents), 0) as spend_cents,
         COALESCE(SUM(m.impressions), 0) as impressions,
         COALESCE(SUM(m.clicks), 0) as clicks,
         COALESCE(SUM(m.conversions), 0) as conversions,
-        0 as conversion_value_cents,
+        COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents,
         COUNT(DISTINCT c.id) as campaigns
-      FROM tiktok_campaigns c
-      LEFT JOIN tiktok_campaign_daily_metrics m
-        ON c.id = m.campaign_ref
+      FROM ad_campaigns c
+      LEFT JOIN ad_metrics m
+        ON c.id = m.entity_ref
+        AND m.entity_type = 'campaign'
         AND m.metric_date >= ?
         AND m.metric_date <= ?
-      WHERE c.organization_id = ?
+      WHERE c.organization_id = ? AND c.platform = 'tiktok'
     `).bind(startDate, endDate, orgId).first<PlatformSummary>();
 
     return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
@@ -844,7 +887,7 @@ export class D1AnalyticsService {
 
   /**
    * Get unified platform summary across all ad platforms
-   * OPTIMIZED: Uses single UNION ALL query instead of N separate queries
+   * Uses unified ad_campaigns and ad_metrics tables
    */
   async getUnifiedPlatformSummary(
     orgId: string,
@@ -852,84 +895,43 @@ export class D1AnalyticsService {
     endDate: string,
     platforms: string[]
   ): Promise<{ summary: PlatformSummary; by_platform: Record<string, PlatformSummary> }> {
-    // Build UNION ALL query for requested platforms
-    const unionParts: string[] = [];
-    const params: unknown[] = [];
-
     // Normalize 'meta' to 'facebook' for query purposes
     const normalizedPlatforms = platforms.map(p => p === 'meta' ? 'facebook' : p);
     const uniquePlatforms = [...new Set(normalizedPlatforms)];
 
-    if (uniquePlatforms.includes('google')) {
-      unionParts.push(`
-        SELECT
-          'google' as platform,
-          COALESCE(SUM(m.spend_cents), 0) as spend_cents,
-          COALESCE(SUM(m.impressions), 0) as impressions,
-          COALESCE(SUM(m.clicks), 0) as clicks,
-          COALESCE(SUM(m.conversions), 0) as conversions,
-          COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents,
-          COUNT(DISTINCT c.id) as campaigns
-        FROM google_campaigns c
-        LEFT JOIN google_campaign_daily_metrics m
-          ON c.id = m.campaign_ref
-          AND m.metric_date >= ?
-          AND m.metric_date <= ?
-        WHERE c.organization_id = ?
-      `);
-      params.push(startDate, endDate, orgId);
-    }
-
-    if (uniquePlatforms.includes('facebook')) {
-      unionParts.push(`
-        SELECT
-          'facebook' as platform,
-          COALESCE(SUM(m.spend_cents), 0) as spend_cents,
-          COALESCE(SUM(m.impressions), 0) as impressions,
-          COALESCE(SUM(m.clicks), 0) as clicks,
-          COALESCE(SUM(m.conversions), 0) as conversions,
-          0 as conversion_value_cents,
-          COUNT(DISTINCT c.id) as campaigns
-        FROM facebook_campaigns c
-        LEFT JOIN facebook_campaign_daily_metrics m
-          ON c.id = m.campaign_ref
-          AND m.metric_date >= ?
-          AND m.metric_date <= ?
-        WHERE c.organization_id = ?
-      `);
-      params.push(startDate, endDate, orgId);
-    }
-
-    if (uniquePlatforms.includes('tiktok')) {
-      unionParts.push(`
-        SELECT
-          'tiktok' as platform,
-          COALESCE(SUM(m.spend_cents), 0) as spend_cents,
-          COALESCE(SUM(m.impressions), 0) as impressions,
-          COALESCE(SUM(m.clicks), 0) as clicks,
-          COALESCE(SUM(m.conversions), 0) as conversions,
-          0 as conversion_value_cents,
-          COUNT(DISTINCT c.id) as campaigns
-        FROM tiktok_campaigns c
-        LEFT JOIN tiktok_campaign_daily_metrics m
-          ON c.id = m.campaign_ref
-          AND m.metric_date >= ?
-          AND m.metric_date <= ?
-        WHERE c.organization_id = ?
-      `);
-      params.push(startDate, endDate, orgId);
-    }
-
     // If no platforms requested, return empty
-    if (unionParts.length === 0) {
+    if (uniquePlatforms.length === 0) {
       return {
         summary: { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 },
         by_platform: {}
       };
     }
 
-    // Execute single UNION ALL query
-    const query = unionParts.join(' UNION ALL ');
+    // Build platform filter
+    const placeholders = uniquePlatforms.map(() => '?').join(', ');
+
+    // Single query against unified tables
+    const query = `
+      SELECT
+        c.platform,
+        COALESCE(SUM(m.spend_cents), 0) as spend_cents,
+        COALESCE(SUM(m.impressions), 0) as impressions,
+        COALESCE(SUM(m.clicks), 0) as clicks,
+        COALESCE(SUM(m.conversions), 0) as conversions,
+        COALESCE(SUM(m.conversion_value_cents), 0) as conversion_value_cents,
+        COUNT(DISTINCT c.id) as campaigns
+      FROM ad_campaigns c
+      LEFT JOIN ad_metrics m
+        ON c.id = m.campaign_ref
+        AND m.entity_type = 'campaign'
+        AND m.metric_date >= ?
+        AND m.metric_date <= ?
+      WHERE c.organization_id = ?
+        AND c.platform IN (${placeholders})
+      GROUP BY c.platform
+    `;
+    const params: unknown[] = [startDate, endDate, orgId, ...uniquePlatforms];
+
     const result = await this.session.prepare(query).bind(...params).all<{
       platform: string;
       spend_cents: number;
