@@ -52,27 +52,6 @@ const ConversionGoalSchema = z.object({
   position_row: z.number().int().min(0).optional(), // Graph Y position (funnel order)
 }).passthrough(); // Allow extra fields that may be sent by frontend
 
-const FilterRuleSchema = z.object({
-  field: z.string(),       // 'page_path', 'utm_source', 'event_type'
-  operator: z.enum([
-    'equals', 'not_equals',
-    'contains', 'not_contains',
-    'starts_with', 'ends_with',
-    'in', 'not_in',
-    'exists', 'not_exists',
-    'is_empty', 'is_not_empty'
-  ]),
-  value: z.union([z.string(), z.number(), z.array(z.string())]).optional(),
-});
-
-const EventFilterSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().min(1).max(100),
-  filter_type: z.enum(['include', 'exclude']).default('exclude'),
-  rules: z.array(FilterRuleSchema).min(1),
-  is_active: z.boolean().default(true),
-});
-
 // ============== Conversion Goals Endpoints ==============
 
 /**
@@ -115,7 +94,7 @@ export class ListConversionGoals extends OpenAPIRoute {
     const goals = await c.env.DB.prepare(`
       SELECT id, name, type, trigger_config, default_value_cents,
              is_primary, include_in_path, priority, created_at, updated_at,
-             slug, description, goal_type, revenue_sources, event_filters_v2,
+             slug, description, goal_type, revenue_sources, filter_config,
              value_type, fixed_value_cents, display_order, color, icon, is_active,
              avg_deal_value_cents, close_rate_percent,
              connector, connector_event_type, is_conversion, position_col, position_row
@@ -145,7 +124,7 @@ export class ListConversionGoals extends OpenAPIRoute {
         is_active: g.is_active !== 0,
         // Enhanced fields
         revenue_sources: g.revenue_sources ? JSON.parse(g.revenue_sources as string) : undefined,
-        event_filters: g.event_filters_v2 ? JSON.parse(g.event_filters_v2 as string) : undefined,
+        event_filters: g.filter_config ? JSON.parse(g.filter_config as string) : undefined,
         // Calculated value based on value_type
         calculated_value_cents: calculatedResult.value_cents,
         value_formula: calculatedResult.formula_used,
@@ -236,7 +215,7 @@ export class CreateConversionGoal extends OpenAPIRoute {
         id, organization_id, name, type, category, trigger_config,
         default_value_cents, is_primary, include_in_path, priority,
         value_type, fixed_value_cents, avg_deal_value_cents, close_rate_percent,
-        slug, description, goal_type, revenue_sources, event_filters_v2,
+        slug, description, goal_type, revenue_sources, filter_config,
         display_order, color, icon, is_active,
         connector, connector_event_type, is_conversion, position_col, position_row,
         created_at, updated_at
@@ -435,7 +414,7 @@ export class UpdateConversionGoal extends OpenAPIRoute {
       values.push(JSON.stringify(body.revenue_sources));
     }
     if (body.event_filters !== undefined) {
-      updates.push('event_filters_v2 = ?');
+      updates.push('filter_config = ?');
       values.push(JSON.stringify(body.event_filters));
     }
     if (body.display_order !== undefined) {
@@ -538,255 +517,6 @@ export class DeleteConversionGoal extends OpenAPIRoute {
   }
 }
 
-// ============== Event Filters Endpoints ==============
-
-/**
- * GET /v1/event-filters - List event filters
- */
-export class ListEventFilters extends OpenAPIRoute {
-  public schema = {
-    tags: ["Goals"],
-    summary: "List event filters for an organization",
-    operationId: "list-event-filters",
-    security: [{ bearerAuth: [] }],
-    responses: {
-      "200": {
-        description: "List of event filters",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.array(EventFilterSchema.extend({
-                id: z.string(),
-                created_at: z.string(),
-                updated_at: z.string(),
-              }))
-            })
-          }
-        }
-      }
-    }
-  };
-
-  public async handle(c: AppContext) {
-    const session = c.get("session");
-    const orgId = c.get("org_id");
-
-    if (!orgId) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
-    }
-
-    // Note: Access already verified by requireOrg middleware (handles admin bypass)
-
-    const filters = await c.env.DB.prepare(`
-      SELECT id, name, filter_type, rules, is_active, created_at, updated_at
-      FROM event_filters
-      WHERE organization_id = ?
-      ORDER BY created_at DESC
-    `).bind(orgId).all();
-
-    // Parse JSON fields
-    const parsedFilters = (filters.results || []).map(f => ({
-      ...f,
-      rules: JSON.parse(f.rules as string || '[]'),
-      is_active: Boolean(f.is_active),
-    }));
-
-    return success(c, parsedFilters);
-  }
-}
-
-/**
- * POST /v1/event-filters - Create an event filter
- */
-export class CreateEventFilter extends OpenAPIRoute {
-  public schema = {
-    tags: ["Goals"],
-    summary: "Create a new event filter",
-    operationId: "create-event-filter",
-    security: [{ bearerAuth: [] }],
-    request: {
-      body: {
-        content: {
-          "application/json": {
-            schema: EventFilterSchema.omit({ id: true })
-          }
-        }
-      }
-    },
-    responses: {
-      "201": {
-        description: "Event filter created"
-      }
-    }
-  };
-
-  public async handle(c: AppContext) {
-    const session = c.get("session");
-    const orgId = c.get("org_id");
-
-    if (!orgId) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
-    }
-
-    // Note: Access already verified by requireOrg middleware (handles admin bypass)
-
-    const data = await this.getValidatedData<typeof this.schema>();
-    const body = data.body;
-
-    const id = crypto.randomUUID();
-    const now = new Date().toISOString();
-
-    await c.env.DB.prepare(`
-      INSERT INTO event_filters (
-        id, organization_id, name, filter_type, rules, is_active,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      id,
-      orgId,
-      body.name,
-      body.filter_type,
-      JSON.stringify(body.rules),
-      body.is_active ? 1 : 0,
-      now,
-      now
-    ).run();
-
-    return success(c, {
-      id,
-      ...body,
-      created_at: now,
-      updated_at: now,
-    }, undefined, 201);
-  }
-}
-
-/**
- * PUT /v1/event-filters/:id - Update an event filter
- */
-export class UpdateEventFilter extends OpenAPIRoute {
-  public schema = {
-    tags: ["Goals"],
-    summary: "Update an event filter",
-    operationId: "update-event-filter",
-    security: [{ bearerAuth: [] }],
-    request: {
-      params: z.object({
-        id: z.string()
-      }),
-      body: {
-        content: {
-          "application/json": {
-            schema: EventFilterSchema.partial().omit({ id: true })
-          }
-        }
-      }
-    },
-    responses: {
-      "200": {
-        description: "Event filter updated"
-      }
-    }
-  };
-
-  public async handle(c: AppContext) {
-    const session = c.get("session");
-    const orgId = c.get("org_id");
-
-    if (!orgId) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
-    }
-
-    const data = await this.getValidatedData<typeof this.schema>();
-    const filterId = data.params.id;
-    const body = data.body;
-
-    // Verify filter belongs to org
-    const existing = await c.env.DB.prepare(`
-      SELECT id FROM event_filters
-      WHERE id = ? AND organization_id = ?
-    `).bind(filterId, orgId).first();
-
-    if (!existing) {
-      return error(c, "NOT_FOUND", "Filter not found", 404);
-    }
-
-    // Build update query dynamically
-    const updates: string[] = [];
-    const values: any[] = [];
-
-    if (body.name !== undefined) {
-      updates.push('name = ?');
-      values.push(body.name);
-    }
-    if (body.filter_type !== undefined) {
-      updates.push('filter_type = ?');
-      values.push(body.filter_type);
-    }
-    if (body.rules !== undefined) {
-      updates.push('rules = ?');
-      values.push(JSON.stringify(body.rules));
-    }
-    if (body.is_active !== undefined) {
-      updates.push('is_active = ?');
-      values.push(body.is_active ? 1 : 0);
-    }
-
-    if (updates.length > 0) {
-      updates.push('updated_at = ?');
-      values.push(new Date().toISOString());
-      values.push(filterId);
-
-      await c.env.DB.prepare(`
-        UPDATE event_filters SET ${updates.join(', ')} WHERE id = ?
-      `).bind(...values).run();
-    }
-
-    return success(c, { updated: true });
-  }
-}
-
-/**
- * DELETE /v1/event-filters/:id - Delete an event filter
- */
-export class DeleteEventFilter extends OpenAPIRoute {
-  public schema = {
-    tags: ["Goals"],
-    summary: "Delete an event filter",
-    operationId: "delete-event-filter",
-    security: [{ bearerAuth: [] }],
-    request: {
-      params: z.object({
-        id: z.string()
-      })
-    },
-    responses: {
-      "200": {
-        description: "Event filter deleted"
-      }
-    }
-  };
-
-  public async handle(c: AppContext) {
-    const session = c.get("session");
-    const orgId = c.get("org_id");
-
-    if (!orgId) {
-      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
-    }
-
-    const data = await this.getValidatedData<typeof this.schema>();
-    const filterId = data.params.id;
-
-    const result = await c.env.DB.prepare(`
-      DELETE FROM event_filters WHERE id = ? AND organization_id = ?
-    `).bind(filterId, orgId).run();
-
-    if (!result.meta?.changes) {
-      return error(c, "NOT_FOUND", "Filter not found", 404);
-    }
-
-    return success(c, { deleted: true });
-  }
-}
+// Note: Standalone event_filters table was removed in migration 0070.
+// Goal-specific filters are stored in conversion_goals.filter_config column.
+// See SHARED_CODE.md §6 for filter configuration documentation.

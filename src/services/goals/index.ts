@@ -205,7 +205,7 @@ export class GoalService {
     const result = await this.db.prepare(`
       INSERT INTO conversion_goals (
         organization_id, name, slug, description, goal_type,
-        revenue_sources, event_filters_v2, value_type, fixed_value_cents,
+        revenue_sources, filter_config, value_type, fixed_value_cents,
         display_order, is_primary, color, icon, is_active,
         type, trigger_config, default_value_cents, priority, include_in_path
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -274,7 +274,7 @@ export class GoalService {
       values.push(input.revenue_sources ? JSON.stringify(input.revenue_sources) : null);
     }
     if (input.event_filters !== undefined) {
-      updates.push('event_filters_v2 = ?');
+      updates.push('filter_config = ?');
       values.push(input.event_filters ? JSON.stringify(input.event_filters) : null);
     }
     if (input.value_type !== undefined) {
@@ -722,8 +722,8 @@ export class GoalService {
 
     // Get event_filters from new column or convert from legacy trigger_config
     let eventFilters: EventFilters | undefined;
-    if (row.event_filters_v2) {
-      eventFilters = JSON.parse(row.event_filters_v2);
+    if (row.filter_config) {
+      eventFilters = JSON.parse(row.filter_config);
     } else if (row.trigger_config && goalType === 'tag_event') {
       // Convert legacy trigger_config to event_filters format
       const legacy = JSON.parse(row.trigger_config);
@@ -786,7 +786,7 @@ interface ConversionGoalRow {
   description: string | null;
   goal_type: string | null;  // 'revenue_source', 'tag_event', 'manual'
   revenue_sources: string | null;
-  event_filters_v2: string | null;
+  filter_config: string | null;
   value_type: string | null;
   fixed_value_cents: number | null;
   display_order: number | null;

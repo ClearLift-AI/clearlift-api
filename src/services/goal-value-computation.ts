@@ -918,9 +918,9 @@ export class GoalValueComputationService {
         return "";
       }
     }
-    if (goal.event_filters_v2) {
+    if (goal.filter_config) {
       try {
-        const filters = JSON.parse(goal.event_filters_v2);
+        const filters = JSON.parse(goal.filter_config);
         return filters.event_type || "";
       } catch {
         return "";

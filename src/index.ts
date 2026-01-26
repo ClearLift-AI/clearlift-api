@@ -256,11 +256,7 @@ import {
   ListConversionGoals,
   CreateConversionGoal,
   UpdateConversionGoal,
-  DeleteConversionGoal,
-  ListEventFilters,
-  CreateEventFilter,
-  UpdateEventFilter,
-  DeleteEventFilter
+  DeleteConversionGoal
 } from "./endpoints/v1/goals";
 import {
   GetGoalMetrics,
@@ -699,12 +695,6 @@ openapi.delete("/v1/goals/relationships/:id", auth, requireOrg, requireOrgAdmin,
 openapi.post("/v1/goals/:id/compute-value", auth, requireOrg, ComputeGoalValue);
 openapi.get("/v1/goals/:id/conversion-stats", auth, requireOrg, GetGoalConversionStats);
 openapi.post("/v1/goals/recompute-all", auth, requireOrg, RecomputeAllGoalValues);
-
-// Event Filters endpoints
-openapi.get("/v1/event-filters", auth, requireOrg, ListEventFilters);
-openapi.post("/v1/event-filters", auth, requireOrg, requireOrgAdmin, CreateEventFilter);
-openapi.put("/v1/event-filters/:id", auth, requireOrg, requireOrgAdmin, UpdateEventFilter);
-openapi.delete("/v1/event-filters/:id", auth, requireOrg, requireOrgAdmin, DeleteEventFilter);
 
 // AI Analysis endpoints (hierarchical insights)
 openapi.post("/v1/analysis/run", auth, requireOrg, RunAnalysis);

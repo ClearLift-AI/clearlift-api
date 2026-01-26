@@ -307,23 +307,6 @@ async function getConversionGoals(db: D1Database, orgId: string): Promise<Conver
   }));
 }
 
-// Helper: Query event filters from D1
-async function getEventFilters(db: D1Database, orgId: string): Promise<EventFilter[]> {
-  const result = await db.prepare(`
-    SELECT id, name, filter_type, rules, is_active
-    FROM event_filters
-    WHERE organization_id = ? AND is_active = 1
-  `).bind(orgId).all();
-
-  return (result.results || []).map(row => ({
-    id: row.id as string,
-    name: row.name as string,
-    filter_type: row.filter_type as 'include' | 'exclude',
-    rules: JSON.parse(row.rules as string || '[]'),
-    is_active: Boolean(row.is_active),
-  }));
-}
-
 // Helper: Check if an event matches a conversion goal
 function eventMatchesGoal(event: any, goal: ConversionGoal): boolean {
   const { trigger_config } = goal;

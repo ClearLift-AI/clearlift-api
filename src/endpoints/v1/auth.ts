@@ -700,7 +700,6 @@ export class DeleteAccount extends OpenAPIRoute {
           'consent_configurations',
           'ai_optimization_settings',
           'conversion_goals',
-          'event_filters',
           'tracking_domains',
           'identity_mappings',
           'identity_merges',
