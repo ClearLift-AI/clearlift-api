@@ -109,21 +109,6 @@ export interface AttributionResultRow {
 // PLATFORM DATA INTERFACES
 // =============================================================================
 
-export interface GoogleCampaignRow {
-  id: string;
-  organization_id: string;
-  customer_id: string;
-  campaign_id: string;
-  campaign_name: string;
-  campaign_status: string;
-  campaign_type: string | null;
-  budget_amount_cents: number | null;
-  budget_type: string | null;
-  last_synced_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface GoogleCampaignMetricsRow {
   campaign_ref: string;
   metric_date: string;
@@ -494,31 +479,6 @@ export class D1AnalyticsService {
   // =============================================================================
   // GOOGLE ADS PLATFORM DATA
   // =============================================================================
-
-  /**
-   * Get Google Ads campaigns for an organization
-   */
-  async getGoogleCampaigns(
-    orgId: string,
-    options: { status?: string; limit?: number; offset?: number } = {}
-  ): Promise<GoogleCampaignRow[]> {
-    let query = `
-      SELECT * FROM google_campaigns
-      WHERE organization_id = ?
-    `;
-    const params: unknown[] = [orgId];
-
-    if (options.status) {
-      query += ` AND campaign_status = ?`;
-      params.push(options.status);
-    }
-
-    query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
-    params.push(options.limit || 100, options.offset || 0);
-
-    const result = await this.session.prepare(query).bind(...params).all<GoogleCampaignRow>();
-    return result.results;
-  }
 
   /**
    * Get Google Ads campaign metrics for a date range

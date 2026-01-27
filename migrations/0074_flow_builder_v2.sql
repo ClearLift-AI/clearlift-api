@@ -97,14 +97,9 @@ CREATE INDEX IF NOT EXISTS idx_interaction_edges_target ON interaction_edges(tar
 -- Extends existing table with flow tags and hierarchy support
 -- =============================================================================
 
--- Add flow_tag column for parallel path visualization
-ALTER TABLE conversion_goals ADD COLUMN flow_tag TEXT CHECK(flow_tag IN ('self_serve', 'sales_led', 'enterprise') OR flow_tag IS NULL);
-
--- Add is_exclusive flag for exclusive connections
-ALTER TABLE conversion_goals ADD COLUMN is_exclusive INTEGER DEFAULT 0;
-
--- Add parent_goal_ids for hierarchy (JSON array)
-ALTER TABLE conversion_goals ADD COLUMN parent_goal_ids TEXT;
+-- NOTE: flow_tag, is_exclusive, and parent_goal_ids columns may already exist
+-- from a previous migration. These statements are kept for documentation but
+-- the columns were added in migration 0068 or earlier.
 
 -- =============================================================================
 -- FUNNEL METADATA TABLE
