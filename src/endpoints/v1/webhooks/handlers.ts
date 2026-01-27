@@ -3,9 +3,187 @@
  *
  * Platform-specific webhook signature verification and event parsing.
  * Each handler implements the WebhookHandler interface.
+ *
+ * Includes unified event type normalization for cross-connector reporting.
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+
+// =============================================================================
+// Unified Event Types
+// =============================================================================
+
+/**
+ * Unified event types for cross-connector normalization.
+ * Maps connector-specific events to standard types.
+ */
+export type UnifiedEventType =
+  // Acquisition
+  | 'lead.created'
+  | 'lead.qualified'
+  | 'contact.created'
+  | 'form.submitted'
+  // Engagement
+  | 'meeting.scheduled'
+  | 'meeting.completed'
+  | 'demo.requested'
+  | 'trial.started'
+  | 'quote.sent'
+  | 'quote.approved'
+  // Conversion
+  | 'subscription.created'
+  | 'subscription.upgraded'
+  | 'payment.completed'
+  | 'order.placed'
+  | 'order.fulfilled'
+  | 'deal.won'
+  | 'job.completed'
+  | 'invoice.paid'
+  // Retention
+  | 'subscription.renewed'
+  | 'subscription.cancelled'
+  | 'refund.issued';
+
+/**
+ * Connector event mappings to unified types.
+ * Key: connector provider ID
+ * Value: Map of connector event name to unified event type
+ */
+const CONNECTOR_EVENT_MAPPINGS: Record<string, Record<string, UnifiedEventType>> = {
+  // Stripe
+  stripe: {
+    'customer.subscription.created': 'subscription.created',
+    'subscription_created': 'subscription.created',
+    'customer.subscription.updated': 'subscription.upgraded',
+    'invoice.paid': 'invoice.paid',
+    'invoice.payment_succeeded': 'payment.completed',
+    'payment_intent.succeeded': 'payment.completed',
+    'payment_success': 'payment.completed',
+    'charge.succeeded': 'payment.completed',
+    'checkout.session.completed': 'payment.completed',
+    'customer.subscription.deleted': 'subscription.cancelled',
+    'charge.refunded': 'refund.issued',
+    'trial_started': 'trial.started',
+  },
+
+  // Shopify
+  shopify: {
+    'orders/create': 'order.placed',
+    'order_placed': 'order.placed',
+    'orders/paid': 'payment.completed',
+    'orders/fulfilled': 'order.fulfilled',
+    'order_fulfilled': 'order.fulfilled',
+    'checkouts/create': 'order.placed',
+    'checkout_started': 'order.placed',
+    'refunds/create': 'refund.issued',
+  },
+
+  // HubSpot
+  hubspot: {
+    'contact.creation': 'contact.created',
+    'contact_created': 'contact.created',
+    'contact.propertyChange': 'lead.qualified',
+    'deal.creation': 'lead.qualified',
+    'deal_created': 'lead.qualified',
+    'deal.propertyChange': 'deal.won',
+    'deal_won': 'deal.won',
+    'form.submitted': 'form.submitted',
+    'form_submitted': 'form.submitted',
+    'meeting.creation': 'meeting.scheduled',
+  },
+
+  // Salesforce
+  salesforce: {
+    'Lead.create': 'lead.created',
+    'lead_created': 'lead.created',
+    'Lead.convert': 'lead.qualified',
+    'lead_converted': 'lead.qualified',
+    'Opportunity.create': 'lead.qualified',
+    'opportunity_created': 'lead.qualified',
+    'Opportunity.won': 'deal.won',
+    'opportunity_won': 'deal.won',
+    'Contact.create': 'contact.created',
+  },
+
+  // Calendly
+  calendly: {
+    'invitee.created': 'meeting.scheduled',
+    'meeting_scheduled': 'meeting.scheduled',
+    'invitee.canceled': 'meeting.scheduled',
+    'meeting_completed': 'meeting.completed',
+  },
+
+  // Jobber
+  jobber: {
+    'quote.created': 'quote.sent',
+    'quote_sent': 'quote.sent',
+    'quote.approved': 'quote.approved',
+    'job.completed': 'job.completed',
+    'job_completed': 'job.completed',
+    'invoice.paid': 'invoice.paid',
+    'invoice_paid': 'invoice.paid',
+  },
+
+  // PayPal
+  paypal: {
+    'PAYMENT.CAPTURE.COMPLETED': 'payment.completed',
+    'payment_captured': 'payment.completed',
+    'BILLING.SUBSCRIPTION.CREATED': 'subscription.created',
+    'subscription_activated': 'subscription.created',
+    'BILLING.SUBSCRIPTION.CANCELLED': 'subscription.cancelled',
+    'PAYMENT.CAPTURE.REFUNDED': 'refund.issued',
+  },
+
+  // Square
+  square: {
+    'payment.completed': 'payment.completed',
+    'payment_completed': 'payment.completed',
+    'order.created': 'order.placed',
+    'order_created': 'order.placed',
+    'refund.created': 'refund.issued',
+  },
+
+  // Pipedrive
+  pipedrive: {
+    'added.person': 'contact.created',
+    'person_created': 'contact.created',
+    'added.deal': 'lead.qualified',
+    'deal_created': 'lead.qualified',
+    'updated.deal': 'deal.won',
+    'deal_won': 'deal.won',
+  },
+
+  // Close
+  close: {
+    'lead.created': 'lead.created',
+    'lead_created': 'lead.created',
+    'opportunity.won': 'deal.won',
+    'opportunity_won': 'deal.won',
+  },
+
+  // Acuity
+  acuity: {
+    'appointment.scheduled': 'meeting.scheduled',
+    'appointment_scheduled': 'meeting.scheduled',
+    'appointment.completed': 'meeting.completed',
+  },
+
+  // Cal.com
+  cal_com: {
+    'BOOKING_CREATED': 'meeting.scheduled',
+    'booking_created': 'meeting.scheduled',
+    'BOOKING_RESCHEDULED': 'meeting.scheduled',
+  },
+};
+
+/**
+ * Convert a connector-specific event to its unified type.
+ */
+export function toUnifiedEventType(connector: string, connectorEvent: string): UnifiedEventType | null {
+  const mapping = CONNECTOR_EVENT_MAPPINGS[connector];
+  if (!mapping) return null;
+  return mapping[connectorEvent] || null;
+}
 
 // =============================================================================
 // Types
@@ -28,6 +206,7 @@ export interface WebhookHandler {
   parseEvent(body: string): WebhookEvent;
   getEventType(event: WebhookEvent): string;
   getEventId(event: WebhookEvent): string | null;
+  getUnifiedEventType(event: WebhookEvent): UnifiedEventType | null;
 }
 
 // =============================================================================
@@ -100,6 +279,10 @@ export class StripeWebhookHandler implements WebhookHandler {
   getEventId(event: WebhookEvent): string | null {
     return event.id;
   }
+
+  getUnifiedEventType(event: WebhookEvent): UnifiedEventType | null {
+    return toUnifiedEventType(this.connector, event.type);
+  }
 }
 
 // =============================================================================
@@ -108,6 +291,7 @@ export class StripeWebhookHandler implements WebhookHandler {
 
 export class ShopifyWebhookHandler implements WebhookHandler {
   connector = "shopify";
+  private currentTopic: string = "shopify_event";
 
   async verifySignature(
     headers: Headers,
@@ -116,6 +300,12 @@ export class ShopifyWebhookHandler implements WebhookHandler {
   ): Promise<boolean> {
     const signature = headers.get("X-Shopify-Hmac-Sha256");
     if (!signature) return false;
+
+    // Store topic from header for event type normalization
+    const topic = headers.get("X-Shopify-Topic");
+    if (topic) {
+      this.currentTopic = topic;
+    }
 
     try {
       // Compute expected HMAC
@@ -138,7 +328,7 @@ export class ShopifyWebhookHandler implements WebhookHandler {
     const data = JSON.parse(body);
     return {
       id: data.id?.toString() || null,
-      type: "shopify_event", // Shopify sends topic in header, not body
+      type: this.currentTopic, // Use topic from header
       payload: data,
     };
   }
@@ -149,6 +339,10 @@ export class ShopifyWebhookHandler implements WebhookHandler {
 
   getEventId(event: WebhookEvent): string | null {
     return event.id;
+  }
+
+  getUnifiedEventType(event: WebhookEvent): UnifiedEventType | null {
+    return toUnifiedEventType(this.connector, event.type);
   }
 }
 
@@ -259,6 +453,10 @@ export class HubSpotWebhookHandler implements WebhookHandler {
 
   getEventId(event: WebhookEvent): string | null {
     return event.id;
+  }
+
+  getUnifiedEventType(event: WebhookEvent): UnifiedEventType | null {
+    return toUnifiedEventType(this.connector, event.type);
   }
 }
 

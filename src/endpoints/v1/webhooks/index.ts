@@ -126,6 +126,7 @@ export class ReceiveWebhook extends OpenAPIRoute {
 
     const eventType = handler.getEventType(event);
     const eventId = handler.getEventId(event);
+    const unifiedEventType = handler.getUnifiedEventType(event);
 
     // Check if this event type is subscribed (if filtering is configured)
     if (endpoint.events_subscribed) {
@@ -158,8 +159,8 @@ export class ReceiveWebhook extends OpenAPIRoute {
     // Store the event
     await c.env.DB.prepare(
       `INSERT INTO webhook_events
-       (id, organization_id, endpoint_id, connector, event_type, event_id, payload_hash, payload, status, received_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`
+       (id, organization_id, endpoint_id, connector, event_type, unified_event_type, event_id, payload_hash, payload, status, received_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`
     )
       .bind(
         webhookEventId,
@@ -167,6 +168,7 @@ export class ReceiveWebhook extends OpenAPIRoute {
         endpoint.id,
         connector,
         eventType,
+        unifiedEventType,
         eventId,
         payloadHash,
         body
@@ -190,6 +192,7 @@ export class ReceiveWebhook extends OpenAPIRoute {
           organization_id: orgId,
           connector,
           event_type: eventType,
+          unified_event_type: unifiedEventType,
           webhook_event_id: webhookEventId,
         });
       } catch (queueError) {
