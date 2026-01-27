@@ -118,7 +118,7 @@ async function checkVerificationStatus(
       SELECT COUNT(*) as total_count
       FROM conversions
       WHERE organization_id = ?
-        AND source_platform IN ('stripe', 'shopify')
+        AND source_platform IN ('stripe', 'shopify', 'jobber')
         AND conversion_timestamp >= ?
         AND conversion_timestamp <= ?
     `).bind(orgId, dateRange.start, dateRange.end + 'T23:59:59Z').first<{ total_count: number }>();
@@ -667,54 +667,98 @@ async function buildPlatformFallbackD1(
     let totalConversions = 0;
     let totalRevenue = 0;
 
-    for (const platform of platforms) {
-      try {
-        const metricsTable = `${platform}_campaign_daily_metrics`;
-        const campaignsTable = `${platform}_campaigns`;
+    // Use unified ad_metrics table instead of per-platform tables
+    try {
+      const metricsResult = await analyticsDb.prepare(`
+        SELECT
+          m.platform,
+          m.campaign_id,
+          c.campaign_name,
+          SUM(m.conversions) as conversions,
+          SUM(m.conversion_value_cents) as conversion_value_cents
+        FROM ad_metrics m
+        LEFT JOIN ad_campaigns c ON m.campaign_id = c.platform_campaign_id AND m.platform = c.platform
+        WHERE m.organization_id = ?
+          AND m.metric_date >= ?
+          AND m.metric_date <= ?
+          AND m.platform IN (${platforms.map(() => '?').join(', ')})
+        GROUP BY m.platform, m.campaign_id, c.campaign_name
+      `).bind(orgId, dateRange.start, dateRange.end, ...platforms).all<{
+        platform: string;
+        campaign_id: string;
+        campaign_name: string | null;
+        conversions: number;
+        conversion_value_cents: number;
+      }>();
 
-        // Query aggregated metrics by campaign
-        // Note: Tables use 'metric_date', 'organization_id', and 'campaign_name' columns
-        const metricsResult = await analyticsDb.prepare(`
-          SELECT
-            m.campaign_ref,
-            c.campaign_name,
-            SUM(m.conversions) as conversions,
-            SUM(m.conversion_value_cents) as conversion_value_cents
-          FROM ${metricsTable} m
-          LEFT JOIN ${campaignsTable} c ON m.campaign_ref = c.id
-          WHERE m.organization_id = ?
-            AND m.metric_date >= ?
-            AND m.metric_date <= ?
-          GROUP BY m.campaign_ref, c.campaign_name
-        `).bind(orgId, dateRange.start, dateRange.end).all<{
-          campaign_ref: string;
-          campaign_name: string | null;
-          conversions: number;
-          conversion_value_cents: number;
-        }>();
+      for (const row of metricsResult.results || []) {
+        const conversions = row.conversions || 0;
+        const revenue = (row.conversion_value_cents || 0) / 100;
+        const medium = row.platform === 'google' ? 'cpc' : 'paid';
 
-        for (const row of metricsResult.results || []) {
-          const conversions = row.conversions || 0;
-          const revenue = (row.conversion_value_cents || 0) / 100;
-          const medium = platform === 'google' ? 'cpc' : 'paid';
+        allCampaigns.push({
+          utm_source: row.platform,
+          utm_medium: medium,
+          utm_campaign: row.campaign_name || row.campaign_id,
+          touchpoints: 0,
+          conversions_in_path: 0,
+          attributed_conversions: conversions,
+          attributed_revenue: revenue,
+          avg_position_in_path: 0
+        });
 
-          allCampaigns.push({
-            utm_source: platform,
-            utm_medium: medium,
-            utm_campaign: row.campaign_name || row.campaign_ref,
-            touchpoints: 0,
-            conversions_in_path: 0,
-            attributed_conversions: conversions,
-            attributed_revenue: revenue,
-            avg_position_in_path: 0
-          });
+        totalConversions += conversions;
+        totalRevenue += revenue;
+      }
+    } catch (err) {
+      // Fall back to per-platform tables if unified table doesn't exist
+      console.warn(`[Attribution D1 Fallback] Unified ad_metrics query failed, trying per-platform:`, err);
+      for (const platform of platforms) {
+        try {
+          const metricsTable = `${platform}_campaign_daily_metrics`;
+          const campaignsTable = `${platform}_campaigns`;
 
-          totalConversions += conversions;
-          totalRevenue += revenue;
+          const metricsResult = await analyticsDb.prepare(`
+            SELECT
+              m.campaign_ref,
+              c.campaign_name,
+              SUM(m.conversions) as conversions,
+              SUM(m.conversion_value_cents) as conversion_value_cents
+            FROM ${metricsTable} m
+            LEFT JOIN ${campaignsTable} c ON m.campaign_ref = c.id
+            WHERE m.organization_id = ?
+              AND m.metric_date >= ?
+              AND m.metric_date <= ?
+            GROUP BY m.campaign_ref, c.campaign_name
+          `).bind(orgId, dateRange.start, dateRange.end).all<{
+            campaign_ref: string;
+            campaign_name: string | null;
+            conversions: number;
+            conversion_value_cents: number;
+          }>();
+
+          for (const row of metricsResult.results || []) {
+            const conversions = row.conversions || 0;
+            const revenue = (row.conversion_value_cents || 0) / 100;
+            const medium = platform === 'google' ? 'cpc' : 'paid';
+
+            allCampaigns.push({
+              utm_source: platform,
+              utm_medium: medium,
+              utm_campaign: row.campaign_name || row.campaign_ref,
+              touchpoints: 0,
+              conversions_in_path: 0,
+              attributed_conversions: conversions,
+              attributed_revenue: revenue,
+              avg_position_in_path: 0
+            });
+
+            totalConversions += conversions;
+            totalRevenue += revenue;
+          }
+        } catch (platformErr) {
+          console.warn(`[Attribution D1 Fallback] Failed to query ${platform}:`, platformErr);
         }
-      } catch (err) {
-        // Table might not exist for this platform
-        console.warn(`[Attribution D1 Fallback] Failed to query ${platform}:`, err);
       }
     }
 
