@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { success, error } from "../../utils/response";
 import { calculateGoalValue, validateGoalValueConfig } from "../../services/goal-value";
+import { OnboardingService } from "../../services/onboarding";
 
 // ============== Schema Definitions ==============
 
@@ -252,6 +253,14 @@ export class CreateConversionGoal extends OpenAPIRoute {
       now,
       now
     ).run();
+
+    // Update onboarding progress
+    try {
+      const onboarding = new OnboardingService(c.env.DB);
+      await onboarding.incrementGoalsCount(session.user_id);
+    } catch (e) {
+      console.error('[GOALS] Failed to update onboarding progress:', e);
+    }
 
     // Calculate the effective value for the response
     const calculatedResult = calculateGoalValue({
@@ -511,6 +520,14 @@ export class DeleteConversionGoal extends OpenAPIRoute {
 
     if (!result.meta?.changes) {
       return error(c, "NOT_FOUND", "Goal not found", 404);
+    }
+
+    // Update onboarding progress
+    try {
+      const onboarding = new OnboardingService(c.env.DB);
+      await onboarding.decrementGoalsCount(session.user_id);
+    } catch (e) {
+      console.error('[GOALS] Failed to update onboarding progress:', e);
     }
 
     return success(c, { deleted: true });

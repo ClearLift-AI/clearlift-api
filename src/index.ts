@@ -108,7 +108,8 @@ import {
   GetOnboardingStatus,
   StartOnboarding,
   CompleteOnboardingStep,
-  ResetOnboarding
+  ResetOnboarding,
+  ValidateOnboarding
 } from "./endpoints/v1/onboarding";
 import {
   Register,
@@ -135,6 +136,7 @@ import {
   RevokeShareableInviteLink,
   LookupOrganization,
   GetTrackingDomains,
+  GetTrackingDomainsAlias,
   AddTrackingDomain,
   RemoveTrackingDomain,
   ResyncTrackingDomain
@@ -586,9 +588,13 @@ openapi.patch("/v1/analytics/tiktok/ad-groups/:ad_group_id/targeting", auth, req
 
 // Onboarding endpoints
 openapi.get("/v1/onboarding/status", auth, GetOnboardingStatus);
+openapi.get("/v1/onboarding/validate", auth, ValidateOnboarding);
 openapi.post("/v1/onboarding/start", auth, StartOnboarding);
 openapi.post("/v1/onboarding/complete-step", auth, CompleteOnboardingStep);
 openapi.post("/v1/onboarding/reset", auth, ResetOnboarding);
+
+// Alias for frontend compatibility (frontend uses /v1/domains?org_id=xxx)
+openapi.get("/v1/domains", auth, requireOrg, GetTrackingDomainsAlias);
 
 // Connector Registry endpoints (public - no auth required for reading)
 openapi.get("/v1/connectors/registry", ListConnectorRegistry);

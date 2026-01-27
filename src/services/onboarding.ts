@@ -12,6 +12,10 @@ export interface OnboardingProgress {
   steps_completed: string[];
   services_connected: number;
   first_sync_completed: boolean;
+  has_verified_tag: boolean;
+  has_defined_goal: boolean;
+  verified_domains_count: number;
+  goals_count: number;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -206,8 +210,85 @@ export class OnboardingService {
   }
 
   /**
+   * Mark that a domain tag has been verified
+   */
+  async markTagVerified(userId: string): Promise<void> {
+    await this.db.prepare(`
+      UPDATE onboarding_progress
+      SET has_verified_tag = 1,
+          verified_domains_count = verified_domains_count + 1,
+          updated_at = datetime('now')
+      WHERE user_id = ?
+    `).bind(userId).run();
+  }
+
+  /**
+   * Increment goals count (called when a goal is created)
+   */
+  async incrementGoalsCount(userId: string): Promise<void> {
+    await this.db.prepare(`
+      UPDATE onboarding_progress
+      SET goals_count = goals_count + 1,
+          has_defined_goal = 1,
+          updated_at = datetime('now')
+      WHERE user_id = ?
+    `).bind(userId).run();
+  }
+
+  /**
+   * Decrement goals count (called when a goal is deleted)
+   */
+  async decrementGoalsCount(userId: string): Promise<void> {
+    await this.db.prepare(`
+      UPDATE onboarding_progress
+      SET goals_count = CASE WHEN goals_count > 0 THEN goals_count - 1 ELSE 0 END,
+          has_defined_goal = CASE WHEN goals_count > 1 THEN 1 ELSE 0 END,
+          updated_at = datetime('now')
+      WHERE user_id = ?
+    `).bind(userId).run();
+  }
+
+  /**
+   * Sync onboarding state with actual data from tables
+   */
+  async syncOnboardingState(userId: string, orgId: string): Promise<void> {
+    const now = new Date().toISOString();
+
+    // Sync verified domains
+    const verifiedDomains = await this.db.prepare(`
+      SELECT COUNT(*) as count FROM tracking_domains
+      WHERE organization_id = ? AND is_verified = 1
+    `).bind(orgId).first<{ count: number }>();
+
+    // Sync goals
+    const goalsCount = await this.db.prepare(`
+      SELECT COUNT(*) as count FROM conversion_goals
+      WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).first<{ count: number }>();
+
+    const vCount = verifiedDomains?.count || 0;
+    const gCount = goalsCount?.count || 0;
+
+    await this.db.prepare(`
+      UPDATE onboarding_progress
+      SET has_verified_tag = ?,
+          verified_domains_count = ?,
+          has_defined_goal = ?,
+          goals_count = ?,
+          updated_at = ?
+      WHERE user_id = ?
+    `).bind(
+      vCount > 0 ? 1 : 0,
+      vCount,
+      gCount > 0 ? 1 : 0,
+      gCount,
+      now,
+      userId
+    ).run();
+  }
+
+  /**
    * Check if user has completed onboarding
-   * Simplified: Just needs to have at least 1 service connected
    */
   async isOnboardingComplete(userId: string): Promise<boolean> {
     const progress = await this.getProgress(userId);
@@ -215,10 +296,12 @@ export class OnboardingService {
       return false;
     }
 
-    // User has completed onboarding if they have:
-    // 1. At least one service connected OR
-    // 2. Current step is 'completed'
-    return progress.services_connected > 0 || progress.current_step === 'completed';
+    // Complete if all requirements met or legacy completed
+    return (
+      progress.services_connected > 0 &&
+      progress.has_verified_tag &&
+      progress.has_defined_goal
+    ) || progress.current_step === 'completed';
   }
 
   /**
@@ -231,6 +314,10 @@ export class OnboardingService {
           steps_completed = '["welcome"]',
           services_connected = 0,
           first_sync_completed = FALSE,
+          has_verified_tag = 0,
+          has_defined_goal = 0,
+          verified_domains_count = 0,
+          goals_count = 0,
           updated_at = datetime('now'),
           completed_at = NULL
       WHERE user_id = ?

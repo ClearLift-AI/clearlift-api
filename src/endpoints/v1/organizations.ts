@@ -1181,6 +1181,51 @@ export class GetTrackingDomains extends OpenAPIRoute {
 }
 
 /**
+ * GET /v1/domains - Alias for GetTrackingDomains using org_id from query/middleware
+ */
+export class GetTrackingDomainsAlias extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "List tracking domains (alias)",
+    operationId: "get-tracking-domains-alias",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().optional(),
+      }),
+    },
+    responses: {
+      "200": {
+        description: "List of tracking domains"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const orgId = c.get("org_id");
+    if (!orgId) {
+      return error(c, "NO_ORGANIZATION", "No organization selected", 403);
+    }
+
+    const domains = await c.env.DB.prepare(`
+      SELECT id, domain, is_verified, is_primary, created_at
+      FROM tracking_domains
+      WHERE organization_id = ?
+      ORDER BY is_primary DESC, created_at DESC
+    `).bind(orgId).all();
+
+    const enrichedDomains = (domains.results || []).map((d: any) => ({
+      ...d,
+      backfill_status: 'completed',
+      backfill_events_count: 0,
+      backfill_completed_at: null
+    }));
+
+    return success(c, enrichedDomains);
+  }
+}
+
+/**
  * POST /v1/organizations/:org_id/tracking-domains - Add tracking domain
  */
 export class AddTrackingDomain extends OpenAPIRoute {

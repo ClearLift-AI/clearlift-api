@@ -186,6 +186,44 @@ export class GetOnboardingStatus extends OpenAPIRoute {
       }
     }
 
+    // 6. Sync has_verified_tag with tracking_domains
+    const verifiedDomains = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM tracking_domains
+      WHERE organization_id = ? AND is_verified = 1
+    `).bind(orgId).first<{ count: number }>();
+
+    const verifiedCount = verifiedDomains?.count || 0;
+    if ((verifiedCount > 0) !== Boolean(progress.has_verified_tag)) {
+      await c.env.DB.prepare(`
+        UPDATE onboarding_progress
+        SET has_verified_tag = ?, verified_domains_count = ?, updated_at = ?
+        WHERE user_id = ?
+      `).bind(verifiedCount > 0 ? 1 : 0, verifiedCount, now, session.user_id).run();
+
+      progress.has_verified_tag = verifiedCount > 0;
+      progress.verified_domains_count = verifiedCount;
+      console.log(`[ONBOARDING_HEAL] Synced has_verified_tag for user ${session.user_id}: ${verifiedCount}`);
+    }
+
+    // 7. Sync goals_count with conversion_goals
+    const goalsCount = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM conversion_goals
+      WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).first<{ count: number }>();
+
+    const gCount = goalsCount?.count || 0;
+    if (gCount !== (progress.goals_count || 0)) {
+      await c.env.DB.prepare(`
+        UPDATE onboarding_progress
+        SET goals_count = ?, has_defined_goal = ?, updated_at = ?
+        WHERE user_id = ?
+      `).bind(gCount, gCount > 0 ? 1 : 0, now, session.user_id).run();
+
+      progress.goals_count = gCount;
+      progress.has_defined_goal = gCount > 0;
+      console.log(`[ONBOARDING_HEAL] Synced goals_count for user ${session.user_id}: ${gCount}`);
+    }
+
     const steps = await onboarding.getDetailedProgress(session.user_id);
     const isComplete = await onboarding.isOnboardingComplete(session.user_id);
 
@@ -194,6 +232,10 @@ export class GetOnboardingStatus extends OpenAPIRoute {
       steps,
       services_connected: progress.services_connected,
       first_sync_completed: progress.first_sync_completed,
+      has_verified_tag: Boolean(progress.has_verified_tag),
+      has_defined_goal: Boolean(progress.has_defined_goal),
+      verified_domains_count: progress.verified_domains_count || 0,
+      goals_count: progress.goals_count || 0,
       is_complete: isComplete
     });
   }
@@ -289,6 +331,100 @@ export class CompleteOnboardingStep extends OpenAPIRoute {
     const progress = await onboarding.completeStep(session.user_id, step_name);
 
     return success(c, { progress });
+  }
+}
+
+/**
+ * GET /v1/onboarding/validate - Validate onboarding completion requirements
+ */
+export class ValidateOnboarding extends OpenAPIRoute {
+  public schema = {
+    tags: ["Onboarding"],
+    summary: "Validate onboarding completion",
+    operationId: "validate-onboarding",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().optional(),
+      }),
+    },
+    responses: {
+      "200": {
+        description: "Validation result",
+      },
+      "401": {
+        description: "Unauthorized"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+
+    // Get org
+    const data = await this.getValidatedData<typeof this.schema>();
+    let orgId = data.query.org_id;
+
+    if (!orgId) {
+      const orgResult = await c.env.DB.prepare(`
+        SELECT organization_id FROM organization_members
+        WHERE user_id = ? ORDER BY joined_at ASC LIMIT 1
+      `).bind(session.user_id).first<{ organization_id: string }>();
+
+      if (!orgResult) {
+        return success(c, {
+          hasOrganization: false,
+          hasConnectedPlatform: false,
+          hasInstalledTag: false,
+          hasDefinedGoal: false,
+          isComplete: false,
+          missingSteps: ['organization', 'platforms', 'tracking', 'goals'],
+          details: { connectedPlatforms: 0, verifiedDomains: 0, definedGoals: 0 }
+        });
+      }
+      orgId = orgResult.organization_id;
+    }
+
+    // Check platform connections
+    const connections = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM platform_connections
+      WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).first<{ count: number }>();
+
+    // Check verified domains
+    const domains = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM tracking_domains
+      WHERE organization_id = ? AND is_verified = 1
+    `).bind(orgId).first<{ count: number }>();
+
+    // Check goals
+    const goals = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM conversion_goals
+      WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).first<{ count: number }>();
+
+    const connectedPlatforms = connections?.count || 0;
+    const verifiedDomains = domains?.count || 0;
+    const definedGoals = goals?.count || 0;
+
+    const hasConnectedPlatform = connectedPlatforms > 0;
+    const hasInstalledTag = verifiedDomains > 0;
+    const hasDefinedGoal = definedGoals > 0;
+
+    const missingSteps: string[] = [];
+    if (!hasConnectedPlatform) missingSteps.push('platforms');
+    if (!hasInstalledTag) missingSteps.push('tracking');
+    if (!hasDefinedGoal) missingSteps.push('goals');
+
+    return success(c, {
+      hasOrganization: true,
+      hasConnectedPlatform,
+      hasInstalledTag,
+      hasDefinedGoal,
+      isComplete: missingSteps.length === 0,
+      missingSteps,
+      details: { connectedPlatforms, verifiedDomains, definedGoals }
+    });
   }
 }
 
