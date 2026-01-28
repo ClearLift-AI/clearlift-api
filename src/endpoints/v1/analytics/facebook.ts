@@ -211,9 +211,7 @@ export class GetFacebookAdSets extends OpenAPIRoute {
           ag.ad_group_name as ad_set_name,
           ag.ad_group_status as ad_set_status,
           ag.campaign_id,
-          ag.daily_budget_cents,
-          ag.lifetime_budget_cents,
-          ag.targeting,
+          ag.platform_fields,
           ag.updated_at,
           COALESCE(SUM(m.impressions), 0) as impressions,
           COALESCE(SUM(m.clicks), 0) as clicks,
@@ -248,25 +246,30 @@ export class GetFacebookAdSets extends OpenAPIRoute {
       const adSets = result.results || [];
 
       return success(c, {
-        ad_sets: adSets.map((as: any) => ({
-          ad_set_id: as.ad_set_id,
-          ad_set_name: as.ad_set_name,
-          ad_set_status: as.ad_set_status,
-          status: as.ad_set_status,
-          campaign_id: as.campaign_id,
-          daily_budget_cents: as.daily_budget_cents,
-          daily_budget: as.daily_budget_cents,
-          lifetime_budget_cents: as.lifetime_budget_cents,
-          targeting: as.targeting ? JSON.parse(as.targeting) : null,
-          updated_at: as.updated_at,
-          // Include flattened metrics
-          impressions: as.impressions || 0,
-          clicks: as.clicks || 0,
-          spend: (as.spend_cents || 0) / 100,
-          spend_cents: as.spend_cents || 0,
-          conversions: as.conversions || 0,
-          ctr: as.impressions > 0 ? (as.clicks / as.impressions) * 100 : 0,
-        })),
+        ad_sets: adSets.map((row: any) => {
+          const pf = row.platform_fields ? JSON.parse(row.platform_fields) : {};
+          const dailyBudgetCents = pf.daily_budget ? Math.round(parseFloat(pf.daily_budget) * 100) : null;
+          const lifetimeBudgetCents = pf.lifetime_budget ? Math.round(parseFloat(pf.lifetime_budget) * 100) : null;
+          return {
+            ad_set_id: row.ad_set_id,
+            ad_set_name: row.ad_set_name,
+            ad_set_status: (row.ad_set_status || '').toUpperCase(),
+            status: (row.ad_set_status || '').toUpperCase(),
+            campaign_id: row.campaign_id,
+            daily_budget_cents: dailyBudgetCents,
+            daily_budget: dailyBudgetCents,
+            lifetime_budget_cents: lifetimeBudgetCents,
+            targeting: pf.targeting || null,
+            updated_at: row.updated_at,
+            // Include flattened metrics
+            impressions: row.impressions || 0,
+            clicks: row.clicks || 0,
+            spend: (row.spend_cents || 0) / 100,
+            spend_cents: row.spend_cents || 0,
+            conversions: row.conversions || 0,
+            ctr: row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0,
+          };
+        }),
         total: adSets.length
       });
     } catch (err: any) {
@@ -309,8 +312,9 @@ export class GetFacebookCreatives extends OpenAPIRoute {
 
     try {
       // Query creatives from unified ads table
+      // creative_id is stored in platform_fields JSON, not as a top-level column
       const sql = `
-        SELECT ad_id, ad_name, creative_id, updated_at
+        SELECT ad_id, ad_name, platform_fields, updated_at
         FROM ads
         WHERE organization_id = ? AND platform = 'facebook'
         ORDER BY updated_at DESC
@@ -320,12 +324,15 @@ export class GetFacebookCreatives extends OpenAPIRoute {
         .bind(orgId, query.query.limit, query.query.offset)
         .all<any>();
 
-      const creatives = (result.results || []).map((ad: any) => ({
-        ad_id: ad.ad_id,
-        ad_name: ad.ad_name,
-        creative_id: ad.creative_id,
-        updated_at: ad.updated_at
-      }));
+      const creatives = (result.results || []).map((ad: any) => {
+        const pf = ad.platform_fields ? JSON.parse(ad.platform_fields) : {};
+        return {
+          ad_id: ad.ad_id,
+          ad_name: ad.ad_name,
+          creative_id: pf.creative_id || null,
+          updated_at: ad.updated_at
+        };
+      });
 
       return success(c, {
         creatives,
@@ -380,6 +387,7 @@ export class GetFacebookAds extends OpenAPIRoute {
 
     try {
       // Query ads from unified ads table with metrics
+      // creative_id is in platform_fields JSON, not a top-level column
       let sql = `
         SELECT
           a.id,
@@ -388,7 +396,7 @@ export class GetFacebookAds extends OpenAPIRoute {
           a.ad_status,
           a.campaign_id,
           a.ad_group_id as ad_set_id,
-          a.creative_id,
+          a.platform_fields,
           a.updated_at,
           COALESCE(SUM(m.impressions), 0) as impressions,
           COALESCE(SUM(m.clicks), 0) as clicks,
@@ -429,23 +437,26 @@ export class GetFacebookAds extends OpenAPIRoute {
       const ads = result.results || [];
 
       return success(c, {
-        ads: ads.map((ad: any) => ({
-          ad_id: ad.ad_id,
-          ad_name: ad.ad_name,
-          ad_status: ad.ad_status,
-          status: ad.ad_status,
-          campaign_id: ad.campaign_id,
-          ad_set_id: ad.ad_set_id,
-          creative_id: ad.creative_id,
-          updated_at: ad.updated_at,
-          // Include flattened metrics
-          impressions: ad.impressions || 0,
-          clicks: ad.clicks || 0,
-          spend: (ad.spend_cents || 0) / 100,
-          spend_cents: ad.spend_cents || 0,
-          conversions: ad.conversions || 0,
-          ctr: ad.impressions > 0 ? (ad.clicks / ad.impressions) * 100 : 0,
-        })),
+        ads: ads.map((ad: any) => {
+          const pf = ad.platform_fields ? JSON.parse(ad.platform_fields) : {};
+          return {
+            ad_id: ad.ad_id,
+            ad_name: ad.ad_name,
+            ad_status: (ad.ad_status || '').toUpperCase(),
+            status: (ad.ad_status || '').toUpperCase(),
+            campaign_id: ad.campaign_id,
+            ad_set_id: ad.ad_set_id,
+            creative_id: pf.creative_id || null,
+            updated_at: ad.updated_at,
+            // Include flattened metrics
+            impressions: ad.impressions || 0,
+            clicks: ad.clicks || 0,
+            spend: (ad.spend_cents || 0) / 100,
+            spend_cents: ad.spend_cents || 0,
+            conversions: ad.conversions || 0,
+            ctr: ad.impressions > 0 ? (ad.clicks / ad.impressions) * 100 : 0,
+          };
+        }),
         total: ads.length
       });
     } catch (err: any) {

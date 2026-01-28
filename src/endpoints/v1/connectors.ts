@@ -1248,6 +1248,14 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         console.log('Storing sync_config in connection settings:', sync_config);
       }
 
+      // Set default data flow settings
+      initialSettings = {
+        ...initialSettings,
+        emit_events: true,
+        aggregation_mode: 'conversions_only',
+        dedup_window_hours: 24,
+      };
+
       // Create connection with selected account and optional settings
       const connectionId = await connectorService.createConnection({
         organizationId: oauthState.organization_id,
@@ -1638,12 +1646,39 @@ export class UpdateConnectorSettings extends OpenAPIRoute {
         }
       }
 
+      // Validate data flow settings
+      if (settings.emit_events !== undefined && typeof settings.emit_events !== 'boolean') {
+        return error(c, "INVALID_CONFIG", "emit_events must be a boolean", 400);
+      }
+      if (settings.aggregation_mode !== undefined) {
+        const validModes = ['all', 'conversions_only', 'none'];
+        if (!validModes.includes(settings.aggregation_mode)) {
+          return error(c, "INVALID_CONFIG", `aggregation_mode must be one of: ${validModes.join(', ')}`, 400);
+        }
+      }
+      if (settings.dedup_window_hours !== undefined) {
+        const hours = Number(settings.dedup_window_hours);
+        if (isNaN(hours) || hours < 1 || hours > 168) {
+          return error(c, "INVALID_CONFIG", "dedup_window_hours must be between 1 and 168", 400);
+        }
+        settings.dedup_window_hours = hours;
+      }
+
+      // Merge with existing settings (preserve platform-specific settings)
+      let existingSettings: Record<string, any> = {};
+      if (connection.settings) {
+        try {
+          existingSettings = JSON.parse(connection.settings);
+        } catch {}
+      }
+      const mergedSettings = { ...existingSettings, ...settings };
+
       // Update connection settings
       await c.env.DB.prepare(`
         UPDATE platform_connections
         SET settings = ?, updated_at = datetime('now')
         WHERE id = ?
-      `).bind(JSON.stringify(settings), connection_id).run();
+      `).bind(JSON.stringify(mergedSettings), connection_id).run();
 
       return success(c, { message: "Settings updated successfully", settings });
     } catch (err: any) {

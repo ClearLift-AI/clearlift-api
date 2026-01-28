@@ -564,7 +564,7 @@ export class D1AnalyticsService {
     return result.results.map((row: any) => ({
       campaign_id: row.campaign_id,
       campaign_name: row.campaign_name,
-      status: row.status,
+      status: (row.status || '').toUpperCase(),
       last_synced_at: row.last_synced_at,
       metrics: {
         impressions: row.impressions || 0,
@@ -684,7 +684,7 @@ export class D1AnalyticsService {
     return result.results.map((row: any) => ({
       campaign_id: row.campaign_id,
       campaign_name: row.campaign_name,
-      status: row.status,
+      status: (row.status || '').toUpperCase(),
       last_synced_at: row.last_synced_at,
       metrics: {
         impressions: row.impressions || 0,
@@ -804,7 +804,7 @@ export class D1AnalyticsService {
     return result.results.map((row: any) => ({
       campaign_id: row.campaign_id,
       campaign_name: row.campaign_name,
-      status: row.status,
+      status: (row.status || '').toUpperCase(),
       last_synced_at: row.last_synced_at,
       metrics: {
         impressions: row.impressions || 0,
