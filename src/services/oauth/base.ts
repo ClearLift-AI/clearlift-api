@@ -147,15 +147,6 @@ export abstract class OAuthProvider {
    * @throws Error if token exchange fails
    */
   async exchangeCodeForToken(code: string, codeVerifier: string): Promise<OAuthTokens> {
-    console.log('Exchanging code for token with PKCE', {
-      tokenUrl: this.config.tokenUrl,
-      redirectUri: this.config.redirectUri,
-      hasClientId: !!this.config.clientId,
-      hasClientSecret: !!this.config.clientSecret,
-      hasCode: !!code,
-      hasCodeVerifier: !!codeVerifier
-    });
-
     try {
       const response = await fetch(this.config.tokenUrl, {
         method: 'POST',
@@ -198,11 +189,6 @@ export abstract class OAuthProvider {
       }
 
       const tokens = await response.json() as OAuthTokens;
-      console.log('Token exchange successful', {
-        hasAccessToken: !!tokens.access_token,
-        hasRefreshToken: !!tokens.refresh_token,
-        expiresIn: tokens.expires_in
-      });
 
       return tokens;
     } catch (error) {
