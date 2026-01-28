@@ -8,16 +8,16 @@
 
 CREATE TABLE IF NOT EXISTS acquisition_instances (
   id TEXT PRIMARY KEY,
-  org_id TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
   connector TEXT NOT NULL,
   label TEXT NOT NULL,
   filter TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+  FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_acquisition_instances_org_id ON acquisition_instances(org_id);
+CREATE INDEX IF NOT EXISTS idx_acquisition_instances_org_id ON acquisition_instances(organization_id);
 CREATE INDEX IF NOT EXISTS idx_acquisition_instances_connector ON acquisition_instances(connector);
 
 -- =============================================================================
@@ -27,18 +27,18 @@ CREATE INDEX IF NOT EXISTS idx_acquisition_instances_connector ON acquisition_in
 
 CREATE TABLE IF NOT EXISTS conversion_configs (
   id TEXT PRIMARY KEY,
-  org_id TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
   connector TEXT NOT NULL,
   event TEXT NOT NULL,
   filters TEXT, -- JSON array of FilterCondition
   label TEXT NOT NULL,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
-  UNIQUE(org_id, connector, event)
+  FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+  UNIQUE(organization_id, connector, event)
 );
 
-CREATE INDEX IF NOT EXISTS idx_conversion_configs_org_id ON conversion_configs(org_id);
+CREATE INDEX IF NOT EXISTS idx_conversion_configs_org_id ON conversion_configs(organization_id);
 CREATE INDEX IF NOT EXISTS idx_conversion_configs_connector ON conversion_configs(connector);
 
 -- =============================================================================

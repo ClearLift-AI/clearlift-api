@@ -7,6 +7,12 @@ import {
 const migrationsPath = path.join(__dirname, "..", "migrations");
 const migrations = await readD1Migrations(migrationsPath);
 
+const analyticsPath = path.join(__dirname, "..", "migrations-analytics");
+const analyticsMigrations = await readD1Migrations(analyticsPath);
+
+const aiPath = path.join(__dirname, "..", "migrations-ai");
+const aiMigrations = await readD1Migrations(aiPath);
+
 export default defineWorkersConfig({
   esbuild: {
     target: "esnext",
@@ -24,6 +30,14 @@ export default defineWorkersConfig({
           compatibilityFlags: ["experimental", "nodejs_compat"],
           bindings: {
             MIGRATIONS: migrations,
+            ANALYTICS_MIGRATIONS: analyticsMigrations,
+            AI_MIGRATIONS: aiMigrations,
+            SENDGRID_API_KEY: "SG.test-key-for-vitest",
+          },
+          // Stub the CLEARLIFT_CRON service binding so miniflare can start.
+          // Tests don't call the cron service — this prevents ERR_RUNTIME_FAILURE.
+          serviceBindings: {
+            CLEARLIFT_CRON: () => new Response("stub", { status: 200 }),
           },
         },
         isolatedStorage: false,

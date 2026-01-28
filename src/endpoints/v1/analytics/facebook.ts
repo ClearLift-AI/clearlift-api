@@ -1352,13 +1352,21 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
         return error(c, "NO_TOKEN", "No access token available for this page", 500);
       }
 
-      // Fetch page insights from Facebook Graph API
+      // Fetch page insights from Facebook Graph API (v24.0)
+      // Note: Many legacy metrics were deprecated Nov 2025 (page_views_total,
+      // page_engaged_users, page_fan_adds/removes, impressions → views).
+      // Using current v24.0 metrics that are still available.
       const metrics = [
-        'page_views_total',
-        'page_engaged_users',
-        'page_post_engagements',
-        'page_fan_adds',
-        'page_fan_removes'
+        'page_post_engagements',       // Total post engagements (still available)
+        'page_daily_follows',          // New followers per day (replaces page_fan_adds)
+        'page_daily_unfollows',        // Unfollows per day (replaces page_fan_removes)
+        'page_follows',                // Total followers over time
+      ].join(',');
+
+      // Also fetch page_impressions separately since it may need 'views' fallback
+      const viewsMetrics = [
+        'page_views_total',            // May still work on some pages
+        'page_impressions',            // Deprecated Nov 2025, try anyway
       ].join(',');
 
       const insightsUrl = new URL(`https://graph.facebook.com/v24.0/${page_id}/insights`);
@@ -1369,59 +1377,104 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
         insightsUrl.searchParams.set('date_preset', date_preset);
       }
 
+      // Fetch primary metrics
       const response = await fetch(insightsUrl.toString());
 
-      if (!response.ok) {
-        // Return empty insights rather than failing
-        return success(c, {
-          page_id,
-          page_name: pageName,
-          period,
-          insights: {
-            page_views: 0,
-            page_engaged_users: 0,
-            page_post_engagements: 0,
-            page_fan_adds: 0,
-            page_fan_removes: 0
-          },
-          note: "Page insights not available or insufficient data"
-        });
-      }
-
-      const insightsData = await response.json() as any;
-
-      // Parse insights response
       const insights: Record<string, number> = {
         page_views: 0,
         page_engaged_users: 0,
         page_post_engagements: 0,
         page_fan_adds: 0,
-        page_fan_removes: 0
+        page_fan_removes: 0,
+        page_impressions: 0,
+        page_impressions_unique: 0,
+        page_followers: 0,
       };
 
-      if (insightsData.data) {
-        for (const metric of insightsData.data) {
-          const name = metric.name;
-          const values = metric.values || [];
-          const latestValue = values.length > 0 ? values[values.length - 1].value : 0;
+      let hasData = false;
 
-          switch (name) {
-            case 'page_views_total':
-              insights.page_views = latestValue;
-              break;
-            case 'page_engaged_users':
-              insights.page_engaged_users = latestValue;
-              break;
-            case 'page_post_engagements':
-              insights.page_post_engagements = latestValue;
-              break;
-            case 'page_fan_adds':
-              insights.page_fan_adds = latestValue;
-              break;
-            case 'page_fan_removes':
-              insights.page_fan_removes = latestValue;
-              break;
+      if (response.ok) {
+        const insightsData = await response.json() as any;
+
+        if (insightsData.data) {
+          for (const metric of insightsData.data) {
+            const name = metric.name;
+            const values = metric.values || [];
+            const latestValue = values.length > 0 ? values[values.length - 1].value : 0;
+
+            switch (name) {
+              case 'page_post_engagements':
+                insights.page_post_engagements = latestValue;
+                insights.page_engaged_users = latestValue; // Best proxy for deprecated metric
+                hasData = true;
+                break;
+              case 'page_daily_follows':
+                insights.page_fan_adds = latestValue;
+                hasData = true;
+                break;
+              case 'page_daily_unfollows':
+                insights.page_fan_removes = latestValue;
+                hasData = true;
+                break;
+              case 'page_follows':
+                insights.page_followers = latestValue;
+                hasData = true;
+                break;
+            }
           }
+        }
+      } else {
+        const errBody = await response.text();
+        console.warn(`Page insights primary metrics failed for ${page_id}: ${response.status} ${errBody}`);
+      }
+
+      // Try to fetch views/impressions metrics separately (may fail on deprecated metrics)
+      const viewsUrl = new URL(`https://graph.facebook.com/v24.0/${page_id}/insights`);
+      viewsUrl.searchParams.set('metric', viewsMetrics);
+      viewsUrl.searchParams.set('period', period);
+      viewsUrl.searchParams.set('access_token', accessToken);
+      if (date_preset) {
+        viewsUrl.searchParams.set('date_preset', date_preset);
+      }
+
+      try {
+        const viewsResponse = await fetch(viewsUrl.toString());
+        if (viewsResponse.ok) {
+          const viewsData = await viewsResponse.json() as any;
+          if (viewsData.data) {
+            for (const metric of viewsData.data) {
+              const values = metric.values || [];
+              const latestValue = values.length > 0 ? values[values.length - 1].value : 0;
+              switch (metric.name) {
+                case 'page_views_total':
+                  insights.page_views = latestValue;
+                  hasData = true;
+                  break;
+                case 'page_impressions':
+                  insights.page_impressions = latestValue;
+                  hasData = true;
+                  break;
+              }
+            }
+          }
+        }
+      } catch {
+        // Views metrics may be fully deprecated — non-critical
+      }
+
+      // Fallback: get follower count from the Page object if insights didn't return it
+      if (insights.page_followers === 0) {
+        try {
+          const pageFieldsUrl = new URL(`https://graph.facebook.com/v24.0/${page_id}`);
+          pageFieldsUrl.searchParams.set('fields', 'followers_count,fan_count');
+          pageFieldsUrl.searchParams.set('access_token', accessToken);
+          const pageFieldsResponse = await fetch(pageFieldsUrl.toString());
+          if (pageFieldsResponse.ok) {
+            const pageFields = await pageFieldsResponse.json() as any;
+            insights.page_followers = pageFields.followers_count || pageFields.fan_count || 0;
+          }
+        } catch {
+          // Non-critical
         }
       }
 
@@ -1429,7 +1482,8 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
         page_id,
         page_name: pageName,
         period,
-        insights
+        insights,
+        ...(hasData ? {} : { note: "Page insights not available — some metrics may be deprecated in Graph API v24.0" })
       });
     } catch (err: any) {
       console.error("Get Facebook page insights error:", err);

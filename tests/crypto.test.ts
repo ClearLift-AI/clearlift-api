@@ -187,12 +187,12 @@ describe('FieldEncryption - Search Hash', () => {
     expect(hash1).toBe(hash2);
   });
 
-  it('should generate 16-character hex hash', async () => {
+  it('should generate 32-character hex hash', async () => {
     const plaintext = 'test@example.com';
     const hash = await crypto.searchHash(plaintext);
 
-    expect(hash).toHaveLength(16);
-    expect(hash).toMatch(/^[0-9a-f]{16}$/);
+    expect(hash).toHaveLength(32);
+    expect(hash).toMatch(/^[0-9a-f]{32}$/);
   });
 
   it('should be case-insensitive', async () => {
@@ -228,8 +228,8 @@ describe('FieldEncryption - Search Hash', () => {
     const hash2 = await crypto.searchHash('user.name@example.com');
 
     expect(hash1).not.toBe(hash2);
-    expect(hash1).toMatch(/^[0-9a-f]{16}$/);
-    expect(hash2).toMatch(/^[0-9a-f]{16}$/);
+    expect(hash1).toMatch(/^[0-9a-f]{32}$/);
+    expect(hash2).toMatch(/^[0-9a-f]{32}$/);
   });
 });
 
@@ -248,7 +248,7 @@ describe('FieldEncryption - encryptWithHash', () => {
     expect(result).toHaveProperty('encrypted');
     expect(result).toHaveProperty('hash');
     expect(result.encrypted).toMatch(/^[A-Za-z0-9+/]+=*$/);
-    expect(result.hash).toMatch(/^[0-9a-f]{16}$/);
+    expect(result.hash).toMatch(/^[0-9a-f]{32}$/);
   });
 
   it('should produce decryptable encrypted value', async () => {
@@ -425,6 +425,6 @@ describe('FieldEncryption - Edge Cases', () => {
 
   it('should reject decryption of too-short ciphertext', async () => {
     const shortCiphertext = btoa('short');
-    await expect(crypto.decrypt(shortCiphertext)).rejects.toThrow('too short');
+    await expect(crypto.decrypt(shortCiphertext)).rejects.toThrow('Invalid ciphertext format');
   });
 });
