@@ -374,7 +374,9 @@ export class D1AnalyticsService {
           }
           channelAgg[channel].sessions += count;
         }
-      } catch {}
+      } catch (err) {
+        console.warn(`[D1Analytics] Failed to parse by_channel JSON:`, err);
+      }
     }
 
     // Get UTM campaign summary

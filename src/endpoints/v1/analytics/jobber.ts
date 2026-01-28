@@ -271,7 +271,7 @@ export class GetJobberInvoices extends OpenAPIRoute {
     if (statusFilter === 'paid') {
       statusClause = 'AND is_paid = 1';
     } else if (statusFilter === 'unpaid') {
-      statusClause = 'AND is_paid = 0 AND status != ?overdue?';
+      statusClause = "AND is_paid = 0 AND status != 'overdue'";
     } else if (statusFilter === 'overdue') {
       statusClause = "AND status = 'overdue'";
     }

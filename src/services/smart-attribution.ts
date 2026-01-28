@@ -612,7 +612,9 @@ export class SmartAttributionService {
               channelDistribution[channel] = (channelDistribution[channel] || 0) + count;
               totalChannelEvents += count;
             }
-          } catch {}
+          } catch (err) {
+            console.warn(`[SmartAttribution] Failed to parse by_channel JSON:`, err);
+          }
         }
       }
 
@@ -653,7 +655,9 @@ export class SmartAttributionService {
             `).bind(orgId, startDate, endDate).first<{ conversions: number }>();
             visitors = result?.conversions || 0;
           }
-        } catch {}
+        } catch (err) {
+          console.warn(`[SmartAttribution] Failed to fetch visitors for connector ${connector}:`, err);
+        }
 
         // Build by_channel for this goal
         const byChannel: Record<string, number> = {};

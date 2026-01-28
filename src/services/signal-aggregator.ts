@@ -201,7 +201,8 @@ export class SignalAggregator {
         `SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1`
       ).bind(orgId).first<{ short_tag: string }>();
       return result?.short_tag || null;
-    } catch {
+    } catch (err) {
+      console.warn(`[SignalAggregator] Failed to get org tag for ${orgId}:`, err);
       return null;
     }
   }
@@ -228,7 +229,9 @@ export class SignalAggregator {
             : r.platform || 'unknown';
         results.push({ channel, platform: r.platform, clickIdType: r.click_id_type, count: r.cnt });
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[SignalAggregator] Failed to fetch click ID signals:`, err);
+    }
     return results;
   }
 
@@ -255,7 +258,9 @@ export class SignalAggregator {
                   : 'referral';
         results.push({ channel, platform: source === '(direct)' ? null : source, medium, sessions: r.sessions, conversions: r.conversions, revenue: r.revenue });
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[SignalAggregator] Failed to fetch UTM signals:`, err);
+    }
     return results;
   }
 
@@ -281,7 +286,9 @@ export class SignalAggregator {
         const channel = r.platform === 'google' ? 'paid_search' : 'paid_social';
         results.push({ channel, platform: r.platform, spend: r.spend, impressions: r.impressions, clicks: r.clicks, conversions: r.conversions, revenue: r.revenue });
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[SignalAggregator] Failed to fetch platform signals:`, err);
+    }
     return results;
   }
 
@@ -303,7 +310,9 @@ export class SignalAggregator {
       for (const r of rows.results || []) {
         results.push({ channel: 'revenue', source: r.conversion_source, conversions: r.conversions, revenue: r.revenue });
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[SignalAggregator] Failed to fetch connector signals:`, err);
+    }
     return results;
   }
 
@@ -325,7 +334,9 @@ export class SignalAggregator {
         const channel = r.platform === 'google' ? 'paid_search' : 'paid_social';
         results.push({ channel, platform: r.platform, count: r.cnt, firstTouch: r.first_touch, lastTouch: r.last_touch });
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[SignalAggregator] Failed to fetch touchpoint signals:`, err);
+    }
     return results;
   }
 
@@ -357,7 +368,9 @@ export class SignalAggregator {
       if (smsClicks > 0) {
         results.push({ channel: 'sms', emailOpens: 0, emailClicks: 0, smsClicks });
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[SignalAggregator] Failed to fetch comm engagement signals:`, err);
+    }
     return results;
   }
 }
