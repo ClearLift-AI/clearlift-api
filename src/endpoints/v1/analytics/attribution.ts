@@ -711,55 +711,7 @@ async function buildPlatformFallbackD1(
         totalRevenue += revenue;
       }
     } catch (err) {
-      // Fall back to per-platform tables if unified table doesn't exist
-      console.warn(`[Attribution D1 Fallback] Unified ad_metrics query failed, trying per-platform:`, err);
-      for (const platform of platforms) {
-        try {
-          const metricsTable = `${platform}_campaign_daily_metrics`;
-          const campaignsTable = `${platform}_campaigns`;
-
-          const metricsResult = await analyticsDb.prepare(`
-            SELECT
-              m.campaign_ref,
-              c.campaign_name,
-              SUM(m.conversions) as conversions,
-              SUM(m.conversion_value_cents) as conversion_value_cents
-            FROM ${metricsTable} m
-            LEFT JOIN ${campaignsTable} c ON m.campaign_ref = c.id
-            WHERE m.organization_id = ?
-              AND m.metric_date >= ?
-              AND m.metric_date <= ?
-            GROUP BY m.campaign_ref, c.campaign_name
-          `).bind(orgId, dateRange.start, dateRange.end).all<{
-            campaign_ref: string;
-            campaign_name: string | null;
-            conversions: number;
-            conversion_value_cents: number;
-          }>();
-
-          for (const row of metricsResult.results || []) {
-            const conversions = row.conversions || 0;
-            const revenue = (row.conversion_value_cents || 0) / 100;
-            const medium = platform === 'google' ? 'cpc' : 'paid';
-
-            allCampaigns.push({
-              utm_source: platform,
-              utm_medium: medium,
-              utm_campaign: row.campaign_name || row.campaign_ref,
-              touchpoints: 0,
-              conversions_in_path: 0,
-              attributed_conversions: conversions,
-              attributed_revenue: revenue,
-              avg_position_in_path: 0
-            });
-
-            totalConversions += conversions;
-            totalRevenue += revenue;
-          }
-        } catch (platformErr) {
-          console.warn(`[Attribution D1 Fallback] Failed to query ${platform}:`, platformErr);
-        }
-      }
+      console.error(`[Attribution D1 Fallback] Unified ad_metrics query failed:`, err);
     }
 
     // Sort by attributed_conversions descending
@@ -1769,34 +1721,40 @@ Works even without click tracking or event data.
     let minDate: string | null = null;
     let maxDate: string | null = null;
 
-    for (const platform of platforms) {
-      try {
-        const result = await analyticsDb.prepare(`
-          SELECT
-            SUM(spend_cents) / 100.0 as spend,
-            SUM(impressions) as impressions,
-            SUM(clicks) as clicks,
-            SUM(conversions) as conversions,
-            SUM(conversion_value_cents) / 100.0 as revenue,
-            MIN(metric_date) as min_date,
-            MAX(metric_date) as max_date
-          FROM ${platform}_campaign_daily_metrics
-          WHERE organization_id = ?
-            AND metric_date >= ?
-            AND metric_date <= ?
-        `).bind(orgId, dateFrom, dateTo).first<{
-          spend: number;
-          impressions: number;
-          clicks: number;
-          conversions: number;
-          revenue: number;
-          min_date: string;
-          max_date: string;
-        }>();
+    try {
+      const placeholders = platforms.map(() => '?').join(', ');
+      const results = await analyticsDb.prepare(`
+        SELECT
+          platform,
+          SUM(spend_cents) / 100.0 as spend,
+          SUM(impressions) as impressions,
+          SUM(clicks) as clicks,
+          SUM(conversions) as conversions,
+          SUM(conversion_value_cents) / 100.0 as revenue,
+          MIN(metric_date) as min_date,
+          MAX(metric_date) as max_date
+        FROM ad_metrics
+        WHERE organization_id = ?
+          AND metric_date >= ?
+          AND metric_date <= ?
+          AND platform IN (${placeholders})
+          AND entity_type = 'campaign'
+        GROUP BY platform
+      `).bind(orgId, dateFrom, dateTo, ...platforms).all<{
+        platform: string;
+        spend: number;
+        impressions: number;
+        clicks: number;
+        conversions: number;
+        revenue: number;
+        min_date: string;
+        max_date: string;
+      }>();
 
-        if (result && (result.spend || result.impressions)) {
+      for (const result of results.results || []) {
+        if (result.spend || result.impressions) {
           byPlatform.push({
-            platform,
+            platform: result.platform,
             spend: result.spend || 0,
             impressions: result.impressions || 0,
             clicks: result.clicks || 0,
@@ -1817,10 +1775,9 @@ Works even without click tracking or event data.
             maxDate = result.max_date;
           }
         }
-      } catch (err) {
-        // Table might not exist
-        console.warn(`[Blended Attribution] Failed to query ${platform}:`, err);
       }
+    } catch (err) {
+      console.error(`[Blended Attribution] Failed to query unified ad_metrics:`, err);
     }
 
     return {
