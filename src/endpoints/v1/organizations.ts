@@ -1463,3 +1463,92 @@ export class ResyncTrackingDomain extends OpenAPIRoute {
     });
   }
 }
+
+/**
+ * GET /v1/organizations/:org_id/script-hash - Get the unique script URL hash for an organization
+ *
+ * Returns the hash that can be used to load the tracking script at cdn.clearlift.ai/<hash>.js
+ * This is the NEW recommended installation method - the URL itself identifies the organization.
+ */
+export class GetScriptHash extends OpenAPIRoute {
+  public schema = {
+    tags: ["Organizations"],
+    summary: "Get unique script URL hash",
+    operationId: "get-script-hash",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        org_id: z.string()
+      })
+    },
+    responses: {
+      "200": {
+        description: "Script hash returned",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                hash: z.string(),
+                script_url: z.string(),
+                installation_snippet: z.string(),
+                org_tag: z.string()
+              })
+            })
+          }
+        }
+      },
+      "404": {
+        description: "Organization not found"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { org_id: orgId } = data.params;
+
+    // Get org_tag for this organization
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings
+      WHERE organization_id = ? AND is_active = 1
+      LIMIT 1
+    `).bind(orgId).first<{ short_tag: string }>();
+
+    if (!tagMapping) {
+      return error(c, "NO_ORG_TAG", "Organization has no active org_tag mapping", 400);
+    }
+
+    // Check if a script hash already exists
+    let scriptHash = await c.env.DB.prepare(`
+      SELECT hash, org_tag FROM script_hashes WHERE organization_id = ?
+    `).bind(orgId).first<{ hash: string; org_tag: string }>();
+
+    // If no hash exists, create one
+    if (!scriptHash) {
+      const hashId = `sh_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      // Generate 8-char random hex hash
+      const hashBytes = new Uint8Array(4);
+      crypto.getRandomValues(hashBytes);
+      const newHash = Array.from(hashBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+
+      await c.env.DB.prepare(`
+        INSERT INTO script_hashes (id, organization_id, hash, org_tag, version)
+        VALUES (?, ?, ?, ?, '3.0.0')
+      `).bind(hashId, orgId, newHash, tagMapping.short_tag).run();
+
+      scriptHash = { hash: newHash, org_tag: tagMapping.short_tag };
+    }
+
+    const scriptUrl = `https://cdn.clearlift.ai/${scriptHash.hash}.js`;
+    const installationSnippet = `<!-- ClearLift Pixel -->
+<script src="${scriptUrl}" async></script>`;
+
+    return success(c, {
+      hash: scriptHash.hash,
+      script_url: scriptUrl,
+      installation_snippet: installationSnippet,
+      org_tag: scriptHash.org_tag
+    });
+  }
+}

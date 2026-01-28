@@ -139,7 +139,8 @@ import {
   GetTrackingDomainsAlias,
   AddTrackingDomain,
   RemoveTrackingDomain,
-  ResyncTrackingDomain
+  ResyncTrackingDomain,
+  GetScriptHash
 } from "./endpoints/v1/organizations";
 import {
   ListConnectors,
@@ -479,6 +480,9 @@ openapi.get("/v1/organizations/:org_id/tracking-domains", auth, requireOrg, GetT
 openapi.post("/v1/organizations/:org_id/tracking-domains", auth, requireOrg, requireOrgAdmin, AddTrackingDomain);
 openapi.delete("/v1/organizations/:org_id/tracking-domains/:domain_id", auth, requireOrg, requireOrgAdmin, RemoveTrackingDomain);
 openapi.post("/v1/organizations/:org_id/tracking-domains/:domain_id/resync", auth, requireOrg, requireOrgAdmin, ResyncTrackingDomain);
+
+// Script hash endpoint (for hash-based script URLs - the NEW default installation method)
+openapi.get("/v1/organizations/:org_id/script-hash", auth, requireOrg, GetScriptHash);
 
 // Analytics endpoints
 openapi.get("/v1/analytics/events", auth, requireOrg, GetEvents);
