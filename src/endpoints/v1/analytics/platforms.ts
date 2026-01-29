@@ -76,7 +76,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       WHERE organization_id = ? AND is_active = 1
     `).bind(orgId).all();
 
-    const activePlatforms = (activeConnections.results?.map(r => (r as { platform: string }).platform) || []) as string[];
+    const AD_PLATFORMS = ['google', 'facebook', 'meta', 'tiktok', 'google_ads', 'meta_ads', 'tiktok_ads'];
+    const allConnectedPlatforms = (activeConnections.results?.map(r => (r as { platform: string }).platform) || []) as string[];
+    const activePlatforms = allConnectedPlatforms.filter(p => AD_PLATFORMS.includes(p));
 
     // If no active connections, return empty data
     if (activePlatforms.length === 0) {
