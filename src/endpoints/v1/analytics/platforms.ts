@@ -89,7 +89,8 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           total_conversion_value_cents: 0,
           average_ctr: 0,
           average_cpc_cents: 0,
-          platforms_active: []
+          platforms_active: [],
+          platforms_connected: []
         },
         by_platform: {},
         time_series: []
@@ -182,7 +183,8 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
           total_conversion_value_cents: summary.total_conversion_value_cents,
           average_ctr: Math.round(summary.average_ctr * 100) / 100,
           average_cpc_cents: summary.average_cpc_cents,
-          platforms_active: summary.platforms_active
+          platforms_active: summary.platforms_active,
+          platforms_connected: activePlatforms
         },
         by_platform,
         time_series: timeSeries
