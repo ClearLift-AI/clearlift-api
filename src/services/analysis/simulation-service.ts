@@ -1082,7 +1082,7 @@ RESULT:
     const clampedAlpha = Math.max(0.3, Math.min(1.0, alpha));
 
     return {
-      k: k * Math.pow(1, alpha - clampedAlpha),
+      k: k * Math.pow(Math.exp(sumX / n), alpha - clampedAlpha),
       alpha: clampedAlpha,
       r_squared: Math.max(0, r_squared)
     };
@@ -1183,7 +1183,7 @@ RESULT:
         entity_ref as id,
         entity_ref as name,
         platform,
-        '${entityType}' as entity_type,
+        ? as entity_type,
         SUM(spend_cents) as spend_cents,
         SUM(conversions) as conversions,
         SUM(impressions) as impressions,
@@ -1192,7 +1192,7 @@ RESULT:
         CASE WHEN SUM(clicks) > 0 THEN SUM(spend_cents) / SUM(clicks) ELSE 0 END as cpc_cents
       FROM ad_metrics
       WHERE organization_id = ?
-        AND entity_type = '${unifiedEntityType}'
+        AND entity_type = ?
         AND metric_date >= date('now', '-7 days')
         AND spend_cents > 0
       GROUP BY entity_ref, platform
@@ -1200,7 +1200,7 @@ RESULT:
     `;
 
     try {
-      const result = await this.analyticsDb.prepare(query).bind(this.orgId).all();
+      const result = await this.analyticsDb.prepare(query).bind(entityType, this.orgId, unifiedEntityType).all();
       return (result.results || []) as EntityMetrics[];
     } catch (err) {
       console.error('Error fetching portfolio metrics:', err);

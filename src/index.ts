@@ -252,6 +252,10 @@ import {
   RateAIDecision
 } from "./endpoints/v1/settings";
 import {
+  GetDashboardLayout,
+  SaveDashboardLayout
+} from "./endpoints/v1/dashboard";
+import {
   AcceptTerms,
   GetTermsStatus
 } from "./endpoints/v1/terms";
@@ -681,6 +685,10 @@ openapi.post("/v1/workers/events-sync/trigger", auth, TriggerEventsSync);
 // Settings endpoints
 openapi.get("/v1/settings/matrix", auth, requireOrg, GetMatrixSettings);
 openapi.post("/v1/settings/matrix", auth, requireOrg, requireOrgAdmin, UpdateMatrixSettings);
+
+// Dashboard layout endpoints
+openapi.get("/v1/dashboard/layout", auth, requireOrg, GetDashboardLayout);
+openapi.post("/v1/dashboard/layout", auth, requireOrg, requireOrgAdmin, SaveDashboardLayout);
 
 // Terms acceptance endpoints (for onboarding clickwrap)
 openapi.post("/v1/terms/accept", auth, AcceptTerms);

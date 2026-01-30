@@ -134,9 +134,7 @@ export class HierarchicalAnalyzer {
     this.agenticLoop = new AgenticLoop(anthropicApiKey, db, analyticsDb);
   }
 
-  /**
-   * Run full hierarchical analysis for an organization
-   */
+  /** @deprecated Superseded by analysis-workflow.ts Workflow. Only read helpers (getLatestAnalysis, getEntitySummary) are still live. */
   async analyzeOrganization(
     orgId: string,
     days: number = 7,

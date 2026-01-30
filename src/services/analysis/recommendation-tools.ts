@@ -452,17 +452,6 @@ export function getAnthropicTools(): any[] {
   }));
 }
 
-// Format tools for Gemini API
-export function getGeminiTools(): any {
-  return {
-    function_declarations: RECOMMENDATION_TOOLS.map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.input_schema
-    }))
-  };
-}
-
 // Interface for a recommendation that will be logged
 export interface Recommendation {
   tool: string;
@@ -474,16 +463,6 @@ export interface Recommendation {
   reason: string;
   predicted_impact: number | null;
   confidence: 'low' | 'medium' | 'high';
-}
-
-// Interface for accumulated insight data
-export interface AccumulatedInsight {
-  title: string;
-  insight: string;
-  category: string;
-  affected_entities?: string;
-  suggested_action?: string;
-  confidence?: string;
 }
 
 // Parse tool call into recommendation

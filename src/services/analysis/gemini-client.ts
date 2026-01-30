@@ -124,6 +124,7 @@ export class GeminiClient implements LLMClient {
           const jitter = Math.random() * 1000;
           console.log(`[Gemini] Rate limited, retrying in ${Math.round((backoffMs + jitter) / 1000)}s (attempt ${attempt + 1}/${this.maxRetries})`);
           await this.sleep(backoffMs + jitter);
+          lastError = new Error(`Rate limited (429) after ${attempt + 1} attempts`);
           continue;
         }
 
@@ -133,6 +134,7 @@ export class GeminiClient implements LLMClient {
           const jitter = Math.random() * 1000;
           console.log(`[Gemini] Service unavailable, retrying in ${Math.round((backoffMs + jitter) / 1000)}s (attempt ${attempt + 1}/${this.maxRetries})`);
           await this.sleep(backoffMs + jitter);
+          lastError = new Error(`Service unavailable (503) after ${attempt + 1} attempts`);
           continue;
         }
 

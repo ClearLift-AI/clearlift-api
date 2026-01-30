@@ -218,40 +218,6 @@ export function buildHierarchySkipSet(tree: SerializedEntityTree): Set<string> {
   return skipSet;
 }
 
-/**
- * Generate a skip summary for an entity that's being skipped due to parent hierarchy
- */
-export function generateHierarchySkipSummary(entity: SerializedEntity, tree: SerializedEntityTree): string {
-  // Find the disabled parent
-  const findDisabledAncestor = (e: SerializedEntity): SerializedEntity | null => {
-    if (!e.parentId) return null;
-
-    // Search for parent in tree
-    for (const [, account] of tree.accounts) {
-      if (account.id === e.parentId) {
-        return !isActiveStatus(account.status) ? account : null;
-      }
-      for (const campaign of account.children) {
-        if (campaign.id === e.parentId) {
-          return !isActiveStatus(campaign.status) ? campaign : findDisabledAncestor(campaign);
-        }
-        for (const adset of campaign.children) {
-          if (adset.id === e.parentId) {
-            return !isActiveStatus(adset.status) ? adset : findDisabledAncestor(adset);
-          }
-        }
-      }
-    }
-    return null;
-  };
-
-  const disabledAncestor = findDisabledAncestor(entity);
-  if (disabledAncestor) {
-    return `Status: SKIPPED (parent ${disabledAncestor.level} "${disabledAncestor.name}" is ${disabledAncestor.status || 'disabled'})`;
-  }
-
-  return `Status: SKIPPED (parent hierarchy disabled)`;
-}
 
 /**
  * Parameters for the analysis workflow

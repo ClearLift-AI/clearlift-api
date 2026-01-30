@@ -294,7 +294,7 @@ export class GetAIDecisions extends OpenAPIRoute {
     request: {
       query: z.object({
         org_id: z.string().optional(),
-        status: z.enum(['pending', 'approved', 'rejected', 'executed', 'failed', 'expired']).optional(),
+        status: z.enum(['pending', 'approved', 'rejected', 'executed', 'failed', 'expired', 'acknowledged']).optional(),
         min_confidence: z.enum(['low', 'medium', 'high']).optional()
       })
     },

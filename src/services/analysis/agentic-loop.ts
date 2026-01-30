@@ -113,9 +113,7 @@ export class AgenticLoop {
     this.explorationExecutor = new ExplorationToolExecutor(analyticsDb);
   }
 
-  /**
-   * Run the agentic loop starting from the executive summary
-   */
+  /** @deprecated Superseded by analysis-workflow.ts Workflow. Only read helpers (getLatestAnalysis, getEntitySummary) are still live. */
   async run(
     orgId: string,
     executiveSummary: string,
@@ -392,20 +390,20 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
     try {
       const result = await this.db.prepare(`
         SELECT
-          recommended_action,
+          tool,
           parameters,
           reason,
           status,
           reviewed_at,
           CAST(julianday('now') - julianday(reviewed_at) AS INTEGER) as days_ago
         FROM ai_decisions
-        WHERE org_id = ?
-          AND status IN ('accepted', 'rejected')
+        WHERE organization_id = ?
+          AND status IN ('approved', 'rejected')
           AND reviewed_at >= ?
         ORDER BY reviewed_at DESC
         LIMIT 30
       `).bind(orgId, cutoffDate.toISOString()).all<{
-        recommended_action: string;
+        tool: string;
         parameters: string;
         reason: string;
         status: string;
@@ -414,7 +412,7 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
       }>();
 
       return (result.results || []).map(r => ({
-        action: r.recommended_action,
+        action: r.tool,
         parameters: r.parameters,
         reason: r.reason,
         status: r.status as 'accepted' | 'rejected',

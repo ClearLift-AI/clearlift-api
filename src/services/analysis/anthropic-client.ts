@@ -87,12 +87,14 @@ export class AnthropicClient implements LLMClient {
           // Rate limited - wait and retry
           const retryAfter = parseInt(response.headers.get('retry-after') || '5');
           await this.sleep(retryAfter * 1000);
+          lastError = new Error(`Rate limited (429) after ${attempt + 1} attempts`);
           continue;
         }
 
         if (response.status === 529) {
           // Overloaded - wait and retry with exponential backoff
           await this.sleep(this.retryDelayMs * Math.pow(2, attempt));
+          lastError = new Error(`Overloaded (529) after ${attempt + 1} attempts`);
           continue;
         }
 

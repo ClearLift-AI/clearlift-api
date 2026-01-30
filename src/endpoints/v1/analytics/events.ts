@@ -57,8 +57,8 @@ export class GetEvents extends OpenAPIRoute {
     const lookback = c.req.query("lookback") || "24h";
     const limit = parseInt(c.req.query("limit") || "100");
 
-    // Cap limit at 500 for R2 SQL (queries take 15-25 seconds)
-    const cappedLimit = Math.min(limit, 500);
+    // R2 SQL supports up to 10,000 but 5,000+ can timeout; cap at 5,000
+    const cappedLimit = Math.min(limit, 5000);
 
     // Look up the org_tag for this organization
     const orgTagMapping = await c.env.DB.prepare(`

@@ -28,8 +28,6 @@ import {
   deserializeEntityTree,
   getEntitiesAtLevel,
   createLimiter,
-  buildHierarchySkipSet,
-  generateHierarchySkipSummary,
   isActiveStatus
 } from './analysis-helpers';
 import { EntityTreeBuilder, Entity, EntityLevel, Platform } from '../services/analysis/entity-tree';
@@ -46,7 +44,6 @@ import {
   isGeneralInsightTool,
   parseToolCallToRecommendation,
   Recommendation,
-  AccumulatedInsight
 } from '../services/analysis/recommendation-tools';
 import {
   getExplorationTools,
@@ -132,10 +129,6 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     let summariesByEntity: Record<string, string> = {};
     let processedCount = 0;
 
-    // Build hierarchy skip set - entities to skip because their parent is disabled
-    // This dramatically reduces LLM calls for accounts with many paused campaigns
-    const hierarchySkipSet = buildHierarchySkipSet(entityTree);
-    console.log(`[Analysis] Hierarchy skip set: ${hierarchySkipSet.size} entities will be skipped due to disabled parents`);
 
     // Steps 2-5: Process each level in batches to avoid 1000 subrequest limit per WORKFLOW INSTANCE
     // With skipLogging optimization: 1 LLM call + 2 D1 queries per entity = ~3 subrequests
@@ -169,7 +162,6 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
             jobId,
             processedCount,
             config?.llm,
-            hierarchySkipSet,
             entityTree
           );
         });
@@ -459,7 +451,6 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     jobId: string,
     startingCount: number,
     llmConfig?: LLMRuntimeConfig,
-    hierarchySkipSet?: Set<string>,
     entityTree?: SerializedEntityTree
   ): Promise<LevelAnalysisResult> {
     // Use D1 ANALYTICS_DB for metrics
@@ -483,7 +474,6 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     // NOTE: Job progress is updated once at end of batch, not per entity (saves D1 calls)
     let llmCallCount = 0;
     let skippedCount = 0;
-    let hierarchySkippedCount = 0;
 
     for (const entity of entities) {
       // Note: Hierarchy skip moved INSIDE analyzeEntity so we can check activity first
@@ -517,7 +507,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     }
 
     // Log batch efficiency
-    console.log(`[Analysis] ${level} batch: ${llmCallCount} LLM calls, ${skippedCount} skipped (inactive/no data), ${hierarchySkippedCount} skipped (parent disabled)`);
+    console.log(`[Analysis] ${level} batch: ${llmCallCount} LLM calls, ${skippedCount} skipped (inactive/no data)`);
 
     // Single D1 update at end of batch (instead of per-entity)
     await jobs.updateProgress(jobId, processedCount, level as AnalysisLevel);
@@ -570,7 +560,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       (m.spend_cents && m.spend_cents > 0) ||
       (m.impressions && m.impressions > 0)
     );
-    const isActive = entity.status === 'ACTIVE' || entity.status === 'ENABLED';
+    const isActive = isActiveStatus(entity.status);
 
     // Only skip if there's NO activity to analyze
     // If paused but had recent spend → still analyze to understand performance
@@ -858,19 +848,19 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     try {
       const result = await this.env.AI_DB.prepare(`
         SELECT
-          recommended_action,
+          tool,
           parameters,
           reason,
           status,
           CAST(julianday('now') - julianday(reviewed_at) AS INTEGER) as days_ago
         FROM ai_decisions
-        WHERE org_id = ?
-          AND status IN ('accepted', 'rejected')
+        WHERE organization_id = ?
+          AND status IN ('approved', 'rejected')
           AND reviewed_at >= ?
         ORDER BY reviewed_at DESC
         LIMIT 30
       `).bind(orgId, cutoffDate.toISOString()).all<{
-        recommended_action: string;
+        tool: string;
         parameters: string;
         reason: string;
         status: string;
@@ -878,7 +868,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       }>();
 
       return (result.results || []).map(r => ({
-        action: r.recommended_action,
+        action: r.tool,
         parameters: r.parameters,
         reason: r.reason,
         status: r.status,

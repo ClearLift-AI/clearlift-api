@@ -184,19 +184,6 @@ export class MetricsFetcher {
   }
 
   /**
-   * Get entity_type value for unified ad_metrics table
-   */
-  private getEntityType(level: EntityLevel): string | null {
-    const mapping: Record<EntityLevel, string | null> = {
-      ad: 'ad',
-      adset: 'ad_group', // Facebook ad_sets are unified as ad_groups
-      campaign: 'campaign',
-      account: null
-    };
-    return mapping[level] || null;
-  }
-
-  /**
    * Get reference column name for platform/level
    */
   private getRefColumn(platform: Platform, level: EntityLevel): string | null {
