@@ -399,7 +399,8 @@ export class GetStripeDailyAggregates extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({
-        connection_id: z.string(),
+        org_id: z.string().optional().describe("Organization ID (used to auto-resolve Stripe connection)"),
+        connection_id: z.string().optional().describe("Stripe connection ID (optional if org_id provided)"),
         date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         currency: z.string().length(3).optional()
@@ -416,20 +417,41 @@ export class GetStripeDailyAggregates extends OpenAPIRoute {
     const session = c.get("session");
     const query = await this.getValidatedData<typeof this.schema>();
 
-    // Get connection first
-    const connection = await c.env.DB.prepare(`
-      SELECT * FROM platform_connections
-      WHERE id = ? AND platform = 'stripe' AND is_active = 1
-    `).bind(query.query.connection_id).first<{ organization_id: string }>();
+    let connectionId = query.query.connection_id;
+    let orgId: string;
 
-    if (!connection) {
-      return error(c, "NOT_FOUND", "Stripe connection not found", 404);
+    if (connectionId) {
+      // Get connection by ID
+      const connection = await c.env.DB.prepare(`
+        SELECT * FROM platform_connections
+        WHERE id = ? AND platform = 'stripe' AND is_active = 1
+      `).bind(connectionId).first<{ organization_id: string }>();
+
+      if (!connection) {
+        return error(c, "NOT_FOUND", "Stripe connection not found", 404);
+      }
+      orgId = connection.organization_id;
+    } else if (query.query.org_id) {
+      // Auto-resolve: find active Stripe connection for this org
+      orgId = query.query.org_id;
+      const connection = await c.env.DB.prepare(`
+        SELECT id FROM platform_connections
+        WHERE organization_id = ? AND platform = 'stripe' AND is_active = 1
+        ORDER BY connected_at DESC LIMIT 1
+      `).bind(orgId).first<{ id: string }>();
+
+      if (!connection) {
+        return error(c, "NOT_FOUND", "No active Stripe connection for this organization", 404);
+      }
+      connectionId = connection.id;
+    } else {
+      return error(c, "VALIDATION_ERROR", "Either org_id or connection_id is required", 400);
     }
 
     // Verify user has access (handles super admin bypass)
     const { D1Adapter } = await import("../../../adapters/d1");
     const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, connection.organization_id);
+    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
 
     if (!hasAccess) {
       return error(c, "FORBIDDEN", "Access denied", 403);
@@ -445,8 +467,8 @@ export class GetStripeDailyAggregates extends OpenAPIRoute {
     try {
       // Get time series data from D1
       const timeSeries = await d1Analytics.getStripeTimeSeries(
-        connection.organization_id,
-        query.query.connection_id,
+        orgId,
+        connectionId!,
         query.query.date_from,
         query.query.date_to,
         'day'
