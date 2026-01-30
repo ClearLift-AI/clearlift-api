@@ -3,6 +3,8 @@ import type { Env as AppEnv } from "../src/bindings";
 
 export type Env = AppEnv & {
   MIGRATIONS: D1Migration[];
+  ANALYTICS_MIGRATIONS: D1Migration[];
+  AI_MIGRATIONS: D1Migration[];
 };
 
 declare module "cloudflare:test" {

@@ -1013,6 +1013,15 @@ Seeds 25+ connector definitions across 15 categories:
 
 New connectors are seeded with `is_active: false, is_beta: true` until sync handlers are implemented.
 
+### Known Issues (Jan 2026)
+
+**Google Ads — Unagi (org `125da223`): 0 records syncing**
+- Account `4417684447` is likely a manager account
+- Connection settings are `{"sync_config":{"timeframe":"all_time"}}` — missing `accountSelection` config
+- Sync completes successfully but writes 0 campaigns/metrics to `ad_campaigns`/`ad_metrics`
+- Stale `sync_error: "OAuth token refresh failed with status 400"` from past failure; token is currently valid
+- Fix: Add `{"accountSelection":{"mode":"all"}}` to settings, or identify and select child accounts
+
 ### Dashboard Integration
 
 The Flow Builder now uses `ConnectorRegistryContext` instead of the deprecated `CONNECTOR_EVENTS` constant. This enables:

@@ -884,7 +884,7 @@ export class D1AnalyticsService {
         COUNT(DISTINCT c.id) as campaigns
       FROM ad_campaigns c
       LEFT JOIN ad_metrics m
-        ON c.id = m.campaign_ref
+        ON c.id = m.entity_ref
         AND m.entity_type = 'campaign'
         AND m.metric_date >= ?
         AND m.metric_date <= ?

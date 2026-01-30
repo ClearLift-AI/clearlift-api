@@ -1272,12 +1272,17 @@ export class GetFacebookPages extends OpenAPIRoute {
  * GET /v1/analytics/facebook/pages/:page_id/insights
  *
  * Retrieves insights for a specific Facebook Page via Graph API.
+ * Uses the read_insights permission to access Page-level insights data
+ * (follower growth, content views, audience demographics).
+ * Note: Meta's permission description references "Pages, apps and web domains"
+ * but app insights (deprecated v12.0, Sept 2021) and domain insights (deprecated)
+ * no longer exist. Page Insights is the sole active use of read_insights.
  */
 export class GetFacebookPageInsights extends OpenAPIRoute {
   schema = {
     tags: ["Facebook Pages"],
     summary: "Get Facebook Page insights",
-    description: "Retrieves engagement insights for a connected Facebook Page via Graph API.",
+    description: "Retrieves Page-level insights including follower growth, content views, and audience demographics. Uses read_insights permission for Page insights data.",
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({
@@ -1352,117 +1357,155 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
         return error(c, "NO_TOKEN", "No access token available for this page", 500);
       }
 
-      // Fetch page insights from Facebook Graph API (v24.0)
-      // Note: Many legacy metrics were deprecated Nov 2025 (page_views_total,
-      // page_engaged_users, page_fan_adds/removes, impressions → views).
-      // Using current v24.0 metrics that are still available.
-      const metrics = [
-        'page_post_engagements',       // Total post engagements (still available)
-        'page_daily_follows',          // New followers per day (replaces page_fan_adds)
-        'page_daily_unfollows',        // Unfollows per day (replaces page_fan_removes)
-        'page_follows',                // Total followers over time
-      ].join(',');
+      // Fetch page insights from Facebook Graph API v24.0
+      // See /docs/MetaV24.md for the full metric reference.
+      //
+      // Period constraints from the docs:
+      //   page_daily_follows, page_daily_unfollows: day only
+      //   page_daily_follows_unique, page_daily_unfollows_unique: day, week, days_28
+      //   page_follows: day only (lifetime total)
+      //   page_post_engagements: day, week, days_28
+      //   page_media_view (NOT page_media_views): day, week, days_28
+      //   page_impressions, page_impressions_unique: day, week, days_28
+      //   page_views_total: day, week, days_28
+      //   page_video_views: day, week, days_28
+      //   page_fans_city, page_fans_country: day only
 
-      // Also fetch page_impressions separately since it may need 'views' fallback
-      const viewsMetrics = [
-        'page_views_total',            // May still work on some pages
-        'page_impressions',            // Deprecated Nov 2025, try anyway
-      ].join(',');
-
-      const insightsUrl = new URL(`https://graph.facebook.com/v24.0/${page_id}/insights`);
-      insightsUrl.searchParams.set('metric', metrics);
-      insightsUrl.searchParams.set('period', period);
-      insightsUrl.searchParams.set('access_token', accessToken);
-      if (date_preset) {
-        insightsUrl.searchParams.set('date_preset', date_preset);
-      }
-
-      // Fetch primary metrics
-      const response = await fetch(insightsUrl.toString());
-
-      const insights: Record<string, number> = {
-        page_views: 0,
-        page_engaged_users: 0,
-        page_post_engagements: 0,
-        page_fan_adds: 0,
-        page_fan_removes: 0,
+      const insights: Record<string, any> = {
+        page_followers: 0,
+        new_follows: 0,
+        unfollows: 0,
+        net_follows: 0,
+        content_views: 0,
         page_impressions: 0,
         page_impressions_unique: 0,
-        page_followers: 0,
+        page_views: 0,
+        post_engagements: 0,
+        video_views: 0,
+        fans_by_city: {} as Record<string, number>,
+        fans_by_country: {} as Record<string, number>,
       };
 
       let hasData = false;
 
-      if (response.ok) {
-        const insightsData = await response.json() as any;
+      // Helper to fetch insights metrics
+      const fetchMetrics = async (metrics: string[], metricPeriod: string, datePreset?: string) => {
+        const url = new URL(`https://graph.facebook.com/v24.0/${page_id}/insights`);
+        url.searchParams.set('metric', metrics.join(','));
+        url.searchParams.set('period', metricPeriod);
+        url.searchParams.set('access_token', accessToken);
+        if (datePreset) url.searchParams.set('date_preset', datePreset);
+        const resp = await fetch(url.toString());
+        if (!resp.ok) {
+          const errBody = await resp.text();
+          console.warn(`Page insights failed for ${page_id} [${metrics.join(',')}]: ${resp.status} ${errBody}`);
+          return null;
+        }
+        return (await resp.json() as any).data || [];
+      };
 
-        if (insightsData.data) {
-          for (const metric of insightsData.data) {
-            const name = metric.name;
+      // 1. Fetch metrics in small batches so one invalid metric doesn't kill the whole request.
+      //    The Graph API rejects the entire call if any metric in the batch is invalid.
+      const metricBatches: { metrics: string[], period: string }[] = [
+        // Engagement metrics (days_28 supported)
+        { metrics: ['page_post_engagements'], period },
+        // Follower changes (days_28 supported for _unique variants)
+        { metrics: ['page_daily_follows_unique', 'page_daily_unfollows_unique'], period },
+        // Impressions & reach (days_28 supported)
+        { metrics: ['page_impressions', 'page_impressions_unique'], period },
+        // Views (days_28 supported)
+        { metrics: ['page_views_total'], period },
+        // Video views (days_28 supported)
+        { metrics: ['page_video_views'], period },
+        // Content views — new metric, may not be available for all pages
+        { metrics: ['page_media_view'], period },
+      ];
+
+      const metricMapping: Record<string, { key: string, aggregate: 'sum' | 'latest' }> = {
+        'page_post_engagements': { key: 'post_engagements', aggregate: 'sum' },
+        'page_media_view': { key: 'content_views', aggregate: 'sum' },
+        'page_impressions': { key: 'page_impressions', aggregate: 'sum' },
+        'page_impressions_unique': { key: 'page_impressions_unique', aggregate: 'sum' },
+        'page_views_total': { key: 'page_views', aggregate: 'sum' },
+        'page_video_views': { key: 'video_views', aggregate: 'sum' },
+        'page_daily_follows_unique': { key: 'new_follows', aggregate: 'sum' },
+        'page_daily_unfollows_unique': { key: 'unfollows', aggregate: 'sum' },
+      };
+
+      const failedMetrics: string[] = [];
+
+      for (const batch of metricBatches) {
+        try {
+          const data = await fetchMetrics(batch.metrics, batch.period, date_preset);
+          if (data) {
+            for (const metric of data) {
+              const mapping = metricMapping[metric.name];
+              if (!mapping) continue;
+              const values = metric.values || [];
+              if (mapping.aggregate === 'sum') {
+                insights[mapping.key] = values.reduce((s: number, v: any) => s + (typeof v.value === 'number' ? v.value : 0), 0);
+              } else {
+                insights[mapping.key] = values.length > 0 ? values[values.length - 1].value : 0;
+              }
+              hasData = true;
+            }
+          } else {
+            failedMetrics.push(...batch.metrics);
+          }
+        } catch {
+          failedMetrics.push(...batch.metrics);
+        }
+      }
+      insights.net_follows = insights.new_follows - insights.unfollows;
+
+      if (failedMetrics.length > 0) {
+        console.warn(`Page ${page_id}: failed metrics: ${failedMetrics.join(', ')}`);
+      }
+
+      // 2. Metrics that only support period=day (lifetime totals)
+      try {
+        const dailyMetrics = await fetchMetrics([
+          'page_follows',
+        ], 'day');
+
+        if (dailyMetrics) {
+          for (const metric of dailyMetrics) {
             const values = metric.values || [];
             const latestValue = values.length > 0 ? values[values.length - 1].value : 0;
-
-            switch (name) {
-              case 'page_post_engagements':
-                insights.page_post_engagements = latestValue;
-                insights.page_engaged_users = latestValue; // Best proxy for deprecated metric
-                hasData = true;
-                break;
-              case 'page_daily_follows':
-                insights.page_fan_adds = latestValue;
-                hasData = true;
-                break;
-              case 'page_daily_unfollows':
-                insights.page_fan_removes = latestValue;
-                hasData = true;
-                break;
-              case 'page_follows':
-                insights.page_followers = latestValue;
-                hasData = true;
-                break;
-            }
-          }
-        }
-      } else {
-        const errBody = await response.text();
-        console.warn(`Page insights primary metrics failed for ${page_id}: ${response.status} ${errBody}`);
-      }
-
-      // Try to fetch views/impressions metrics separately (may fail on deprecated metrics)
-      const viewsUrl = new URL(`https://graph.facebook.com/v24.0/${page_id}/insights`);
-      viewsUrl.searchParams.set('metric', viewsMetrics);
-      viewsUrl.searchParams.set('period', period);
-      viewsUrl.searchParams.set('access_token', accessToken);
-      if (date_preset) {
-        viewsUrl.searchParams.set('date_preset', date_preset);
-      }
-
-      try {
-        const viewsResponse = await fetch(viewsUrl.toString());
-        if (viewsResponse.ok) {
-          const viewsData = await viewsResponse.json() as any;
-          if (viewsData.data) {
-            for (const metric of viewsData.data) {
-              const values = metric.values || [];
-              const latestValue = values.length > 0 ? values[values.length - 1].value : 0;
-              switch (metric.name) {
-                case 'page_views_total':
-                  insights.page_views = latestValue;
-                  hasData = true;
-                  break;
-                case 'page_impressions':
-                  insights.page_impressions = latestValue;
-                  hasData = true;
-                  break;
-              }
+            if (metric.name === 'page_follows') {
+              insights.page_followers = latestValue;
+              hasData = true;
             }
           }
         }
       } catch {
-        // Views metrics may be fully deprecated — non-critical
+        // Non-critical
       }
 
-      // Fallback: get follower count from the Page object if insights didn't return it
+      // 3. Fan demographics (day period only, returns JSON objects)
+      try {
+        const demoMetrics = await fetchMetrics([
+          'page_fans_city',
+          'page_fans_country',
+        ], 'day');
+
+        if (demoMetrics) {
+          for (const metric of demoMetrics) {
+            const values = metric.values || [];
+            const latestValue = values.length > 0 ? values[values.length - 1].value : {};
+            if (metric.name === 'page_fans_city' && typeof latestValue === 'object') {
+              insights.fans_by_city = latestValue;
+            }
+            if (metric.name === 'page_fans_country' && typeof latestValue === 'object') {
+              insights.fans_by_country = latestValue;
+            }
+          }
+        }
+      } catch {
+        // Demographics may not be available — non-critical
+      }
+
+      // 4. Fallback: get follower count from the Page object if insights didn't return it
       if (insights.page_followers === 0) {
         try {
           const pageFieldsUrl = new URL(`https://graph.facebook.com/v24.0/${page_id}`);
@@ -1483,7 +1526,8 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
         page_name: pageName,
         period,
         insights,
-        ...(hasData ? {} : { note: "Page insights not available — some metrics may be deprecated in Graph API v24.0" })
+        ...(failedMetrics.length > 0 ? { failed_metrics: failedMetrics } : {}),
+        ...(hasData ? {} : { note: "Page insights not available — this page may not have enough data yet" })
       });
     } catch (err: any) {
       console.error("Get Facebook page insights error:", err);
@@ -1496,13 +1540,13 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
  * GET /v1/analytics/facebook/audience-insights
  *
  * Returns ad performance breakdowns by demographics, platforms, placements, and devices.
- * This endpoint uses the read_insights permission to fetch breakdown data from Facebook Marketing API.
+ * This endpoint uses the ads_read permission to fetch breakdown data from Facebook Marketing API.
  */
 export class GetFacebookAudienceInsights extends OpenAPIRoute {
   schema = {
     tags: ["Facebook Ads"],
     summary: "Get Facebook audience insights with breakdowns",
-    description: "Retrieve ad performance breakdowns by age, gender, platform, placement, and device. Requires read_insights permission.",
+    description: "Retrieve ad performance breakdowns by age, gender, platform, placement, and device. Uses ads_read permission via Marketing API.",
     security: [{ bearerAuth: [] }],
     request: {
       query: z.object({

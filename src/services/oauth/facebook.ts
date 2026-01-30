@@ -1,8 +1,12 @@
 /**
  * Facebook Ads OAuth Provider
  *
- * Implements OAuth 2.0 flow for Facebook Marketing API access.
- * Scopes: ads_read, ads_management
+ * Implements OAuth 2.0 flow for Facebook Marketing API + Page Insights access.
+ * Scopes:
+ *   ads_read, ads_management  — Marketing API (ad campaigns, audience breakdowns)
+ *   read_insights             — Page Insights API (follower growth, content views, demographics)
+ *   pages_read_engagement     — Page content and engagement data
+ *   pages_show_list           — List connected Pages
  */
 
 import { OAuthProvider, OAuthUserInfo} from './base';
@@ -22,10 +26,10 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
       scopes: [
         'ads_read',
         'ads_management',
-        'read_insights',       // Required for reading ad insights/metrics
+        'read_insights',       // Required for reading Page Insights (follower trends, content views, demographics)
         'business_management', // Required for managing business assets
         'pages_show_list',     // Required for listing connected pages
-        'pages_read_engagement', // Required for reading page content & insights
+        'pages_read_engagement', // Required for reading page content & engagement data
         'email',
         'public_profile'
       ],

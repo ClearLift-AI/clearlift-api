@@ -9,6 +9,8 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
+import { StripeQueryBuilder } from "../../../services/filters/stripeQueryBuilder";
+import { FilterRule } from "../../../services/filters/types";
 
 /**
  * GET /v1/analytics/stripe
@@ -112,21 +114,29 @@ export class GetStripeAnalytics extends OpenAPIRoute {
     const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
 
     try {
-      // Get charges from D1
-      const charges = await d1Analytics.getStripeCharges(
-        connection.organization_id,
-        query.query.connection_id,
-        query.query.date_from,
-        query.query.date_to,
-        {
-          status: query.query.status,
-          currency: query.query.currency,
-          minAmount: query.query.min_amount,
-          maxAmount: query.query.max_amount,
-          limit: 1000, // Get all for aggregation
-          offset: 0,
-        }
-      );
+      // Fetch all charges in chunks for aggregation (D1 caps at 1000 per query)
+      const CHUNK_SIZE = 1000;
+      const charges: Awaited<ReturnType<typeof d1Analytics.getStripeCharges>> = [];
+      let offset = 0;
+      while (true) {
+        const chunk = await d1Analytics.getStripeCharges(
+          connection.organization_id,
+          query.query.connection_id,
+          query.query.date_from,
+          query.query.date_to,
+          {
+            status: query.query.status,
+            currency: query.query.currency,
+            minAmount: query.query.min_amount,
+            maxAmount: query.query.max_amount,
+            limit: CHUNK_SIZE,
+            offset,
+          }
+        );
+        charges.push(...chunk);
+        if (chunk.length < CHUNK_SIZE) break;
+        offset += CHUNK_SIZE;
+      }
 
       if (charges.length === 0) {
         return success(c, {
@@ -146,7 +156,7 @@ export class GetStripeAnalytics extends OpenAPIRoute {
       }
 
       // Transform charges to records format
-      const records = charges.map(charge => ({
+      let records = charges.map(charge => ({
         date: charge.stripe_created_at.split('T')[0],
         charge_id: charge.charge_id,
         amount: charge.amount_cents,
@@ -156,6 +166,33 @@ export class GetStripeAnalytics extends OpenAPIRoute {
         billing_reason: (charge as any).billing_reason || null, // For SaaS conversion filtering
         metadata: charge.metadata ? JSON.parse(charge.metadata) : {}
       }));
+
+      // Apply connector filter rules (e.g. exclude incomplete subscriptions)
+      const filterRows = await c.env.DB.prepare(`
+        SELECT conditions, operator, rule_type FROM connector_filter_rules
+        WHERE connection_id = ? AND is_active = 1
+      `).bind(query.query.connection_id).all<{ conditions: string; operator: string; rule_type: string }>();
+
+      if (filterRows.results.length > 0) {
+        const queryBuilder = new StripeQueryBuilder();
+        for (const row of filterRows.results) {
+          const rule: FilterRule = {
+            name: 'connector_filter',
+            operator: (row.operator as 'AND' | 'OR') || 'AND',
+            conditions: JSON.parse(row.conditions),
+            is_active: true
+          };
+          const matched = queryBuilder.applyFilters(records, [rule]);
+          if (row.rule_type === 'exclude') {
+            // Remove matched records
+            const matchedIds = new Set(matched.map(r => r.charge_id));
+            records = records.filter(r => !matchedIds.has(r.charge_id));
+          } else {
+            // Include only matched records
+            records = matched;
+          }
+        }
+      }
 
       // Calculate summary metrics
       const summary = this.calculateSummary(records);
@@ -202,10 +239,9 @@ export class GetStripeAnalytics extends OpenAPIRoute {
   }
 
   private calculateSummary(records: any[]): any {
-    // For charges: status === 'succeeded'
-    // For subscriptions: status in ('active', 'trialing', 'past_due') - active billing relationships
-    const successfulStatuses = ['succeeded', 'active', 'trialing', 'past_due'];
-    const successfulRecords = records.filter(r => successfulStatuses.includes(r.status));
+    // All records passed in have already been through filter rules (e.g. exclude incomplete)
+    // so every record here is "successful" — no additional status filtering needed
+    const successfulRecords = records;
     const customerSet = new Set(records.map(r => r.customer_id).filter(Boolean));
 
     const totalRevenue = successfulRecords.reduce((sum, r) => sum + r.amount, 0);
@@ -231,10 +267,8 @@ export class GetStripeAnalytics extends OpenAPIRoute {
     groupBy: 'day' | 'week' | 'month'
   ): any[] {
     const grouped: Record<string, { revenue: number; units: number; transactions: number; conversions: number }> = {};
-    const successfulStatuses = ['succeeded', 'active', 'trialing', 'past_due'];
 
     for (const record of records) {
-      if (!successfulStatuses.includes(record.status)) continue;
 
       const date = this.getGroupedDate(record.date, groupBy);
 
@@ -286,7 +320,7 @@ export class GetStripeAnalytics extends OpenAPIRoute {
     const grouped: Record<string, number> = {};
 
     for (const record of records) {
-      if (record.status !== 'succeeded' || !record.product_id) continue;
+      if (!record.product_id) continue;
       grouped[record.product_id] = (grouped[record.product_id] || 0) + record.amount;
     }
 
@@ -311,7 +345,7 @@ export class GetStripeAnalytics extends OpenAPIRoute {
       result[groupKey] = {};
 
       for (const record of records) {
-        if (record.status !== 'succeeded') continue;
+        if (record.status === 'failed') continue;
 
         const metadataField = `${source}_metadata`;
         let metadata = record[metadataField];

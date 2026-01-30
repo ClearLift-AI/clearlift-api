@@ -1285,7 +1285,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       `).bind(connectionId).run();
       console.log('Cleared needs_reauth flag for connection:', connectionId);
 
-      // For Facebook, fetch connected pages (demonstrates pages_read_engagement usage)
+      // For Facebook, fetch connected pages (pages_read_engagement + read_insights for Page insights)
       if (provider === 'facebook') {
         try {
           console.log('Fetching Facebook connected pages for pages_read_engagement compliance...');
