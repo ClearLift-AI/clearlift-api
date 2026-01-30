@@ -484,12 +484,20 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);  // 7-day expiry
 
+    // Build current_state from the LLM's tool input parameters
+    const currentState: Record<string, any> = {};
+    const params = rec.parameters || {};
+    if (params.current_budget_cents !== undefined) currentState.daily_budget = params.current_budget_cents;
+    if (params.current_status !== undefined) currentState.status = params.current_status;
+    if (params.current_bid_cents !== undefined) currentState.bid_cents = params.current_bid_cents;
+    if (params.current_strategy !== undefined) currentState.strategy = params.current_strategy;
+
     await this.db.prepare(`
       INSERT INTO ai_decisions (
         id, organization_id, tool, platform, entity_type, entity_id, entity_name,
-        parameters, reason, predicted_impact, confidence, status, expires_at,
+        parameters, current_state, reason, predicted_impact, confidence, status, expires_at,
         supporting_data
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
     `).bind(
       id,
       orgId,
@@ -499,6 +507,7 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
       rec.entity_id,
       rec.entity_name,
       JSON.stringify(rec.parameters),
+      JSON.stringify(currentState),
       rec.reason,
       rec.predicted_impact,
       rec.confidence,

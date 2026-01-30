@@ -74,7 +74,7 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
           enum: ['low', 'medium', 'high']
         }
       },
-      required: ['platform', 'entity_type', 'entity_id', 'entity_name', 'recommended_budget_cents', 'budget_type', 'reason', 'confidence']
+      required: ['platform', 'entity_type', 'entity_id', 'entity_name', 'current_budget_cents', 'recommended_budget_cents', 'budget_type', 'reason', 'confidence']
     }
   },
   {
@@ -125,7 +125,7 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
           enum: ['low', 'medium', 'high']
         }
       },
-      required: ['platform', 'entity_type', 'entity_id', 'entity_name', 'recommended_status', 'reason', 'confidence']
+      required: ['platform', 'entity_type', 'entity_id', 'entity_name', 'current_status', 'recommended_status', 'reason', 'confidence']
     }
   },
   {
