@@ -273,7 +273,7 @@ export class AggregationService {
         datetime('now') as updated_at
       FROM stripe_charges
       WHERE date(stripe_created_at) = ?
-        AND status = 'succeeded'
+        AND status IN ('succeeded', 'active')
       GROUP BY organization_id
     `).bind(date, date, date).run();
   }
@@ -625,9 +625,9 @@ export class AggregationService {
         organization_id,
         date(stripe_created_at) as summary_date,
         COUNT(*) as total_charges,
-        SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as total_amount_cents,
-        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as successful_charges,
-        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_charges,
+        SUM(CASE WHEN status IN ('succeeded', 'active') THEN amount_cents ELSE 0 END) as total_amount_cents,
+        SUM(CASE WHEN status IN ('succeeded', 'active') THEN 1 ELSE 0 END) as successful_charges,
+        SUM(CASE WHEN status IN ('failed', 'unpaid') THEN 1 ELSE 0 END) as failed_charges,
         0 as refunded_amount_cents,
         COUNT(DISTINCT customer_id) as unique_customers,
         datetime('now') as created_at
