@@ -1524,7 +1524,7 @@ export class GetComputedAttribution extends OpenAPIRoute {
     const orgId = c.get("org_id" as any) || data.query.org_id;
     const model = data.query.model;
 
-    // Get most recent computed results
+    // Try AI_DB first (from API-triggered attribution workflow)
     const results = await c.env.AI_DB.prepare(`
       SELECT channel, attributed_credit, removal_effect, shapley_value,
              computation_date, conversion_count, path_count
@@ -1543,26 +1543,89 @@ export class GetComputedAttribution extends OpenAPIRoute {
       path_count: number;
     }>();
 
-    if (!results.results || results.results.length === 0) {
-      return error(c, "NO_RESULTS", `No ${model} results available. Run attribution analysis first.`, 404);
+    if (results.results && results.results.length > 0) {
+      const first = results.results[0];
+      return success(c, {
+        model,
+        computation_date: first.computation_date,
+        attributions: results.results.map(r => ({
+          channel: r.channel,
+          attributed_credit: r.attributed_credit,
+          removal_effect: r.removal_effect,
+          shapley_value: r.shapley_value
+        })),
+        metadata: {
+          conversion_count: first.conversion_count,
+          path_count: first.path_count
+        }
+      });
     }
 
-    const first = results.results[0];
+    // Fallback: try ANALYTICS_DB (from daily cron probabilistic attribution workflow)
+    // The cron uses short model names: 'markov' / 'shapley'
+    const cronModelName = model === 'markov_chain' ? 'markov' : 'shapley';
+    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
 
-    return success(c, {
-      model,
-      computation_date: first.computation_date,
-      attributions: results.results.map(r => ({
-        channel: r.channel,
-        attributed_credit: r.attributed_credit,
-        removal_effect: r.removal_effect,
-        shapley_value: r.shapley_value
-      })),
-      metadata: {
-        conversion_count: first.conversion_count,
-        path_count: first.path_count
+    // Resolve org_tag
+    const tagMapping = await c.env.DB.prepare(
+      `SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1`
+    ).bind(orgId).first<{ short_tag: string }>();
+
+    if (tagMapping?.short_tag) {
+      try {
+        // Get the most recent period only
+        const latestPeriod = await analyticsDb.prepare(`
+          SELECT period_start FROM attribution_results
+          WHERE org_tag = ? AND model = ?
+          ORDER BY period_start DESC LIMIT 1
+        `).bind(tagMapping.short_tag, cronModelName).first();
+
+        if (!latestPeriod) throw new Error('no results');
+
+        const cronResults = await analyticsDb.prepare(`
+          SELECT channel, credit, removal_effect, shapley_value,
+                 period_start, conversions
+          FROM attribution_results
+          WHERE org_tag = ?
+            AND model = ?
+            AND period_start = ?
+          ORDER BY credit DESC
+        `).bind(tagMapping.short_tag, cronModelName, latestPeriod.period_start).all();
+
+        const rows = (cronResults.results || []) as Array<{
+          channel: string;
+          credit: number;
+          removal_effect: number | null;
+          shapley_value: number | null;
+          period_start: string;
+          conversions: number;
+        }>;
+
+        if (rows.length > 0) {
+          const first = rows[0];
+          const totalConversions = rows.reduce((s: number, r: { conversions: number }) => s + (r.conversions || 0), 0);
+
+          return success(c, {
+            model,
+            computation_date: first.period_start,
+            attributions: rows.map((r: { channel: string; credit: number; removal_effect: number | null; shapley_value: number | null }) => ({
+              channel: r.channel,
+              attributed_credit: r.credit,
+              removal_effect: r.removal_effect,
+              shapley_value: r.shapley_value
+            })),
+            metadata: {
+              conversion_count: Math.round(totalConversions),
+              path_count: 0 // Not tracked by cron workflow
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('[GetComputedAttribution] Fallback to ANALYTICS_DB failed:', err);
       }
-    });
+    }
+
+    return error(c, "NO_RESULTS", `No ${model} results available. Run attribution analysis first.`, 404);
   }
 }
 
