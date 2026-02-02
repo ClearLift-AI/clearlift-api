@@ -675,20 +675,21 @@ async function buildPlatformFallbackD1(
       const metricsResult = await analyticsDb.prepare(`
         SELECT
           m.platform,
-          m.campaign_id,
+          m.entity_ref,
           c.campaign_name,
           SUM(m.conversions) as conversions,
           SUM(m.conversion_value_cents) as conversion_value_cents
         FROM ad_metrics m
-        LEFT JOIN ad_campaigns c ON m.campaign_id = c.platform_campaign_id AND m.platform = c.platform
+        LEFT JOIN ad_campaigns c ON m.entity_ref = c.id AND m.platform = c.platform
         WHERE m.organization_id = ?
+          AND m.entity_type = 'campaign'
           AND m.metric_date >= ?
           AND m.metric_date <= ?
           AND m.platform IN (${platforms.map(() => '?').join(', ')})
-        GROUP BY m.platform, m.campaign_id, c.campaign_name
+        GROUP BY m.platform, m.entity_ref, c.campaign_name
       `).bind(orgId, dateRange.start, dateRange.end, ...platforms).all<{
         platform: string;
-        campaign_id: string;
+        entity_ref: string;
         campaign_name: string | null;
         conversions: number;
         conversion_value_cents: number;
@@ -702,7 +703,7 @@ async function buildPlatformFallbackD1(
         allCampaigns.push({
           utm_source: row.platform,
           utm_medium: medium,
-          utm_campaign: row.campaign_name || row.campaign_id,
+          utm_campaign: row.campaign_name || row.entity_ref,
           touchpoints: 0,
           conversions_in_path: 0,
           attributed_conversions: conversions,

@@ -26,8 +26,8 @@ async function checkJourneySetupStatus(
 ): Promise<SetupStatus> {
   // Check tracking tag
   const tagMapping = await mainDb.prepare(`
-    SELECT short_tag, domain FROM org_tag_mappings WHERE organization_id = ? LIMIT 1
-  `).bind(orgId).first<{ short_tag: string; domain: string }>();
+    SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1
+  `).bind(orgId).first<{ short_tag: string }>();
 
   // Check connected platforms
   const platformsResult = await mainDb.prepare(`
@@ -44,7 +44,7 @@ async function checkJourneySetupStatus(
     hasRevenueConnector: revenueConnectors.length > 0,
     hasClickIds: false, // Not checked at endpoint level
     hasUtmData: false, // Not checked at endpoint level
-    trackingDomain: tagMapping?.domain,
+    trackingDomain: undefined,
     connectedPlatforms: adPlatforms,
     connectedConnectors: revenueConnectors
   };

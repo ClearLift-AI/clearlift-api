@@ -19,8 +19,8 @@ async function checkConversionSetupStatus(
 ): Promise<SetupStatus> {
   // Check tracking tag
   const tagMapping = await mainDb.prepare(`
-    SELECT short_tag, domain FROM org_tag_mappings WHERE organization_id = ? LIMIT 1
-  `).bind(orgId).first<{ short_tag: string; domain: string }>();
+    SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1
+  `).bind(orgId).first<{ short_tag: string }>();
 
   // Check connected platforms
   const platformsResult = await mainDb.prepare(`
@@ -37,7 +37,7 @@ async function checkConversionSetupStatus(
     hasRevenueConnector: revenueConnectors.length > 0,
     hasClickIds: false, // Checked separately
     hasUtmData: false, // Checked separately
-    trackingDomain: tagMapping?.domain,
+    trackingDomain: undefined,
     connectedPlatforms: adPlatforms,
     connectedConnectors: revenueConnectors
   };
