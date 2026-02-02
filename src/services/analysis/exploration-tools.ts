@@ -1548,13 +1548,13 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // Query attribution_results from D1
+      // Query conversions from D1 (not attribution_results which has aggregated data)
       const sql = `
         SELECT *
-        FROM attribution_results
+        FROM conversions
         WHERE organization_id = ?
           AND conversion_timestamp >= ? AND conversion_timestamp <= ?
-          AND source_platform = 'stripe'
+          AND conversion_source = 'stripe'
       `;
       const result = await this.db.prepare(sql).bind(orgId, startStr, endStr + 'T23:59:59Z').all<any>();
       const conversions = result.results || [];

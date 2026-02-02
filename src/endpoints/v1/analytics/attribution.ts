@@ -1317,10 +1317,15 @@ export class GetAttributionComparison extends OpenAPIRoute {
       shapley_value: number | null;
     }> = [];
 
+    // Map API model names to DB model names (same mapping as GetAttribution)
+    const apiToDbModel = (m: string) => m === 'markov_chain' ? 'markov' : m === 'shapley_value' ? 'shapley' : m;
+    const dbToApiModel = (m: string) => m === 'markov' ? 'markov_chain' : m === 'shapley' ? 'shapley_value' : m;
+    const dbModels = models.map(apiToDbModel);
+
     if (tagMapping?.short_tag) {
       try {
         // Query attribution results for requested models within date range
-        const modelsPlaceholder = models.map(() => '?').join(',');
+        const modelsPlaceholder = dbModels.map(() => '?').join(',');
         const attrResult = await analyticsDb.prepare(`
           SELECT model, channel, credit, conversions, revenue_cents, removal_effect, shapley_value
           FROM attribution_results
@@ -1329,7 +1334,7 @@ export class GetAttributionComparison extends OpenAPIRoute {
             AND period_start <= ?
             AND period_end >= ?
           ORDER BY model, credit DESC
-        `).bind(tagMapping.short_tag, ...models, dateTo, dateFrom).all();
+        `).bind(tagMapping.short_tag, ...dbModels, dateTo, dateFrom).all();
         attributionResults = (attrResult.results || []) as Array<{
           model: string;
           channel: string;
@@ -1355,9 +1360,10 @@ export class GetAttributionComparison extends OpenAPIRoute {
         resultsByModel.set(result.model, existing);
       }
 
-      // Build response with actual attribution data
+      // Build response with actual attribution data (map DB model names back to API names)
       const modelResults = models.map(model => {
-        const modelData = resultsByModel.get(model) || [];
+        const dbName = apiToDbModel(model);
+        const modelData = resultsByModel.get(dbName) || [];
         return {
           model,
           attributions: modelData.slice(0, 10).map(a => ({
