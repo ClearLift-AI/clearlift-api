@@ -31,6 +31,7 @@ export interface PlatformConnection {
   connected_at: string;
   last_synced_at: string | null;
   sync_status: string;
+  records_synced?: number;
   is_active: boolean;
   expires_at: string | null;
   scopes: string[];
@@ -396,12 +397,15 @@ export class ConnectorService {
   async getOrganizationConnections(organizationId: string): Promise<PlatformConnection[]> {
     const result = await this.db.prepare(`
       SELECT
-        id, organization_id, platform, account_id, account_name,
-        connected_by, connected_at, last_synced_at, sync_status,
-        is_active, expires_at, scopes
-      FROM platform_connections
-      WHERE organization_id = ? AND is_active = 1
-      ORDER BY connected_at DESC
+        pc.id, pc.organization_id, pc.platform, pc.account_id, pc.account_name,
+        pc.connected_by, pc.connected_at, pc.last_synced_at, pc.sync_status,
+        pc.is_active, pc.expires_at, pc.scopes,
+        (SELECT sj.records_synced FROM sync_jobs sj
+         WHERE sj.connection_id = pc.id AND sj.status = 'completed'
+         ORDER BY sj.completed_at DESC LIMIT 1) as records_synced
+      FROM platform_connections pc
+      WHERE pc.organization_id = ? AND pc.is_active = 1
+      ORDER BY pc.connected_at DESC
     `).bind(organizationId).all<PlatformConnection>();
 
     return (result.results || []).map(conn => {
