@@ -357,7 +357,7 @@ export class SmartAttributionService {
           COALESCE(SUM(m.conversion_value_cents), 0) / 100.0 as revenue
         FROM ad_campaigns c
         LEFT JOIN ad_metrics m
-          ON c.id = m.campaign_ref
+          ON c.id = m.entity_ref
           AND m.entity_type = 'campaign'
           AND m.metric_date >= ?
           AND m.metric_date <= ?
@@ -634,7 +634,7 @@ export class SmartAttributionService {
               SELECT COALESCE(SUM(m.clicks), 0) as clicks
               FROM ad_campaigns c
               LEFT JOIN ad_metrics m
-                ON c.id = m.campaign_ref
+                ON c.id = m.entity_ref
                 AND m.entity_type = 'campaign'
                 AND m.metric_date >= ?
                 AND m.metric_date <= ?
@@ -1489,7 +1489,7 @@ export class SmartAttributionService {
           COALESCE(SUM(m.conversion_value_cents), 0) / 100.0 as revenue
         FROM ad_campaigns c
         JOIN ad_metrics m
-          ON c.id = m.campaign_ref
+          ON c.id = m.entity_ref
           AND m.entity_type = 'campaign'
         WHERE c.organization_id = ?
           AND m.metric_date >= ?

@@ -392,10 +392,13 @@ export class GetD1Attribution extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
     }
 
+    // Map API model names to DB model names (markov_chain → markov, shapley_value → shapley)
+    const dbModel = model === 'markov_chain' ? 'markov' : model === 'shapley_value' ? 'shapley' : model;
+
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
     const results = await analyticsService.getAttributionResults(
       orgTagMapping.short_tag,
-      model,
+      dbModel,
       periodStart,
       periodEnd
     );

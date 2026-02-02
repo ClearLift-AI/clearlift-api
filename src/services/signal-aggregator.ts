@@ -275,7 +275,7 @@ export class SignalAggregator {
           COALESCE(SUM(m.conversions), 0) as conversions,
           COALESCE(SUM(m.conversion_value_cents), 0) / 100.0 as revenue
         FROM ad_campaigns c
-        LEFT JOIN ad_metrics m ON c.id = m.campaign_ref AND m.entity_type = 'campaign' AND m.metric_date >= ? AND m.metric_date <= ?
+        LEFT JOIN ad_metrics m ON c.id = m.entity_ref AND m.entity_type = 'campaign' AND m.metric_date >= ? AND m.metric_date <= ?
         WHERE c.organization_id = ?
         GROUP BY c.platform
       `).bind(startDate, endDate, orgId).all<{

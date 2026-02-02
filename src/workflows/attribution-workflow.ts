@@ -333,8 +333,11 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
         m.metric_date as date,
         m.clicks
       FROM ad_metrics m
-      JOIN ad_campaigns c ON m.campaign_ref = c.id
       LEFT JOIN ad_groups g ON m.entity_type = 'ad_group' AND m.entity_ref = g.id
+      JOIN ad_campaigns c ON c.id = CASE
+        WHEN m.entity_type = 'campaign' THEN m.entity_ref
+        WHEN m.entity_type = 'ad_group' THEN g.campaign_ref
+      END
       WHERE m.organization_id = ?
         AND m.metric_date >= ?
         AND m.entity_type IN ('campaign', 'ad_group')

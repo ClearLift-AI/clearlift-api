@@ -1668,7 +1668,7 @@ export class GetComputedAttribution extends OpenAPIRoute {
 
     // Fallback: try ANALYTICS_DB (from daily cron probabilistic attribution workflow)
     // The cron uses short model names: 'markov' / 'shapley'
-    const cronModelName = model === 'markov_chain' ? 'markov' : 'shapley';
+    const cronModelName = model === 'markov_chain' ? 'markov' : model === 'shapley_value' ? 'shapley' : model;
     const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
 
     // Resolve org_tag
