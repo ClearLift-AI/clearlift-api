@@ -36,8 +36,8 @@ async function checkSetupStatus(
 ): Promise<SetupStatus> {
   // Check tracking tag
   const tagMapping = await mainDb.prepare(`
-    SELECT short_tag, domain FROM org_tag_mappings WHERE organization_id = ? LIMIT 1
-  `).bind(orgId).first<{ short_tag: string; domain: string }>();
+    SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1
+  `).bind(orgId).first<{ short_tag: string }>();
 
   // Check connected platforms
   const platformsResult = await mainDb.prepare(`
@@ -86,7 +86,8 @@ async function checkSetupStatus(
     hasRevenueConnector: revenueConnectors.length > 0,
     hasClickIds,
     hasUtmData,
-    trackingDomain: tagMapping?.domain,
+    trackingDomain: undefined,
+    shortTag: tagMapping?.short_tag,
     connectedPlatforms: adPlatforms,
     connectedConnectors: revenueConnectors
   };
@@ -206,7 +207,9 @@ const AttributionModelEnum = z.enum([
   'last_touch',
   'linear',
   'time_decay',
-  'position_based'
+  'position_based',
+  'markov_chain',
+  'shapley_value'
 ]);
 
 // Data quality levels for "best available data" approach
@@ -989,6 +992,107 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     const warnings: DataWarning[] = [];
     let verificationMetrics: VerificationMetrics | null = null;
 
+    // Fix 6: Run verification check unconditionally so pre-computed path can use it
+    try {
+      verificationMetrics = await checkVerificationStatus(analyticsDb, orgId, dateRange);
+    } catch (err) {
+      console.warn('[Attribution] Verification check failed:', err);
+    }
+
+    // See SHARED_CODE.md §19.9 — Pre-computed attribution results
+    // Query tag mapping directly (setupStatus.shortTag may be null if checkSetupStatus failed due to schema differences)
+    const orgTagRow = setupStatus.shortTag
+      ? { short_tag: setupStatus.shortTag }
+      : await c.env.DB.prepare(`SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1`).bind(orgId).first<{ short_tag: string }>();
+    const orgShortTag = orgTagRow?.short_tag;
+
+    if (orgShortTag && requestedModel !== 'platform') {
+      const cronModelName = requestedModel === 'markov_chain' ? 'markov'
+        : requestedModel === 'shapley_value' ? 'shapley'
+        : requestedModel;
+
+      try {
+        const latestPeriod = await analyticsDb.prepare(`
+          SELECT period_start FROM attribution_results
+          WHERE org_tag = ? AND model = ?
+          ORDER BY period_start DESC LIMIT 1
+        `).bind(orgShortTag, cronModelName).first() as { period_start: string } | null;
+
+        if (latestPeriod) {
+          const precomputed = await analyticsDb.prepare(`
+            SELECT channel, credit, conversions, revenue_cents, removal_effect, shapley_value,
+                   period_start, period_end
+            FROM attribution_results
+            WHERE org_tag = ? AND model = ? AND period_start = ?
+            ORDER BY credit DESC
+          `).bind(orgShortTag, cronModelName, latestPeriod.period_start).all();
+
+          const rows = (precomputed.results || []) as Array<{
+            channel: string; credit: number; conversions: number; revenue_cents: number;
+            removal_effect: number | null; shapley_value: number | null;
+            period_start: string; period_end: string;
+          }>;
+
+          if (rows.length > 0) {
+            const totalConv = rows.reduce((s, r) => s + r.conversions, 0);
+            const totalRevCents = rows.reduce((s, r) => s + r.revenue_cents, 0);
+
+            const isVerified = verificationMetrics &&
+              verificationMetrics.verified_count >= 10 &&
+              verificationMetrics.avg_confidence >= 0.7 &&
+              verificationMetrics.verification_rate >= 50;
+
+            console.log(`[Attribution] Using pre-computed results: ${rows.length} channels, model=${cronModelName}`);
+
+            return success(c, {
+              model: requestedModel,
+              config: {
+                attribution_window_days: attributionWindowDays,
+                time_decay_half_life_days: timeDecayHalfLifeDays,
+                identity_stitching_enabled: useIdentityStitching,
+              },
+              data_quality: {
+                quality: isVerified ? 'verified' as DataQuality : 'tracked' as DataQuality,
+                warnings: [] as DataWarning[],
+                event_count: 0,
+                conversion_count: Math.round(totalConv),
+                fallback_source: null,
+                conversion_source_setting: conversionSource,
+                verification: verificationMetrics ? {
+                  verified_conversion_count: verificationMetrics.verified_count,
+                  avg_link_confidence: verificationMetrics.avg_confidence,
+                  link_method_breakdown: verificationMetrics.link_method_breakdown,
+                  verification_rate: verificationMetrics.verification_rate,
+                } : undefined,
+              },
+              attributions: rows.map(r => ({
+                utm_source: r.channel,
+                utm_medium: null,
+                utm_campaign: null,
+                touchpoints: Math.round(r.conversions),
+                conversions_in_path: Math.round(r.conversions),
+                attributed_conversions: r.conversions,
+                attributed_revenue: r.revenue_cents / 100,
+                credit: r.credit,
+                avg_position_in_path: 0,
+              })),
+              summary: {
+                total_conversions: Math.round(totalConv),
+                total_revenue: totalRevCents / 100,
+                avg_path_length: 0,
+                avg_days_to_convert: 0,
+                identified_users: 0,
+                anonymous_sessions: 0,
+              },
+              setup_guidance: setupGuidance.completeness < 100 ? setupGuidance : undefined,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[Attribution] Pre-computed query failed, falling back to live query:', err);
+      }
+    }
+
     if (conversionSource === 'connectors' || conversionSource === 'all') {
       // Query unified revenue sources (Stripe, Shopify, Jobber, etc.)
       console.log(`[Attribution] Querying unified revenue sources for connectors`);
@@ -1002,20 +1106,16 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         if (revenueData.summary.conversions > 0) {
           const connectorAttributions = buildConnectorAttributions(revenueData);
 
-          // Check verification status - are conversions linked to goals?
-          verificationMetrics = await checkVerificationStatus(analyticsDb, orgId, dateRange);
-
-          // Determine if data quality is "verified" (linked to goals with high confidence)
-          // Requirements: at least 10 verified conversions, 70%+ avg confidence, 50%+ verification rate
-          const isVerified =
+          // Verification metrics already fetched above (Fix 6)
+          const isVerified = verificationMetrics &&
             verificationMetrics.verified_count >= 10 &&
             verificationMetrics.avg_confidence >= 0.7 &&
             verificationMetrics.verification_rate >= 50;
 
           if (isVerified) {
             dataQuality = 'verified' as DataQuality;
-            console.log(`[Attribution] Data quality: VERIFIED (${verificationMetrics.verified_count} linked conversions, ${verificationMetrics.verification_rate.toFixed(1)}% rate)`);
-          } else {
+            console.log(`[Attribution] Data quality: VERIFIED (${verificationMetrics!.verified_count} linked conversions, ${verificationMetrics!.verification_rate.toFixed(1)}% rate)`);
+          } else if (verificationMetrics) {
             console.log(`[Attribution] Data quality: connector_only (verification: ${verificationMetrics.verified_count} linked, ${verificationMetrics.verification_rate.toFixed(1)}% rate)`);
           }
           console.log(`[Attribution] Found ${connectorAttributions.summary.total_conversions} connector conversions, $${connectorAttributions.summary.total_revenue} revenue`);
@@ -1226,10 +1326,10 @@ export class GetAttributionComparison extends OpenAPIRoute {
           FROM attribution_results
           WHERE org_tag = ?
             AND model IN (${modelsPlaceholder})
-            AND period_start >= ?
-            AND period_end <= ?
+            AND period_start <= ?
+            AND period_end >= ?
           ORDER BY model, credit DESC
-        `).bind(tagMapping.short_tag, ...models, dateFrom, dateTo).all();
+        `).bind(tagMapping.short_tag, ...models, dateTo, dateFrom).all();
         attributionResults = (attrResult.results || []) as Array<{
           model: string;
           channel: string;
@@ -1273,7 +1373,6 @@ export class GetAttributionComparison extends OpenAPIRoute {
 
       // Calculate summary from all results
       const allResults = Array.from(resultsByModel.values()).flat();
-      const uniqueConversions = new Set(allResults.map(r => `${r.channel}-${r.conversions}`));
       const totalConversions = allResults.length > 0
         ? allResults.reduce((sum, r) => sum + r.conversions, 0) / models.length // Average across models
         : 0;

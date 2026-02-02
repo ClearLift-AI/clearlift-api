@@ -50,6 +50,7 @@ export interface SetupStatus {
   hasClickIds: boolean;
   hasUtmData: boolean;
   trackingDomain?: string;
+  shortTag?: string;
   connectedPlatforms: string[];
   connectedConnectors: string[];
 }
