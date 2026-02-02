@@ -924,6 +924,50 @@ export default {
         }
       }
 
+      // Find stale running jobs (> 30 minutes) and mark as failed
+      // Workers can crash or hit CPU limits leaving jobs stuck in 'running' forever
+      const staleRunningJobs = await env.DB.prepare(`
+        SELECT id, connection_id, metadata FROM sync_jobs
+        WHERE status = 'running'
+          AND (started_at < datetime('now', '-30 minutes')
+               OR (started_at IS NULL AND created_at < datetime('now', '-30 minutes')))
+        LIMIT 20
+      `).all<{ id: string; connection_id: string | null; metadata: string | null }>();
+
+      if (staleRunningJobs.results?.length) {
+        console.log(`[Cron] Marking ${staleRunningJobs.results.length} stale running jobs as failed`);
+
+        for (const job of staleRunningJobs.results) {
+          const metadata = job.metadata ? JSON.parse(job.metadata) : {};
+          await env.DB.prepare(`
+            UPDATE sync_jobs
+            SET status = 'failed',
+                error_message = 'Job stuck in running state for over 30 minutes - worker likely crashed',
+                completed_at = datetime('now'),
+                metadata = ?
+            WHERE id = ?
+          `).bind(
+            JSON.stringify({ ...metadata, failed_reason: 'stuck_running' }),
+            job.id
+          ).run();
+        }
+
+        // Reset platform_connections.sync_status so future syncs aren't blocked
+        const staleConnectionIds = staleRunningJobs.results
+          .map(j => j.connection_id)
+          .filter(Boolean);
+        if (staleConnectionIds.length > 0) {
+          const placeholders = staleConnectionIds.map(() => '?').join(',');
+          await env.DB.prepare(`
+            UPDATE platform_connections
+            SET sync_status = 'idle'
+            WHERE id IN (${placeholders})
+              AND sync_status IN ('syncing', 'running')
+          `).bind(...staleConnectionIds).run();
+          console.log(`[Cron] Reset sync_status for ${staleConnectionIds.length} connections`);
+        }
+      }
+
       // Also cleanup stale active_event_workflows entries (> 2 hours old)
       const cleanedWorkflows = await env.DB.prepare(`
         DELETE FROM active_event_workflows
