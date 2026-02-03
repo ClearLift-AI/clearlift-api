@@ -599,6 +599,37 @@ export class SmartAttributionService {
         return [];
       }
 
+      // Query goal_relationships for exclusive flow synthesis
+      const relsResult = await this.mainDb.prepare(`
+        SELECT upstream_goal_id, downstream_goal_id, flow_tag, is_exclusive
+        FROM goal_relationships
+        WHERE organization_id = ?
+      `).bind(orgId).all<{
+        upstream_goal_id: string;
+        downstream_goal_id: string;
+        flow_tag: string | null;
+        is_exclusive: number | null;
+      }>();
+      const rels = relsResult.results || [];
+
+      // Synthesize flow_tag on goals when is_exclusive=1 but flow_tag is null
+      const goalMap = new Map(goals.map(g => [g.id, g]));
+      for (const rel of rels) {
+        if (rel.is_exclusive) {
+          const syntheticTag = rel.flow_tag || `_exclusive_${rel.upstream_goal_id}_${rel.downstream_goal_id}`;
+          const upstream = goalMap.get(rel.upstream_goal_id);
+          const downstream = goalMap.get(rel.downstream_goal_id);
+          if (upstream && !upstream.flow_tag) {
+            upstream.flow_tag = syntheticTag;
+            upstream.is_exclusive = 1;
+          }
+          if (downstream && !downstream.flow_tag) {
+            downstream.flow_tag = syntheticTag;
+            downstream.is_exclusive = 1;
+          }
+        }
+      }
+
       // Get channel distribution from daily_metrics
       const channelResult = await this.analyticsDb.prepare(`
         SELECT by_channel FROM daily_metrics
@@ -1049,12 +1080,21 @@ export class SmartAttributionService {
       console.log(`[SmartAttribution] Funnel bonuses computed for ${funnelBonusByChannel.size} channels, ${exclusiveFlowChannels.size} exclusive flows`);
     }
 
+    // Build set of all channels in any exclusive flow (for gating boost)
+    const allExclusiveChannels = new Set<string>();
+    for (const channels of exclusiveFlowChannels.values()) {
+      for (const ch of channels) allExclusiveChannels.add(ch);
+    }
+
     // Calculate total weighted sessions (for normalization)
+    // Channels in exclusive flows get an additional boost since they represent
+    // dedicated conversion paths that should concentrate credit
     let totalWeightedSessions = 0;
     const channelWeights = new Map<string, number>();
     for (const [channelKey, utm] of aggregatedUtm) {
       const bonus = funnelBonusByChannel.get(channelKey.toLowerCase())?.bonus || 0;
-      const weight = utm.sessions * (1 + bonus);
+      const exclusiveBoost = allExclusiveChannels.has(channelKey.toLowerCase()) ? 1.5 : 1.0;
+      const weight = utm.sessions * (1 + bonus) * exclusiveBoost;
       channelWeights.set(channelKey, weight);
       totalWeightedSessions += weight;
     }

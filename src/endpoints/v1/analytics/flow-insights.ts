@@ -110,6 +110,10 @@ export class GetFlowInsights extends OpenAPIRoute {
       }>();
 
       const goals = goalsResult.results || [];
+      if (goals.length === 0) {
+        return success(c, { stages: [], summary: { total_sessions: journeyAnalytics.total_sessions || 0, converting_sessions: journeyAnalytics.converting_sessions || 0, overall_conversion_rate: journeyAnalytics.conversion_rate || 0, bottleneck_stage: null } });
+      }
+
       const channelDist: Record<string, number> = journeyAnalytics.channel_distribution
         ? JSON.parse(journeyAnalytics.channel_distribution)
         : {};
@@ -130,10 +134,6 @@ export class GetFlowInsights extends OpenAPIRoute {
         'organic_social': ['organic_social'],
         'email': ['email'],
         'sms': ['sms'],
-        'clearlift_tag': ['direct'],
-        'stripe': ['direct'],
-        'shopify': ['direct'],
-        'jobber': ['direct'],
         'referral': ['referral'],
       };
 
