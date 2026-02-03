@@ -17,6 +17,7 @@ import {
 } from './recommendation-tools';
 import {
   getExplorationTools,
+  getExplorationToolsForOrg,
   isExplorationTool,
   ExplorationToolExecutor
 } from './exploration-tools';
@@ -145,7 +146,7 @@ export class AgenticLoop {
     // Build system prompt with optional custom instructions
     let systemPrompt = `You are an expert digital advertising strategist. Based on the analysis provided, identify actionable optimizations.
 
-IMPORTANT DATE RANGE: This analysis covers the LAST ${days} DAYS only. When using exploration tools (query_metrics, compare_entities), you MUST use days=${days} to stay consistent with the analysis period.
+IMPORTANT DATE RANGE: This analysis covers the LAST ${days} DAYS only. When using exploration tools (query_ad_metrics, calculate with scope=compare_entities), you MUST use days=${days} to stay consistent with the analysis period.
 
 IMPORTANT DATA UNITS: All monetary values in raw data are in CENTS (not dollars). When interpreting spend_cents or conversion_value_cents:
 - spend_cents: 100 = $1.00
@@ -193,7 +194,7 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
       iterations++;
 
       // Call Claude with tools
-      const response = await this.callWithTools(systemPrompt, messages, enableExploration);
+      const response = await this.callWithTools(systemPrompt, messages, enableExploration, orgId);
 
       // Extract tool uses and text from response
       const toolUses = response.content.filter(
@@ -291,7 +292,8 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
         const finalResponse = await this.callWithTools(
           systemPrompt + `\n\nYou have made ${maxRecommendations} recommendations which is the maximum. Provide a brief final summary.`,
           messages,
-          enableExploration
+          enableExploration,
+          orgId
         );
 
         const finalText = finalResponse.content
@@ -342,15 +344,18 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
   private async callWithTools(
     systemPrompt: string,
     messages: AnthropicMessage[],
-    enableExploration: boolean = true
+    enableExploration: boolean = true,
+    orgId?: string
   ): Promise<{
     content: Array<AnthropicToolUse | AnthropicTextBlock>;
     stop_reason: string;
   }> {
     // Build tools list - always include recommendation tools, conditionally include exploration
-    const tools = enableExploration
-      ? [...getAnthropicTools(), ...getExplorationTools()]
-      : getAnthropicTools();
+    // Dynamic filtering: only include tools relevant to org's active connectors
+    const explorationTools = enableExploration && orgId
+      ? await getExplorationToolsForOrg(this.analyticsDb, orgId)
+      : enableExploration ? getExplorationTools() : [];
+    const tools = [...getAnthropicTools(), ...explorationTools];
 
     const response = await fetch(`${this.baseUrl}/messages`, {
       method: 'POST',

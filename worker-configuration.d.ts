@@ -51,6 +51,8 @@ declare namespace Cloudflare {
 		SHOPIFY_CLIENT_SECRET: SecretsStoreSecret;
 		JOBBER_CLIENT_ID: SecretsStoreSecret;
 		JOBBER_CLIENT_SECRET: SecretsStoreSecret;
+		HUBSPOT_CLIENT_ID: SecretsStoreSecret;
+		HUBSPOT_CLIENT_SECRET: SecretsStoreSecret;
 		SYNC_QUEUE: Queue;
 		ANALYSIS_WORKFLOW: Workflow<Parameters<import("./src/index").AnalysisWorkflow['run']>[0]['payload']>;
 	}

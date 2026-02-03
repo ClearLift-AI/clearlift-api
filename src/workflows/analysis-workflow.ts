@@ -47,6 +47,7 @@ import {
 } from '../services/analysis/recommendation-tools';
 import {
   getExplorationTools,
+  getExplorationToolsForOrg,
   isExplorationTool,
   ExplorationToolExecutor
 } from '../services/analysis/exploration-tools';
@@ -190,7 +191,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       );
     });
 
-    const { crossPlatformSummary, platformSummaries } = crossPlatformResult;
+    const { crossPlatformSummary, platformSummaries, additionalContext } = crossPlatformResult;
     processedCount = crossPlatformResult.processedCount;
 
     // Steps 7+: Agentic loop (dynamic iterations)
@@ -230,7 +231,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       const recentRecs = await this.getRecentRecommendations(orgId);
 
       // Build initial messages
-      const contextPrompt = this.buildAgenticContextPrompt(crossPlatformSummary, platformSummaries);
+      const contextPrompt = this.buildAgenticContextPrompt(crossPlatformSummary, platformSummaries, additionalContext);
 
       return {
         recentRecs,
@@ -297,7 +298,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         return await this.getAgenticFinalSummary(
           agenticMessages,
           agenticContext.systemPrompt + `\n\nYou have made ${maxActionRecommendations} recommendations which is the maximum. Provide a brief final summary.`,
-          enableExploration
+          enableExploration,
+          orgId
         );
       });
       finalSummary = finalResult || crossPlatformSummary;
@@ -673,7 +675,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     jobId: string,
     startingCount: number,
     llmConfig?: LLMRuntimeConfig
-  ): Promise<{ crossPlatformSummary: string; platformSummaries: Record<string, string>; processedCount: number }> {
+  ): Promise<{ crossPlatformSummary: string; platformSummaries: Record<string, string>; processedCount: number; additionalContext?: string }> {
     // Use D1 ANALYTICS_DB for metrics
     const metrics = new MetricsFetcher(this.env.ANALYTICS_DB);
     const anthropicKey = await getSecret(this.env.ANTHROPIC_API_KEY);
@@ -696,9 +698,13 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         : accountSummary;
     }
 
-    // Calculate totals
+    // Calculate totals + per-platform breakdowns (deterministic math)
     let totalSpendCents = 0;
     let totalRevenueCents = 0;
+    let totalImpressions = 0;
+    let totalClicks = 0;
+    let totalConversions = 0;
+    const platformMetrics: Record<string, { spend_cents: number; revenue_cents: number; impressions: number; clicks: number; conversions: number }> = {};
 
     // Deserialize to get proper Map iteration
     const tree = deserializeEntityTree(entityTree);
@@ -713,12 +719,293 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       const totals = metrics.sumMetrics(accountMetrics);
       totalSpendCents += totals.spend_cents;
       totalRevenueCents += totals.conversion_value_cents;
+      totalImpressions += totals.impressions;
+      totalClicks += totals.clicks;
+      totalConversions += totals.conversions;
+
+      const p = account.platform;
+      if (!platformMetrics[p]) {
+        platformMetrics[p] = { spend_cents: 0, revenue_cents: 0, impressions: 0, clicks: 0, conversions: 0 };
+      }
+      platformMetrics[p].spend_cents += totals.spend_cents;
+      platformMetrics[p].revenue_cents += totals.conversion_value_cents;
+      platformMetrics[p].impressions += totals.impressions;
+      platformMetrics[p].clicks += totals.clicks;
+      platformMetrics[p].conversions += totals.conversions;
     }
 
     const totalSpend = `$${(totalSpendCents / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
     const blendedRoas = totalSpendCents > 0
       ? (totalRevenueCents / totalSpendCents).toFixed(2)
       : '0.00';
+
+    // Build deterministic computed metrics snapshot (no LLM needed for these numbers)
+    const fmt = (cents: number) => '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const pct = (num: number, den: number) => den > 0 ? (num / den * 100).toFixed(1) + '%' : 'N/A';
+
+    let computedSnapshot = `## Computed Metrics (${days}d, deterministic)\n`;
+    computedSnapshot += `| Metric | Value |\n|---|---|\n`;
+    computedSnapshot += `| Total Spend | ${fmt(totalSpendCents)} |\n`;
+    computedSnapshot += `| Total Revenue (platform-reported) | ${fmt(totalRevenueCents)} |\n`;
+    computedSnapshot += `| Blended ROAS | ${blendedRoas}x |\n`;
+    computedSnapshot += `| Total Impressions | ${totalImpressions.toLocaleString()} |\n`;
+    computedSnapshot += `| Total Clicks | ${totalClicks.toLocaleString()} |\n`;
+    computedSnapshot += `| Blended CTR | ${pct(totalClicks, totalImpressions)} |\n`;
+    computedSnapshot += `| Total Conversions | ${totalConversions.toLocaleString()} |\n`;
+    computedSnapshot += `| Blended CPA | ${totalConversions > 0 ? fmt(Math.round(totalSpendCents / totalConversions)) : 'N/A'} |\n`;
+    computedSnapshot += `| Blended CPC | ${totalClicks > 0 ? fmt(Math.round(totalSpendCents / totalClicks)) : 'N/A'} |\n`;
+    computedSnapshot += `| Conv. Rate (click→conv) | ${pct(totalConversions, totalClicks)} |\n\n`;
+
+    // Per-platform breakdown
+    const platformNames = Object.keys(platformMetrics);
+    if (platformNames.length > 1) {
+      computedSnapshot += `### Per-Platform Breakdown\n`;
+      computedSnapshot += `| Platform | Spend | Revenue | ROAS | CPA | CTR | Conversions |\n|---|---|---|---|---|---|---|\n`;
+      for (const p of platformNames) {
+        const m = platformMetrics[p];
+        const pRoas = m.spend_cents > 0 ? (m.revenue_cents / m.spend_cents).toFixed(2) + 'x' : 'N/A';
+        const pCpa = m.conversions > 0 ? fmt(Math.round(m.spend_cents / m.conversions)) : 'N/A';
+        const pCtr = pct(m.clicks, m.impressions);
+        computedSnapshot += `| ${p.charAt(0).toUpperCase() + p.slice(1)} | ${fmt(m.spend_cents)} | ${fmt(m.revenue_cents)} | ${pRoas} | ${pCpa} | ${pCtr} | ${m.conversions.toLocaleString()} |\n`;
+      }
+      computedSnapshot += '\n';
+
+      // Spend share
+      computedSnapshot += `### Spend Allocation\n`;
+      for (const p of platformNames) {
+        const share = totalSpendCents > 0 ? (platformMetrics[p].spend_cents / totalSpendCents * 100).toFixed(1) : '0';
+        computedSnapshot += `- ${p.charAt(0).toUpperCase() + p.slice(1)}: ${share}%\n`;
+      }
+      computedSnapshot += '\n';
+    }
+
+    // Fetch additional context: journey analytics, traffic, CAC trend
+    let additionalContext = computedSnapshot;
+    try {
+      // Resolve org_tag
+      const orgTagRow = await this.env.DB.prepare(
+        'SELECT org_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1'
+      ).bind(orgId).first<{ org_tag: string }>();
+      const orgTag = orgTagRow?.org_tag;
+
+      // Journey analytics
+      if (orgTag) {
+        try {
+          const journey = await this.env.ANALYTICS_DB.prepare(`
+            SELECT total_sessions, converting_sessions, conversion_rate,
+                   avg_path_length, channel_distribution
+            FROM journey_analytics
+            WHERE org_tag = ?
+            ORDER BY computed_at DESC LIMIT 1
+          `).bind(orgTag).first<{
+            total_sessions: number;
+            converting_sessions: number;
+            conversion_rate: number;
+            avg_path_length: number;
+            channel_distribution: string | null;
+          }>();
+
+          if (journey && journey.total_sessions > 0) {
+            const channels = journey.channel_distribution ? JSON.parse(journey.channel_distribution) : {};
+            const topChannels = Object.entries(channels)
+              .sort((a: any, b: any) => b[1] - a[1])
+              .slice(0, 5)
+              .map(([ch, cnt]) => `${ch}: ${cnt} sessions`)
+              .join(', ');
+
+            additionalContext += `## Journey Analytics\n`;
+            additionalContext += `- Total sessions: ${journey.total_sessions.toLocaleString()}\n`;
+            additionalContext += `- Converting sessions: ${journey.converting_sessions.toLocaleString()} (${journey.conversion_rate}%)\n`;
+            additionalContext += `- Avg path length: ${journey.avg_path_length}\n`;
+            if (topChannels) additionalContext += `- Top channels: ${topChannels}\n`;
+            additionalContext += '\n';
+          }
+        } catch { /* journey_analytics may not exist */ }
+
+        // Daily traffic summary
+        try {
+          const traffic = await this.env.ANALYTICS_DB.prepare(`
+            SELECT SUM(sessions) as sessions, SUM(unique_users) as users,
+                   SUM(conversions) as conversions, SUM(revenue_cents) as revenue_cents
+            FROM daily_metrics
+            WHERE org_tag = ?
+              AND metric_date >= date('now', '-${days} days')
+          `).bind(orgTag).first<{
+            sessions: number | null;
+            users: number | null;
+            conversions: number | null;
+            revenue_cents: number | null;
+          }>();
+
+          if (traffic && (traffic.sessions || 0) > 0) {
+            const tSessions = traffic.sessions || 0;
+            const tConversions = traffic.conversions || 0;
+            const tRevenue = traffic.revenue_cents || 0;
+            additionalContext += `## Site Traffic (${days}d)\n`;
+            additionalContext += `- Sessions: ${tSessions.toLocaleString()}\n`;
+            additionalContext += `- Unique users: ${(traffic.users || 0).toLocaleString()}\n`;
+            additionalContext += `- Conversions: ${tConversions.toLocaleString()}\n`;
+            additionalContext += `- Revenue: ${fmt(tRevenue)}\n`;
+            additionalContext += `- Site conv. rate: ${pct(tConversions, tSessions)}\n`;
+            if (totalSpendCents > 0 && tSessions > 0) {
+              additionalContext += `- Cost per session: ${fmt(Math.round(totalSpendCents / tSessions))}\n`;
+            }
+            additionalContext += '\n';
+          }
+        } catch { /* daily_metrics may not exist */ }
+      }
+
+      // CAC trend from AI_DB
+      try {
+        const cacRows = await this.env.AI_DB.prepare(`
+          SELECT date, cac_cents FROM cac_history
+          WHERE organization_id = ?
+          ORDER BY date DESC LIMIT 14
+        `).bind(orgId).all<{ date: string; cac_cents: number }>();
+
+        const cacHistory = cacRows.results || [];
+        if (cacHistory.length > 0) {
+          const current = cacHistory[0].cac_cents;
+          const oldest = cacHistory[cacHistory.length - 1].cac_cents;
+          const trendPct = oldest > 0
+            ? Math.round(((current - oldest) / oldest) * 100)
+            : 0;
+          const values = cacHistory.map(h => h.cac_cents);
+          const minCac = Math.min(...values);
+          const maxCac = Math.max(...values);
+
+          additionalContext += `## CAC Trend (14d)\n`;
+          additionalContext += `- Current CAC: ${fmt(current)}\n`;
+          additionalContext += `- Trend: ${trendPct > 0 ? '+' : ''}${trendPct}% over ${cacHistory.length} days\n`;
+          additionalContext += `- Range: ${fmt(minCac)} – ${fmt(maxCac)}\n`;
+          // Cross-reference: CAC vs blended CPA from ad platforms
+          if (totalConversions > 0) {
+            const platformCpa = Math.round(totalSpendCents / totalConversions);
+            const delta = current > 0 ? Math.round(((platformCpa - current) / current) * 100) : 0;
+            additionalContext += `- Platform CPA vs tracked CAC: ${fmt(platformCpa)} vs ${fmt(current)} (${delta > 0 ? '+' : ''}${delta}%)\n`;
+          }
+          additionalContext += '\n';
+        }
+      } catch { /* cac_history may not exist */ }
+
+      // Shopify revenue
+      try {
+        const shopify = await this.env.ANALYTICS_DB.prepare(`
+          SELECT COUNT(*) as orders, SUM(total_price_cents) as revenue_cents,
+                 AVG(total_price_cents) as aov_cents,
+                 COUNT(CASE WHEN customer_orders_count <= 1 THEN 1 END) as new_customers
+          FROM shopify_orders
+          WHERE organization_id = ?
+            AND shopify_created_at >= date('now', '-${days} days')
+        `).bind(orgId).first<{
+          orders: number; revenue_cents: number | null; aov_cents: number | null; new_customers: number;
+        }>();
+
+        if (shopify && (shopify.orders || 0) > 0) {
+          additionalContext += `## Shopify Revenue (${days}d)\n`;
+          additionalContext += `- Orders: ${shopify.orders.toLocaleString()}\n`;
+          additionalContext += `- Revenue: ${fmt(shopify.revenue_cents || 0)}\n`;
+          additionalContext += `- AOV: ${fmt(Math.round(shopify.aov_cents || 0))}\n`;
+          additionalContext += `- New customers: ${shopify.new_customers} (${shopify.orders > 0 ? Math.round(shopify.new_customers / shopify.orders * 100) : 0}%)\n`;
+          if (totalSpendCents > 0 && shopify.revenue_cents) {
+            additionalContext += `- Shopify ROAS (vs ad spend): ${(shopify.revenue_cents / totalSpendCents).toFixed(2)}x\n`;
+          }
+          additionalContext += '\n';
+        }
+      } catch { /* shopify_orders may not exist */ }
+
+      // CRM pipeline
+      try {
+        const crm = await this.env.ANALYTICS_DB.prepare(`
+          SELECT COUNT(*) as deals,
+                 COUNT(CASE WHEN status = 'won' THEN 1 END) as won,
+                 COUNT(CASE WHEN status = 'lost' THEN 1 END) as lost,
+                 COUNT(CASE WHEN status = 'open' THEN 1 END) as open_deals,
+                 SUM(value_cents) as pipeline_cents,
+                 SUM(CASE WHEN status = 'won' THEN value_cents ELSE 0 END) as won_cents
+          FROM crm_deals
+          WHERE organization_id = ?
+            AND created_at >= date('now', '-${days} days')
+        `).bind(orgId).first<{
+          deals: number; won: number; lost: number; open_deals: number;
+          pipeline_cents: number | null; won_cents: number | null;
+        }>();
+
+        if (crm && (crm.deals || 0) > 0) {
+          additionalContext += `## CRM Pipeline (${days}d)\n`;
+          additionalContext += `- Total deals: ${crm.deals} (${crm.open_deals} open, ${crm.won} won, ${crm.lost} lost)\n`;
+          additionalContext += `- Pipeline value: ${fmt(crm.pipeline_cents || 0)}\n`;
+          additionalContext += `- Won value: ${fmt(crm.won_cents || 0)}\n`;
+          const winRate = (crm.won + crm.lost) > 0 ? Math.round(crm.won / (crm.won + crm.lost) * 100) : 0;
+          additionalContext += `- Win rate: ${winRate}%\n`;
+          if (totalSpendCents > 0 && crm.won_cents) {
+            additionalContext += `- CRM ROAS (won value vs ad spend): ${(crm.won_cents / totalSpendCents).toFixed(2)}x\n`;
+          }
+          additionalContext += '\n';
+        }
+      } catch { /* crm_deals may not exist */ }
+
+      // Subscription MRR
+      try {
+        const subs = await this.env.ANALYTICS_DB.prepare(`
+          SELECT COUNT(*) as total,
+                 COUNT(CASE WHEN status IN ('active', 'trialing') THEN 1 END) as active,
+                 COUNT(CASE WHEN status = 'canceled' THEN 1 END) as canceled,
+                 SUM(CASE WHEN status IN ('active', 'trialing') THEN amount_cents ELSE 0 END) as mrr_cents
+          FROM stripe_subscriptions
+          WHERE organization_id = ?
+        `).bind(orgId).first<{
+          total: number; active: number; canceled: number; mrr_cents: number | null;
+        }>();
+
+        if (subs && (subs.total || 0) > 0) {
+          const mrrCents = subs.mrr_cents || 0;
+          additionalContext += `## Subscriptions\n`;
+          additionalContext += `- Active: ${subs.active} | Canceled: ${subs.canceled} | Total: ${subs.total}\n`;
+          additionalContext += `- MRR: ${fmt(mrrCents)} | ARR: ${fmt(mrrCents * 12)}\n`;
+          const churnRate = subs.total > 0 ? Math.round(subs.canceled / subs.total * 100) : 0;
+          additionalContext += `- Churn rate: ${churnRate}%\n\n`;
+        }
+      } catch { /* stripe_subscriptions may not exist */ }
+
+      // Email/SMS engagement
+      try {
+        const comms = await this.env.ANALYTICS_DB.prepare(`
+          SELECT COUNT(*) as campaigns, SUM(audience_count) as total_sent
+          FROM comm_campaigns
+          WHERE organization_id = ?
+            AND sent_at >= date('now', '-${days} days')
+        `).bind(orgId).first<{ campaigns: number; total_sent: number | null }>();
+
+        if (comms && (comms.campaigns || 0) > 0) {
+          const engagements = await this.env.ANALYTICS_DB.prepare(`
+            SELECT engagement_type, COUNT(*) as count
+            FROM comm_engagements
+            WHERE organization_id = ?
+              AND occurred_at >= date('now', '-${days} days')
+            GROUP BY engagement_type
+          `).bind(orgId).all<{ engagement_type: string; count: number }>();
+
+          const engMap: Record<string, number> = {};
+          for (const r of engagements.results || []) {
+            engMap[r.engagement_type] = r.count;
+          }
+
+          const sent = comms.total_sent || 0;
+          const opens = engMap['open'] || engMap['opened'] || 0;
+          const clicks = engMap['click'] || engMap['clicked'] || 0;
+
+          additionalContext += `## Email/SMS (${days}d)\n`;
+          additionalContext += `- Campaigns: ${comms.campaigns}\n`;
+          additionalContext += `- Sent: ${sent.toLocaleString()}\n`;
+          additionalContext += `- Opens: ${opens.toLocaleString()} (${sent > 0 ? (opens / sent * 100).toFixed(1) : '0'}%)\n`;
+          additionalContext += `- Clicks: ${clicks.toLocaleString()} (${sent > 0 ? (clicks / sent * 100).toFixed(1) : '0'}%)\n\n`;
+        }
+      } catch { /* comm tables may not exist */ }
+
+    } catch {
+      // Non-critical — additional context is best-effort
+    }
 
     // Format platform summaries for prompt
     const childSummaries = Object.entries(platformSummaries).map(([platform, summary]) => ({
@@ -793,7 +1080,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     return {
       crossPlatformSummary: response.content,
       platformSummaries,
-      processedCount
+      processedCount,
+      additionalContext: additionalContext || undefined
     };
   }
 
@@ -884,12 +1172,16 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
    */
   private buildAgenticContextPrompt(
     executiveSummary: string,
-    platformSummaries: Record<string, string>
+    platformSummaries: Record<string, string>,
+    additionalContext?: string
   ): string {
     let prompt = `## Executive Summary\n${executiveSummary}\n\n`;
     prompt += '## Platform Summaries\n';
     for (const [platform, summary] of Object.entries(platformSummaries)) {
       prompt += `### ${platform.charAt(0).toUpperCase() + platform.slice(1)}\n${summary}\n\n`;
+    }
+    if (additionalContext) {
+      prompt += additionalContext + '\n\n';
     }
     prompt += `Based on the analysis above:
 1. FIRST: Generate at least one insight using general_insight to capture your strategic observations
@@ -1018,13 +1310,15 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     let accumulatedInsightId = existingAccumulatedInsightId;
     let accumulatedInsights = [...existingAccumulatedInsights];
     const actionRecommendations = [...existingActionRecommendations];
-    const explorationExecutor = new ExplorationToolExecutor(this.env.ANALYTICS_DB);
+    const explorationExecutor = new ExplorationToolExecutor(this.env.ANALYTICS_DB, this.env.AI_DB);
 
     // Build tools list with simulate_change at the front
     // This makes the LLM more likely to use it before making recommendations
-    const baseTools = enableExploration
-      ? [...getAnthropicTools(), ...getExplorationTools()]
-      : getAnthropicTools();
+    // Dynamic filtering: only include exploration tools relevant to this org's connectors
+    const explorationTools = enableExploration
+      ? await getExplorationToolsForOrg(this.env.ANALYTICS_DB, orgId)
+      : [];
+    const baseTools = [...getAnthropicTools(), ...explorationTools];
     const tools = getToolsWithSimulation(baseTools);
 
     // Get API key
@@ -1319,11 +1613,13 @@ If you cannot find any actionable recommendations, you MUST still generate an in
   private async getAgenticFinalSummary(
     messages: any[],
     systemPrompt: string,
-    enableExploration: boolean
+    enableExploration: boolean,
+    orgId?: string
   ): Promise<string | null> {
-    const tools = enableExploration
-      ? [...getAnthropicTools(), ...getExplorationTools()]
-      : getAnthropicTools();
+    const explorationTools = enableExploration && orgId
+      ? await getExplorationToolsForOrg(this.env.ANALYTICS_DB, orgId)
+      : enableExploration ? getExplorationTools() : [];
+    const tools = [...getAnthropicTools(), ...explorationTools];
 
     // Get API key
     const anthropicKey = await getSecret(this.env.ANTHROPIC_API_KEY);
