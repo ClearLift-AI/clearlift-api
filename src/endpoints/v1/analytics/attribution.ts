@@ -708,6 +708,7 @@ async function buildPlatformFallbackD1(
           conversions_in_path: 0,
           attributed_conversions: conversions,
           attributed_revenue: revenue,
+          credit: 0,
           avg_position_in_path: 0
         });
 
@@ -760,6 +761,7 @@ function buildConnectorAttributions(
       conversions_in_path: data.conversions,
       attributed_conversions: data.conversions,
       attributed_revenue: Math.round(data.revenue * 100) / 100,
+      credit: 0,
       avg_position_in_path: 0
     });
   }
