@@ -1327,17 +1327,21 @@ export class GetAttributionComparison extends OpenAPIRoute {
 
     if (tagMapping?.short_tag) {
       try {
-        // Query attribution results for requested models within date range
+        // Query attribution results — use only the latest period per model to avoid duplicates
         const modelsPlaceholder = dbModels.map(() => '?').join(',');
         const attrResult = await analyticsDb.prepare(`
-          SELECT model, channel, credit, conversions, revenue_cents, removal_effect, shapley_value
-          FROM attribution_results
-          WHERE org_tag = ?
-            AND model IN (${modelsPlaceholder})
-            AND period_start <= ?
-            AND period_end >= ?
-          ORDER BY model, credit DESC
-        `).bind(tagMapping.short_tag, ...dbModels, dateTo, dateFrom).all();
+          SELECT ar.model, ar.channel, ar.credit, ar.conversions, ar.revenue_cents, ar.removal_effect, ar.shapley_value
+          FROM attribution_results ar
+          INNER JOIN (
+            SELECT model, MAX(period_start) as latest_start
+            FROM attribution_results
+            WHERE org_tag = ? AND model IN (${modelsPlaceholder})
+            GROUP BY model
+          ) latest ON ar.model = latest.model AND ar.period_start = latest.latest_start
+          WHERE ar.org_tag = ?
+            AND ar.model IN (${modelsPlaceholder})
+          ORDER BY ar.model, ar.credit DESC
+        `).bind(tagMapping.short_tag, ...dbModels, tagMapping.short_tag, ...dbModels).all();
         attributionResults = (attrResult.results || []) as Array<{
           model: string;
           channel: string;
