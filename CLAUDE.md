@@ -860,6 +860,47 @@ SELECT COUNT(*) FROM shopify_orders;
 | **3 (Ads)** | LinkedIn Marketing | Better B2B attribution |
 | **4 (Creator)** | ConvertKit, Kajabi | Niche verticals |
 
+### HubSpot Integration Status (Feb 2026)
+
+**Implementation Status:**
+
+| Component | Status | File |
+|-----------|--------|------|
+| OAuth Provider | ✅ Implemented | `src/services/oauth/hubspot.ts` |
+| Webhook Handler | ✅ Implemented | `src/endpoints/v1/webhooks/handlers.ts` |
+| Wrangler Bindings | ✅ Configured | `HUBSPOT_CLIENT_ID`, `HUBSPOT_CLIENT_SECRET` |
+| Secrets in Cloudflare | ❌ Not set | Blocking production OAuth |
+
+**To Enable HubSpot OAuth:**
+
+1. Create HubSpot App in [Developer Portal](https://developers.hubspot.com/):
+   - App Type: Public App (for OAuth)
+   - Scopes: `crm.objects.contacts.read`, `crm.objects.companies.read`, `crm.objects.deals.read`, `crm.schemas.*.read`, `timeline`, `oauth`
+   - Redirect URI: `https://api.clearlift.ai/v1/connectors/hubspot/callback`
+
+2. Set Cloudflare secrets:
+   ```bash
+   echo "your-client-id" | npx wrangler secret put HUBSPOT_CLIENT_ID
+   echo "your-client-secret" | npx wrangler secret put HUBSPOT_CLIENT_SECRET
+   ```
+
+**HubSpot CLI for Development:**
+
+The `hs` CLI (v7.11.3) is configured with account `clear-lift` (244951827).
+
+```bash
+# Create development sandbox (isolated test data)
+hs sandbox create --name="clearlift-dev"
+
+# Check account info
+hs account info
+
+# Manage secrets
+hs app secret list
+```
+
+Use sandboxes for testing OAuth flows and sync without affecting production HubSpot data.
+
 ### Architecture Notes for New Connectors
 
 All connectors should implement:
