@@ -1020,8 +1020,8 @@ export class D1AnalyticsService {
     const result = await this.session.prepare(`
       SELECT
         COUNT(*) as total_transactions,
-        COALESCE(SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END), 0) as total_revenue_cents,
-        COALESCE(SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END), 0) as successful_count,
+        COALESCE(SUM(amount_cents), 0) as total_revenue_cents,
+        COUNT(*) as successful_count,
         COUNT(DISTINCT customer_id) as unique_customers
       FROM stripe_charges
       WHERE organization_id = ?
@@ -1071,8 +1071,8 @@ export class D1AnalyticsService {
     const result = await this.session.prepare(`
       SELECT
         ${dateFormat} as date,
-        SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as revenue_cents,
-        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as transactions,
+        SUM(amount_cents) as revenue_cents,
+        COUNT(*) as transactions,
         COUNT(DISTINCT customer_id) as unique_customers
       FROM stripe_charges
       WHERE organization_id = ?
@@ -1107,8 +1107,8 @@ export class D1AnalyticsService {
     const result = await this.session.prepare(`
       SELECT
         COUNT(*) as total_charges,
-        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as successful_charges,
-        SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as total_revenue_cents,
+        COUNT(*) as successful_charges,
+        SUM(amount_cents) as total_revenue_cents,
         COUNT(DISTINCT customer_id) as unique_customers
       FROM stripe_charges
       WHERE organization_id = ?
@@ -1138,8 +1138,8 @@ export class D1AnalyticsService {
     const result = await this.session.prepare(`
       SELECT
         strftime('%Y-%m-%d %H:00:00', stripe_created_at) as bucket,
-        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN status = 'succeeded' THEN amount_cents ELSE 0 END) as revenue_cents
+        COUNT(*) as conversions,
+        SUM(amount_cents) as revenue_cents
       FROM stripe_charges
       WHERE organization_id = ?
         AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
