@@ -299,6 +299,7 @@ Returns stage-by-stage metrics for the acquisition flow:
         let visitors = 0;
         let conversions = 0;
         let conversionValueCents = 0;
+        let byChannel: Record<string, number> | undefined;
 
         try {
           // Query based on connector type (using unified ad_metrics table)
@@ -465,7 +466,6 @@ Returns stage-by-stage metrics for the acquisition flow:
         }
 
         // Calculate by_channel for this stage
-        let byChannel: Record<string, number> | undefined;
         let byChannelEnhanced: Record<string, EnhancedChannelAttribution> | undefined;
 
         if (visitors > 0) {

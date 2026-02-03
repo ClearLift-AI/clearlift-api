@@ -43,6 +43,7 @@ import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./end
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
 import { GetFlowMetrics, GetStageTransitions } from "./endpoints/v1/analytics/flow-metrics";
 import { GetFlowInsights } from "./endpoints/v1/analytics/flow-insights";
+import { GetPageFlow } from "./endpoints/v1/analytics/page-flow";
 import { GetEventsSyncStatus } from "./endpoints/v1/analytics/events-sync";
 import {
   GetD1MetricsSummary,
@@ -530,6 +531,7 @@ openapi.get("/v1/analytics/journeys/overview", auth, requireOrg, GetJourneysOver
 openapi.get("/v1/analytics/flow/metrics", auth, requireOrg, GetFlowMetrics);
 openapi.get("/v1/analytics/flow/insights", auth, requireOrg, GetFlowInsights);
 openapi.get("/v1/analytics/flow/stage/:stageId/transitions", auth, requireOrg, GetStageTransitions);
+openapi.get("/v1/analytics/flow/pages", auth, requireOrg, GetPageFlow);
 
 // D1 Analytics endpoints (dev environment - pure Cloudflare)
 openapi.get("/v1/analytics/metrics/summary", auth, requireOrg, GetD1MetricsSummary);
