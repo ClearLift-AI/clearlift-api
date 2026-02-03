@@ -169,6 +169,8 @@ interface FunnelPositionData {
   conversionRate: number;  // Rate of converting to macro conversion
   visitorCount: number;
   byChannel: Record<string, number>;  // Channel -> visitor count at this funnel step
+  flowTag: string | null;
+  isExclusive: boolean;
 }
 
 // Time series entry for response
@@ -575,7 +577,7 @@ export class SmartAttributionService {
           id, name, type, connector, connector_event_type,
           COALESCE(position_row, priority, 0) as position_row,
           COALESCE(position_col, 0) as position_col,
-          is_conversion
+          is_conversion, flow_tag, is_exclusive
         FROM conversion_goals
         WHERE organization_id = ? AND is_active = 1
         ORDER BY position_row ASC, position_col ASC
@@ -588,6 +590,8 @@ export class SmartAttributionService {
         position_row: number;
         position_col: number;
         is_conversion: number | null;
+        flow_tag: string | null;
+        is_exclusive: number | null;
       }>();
 
       const goals = goalsResult.results || [];
@@ -692,6 +696,8 @@ export class SmartAttributionService {
           conversionRate,
           visitorCount: visitors,
           byChannel,
+          flowTag: goal.flow_tag || null,
+          isExclusive: !!(goal.is_exclusive),
         });
       }
 
@@ -1007,26 +1013,40 @@ export class SmartAttributionService {
 
     // Build funnel bonus lookup by channel
     // Channels with visitors at higher funnel positions get bonus weighting
-    const funnelBonusByChannel = new Map<string, { bonus: number; maxPosition: number; steps: string[] }>();
+    const funnelBonusByChannel = new Map<string, { bonus: number; maxPosition: number; steps: string[]; flowTag: string | null }>();
+    // Build exclusive flow channel sets for gating
+    const exclusiveFlowChannels = new Map<string, Set<string>>(); // flow_tag → channels
     if (funnelData.length > 0) {
       for (const funnelStep of funnelData) {
+        // Track exclusive flow channels
+        if (funnelStep.flowTag && funnelStep.isExclusive) {
+          if (!exclusiveFlowChannels.has(funnelStep.flowTag)) {
+            exclusiveFlowChannels.set(funnelStep.flowTag, new Set());
+          }
+          for (const ch of Object.keys(funnelStep.byChannel)) {
+            exclusiveFlowChannels.get(funnelStep.flowTag)!.add(ch.toLowerCase());
+          }
+        }
+
         for (const [channel, visitorCount] of Object.entries(funnelStep.byChannel)) {
           const normalizedChannel = channel.toLowerCase();
-          const existing = funnelBonusByChannel.get(normalizedChannel) || { bonus: 0, maxPosition: 0, steps: [] };
+          const existing = funnelBonusByChannel.get(normalizedChannel) || { bonus: 0, maxPosition: 0, steps: [], flowTag: null };
 
           // Add bonus based on funnel position × conversion rate
-          // Position 3 with 50% conversion rate = 1.5 bonus points
           const stepBonus = funnelStep.funnelPosition * funnelStep.conversionRate;
           existing.bonus += stepBonus;
           existing.maxPosition = Math.max(existing.maxPosition, funnelStep.funnelPosition);
           if (!existing.steps.includes(funnelStep.goalName)) {
             existing.steps.push(funnelStep.goalName);
           }
+          if (funnelStep.flowTag) {
+            existing.flowTag = funnelStep.flowTag;
+          }
 
           funnelBonusByChannel.set(normalizedChannel, existing);
         }
       }
-      console.log(`[SmartAttribution] Funnel bonuses computed for ${funnelBonusByChannel.size} channels`);
+      console.log(`[SmartAttribution] Funnel bonuses computed for ${funnelBonusByChannel.size} channels, ${exclusiveFlowChannels.size} exclusive flows`);
     }
 
     // Calculate total weighted sessions (for normalization)

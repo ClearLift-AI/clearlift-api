@@ -42,6 +42,7 @@ import { GetTrackingLinkPerformance } from "./endpoints/v1/analytics/tracking-li
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
 import { GetFlowMetrics, GetStageTransitions } from "./endpoints/v1/analytics/flow-metrics";
+import { GetFlowInsights } from "./endpoints/v1/analytics/flow-insights";
 import { GetEventsSyncStatus } from "./endpoints/v1/analytics/events-sync";
 import {
   GetD1MetricsSummary,
@@ -527,6 +528,7 @@ openapi.get("/v1/analytics/journeys/overview", auth, requireOrg, GetJourneysOver
 
 // Flow Builder analytics endpoints
 openapi.get("/v1/analytics/flow/metrics", auth, requireOrg, GetFlowMetrics);
+openapi.get("/v1/analytics/flow/insights", auth, requireOrg, GetFlowInsights);
 openapi.get("/v1/analytics/flow/stage/:stageId/transitions", auth, requireOrg, GetStageTransitions);
 
 // D1 Analytics endpoints (dev environment - pure Cloudflare)
