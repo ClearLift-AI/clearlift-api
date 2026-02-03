@@ -32,7 +32,8 @@ import {
   GetBlendedAttribution,
   RunProbabilisticAttribution,
   GetProbabilisticAttributionStatus,
-  GetJourneyAnalytics
+  GetJourneyAnalytics,
+  GetAssistedDirectStats
 } from "./endpoints/v1/analytics/attribution";
 import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-campaigns";
 import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
@@ -505,6 +506,7 @@ openapi.get("/v1/analytics/attribution/probabilistic/status/:job_id", auth, requ
 openapi.get("/v1/analytics/attribution/journey-analytics", auth, requireOrg, GetJourneyAnalytics);
 openapi.get("/v1/analytics/attribution/computed", auth, requireOrg, GetComputedAttribution);
 openapi.get("/v1/analytics/attribution/blended", auth, requireOrg, GetBlendedAttribution);
+openapi.get("/v1/analytics/attribution/assisted-direct", auth, requireOrg, GetAssistedDirectStats);
 openapi.get("/v1/analytics/smart-attribution", auth, requireOrg, GetSmartAttribution);
 openapi.get("/v1/analytics/stripe", auth, requireOrg, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, requireOrg, GetStripeDailyAggregates);

@@ -2577,3 +2577,167 @@ Run probabilistic attribution first to generate this data.
     });
   }
 }
+
+/**
+ * GET /v1/analytics/attribution/assisted-direct
+ *
+ * Journey-aware direct attribution - shows how much "direct" traffic
+ * is actually return visitors from prior ad campaigns.
+ *
+ * Uses time-decay to attribute direct visits to prior marketing touchpoints
+ * within a 7-day lookback window.
+ */
+export class GetAssistedDirectStats extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Get assisted direct traffic breakdown",
+    description: `
+Analyze direct traffic to distinguish between:
+- **True Direct**: First-time visitors with no prior marketing touchpoints
+- **Assisted Direct**: Return visitors who previously came from ad campaigns
+
+Uses a 7-day lookback window with time-decay attribution (24-hour half-life)
+to identify which marketing channels drove the original visit.
+
+This helps understand the true value of ad spend - many "direct" visits
+are actually return visitors influenced by earlier marketing.
+    `.trim(),
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Start date (YYYY-MM-DD)"),
+        date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("End date (YYYY-MM-DD)"),
+        lookback_hours: z.coerce.number().min(1).max(720).optional().describe("Hours to look back for prior touchpoints (default: 168 = 7 days)")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Assisted direct traffic breakdown",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                total_direct_sessions: z.number().describe("Total sessions classified as 'direct'"),
+                assisted_direct_sessions: z.number().describe("Direct sessions from return visitors"),
+                true_direct_sessions: z.number().describe("Direct sessions with no prior touchpoints"),
+                assisted_percent: z.number().describe("Percentage of direct traffic that was assisted"),
+                assisted_by_channel: z.record(z.number()).describe("Breakdown by original marketing channel"),
+                lookback_hours: z.number().describe("Lookback window used"),
+                period: z.object({
+                  start: z.string(),
+                  end: z.string()
+                })
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+
+    const orgId = c.get("org_id" as any) || data.query.org_id;
+    const dateFrom = data.query.date_from;
+    const dateTo = data.query.date_to;
+    const lookbackHours = data.query.lookback_hours || 168; // 7 days default
+
+    // Get org_tag
+    const tagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
+    `).bind(orgId).first<{ short_tag: string }>();
+
+    if (!tagMapping?.short_tag) {
+      return error(c, "NO_TRACKING_TAG", "Organization does not have a tracking tag configured", 400);
+    }
+
+    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    if (!analyticsDb) {
+      return error(c, "DATABASE_ERROR", "ANALYTICS_DB not configured", 500);
+    }
+
+    // Query to find direct sessions and their prior touchpoints
+    const result = await analyticsDb.prepare(`
+      WITH direct_sessions AS (
+        SELECT DISTINCT
+          t.session_id,
+          t.anonymous_id,
+          t.touchpoint_timestamp
+        FROM journey_touchpoints t
+        WHERE t.org_tag = ?
+          AND t.channel = 'direct'
+          AND DATE(t.touchpoint_timestamp) >= ?
+          AND DATE(t.touchpoint_timestamp) <= ?
+      ),
+      prior_touches AS (
+        SELECT
+          ds.session_id,
+          ds.anonymous_id,
+          (
+            SELECT jt.channel
+            FROM journey_touchpoints jt
+            WHERE jt.org_tag = ?
+              AND jt.anonymous_id = ds.anonymous_id
+              AND jt.channel != 'direct'
+              AND jt.touchpoint_timestamp < ds.touchpoint_timestamp
+              AND jt.touchpoint_timestamp >= datetime(ds.touchpoint_timestamp, '-' || ? || ' hours')
+            ORDER BY jt.touchpoint_timestamp DESC
+            LIMIT 1
+          ) as assisted_by
+        FROM direct_sessions ds
+      )
+      SELECT
+        COUNT(DISTINCT session_id) as total_direct,
+        COUNT(DISTINCT CASE WHEN assisted_by IS NOT NULL THEN session_id END) as assisted_direct,
+        COUNT(DISTINCT CASE WHEN assisted_by IS NULL THEN session_id END) as true_direct,
+        assisted_by,
+        COUNT(DISTINCT CASE WHEN assisted_by IS NOT NULL THEN session_id END) as count_by_channel
+      FROM prior_touches
+      GROUP BY assisted_by
+    `).bind(tagMapping.short_tag, dateFrom, dateTo, tagMapping.short_tag, lookbackHours).all();
+
+    const stats = {
+      total_direct_sessions: 0,
+      assisted_direct_sessions: 0,
+      true_direct_sessions: 0,
+      assisted_by_channel: {} as Record<string, number>
+    };
+
+    for (const row of (result.results || []) as Array<{
+      total_direct: number;
+      assisted_direct: number;
+      true_direct: number;
+      assisted_by: string | null;
+      count_by_channel: number;
+    }>) {
+      // The totals are the same across all rows due to the query structure
+      stats.total_direct_sessions = row.total_direct;
+      stats.assisted_direct_sessions += row.assisted_direct;
+      stats.true_direct_sessions = row.true_direct;
+
+      if (row.assisted_by) {
+        stats.assisted_by_channel[row.assisted_by] = row.count_by_channel;
+      }
+    }
+
+    const assistedPercent = stats.total_direct_sessions > 0
+      ? (stats.assisted_direct_sessions / stats.total_direct_sessions) * 100
+      : 0;
+
+    return success(c, {
+      total_direct_sessions: stats.total_direct_sessions,
+      assisted_direct_sessions: stats.assisted_direct_sessions,
+      true_direct_sessions: stats.true_direct_sessions,
+      assisted_percent: Math.round(assistedPercent * 10) / 10,
+      assisted_by_channel: stats.assisted_by_channel,
+      lookback_hours: lookbackHours,
+      period: {
+        start: dateFrom,
+        end: dateTo
+      }
+    });
+  }
+}
