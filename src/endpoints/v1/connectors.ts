@@ -1151,7 +1151,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
           account_name: z.string(),
           selectedAccounts: z.array(z.string()).optional(), // For Google Ads manager accounts
           sync_config: z.object({
-            timeframe: z.enum(['7_days', '90_days', 'all_time', 'custom']),
+            timeframe: z.enum(['7_days', '60_days', 'all_time', 'custom']),
             custom_start: z.string().optional(),
             custom_end: z.string().optional()
           }).optional()
@@ -1368,18 +1368,18 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const calculateSyncWindow = () => {
         const TIMEFRAME_DAYS: Record<string, number> = {
           '7_days': 7,
-          '90_days': 90,
+          '60_days': 60,
           'all_time': 730
         };
 
-        // Default to 90 days if no sync_config provided
+        // Default to 60 days if no sync_config provided
         if (!sync_config) {
-          const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-          return { type: 'full', start: ninetyDaysAgo, end: now };
+          const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+          return { type: 'full', start: sixtyDaysAgo, end: now };
         }
 
         if (sync_config.timeframe === 'custom') {
-          const defaultWindow = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+          const defaultWindow = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
           const customStart = sync_config.custom_start || defaultWindow;
           const customEnd = sync_config.custom_end || now;
           return { type: 'full', start: customStart, end: customEnd };

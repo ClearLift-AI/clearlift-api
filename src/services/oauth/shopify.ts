@@ -66,7 +66,7 @@ export class ShopifyOAuthProvider extends OAuthProvider {
       clientId,
       clientSecret,
       redirectUri,
-      scopes: ['read_orders', 'read_customers'],
+      scopes: ['read_orders', 'read_customers', 'read_customer_events', 'read_products'],
       // Dynamic URLs based on shop
       authorizeUrl: `https://${normalizedShop}/admin/oauth/authorize`,
       tokenUrl: `https://${normalizedShop}/admin/oauth/access_token`
