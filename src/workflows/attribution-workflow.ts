@@ -88,7 +88,10 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
 
     // If no paths found, complete early
     if (paths.conversionPaths.length === 0) {
-      await step.do('complete_no_data', async () => {
+      await step.do('complete_no_data', {
+        retries: { limit: 2, delay: '1 second' },
+        timeout: '30 seconds'
+      }, async () => {
         await this.env.AI_DB.prepare(`
           UPDATE analysis_jobs
           SET status = 'completed', completed_at = datetime('now'),
@@ -152,7 +155,10 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
     });
 
     // Step 5: Mark job complete
-    await step.do('complete', async () => {
+    await step.do('complete', {
+      retries: { limit: 2, delay: '1 second' },
+      timeout: '30 seconds'
+    }, async () => {
       await this.env.AI_DB.prepare(`
         UPDATE analysis_jobs
         SET status = 'completed', completed_at = datetime('now'),
