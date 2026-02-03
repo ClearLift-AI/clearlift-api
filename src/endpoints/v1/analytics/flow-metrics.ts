@@ -374,53 +374,90 @@ Returns stage-by-stage metrics for the acquisition flow:
             visitors = conversions;
             conversionValueCents = result?.revenue_cents || 0;
           } else if (connector === "clearlift_tag" && orgTag) {
-            // Tag events - query based on trigger_config
-            const triggerConfig = goal.trigger_config ? JSON.parse(goal.trigger_config) : {};
-            const eventType = goal.connector_event_type || triggerConfig.event_type || "page_view";
-            const pagePattern = triggerConfig.page_pattern || "";
+            // Tag events - query session-linked metrics from goal_completion_metrics
+            // This gives us unique_visitors (session count) instead of disconnected page views
+            const goalMetrics = await analyticsDb.prepare(`
+              SELECT
+                COALESCE(SUM(unique_visitors), 0) as unique_visitors,
+                COALESCE(SUM(completions), 0) as completions,
+                COALESCE(SUM(downstream_conversions), 0) as downstream_conversions,
+                by_channel
+              FROM goal_completion_metrics
+              WHERE org_tag = ?
+                AND goal_id = ?
+                AND date >= ?
+                AND date <= ?
+            `).bind(orgTag, goal.id, startDateStr, endDateStr).first() as {
+              unique_visitors: number;
+              completions: number;
+              downstream_conversions: number;
+              by_channel: string | null;
+            } | null;
 
-            if (eventType === "page_view" && pagePattern) {
-              // Query page views from hourly_metrics.by_page JSON column
-              const result = await analyticsDb.prepare(`
-                SELECT by_page FROM hourly_metrics
-                WHERE org_tag = ?
-                  AND DATE(hour) >= ?
-                  AND DATE(hour) <= ?
-                  AND by_page IS NOT NULL
-              `).bind(orgTag, startDateStr, endDateStr).all();
+            if (goalMetrics && goalMetrics.unique_visitors > 0) {
+              // Use session-linked unique_visitors count
+              visitors = goalMetrics.unique_visitors;
+              conversions = goalMetrics.completions;
 
-              // Aggregate page views matching the pattern
-              let totalViews = 0;
-              for (const row of (result.results || []) as { by_page: string }[]) {
+              // Parse by_channel if available for this goal
+              if (goalMetrics.by_channel) {
                 try {
-                  const pages = JSON.parse(row.by_page || '{}');
-                  for (const [page, data] of Object.entries(pages as Record<string, any>)) {
-                    // Check if page matches pattern (simple substring match)
-                    if (page.includes(pagePattern)) {
-                      if (typeof data === 'number') {
-                        totalViews += data;
-                      } else {
-                        totalViews += data.events || data.count || 0;
-                      }
-                    }
+                  const channels = JSON.parse(goalMetrics.by_channel) as Record<string, number>;
+                  if (Object.keys(channels).length > 0) {
+                    byChannel = channels;
                   }
                 } catch (e) {
                   // Skip invalid JSON
                 }
               }
-              visitors = totalViews;
-              conversions = visitors;
             } else {
-              // Fallback: get total page views from daily_metrics
-              const result = await analyticsDb.prepare(`
-                SELECT COALESCE(SUM(page_views), 0) as total_views
-                FROM daily_metrics
-                WHERE org_tag = ?
-                  AND date >= ?
-                  AND date <= ?
-              `).bind(orgTag, startDateStr, endDateStr).first() as { total_views: number } | null;
-              visitors = result?.total_views || 0;
-              conversions = visitors;
+              // Fallback to page view counts if goal_completion_metrics not populated yet
+              // This handles cases where aggregation hasn't run for new goals
+              const triggerConfig = goal.trigger_config ? JSON.parse(goal.trigger_config) : {};
+              const pagePattern = triggerConfig.page_pattern || "";
+
+              if (pagePattern) {
+                // Query page views from hourly_metrics.by_page JSON column
+                const result = await analyticsDb.prepare(`
+                  SELECT by_page FROM hourly_metrics
+                  WHERE org_tag = ?
+                    AND DATE(hour) >= ?
+                    AND DATE(hour) <= ?
+                    AND by_page IS NOT NULL
+                `).bind(orgTag, startDateStr, endDateStr).all();
+
+                // Aggregate page views matching the pattern
+                let totalViews = 0;
+                for (const row of (result.results || []) as { by_page: string }[]) {
+                  try {
+                    const pages = JSON.parse(row.by_page || '{}');
+                    for (const [page, data] of Object.entries(pages as Record<string, any>)) {
+                      if (page.includes(pagePattern)) {
+                        if (typeof data === 'number') {
+                          totalViews += data;
+                        } else {
+                          totalViews += data.events || data.count || 0;
+                        }
+                      }
+                    }
+                  } catch (e) {
+                    // Skip invalid JSON
+                  }
+                }
+                visitors = totalViews;
+                conversions = visitors;
+              } else {
+                // Fallback: get total sessions from daily_metrics (more accurate than page views)
+                const result = await analyticsDb.prepare(`
+                  SELECT COALESCE(SUM(sessions), 0) as total_sessions
+                  FROM daily_metrics
+                  WHERE org_tag = ?
+                    AND date >= ?
+                    AND date <= ?
+                `).bind(orgTag, startDateStr, endDateStr).first() as { total_sessions: number } | null;
+                visitors = result?.total_sessions || 0;
+                conversions = visitors;
+              }
             }
           }
         } catch (err) {
@@ -507,8 +544,9 @@ Returns stage-by-stage metrics for the acquisition flow:
           }
         }
 
-        // Traffic sources are ad platforms - they're entry points, not funnel stages
-        const isTrafficSource = ["google_ads", "facebook_ads", "tiktok_ads"].includes(connector);
+        // Traffic sources are ad platforms and direct traffic - they're entry points, not funnel stages
+        // 'direct' connector is used by flow builder for organic/direct traffic visualization
+        const isTrafficSource = ["google_ads", "facebook_ads", "tiktok_ads", "direct"].includes(connector);
 
         const metrics: StageMetrics = {
           id: goal.id,
@@ -537,9 +575,9 @@ Returns stage-by-stage metrics for the acquisition flow:
       }
 
       // CRITICAL FIX: Separate traffic sources from funnel stages
-      // Ad platforms (google_ads, facebook_ads, tiktok_ads) are ENTRY POINTS, not funnel stages
+      // Ad platforms (google_ads, facebook_ads, tiktok_ads) and direct traffic are ENTRY POINTS, not funnel stages
       // We cannot calculate dropoff from ad clicks to page views - they're not session-linked
-      const trafficSourceConnectors = new Set(["google_ads", "facebook_ads", "tiktok_ads"]);
+      const trafficSourceConnectors = new Set(["google_ads", "facebook_ads", "tiktok_ads", "direct"]);
       const funnelStages = stageMetrics.filter(s => !trafficSourceConnectors.has(s.connector || ""));
       const trafficSourceStages = stageMetrics.filter(s => trafficSourceConnectors.has(s.connector || ""));
 
@@ -581,6 +619,44 @@ Returns stage-by-stage metrics for the acquisition flow:
               bottleneckStageId = stage.id;
             }
           }
+        }
+      }
+
+      // Enrich with timing data from funnel_transitions (session-linked)
+      if (orgTag) {
+        try {
+          const timingResult = await analyticsDb.prepare(`
+            SELECT
+              from_id,
+              AVG(avg_time_to_transition_hours) as avg_hours
+            FROM funnel_transitions
+            WHERE org_tag = ?
+              AND from_type = 'goal'
+              AND period_start >= ?
+              AND period_end <= ?
+              AND avg_time_to_transition_hours IS NOT NULL
+            GROUP BY from_id
+          `).bind(orgTag, startDateStr, endDateStr).all() as D1Result<{
+            from_id: string;
+            avg_hours: number | null;
+          }>;
+
+          // Apply timing to stages
+          const timingMap = new Map<string, number>();
+          for (const row of timingResult.results || []) {
+            if (row.avg_hours !== null) {
+              timingMap.set(row.from_id, row.avg_hours);
+            }
+          }
+
+          for (const stage of stageMetrics) {
+            const avgTime = timingMap.get(stage.id);
+            if (avgTime !== undefined) {
+              stage.avg_time_to_next_hours = Math.round(avgTime * 10) / 10;
+            }
+          }
+        } catch (err) {
+          console.warn("[FlowMetrics] Failed to get timing from funnel_transitions:", err);
         }
       }
 
