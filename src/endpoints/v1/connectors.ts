@@ -8,6 +8,7 @@ import { FacebookAdsOAuthProvider } from "../../services/oauth/facebook";
 import { ShopifyOAuthProvider } from "../../services/oauth/shopify";
 import { JobberOAuthProvider } from "../../services/oauth/jobber";
 import { HubSpotOAuthProvider } from "../../services/oauth/hubspot";
+import { SalesforceOAuthProvider } from "../../services/oauth/salesforce";
 import { success, error } from "../../utils/response";
 import { getSecret } from "../../utils/secrets";
 
@@ -175,7 +176,7 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot', 'salesforce'])
       }),
       body: contentJson(
         z.object({
@@ -348,6 +349,18 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
           redirectUri
         );
       }
+      case 'salesforce': {
+        const clientId = await getSecret(c.env.SALESFORCE_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.SALESFORCE_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
+          throw new Error('Salesforce OAuth credentials not configured');
+        }
+        return new SalesforceOAuthProvider(
+          clientId,
+          clientSecret,
+          redirectUri
+        );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -364,7 +377,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     operationId: "handle-oauth-callback",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot', 'salesforce'])
       }),
       query: z.object({
         code: z.string(),
@@ -508,6 +521,15 @@ export class HandleOAuthCallback extends OpenAPIRoute {
         metadata.shop_domain = shopDomain;
       }
 
+      // For Salesforce, store instance_url from tokens (required for API calls)
+      if (provider === 'salesforce' && (tokens as any).instance_url) {
+        metadata.user_info = {
+          ...metadata.user_info,
+          instance_url: (tokens as any).instance_url
+        };
+        console.log('Salesforce - storing instance URL in metadata:', (tokens as any).instance_url);
+      }
+
       await c.env.DB.prepare(`
         UPDATE oauth_states
         SET metadata = ?
@@ -604,6 +626,18 @@ export class HandleOAuthCallback extends OpenAPIRoute {
           redirectUri
         );
       }
+      case 'salesforce': {
+        const clientId = await getSecret(c.env.SALESFORCE_CLIENT_ID);
+        const clientSecret = await getSecret(c.env.SALESFORCE_CLIENT_SECRET);
+        if (!clientId || !clientSecret) {
+          throw new Error('Salesforce OAuth credentials not configured');
+        }
+        return new SalesforceOAuthProvider(
+          clientId,
+          clientSecret,
+          redirectUri
+        );
+      }
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -622,7 +656,7 @@ export class MockOAuthCallback extends OpenAPIRoute {
     operationId: "mock-oauth-callback",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot', 'salesforce'])
       }),
       query: z.object({
         state: z.string()
@@ -747,6 +781,33 @@ export class MockOAuthCallback extends OpenAPIRoute {
             email: 'shop@example.com'
           }
         };
+      case 'salesforce':
+        return {
+          access_token: `mock_salesforce_token_${now}`,
+          refresh_token: `mock_salesforce_refresh_${now}`,
+          expires_in: 7200,  // ~2 hours
+          scope: 'api refresh_token id profile email',
+          user_info: {
+            id: '00D000000000000',
+            organization_id: '00D000000000000',
+            email: 'admin@testorg.com',
+            name: 'Test Salesforce Org',
+            instance_url: 'https://test.salesforce.com'
+          }
+        };
+      case 'hubspot':
+        return {
+          access_token: `mock_hubspot_token_${now}`,
+          refresh_token: `mock_hubspot_refresh_${now}`,
+          expires_in: 21600,  // ~6 hours
+          scope: 'crm.objects.contacts.read crm.objects.companies.read',
+          user_info: {
+            id: '12345678',
+            hub_id: 12345678,
+            email: 'admin@testhubspot.com',
+            name: 'Test HubSpot Portal'
+          }
+        };
       default:
         return {
           access_token: `mock_token_${now}`,
@@ -769,7 +830,7 @@ export class GetOAuthAccounts extends OpenAPIRoute {
     operationId: "get-oauth-accounts",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify', 'jobber'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify', 'jobber', 'hubspot', 'salesforce'])
       }),
       query: z.object({
         state: z.string()
@@ -936,6 +997,44 @@ export class GetOAuthAccounts extends OpenAPIRoute {
           }];
           break;
         }
+        case 'hubspot': {
+          // For HubSpot, the "account" is the HubSpot portal itself
+          const userInfo = metadata?.user_info;
+
+          if (!userInfo) {
+            return error(c, "NO_ACCOUNT_INFO", "HubSpot account info not found", 400);
+          }
+
+          // Return the HubSpot portal as the single "account"
+          accounts = [{
+            id: String(userInfo.hub_id || userInfo.id),
+            name: userInfo.name || userInfo.hub_domain || `HubSpot Portal ${userInfo.hub_id}`,
+            hub_id: userInfo.hub_id,
+            hub_domain: userInfo.hub_domain,
+            email: userInfo.email || userInfo.user,
+            timezone: userInfo.raw?.timeZone
+          }];
+          break;
+        }
+        case 'salesforce': {
+          // For Salesforce, the "account" is the Salesforce org itself
+          const userInfo = metadata?.user_info;
+
+          if (!userInfo) {
+            return error(c, "NO_ACCOUNT_INFO", "Salesforce account info not found", 400);
+          }
+
+          // Return the Salesforce org as the single "account"
+          accounts = [{
+            id: userInfo.organization_id || userInfo.id,
+            name: userInfo.name || `Salesforce Org ${userInfo.organization_id}`,
+            organization_id: userInfo.organization_id,
+            email: userInfo.email,
+            instance_url: userInfo.raw?.instance_url || userInfo.instance_url,
+            is_sandbox: userInfo.raw?.IsSandbox
+          }];
+          break;
+        }
       }
 
       return success(c, { accounts });
@@ -1022,6 +1121,28 @@ export class GetOAuthAccounts extends OpenAPIRoute {
             email: 'admin@testhomeservices.com',
             timezone: 'America/Denver',
             country: 'US'
+          }
+        ];
+      case 'hubspot':
+        return [
+          {
+            id: '12345678',
+            name: 'Test HubSpot Portal',
+            hub_id: 12345678,
+            hub_domain: 'test-company.hubspot.com',
+            email: 'admin@testcompany.com',
+            timezone: 'America/New_York'
+          }
+        ];
+      case 'salesforce':
+        return [
+          {
+            id: '00D000000000000',
+            name: 'Test Salesforce Org',
+            organization_id: '00D000000000000',
+            email: 'admin@testsalesforce.com',
+            instance_url: 'https://test.salesforce.com',
+            is_sandbox: true
           }
         ];
       default:
@@ -1142,7 +1263,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
     operationId: "finalize-oauth-connection",
     request: {
       params: z.object({
-        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify', 'jobber'])
+        provider: z.enum(['google', 'facebook', 'tiktok', 'shopify', 'jobber', 'hubspot', 'salesforce'])
       }),
       body: contentJson(
         z.object({
@@ -1237,6 +1358,27 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
           shop_domain: shopDomain
         };
         console.log('Shopify - storing shop domain:', shopDomain);
+      }
+
+      // Salesforce: store instance_url in settings (required for API calls)
+      const instanceUrl = metadata?.user_info?.instance_url || metadata?.user_info?.raw?.instance_url;
+      if (provider === 'salesforce' && instanceUrl) {
+        initialSettings = {
+          ...initialSettings,
+          instance_url: instanceUrl
+        };
+        console.log('Salesforce - storing instance URL:', instanceUrl);
+      }
+
+      // HubSpot: store hub_id in settings
+      const hubId = metadata?.user_info?.hub_id;
+      if (provider === 'hubspot' && hubId) {
+        initialSettings = {
+          ...initialSettings,
+          hub_id: hubId,
+          hub_domain: metadata?.user_info?.hub_domain
+        };
+        console.log('HubSpot - storing hub ID:', hubId);
       }
 
       // Store sync_config for cron scheduler to use if initial sync fails
