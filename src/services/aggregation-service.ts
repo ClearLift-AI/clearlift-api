@@ -179,15 +179,14 @@ export class AggregationService {
 
   /**
    * Aggregate org_daily_summary for a specific platform
+   * Uses unified ad_campaigns and ad_metrics tables
    */
   private async aggregateOrgDailySummaryForPlatform(
     shard: D1Database,
     platform: Platform,
     date: string
   ): Promise<{ orgs: number; rows: number }> {
-    const campaignTable = `${platform}_campaigns`;
-    const metricsTable = `${platform}_campaign_metrics`;
-
+    // Query unified tables with platform filter
     const result = await shard.prepare(`
       INSERT OR REPLACE INTO org_daily_summary (
         id, organization_id, platform, metric_date,
@@ -198,16 +197,16 @@ export class AggregationService {
         updated_at
       )
       SELECT
-        c.organization_id || ':${platform}:' || ? as id,
+        c.organization_id || ':' || c.platform || ':' || ? as id,
         c.organization_id,
-        '${platform}' as platform,
+        c.platform,
         ? as metric_date,
         COALESCE(SUM(m.spend_cents), 0) as total_spend_cents,
         COALESCE(SUM(m.impressions), 0) as total_impressions,
         COALESCE(SUM(m.clicks), 0) as total_clicks,
         COALESCE(SUM(m.conversions), 0) as total_conversions,
         COALESCE(SUM(m.conversion_value_cents), 0) as total_conversion_value_cents,
-        COUNT(DISTINCT CASE WHEN c.campaign_status = 'ENABLED' OR c.campaign_status = 'ACTIVE' THEN c.id END) as active_campaigns,
+        COUNT(DISTINCT CASE WHEN c.campaign_status = 'active' THEN c.id END) as active_campaigns,
         0 as active_ad_groups,
         0 as active_ads,
         CASE WHEN SUM(m.impressions) > 0
@@ -231,13 +230,15 @@ export class AggregationService {
           ELSE 0
         END as cpa_cents,
         datetime('now') as updated_at
-      FROM ${campaignTable} c
-      LEFT JOIN ${metricsTable} m
-        ON c.id = m.campaign_ref AND m.metric_date = ?
-      WHERE c.deleted_at IS NULL
+      FROM ad_campaigns c
+      LEFT JOIN ad_metrics m
+        ON c.id = m.entity_ref
+        AND m.entity_type = 'campaign'
+        AND m.metric_date = ?
+      WHERE c.platform = ?
       GROUP BY c.organization_id
       HAVING SUM(m.spend_cents) > 0 OR COUNT(DISTINCT c.id) > 0
-    `).bind(date, date, date).run();
+    `).bind(date, date, date, platform).run();
 
     return {
       orgs: result.meta?.changes || 0,
@@ -308,14 +309,8 @@ export class AggregationService {
   }
 
   /**
-   * Get the budget column name for a platform (TikTok uses budget_cents, others use budget_amount_cents)
-   */
-  private getBudgetColumn(platform: Platform): string {
-    return platform === 'tiktok' ? 'budget_cents' : 'budget_amount_cents';
-  }
-
-  /**
    * Aggregate campaign_period_summary for a specific platform and period
+   * Uses unified ad_campaigns and ad_metrics tables
    */
   private async aggregateCampaignPeriodForPlatform(
     shard: D1Database,
@@ -324,10 +319,7 @@ export class AggregationService {
     periodType: string,
     periodDays: number
   ): Promise<{ campaigns: number; rows: number }> {
-    const campaignTable = `${platform}_campaigns`;
-    const metricsTable = `${platform}_campaign_metrics`;
     const startDate = this.subtractDays(endDate, periodDays - 1);
-    const budgetCol = this.getBudgetColumn(platform);
 
     const result = await shard.prepare(`
       INSERT OR REPLACE INTO campaign_period_summary (
@@ -340,14 +332,14 @@ export class AggregationService {
         updated_at
       )
       SELECT
-        c.organization_id || ':${platform}:' || c.campaign_id || ':${periodType}' as id,
+        c.organization_id || ':' || c.platform || ':' || c.campaign_id || ':' || ? as id,
         c.organization_id,
-        '${platform}' as platform,
+        c.platform,
         c.campaign_id,
         c.id as campaign_ref,
         c.campaign_name,
         c.campaign_status,
-        '${periodType}' as period_type,
+        ? as period_type,
         ? as period_start,
         ? as period_end,
         COALESCE(SUM(m.spend_cents), 0) as total_spend_cents,
@@ -375,20 +367,21 @@ export class AggregationService {
           THEN CAST(SUM(m.spend_cents) AS INTEGER) / SUM(m.conversions)
           ELSE 0
         END as cpa_cents,
-        c.${budgetCol} as budget_cents,
-        CASE WHEN c.${budgetCol} > 0 AND c.${budgetCol} IS NOT NULL
-          THEN CAST(SUM(m.spend_cents) AS REAL) / (c.${budgetCol} * ${periodDays}) * 100
+        c.budget_cents,
+        CASE WHEN c.budget_cents > 0 AND c.budget_cents IS NOT NULL
+          THEN CAST(SUM(m.spend_cents) AS REAL) / (c.budget_cents * ?) * 100
           ELSE 0
         END as budget_utilization_pct,
         datetime('now') as updated_at
-      FROM ${campaignTable} c
-      LEFT JOIN ${metricsTable} m
-        ON c.id = m.campaign_ref
+      FROM ad_campaigns c
+      LEFT JOIN ad_metrics m
+        ON c.id = m.entity_ref
+        AND m.entity_type = 'campaign'
         AND m.metric_date >= ?
         AND m.metric_date <= ?
-      WHERE c.deleted_at IS NULL
+      WHERE c.platform = ?
       GROUP BY c.id
-    `).bind(startDate, endDate, startDate, endDate).run();
+    `).bind(periodType, periodType, startDate, endDate, periodDays, startDate, endDate, platform).run();
 
     return {
       campaigns: result.meta?.changes || 0,

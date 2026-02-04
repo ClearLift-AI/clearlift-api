@@ -138,26 +138,30 @@
       "database_id": "a69beb57-92c9-489c-8f55-86205b613010",
       "migrations_dir": "migrations-analytics"
     },
-    // Platform data shards (for campaign/metrics storage)
+    // Platform data shards (for campaign/metrics storage + pre-aggregation)
     {
       "binding": "SHARD_0",
       "database_name": "clearlift-shard-0",
-      "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0"
+      "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0",
+      "migrations_dir": "shard-migrations"
     },
     {
       "binding": "SHARD_1",
       "database_name": "clearlift-shard-1",
-      "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6"
+      "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6",
+      "migrations_dir": "shard-migrations"
     },
     {
       "binding": "SHARD_2",
       "database_name": "clearlift-shard-2",
-      "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8"
+      "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8",
+      "migrations_dir": "shard-migrations"
     },
     {
       "binding": "SHARD_3",
       "database_name": "clearlift-shard-3",
-      "database_id": "ff763599-df7b-4041-b766-b574e7b3415b"
+      "database_id": "ff763599-df7b-4041-b766-b574e7b3415b",
+      "migrations_dir": "shard-migrations"
     }
   ],
 
@@ -247,26 +251,30 @@
           "database_id": "a69beb57-92c9-489c-8f55-86205b613010",
           "migrations_dir": "migrations-analytics"
         },
-        // Platform data shards
+        // Platform data shards (for campaign/metrics storage + pre-aggregation)
         {
           "binding": "SHARD_0",
           "database_name": "clearlift-shard-0",
-          "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0"
+          "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0",
+          "migrations_dir": "shard-migrations"
         },
         {
           "binding": "SHARD_1",
           "database_name": "clearlift-shard-1",
-          "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6"
+          "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6",
+          "migrations_dir": "shard-migrations"
         },
         {
           "binding": "SHARD_2",
           "database_name": "clearlift-shard-2",
-          "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8"
+          "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8",
+          "migrations_dir": "shard-migrations"
         },
         {
           "binding": "SHARD_3",
           "database_name": "clearlift-shard-3",
-          "database_id": "ff763599-df7b-4041-b766-b574e7b3415b"
+          "database_id": "ff763599-df7b-4041-b766-b574e7b3415b",
+          "migrations_dir": "shard-migrations"
         }
       ],
       "queues": {
@@ -329,25 +337,30 @@
           "database_id": "a69beb57-92c9-489c-8f55-86205b613010",
           "migrations_dir": "migrations-analytics"
         },
+        // Platform data shards (for campaign/metrics storage + pre-aggregation)
         {
           "binding": "SHARD_0",
           "database_name": "clearlift-shard-0",
-          "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0"
+          "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0",
+          "migrations_dir": "shard-migrations"
         },
         {
           "binding": "SHARD_1",
           "database_name": "clearlift-shard-1",
-          "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6"
+          "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6",
+          "migrations_dir": "shard-migrations"
         },
         {
           "binding": "SHARD_2",
           "database_name": "clearlift-shard-2",
-          "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8"
+          "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8",
+          "migrations_dir": "shard-migrations"
         },
         {
           "binding": "SHARD_3",
           "database_name": "clearlift-shard-3",
-          "database_id": "ff763599-df7b-4041-b766-b574e7b3415b"
+          "database_id": "ff763599-df7b-4041-b766-b574e7b3415b",
+          "migrations_dir": "shard-migrations"
         }
       ],
       "queues": {
@@ -506,6 +519,31 @@
           "database_name": "clearlift-analytics-dev",
           "database_id": "57a7e42f-3a52-4b15-b237-bc1338e5fb61",
           "migrations_dir": "migrations-analytics"
+        },
+        // Platform data shards (for campaign/metrics storage + pre-aggregation)
+        {
+          "binding": "SHARD_0",
+          "database_name": "clearlift-shard-0",
+          "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0",
+          "migrations_dir": "shard-migrations"
+        },
+        {
+          "binding": "SHARD_1",
+          "database_name": "clearlift-shard-1",
+          "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6",
+          "migrations_dir": "shard-migrations"
+        },
+        {
+          "binding": "SHARD_2",
+          "database_name": "clearlift-shard-2",
+          "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8",
+          "migrations_dir": "shard-migrations"
+        },
+        {
+          "binding": "SHARD_3",
+          "database_name": "clearlift-shard-3",
+          "database_id": "ff763599-df7b-4041-b766-b574e7b3415b",
+          "migrations_dir": "shard-migrations"
         }
       ],
       "queues": {

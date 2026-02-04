@@ -95,16 +95,65 @@ See `clearlift-cron/docs/SHARED_CODE.md §21` for full unified architecture docu
 
 Four shard databases for scaling platform data by organization:
 
-| Binding | Database Name | Purpose |
-|---------|--------------|---------|
-| `SHARD_0` | clearlift-shard-0 | Org data (hash % 4 == 0) |
-| `SHARD_1` | clearlift-shard-1 | Org data (hash % 4 == 1) |
-| `SHARD_2` | clearlift-shard-2 | Org data (hash % 4 == 2) |
-| `SHARD_3` | clearlift-shard-3 | Org data (hash % 4 == 3) |
+| Binding | Database Name | Migrations Dir | Purpose |
+|---------|--------------|----------------|---------|
+| `SHARD_0` | clearlift-shard-0 | `shard-migrations/` | Org data (hash % 4 == 0) |
+| `SHARD_1` | clearlift-shard-1 | `shard-migrations/` | Org data (hash % 4 == 1) |
+| `SHARD_2` | clearlift-shard-2 | `shard-migrations/` | Org data (hash % 4 == 2) |
+| `SHARD_3` | clearlift-shard-3 | `shard-migrations/` | Org data (hash % 4 == 3) |
+
+**Shard Schema** (`shard-migrations/`):
+
+| Migration | Tables | Status |
+|-----------|--------|--------|
+| `0001_platform_tables.sql` | Legacy: Google/Facebook/TikTok campaigns, ad_groups, ads, metrics | ❌ Deprecated |
+| `0002_pre_aggregation_tables.sql` | `org_daily_summary`, `campaign_period_summary`, `platform_comparison`, `org_timeseries`, `aggregation_jobs` | ✅ Active |
+| `0003_unified_ad_tables.sql` | `ad_campaigns`, `ad_groups`, `ads`, `ad_metrics` (unified schema) | ✅ Active |
 
 **Routing:** Uses `ShardRouter` with FNV-1a consistent hashing. See `src/services/shard-router.ts`.
 
-**Migration status:** Tracked in `shard_routing` table (per-org `read_source` and `write_mode`).
+**Migration status:** Tracked in `shard_routing` table (per-org assignment).
+
+**Local Development - Shard Migrations:**
+```bash
+# Apply shard migrations to all local shards
+npx wrangler d1 migrations apply SHARD_0 --local --env local
+npx wrangler d1 migrations apply SHARD_1 --local --env local
+npx wrangler d1 migrations apply SHARD_2 --local --env local
+npx wrangler d1 migrations apply SHARD_3 --local --env local
+
+# Verify tables exist
+npx wrangler d1 execute clearlift-shard-0 --local --env local \
+  --command "SELECT name FROM sqlite_master WHERE type='table'"
+```
+
+**Production - Shard Migrations:**
+```bash
+# Apply shard migrations to production shards (CAUTION: affects live data)
+npx wrangler d1 migrations apply SHARD_0 --remote
+npx wrangler d1 migrations apply SHARD_1 --remote
+npx wrangler d1 migrations apply SHARD_2 --remote
+npx wrangler d1 migrations apply SHARD_3 --remote
+```
+
+**Current Status (Feb 2026):**
+- ✅ Shard databases created in Cloudflare
+- ✅ Unified shard schema defined (`shard-migrations/0003_unified_ad_tables.sql`)
+- ✅ `migrations_dir` configured in wrangler.jsonc for all environments
+- ✅ Local migrations applied and tested
+- ✅ AggregationService reads from shards (unified tables)
+- ✅ DataWriter writes to shards via ShardRouter (clearlift-cron)
+- ⚠️ Production migrations pending
+- ⚠️ API read endpoints still query ANALYTICS_DB (not shards)
+
+**Pending API Read Migration:**
+These D1AnalyticsService methods should be updated to query shards:
+- `getGoogleCampaignsWithMetrics()` - queries unified `ad_campaigns` + `ad_metrics`
+- `getFacebookCampaignsWithMetrics()` - queries unified `ad_campaigns` + `ad_metrics`
+- `getTikTokCampaignsWithMetrics()` - queries unified `ad_campaigns` + `ad_metrics`
+- `getUnifiedPlatformSummary()` - queries unified tables
+
+Summary endpoints can continue reading from ANALYTICS_DB (pre-aggregated by AggregationService).
 
 #### Data Sources Summary
 
@@ -275,8 +324,8 @@ GOOGLE_ADS_DEVELOPER_TOKEN=xxx
 FACEBOOK_APP_ID=xxx
 FACEBOOK_APP_SECRET=xxx
 
-# OAuth Tunnel (update each time cloudflared restarts)
-OAUTH_CALLBACK_BASE=https://xxx-xxx-xxx.trycloudflare.com
+# OAuth Tunnel - use dev.clearlift.ai for HTTPS callbacks
+OAUTH_CALLBACK_BASE=https://dev.clearlift.ai
 APP_BASE_URL=http://localhost:3001
 ```
 
@@ -302,8 +351,8 @@ cd ../clearlift-cron && npx wrangler dev \
 # Terminal 3: Dashboard
 cd ../clearlift-page-router/apps/dashboard && npm run dev
 
-# Terminal 4: Cloudflared Tunnel (for OAuth)
-cloudflared tunnel --url http://localhost:8787
+# Terminal 4: Cloudflare Tunnel (for OAuth - routes dev.clearlift.ai → localhost)
+cloudflared tunnel run dev-api
 ```
 
 ### How Local Sync Works
@@ -337,18 +386,26 @@ The Queue Consumer must access the same D1 database as the API:
 
 **Without it:** Queue Consumer gets `"no such table: sync_jobs"` errors.
 
-### OAuth Testing with Cloudflared
+### OAuth Testing with dev.clearlift.ai
 
-1. Start cloudflared: `cloudflared tunnel --url http://localhost:8787`
-2. Copy the generated URL (e.g., `https://xxx.trycloudflare.com`)
-3. Update `.dev.vars`:
-   ```
-   OAUTH_CALLBACK_BASE=https://xxx.trycloudflare.com
-   ```
-4. Update Google Cloud Console / Meta Developer Console redirect URIs
-5. Restart API worker
+OAuth providers require HTTPS callback URLs. We use `dev.clearlift.ai` as a permanent Cloudflare tunnel to your local API.
 
-**Note:** Cloudflared URLs change each restart. You must update both `.dev.vars` and the OAuth provider consoles.
+**Setup:**
+1. Start the tunnel: `cloudflared tunnel run dev-api`
+2. Ensure `.dev.vars` has: `OAUTH_CALLBACK_BASE=https://dev.clearlift.ai`
+3. Start the API worker (it picks up the env var)
+
+**Why dev.clearlift.ai:**
+- Permanent redirect URIs already registered with OAuth providers (Google, Meta, HubSpot, TikTok)
+- No need to update OAuth app settings for each dev session
+- Enables remote team collaboration on local builds
+- HTTPS endpoints required for OAuth callbacks
+
+**Registered redirect URIs** (already configured in provider consoles):
+- `https://dev.clearlift.ai/v1/connectors/google/callback`
+- `https://dev.clearlift.ai/v1/connectors/facebook/callback`
+- `https://dev.clearlift.ai/v1/connectors/hubspot/callback`
+- `https://dev.clearlift.ai/v1/connectors/tiktok/callback`
 
 ### Verify Local Sync
 
