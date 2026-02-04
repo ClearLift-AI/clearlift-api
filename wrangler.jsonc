@@ -106,17 +106,8 @@
       "binding": "HUBSPOT_CLIENT_SECRET",
       "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
       "secret_name": "HUBSPOT_CLIENT_SECRET"
-    },
-    {
-      "binding": "SALESFORCE_CLIENT_ID",
-      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-      "secret_name": "SALESFORCE_CLIENT_ID"
-    },
-    {
-      "binding": "SALESFORCE_CLIENT_SECRET",
-      "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-      "secret_name": "SALESFORCE_CLIENT_SECRET"
     }
+    // SALESFORCE_CLIENT_ID and SALESFORCE_CLIENT_SECRET removed - connector not implemented yet
   ],
 
   "d1_databases": [
@@ -473,17 +464,8 @@
           "binding": "HUBSPOT_CLIENT_SECRET",
           "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
           "secret_name": "HUBSPOT_CLIENT_SECRET"
-        },
-        {
-          "binding": "SALESFORCE_CLIENT_ID",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "SALESFORCE_CLIENT_ID"
-        },
-        {
-          "binding": "SALESFORCE_CLIENT_SECRET",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "SALESFORCE_CLIENT_SECRET"
         }
+        // SALESFORCE secrets removed - connector not implemented yet
       ]
     },
 
@@ -662,17 +644,8 @@
           "binding": "HUBSPOT_CLIENT_SECRET",
           "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
           "secret_name": "HUBSPOT_CLIENT_SECRET"
-        },
-        {
-          "binding": "SALESFORCE_CLIENT_ID",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "SALESFORCE_CLIENT_ID"
-        },
-        {
-          "binding": "SALESFORCE_CLIENT_SECRET",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "SALESFORCE_CLIENT_SECRET"
         }
+        // SALESFORCE secrets removed - connector not implemented yet
       ]
     }
   }
