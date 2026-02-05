@@ -832,6 +832,7 @@ const weight = Math.exp(-daysBack * Math.LN2 / 2);
 // Sessions closer to conversion day get exponentially more credit
 // Replaces flat session-share when ≥2 conversion days + UTM data exist
 // Uses dailyUtmPerformance + dailyConnectorRevenue (already queried, no new D1 calls)
+// IMPORTANT: revScale guard (Feb 2026) — totalDistributedRev > 0 check prevents Infinity/NaN
 ```
 
 See `SHARED_CODE.md §19.9d` for full algorithm details, data sources, and why hourly resolution was rejected.
@@ -862,7 +863,7 @@ See `SHARED_CODE.md §19.9d` for full algorithm details, data sources, and why h
 
 ## Project Completion Status
 
-**Last Updated:** January 2026
+**Last Updated:** February 2026
 
 See `clearlift-cron/docs/SHARED_CODE.md §19` for the comprehensive cross-repo implementation details.
 

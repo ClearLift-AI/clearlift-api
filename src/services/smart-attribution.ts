@@ -949,7 +949,7 @@ export class SmartAttributionService {
     // Scale to match remaining connector totals (accounts for click-attributed deductions)
     if (totalDistributedConv > 0) {
       const convScale = remainingConversions / totalDistributedConv;
-      const revScale = remainingRevenue / totalDistributedRev;
+      const revScale = totalDistributedRev > 0 ? remainingRevenue / totalDistributedRev : 0;
       for (const entry of channelCredits.values()) {
         entry.credit = Math.round(entry.credit * convScale * 100) / 100;
         entry.revenue = Math.round(entry.revenue * revScale * 100) / 100;
