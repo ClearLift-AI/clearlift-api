@@ -143,7 +143,7 @@ npx wrangler d1 migrations apply SHARD_3 --remote
 - ✅ Local migrations applied and tested
 - ✅ AggregationService reads from shards (unified tables)
 - ✅ DataWriter writes to shards via ShardRouter (clearlift-cron)
-- ⚠️ Production migrations pending
+- ✅ Production migrations applied to all 4 shards (SHARD_0-3): 0001 (55 cmds), 0002 (18 cmds), 0003 (22 cmds)
 - ⚠️ API read endpoints still query ANALYTICS_DB (not shards)
 
 **Pending API Read Migration:**
@@ -945,20 +945,15 @@ SELECT COUNT(*) FROM shopify_orders;
 | OAuth Provider | ✅ Implemented | `src/services/oauth/hubspot.ts` |
 | Webhook Handler | ✅ Implemented | `src/endpoints/v1/webhooks/handlers.ts` |
 | Wrangler Bindings | ✅ Configured | `HUBSPOT_CLIENT_ID`, `HUBSPOT_CLIENT_SECRET` |
-| Secrets in Cloudflare | ❌ Not set | Blocking production OAuth |
+| Secrets in Cloudflare | ✅ Set | Secret Store bindings in wrangler.jsonc |
+| CRM connector + pagination | ✅ Implemented | `clearlift-cron` HubSpot adapter |
+| Connector registered | ✅ Active | `register.ts` isActive: true |
+| Type errors fixed | ✅ Fixed | `hubspot-adapter.ts` config, `crm-sync.ts` LifecycleStage |
+| API CRM query pagination | ⚠️ Missing | API endpoints need pagination for CRM data |
 
-**To Enable HubSpot OAuth:**
+**HubSpot OAuth is ready.** Secrets configured via Secret Store bindings (`HUBSPOT_CLIENT_ID`, `HUBSPOT_CLIENT_SECRET`) in wrangler.jsonc.
 
-1. Create HubSpot App in [Developer Portal](https://developers.hubspot.com/):
-   - App Type: Public App (for OAuth)
-   - Scopes: `crm.objects.contacts.read`, `crm.objects.companies.read`, `crm.objects.deals.read`, `crm.schemas.*.read`, `timeline`, `oauth`
-   - Redirect URI: `https://api.clearlift.ai/v1/connectors/hubspot/callback`
-
-2. Set Cloudflare secrets:
-   ```bash
-   echo "your-client-id" | npx wrangler secret put HUBSPOT_CLIENT_ID
-   echo "your-client-secret" | npx wrangler secret put HUBSPOT_CLIENT_SECRET
-   ```
+**Remaining blocker:** API CRM query endpoints need pagination for production-scale data.
 
 **HubSpot CLI for Development:**
 
