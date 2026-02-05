@@ -163,11 +163,11 @@ Summary endpoints can continue reading from ANALYTICS_DB (pre-aggregated by Aggr
 | Event aggregations | D1 ANALYTICS_DB | `/v1/analytics/d1/*` | Pre-aggregated metrics |
 | Platform campaigns | D1 Shards | `/v1/analytics/platforms` | Sharded by org |
 | Platform metrics | D1 Shards | `/v1/analytics/platforms` | Sharded by org |
-| Raw events (archive) | R2 SQL | `/v1/analytics/events` | 15-25s queries |
+| Raw events (archive) | R2 SQL | `/v1/analytics/events` | 15-25s queries, 96-field schema |
 
 #### Other Data Sources
-1. **Analytics Engine** - Real-time event analytics with < 100ms latency (90-day retention)
-2. **R2 SQL** - Historical event archive beyond 90 days (Iceberg tables)
+1. **Analytics Engine** - Real-time event analytics with < 100ms latency (90-day retention). Layout: 1 index (org_tag) + 19 blobs + 11 doubles.
+2. **R2 SQL** - Historical event archive (Iceberg tables). Primary: `clearlift.event_data_v5` (96 fields, v3.1.0). Legacy: `clearlift.event_data` (backward compat).
 
 ### Key Architectural Points
 - This API worker does NOT use containers
