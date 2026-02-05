@@ -308,7 +308,6 @@ npx wrangler dev --port 8787
 | Feature | `--env local` | Default |
 |---------|---------------|---------|
 | Secrets | Plain strings from `.dev.vars` | Secrets Store bindings |
-| Supabase | Works (uses `.dev.vars`) | Fails ("Supabase not configured") |
 | D1 (DB) | Local SQLite in `.wrangler/state/` | Local SQLite |
 | D1 (AI_DB) | Local SQLite in `.wrangler/state/` | Local SQLite |
 | Best for | Local development | Pre-deploy testing |
@@ -422,86 +421,11 @@ OAuth providers require HTTPS callback URLs. We use `dev.clearlift.ai` as a perm
      -d '{"connection_id":"xxx","platform":"google","account_id":"xxx"}'
    ```
 
-3. Check Supabase for synced data:
+3. Check D1 for synced data:
    ```bash
-   cd ../clearlift-cron && supabase db dump --schema google_ads | head -50
+   npx wrangler d1 execute DB --local --env local \
+     --command "SELECT COUNT(*) FROM ad_campaigns"
    ```
-
-## Core API Endpoints (To Implement)
-
-### Authentication Middleware Stack
-1. Validate Cloudflare Access JWT from headers
-2. Extract session token from request
-3. Validate session in D1 sessions table
-4. Load user and organization context
-5. Check organization permissions
-
-### Endpoints
-
-#### GET /me
-- Returns current user info + their organizations
-- Query: users, organization_members, organizations tables
-
-#### GET /orgs/:orgId/...
-- All org-scoped endpoints require membership check
-- Use organization_members table to verify access
-
-#### POST /sessions/refresh
-- Extend or rotate session tokens
-- Update expires_at in sessions table
-
-#### GET /orgs/:orgId/ad/*
-- Proxy to Supabase for ad platform data
-- Verify org membership before forwarding
-
-#### GET /orgs/:orgId/conversions
-- Query Supabase conversions table filtered by org_id
-- Returns aggregated conversion data
-- No org_tag_mappings needed (uses org_id directly)
-
-## Supabase Schema Reference (CRITICAL)
-
-⚠️ **NEVER query tables without the correct schema prefix!** This has caused bugs where fallback queries silently return empty results.
-
-### Platform Schemas
-
-| Platform | Schema | Tables |
-|----------|--------|--------|
-| Google Ads | `google_ads` | `campaigns`, `ad_groups`, `ads`, `campaign_daily_metrics`, `ad_group_daily_metrics`, `ad_daily_metrics` |
-| Meta/Facebook | `facebook_ads` | `campaigns`, `ad_sets`, `ads`, `campaign_daily_metrics`, `ad_set_daily_metrics`, `ad_daily_metrics` |
-| TikTok | `tiktok_ads` | `campaigns`, `ad_groups`, `ads`, `campaign_daily_metrics`, `ad_group_daily_metrics`, `ad_daily_metrics` |
-| Unified | `clearlift` | `unified_ad_daily_performance` (materialized view) |
-| Stripe | `stripe` | `customers`, `subscriptions`, `payments`, `stripe_conversions` |
-
-### WRONG vs CORRECT queries
-
-```typescript
-// ❌ WRONG - No schema, queries non-existent table
-await supabase.select('google_campaigns', query);  // ERROR: table not found
-
-// ✅ CORRECT - Use schema option
-await supabase.select('campaigns', query, { schema: 'google_ads' });
-
-// ✅ BEST - Use platform adapters
-import { GoogleAdsSupabaseAdapter } from "../adapters/platforms/google-supabase";
-const adapter = new GoogleAdsSupabaseAdapter(supabase);
-const campaigns = await adapter.getCampaignsWithMetrics(orgId, dateRange);
-```
-
-### Platform Adapters
-
-Always use platform-specific adapters for data access:
-
-```typescript
-import { GoogleAdsSupabaseAdapter } from "../adapters/platforms/google-supabase";
-import { FacebookSupabaseAdapter } from "../adapters/platforms/facebook-supabase";
-import { TikTokAdsSupabaseAdapter } from "../adapters/platforms/tiktok-supabase";
-```
-
-**Key adapter methods:**
-- `getCampaigns(orgId)` - Get campaigns
-- `getCampaignsWithMetrics(orgId, dateRange)` - Get campaigns with aggregated metrics
-- `getCampaignDailyMetrics(orgId, dateRange)` - Get daily performance data
 
 ## External Service Integration
 
@@ -540,33 +464,17 @@ async function getConversions(orgId: string, c: AppContext) {
 - Aggregations are performed client-side in the adapter
 - Maximum 10,000 rows recommended for aggregation queries
 
-### Supabase Integration
-
-```typescript
-// To be implemented - proxy PostgREST API
-async function getAdCampaigns(orgId: string) {
-  // Verify org access, then proxy to Supabase
-  // Implementation depends on Supabase setup
-}
-```
-
-## Current Implementation
-
-### Example Endpoints (from template)
-- `/tasks/*` - CRUD operations using Chanfana's D1 AutoEndpoints
-- `/dummy/:slug` - Simple example endpoint
-- These can be removed once real endpoints are implemented
-
 ### Project Structure
 ```
 src/
   index.ts           # Main router setup with OpenAPI config
   types.ts           # TypeScript type definitions
   endpoints/
-    tasks/           # Example CRUD endpoints (to be replaced)
-    dummyEndpoint.ts # Example endpoint (to be removed)
-  middleware/        # TO CREATE: Auth middleware
-  adapters/          # D1, Supabase, R2 SQL adapters
+    v1/              # All API endpoints (analytics, connectors, settings, webhooks, admin)
+  services/          # Business logic (attribution, analysis, goals, oauth, etc.)
+  workflows/         # Cloudflare Workflows (attribution, analysis)
+  utils/             # Auth, crypto, response helpers
+  constants/         # Platform-specific constants (facebook.ts, tiktok.ts)
 ```
 
 ## Testing
@@ -636,7 +544,7 @@ Users can override via Settings UI (stored in `ai_optimization_settings.llm_*` c
 
 | Service | Purpose |
 |---------|---------|
-| `entity-tree.ts` | Builds hierarchy from Supabase (campaigns → adsets → ads) |
+| `entity-tree.ts` | Builds hierarchy from D1 (campaigns → adsets → ads) |
 | `metrics-fetcher.ts` | Fetches timeseries metrics from `*_daily_metrics` tables |
 | `prompt-manager.ts` | Template hydration from `analysis_prompts` table |
 | `llm-router.ts` | Routes to Claude/Gemini based on level or config |
@@ -932,7 +840,7 @@ SELECT COUNT(*) FROM shopify_orders;
 
 | Phase | Connectors | Impact |
 |-------|------------|--------|
-| **1 (CRM)** | HubSpot, Salesforce | Unlocks B2B SaaS, Lead Gen |
+| **1 (CRM)** | ~~HubSpot~~ ✅, Salesforce | Unlocks B2B SaaS, Lead Gen |
 | **2 (Comms)** | CallRail, Calendly | Unlocks Local Services |
 | **3 (Ads)** | LinkedIn Marketing | Better B2B attribution |
 | **4 (Creator)** | ConvertKit, Kajabi | Niche verticals |
@@ -1099,11 +1007,10 @@ export type ConnectorType =
   | 'accounting' | 'attribution' | 'reviews' | 'affiliate' | 'social'
   | 'field_service';
 
-// 12 UI grouping categories
+// 9 UI grouping categories
 export type ConnectorCategory =
   | 'advertising' | 'sales' | 'marketing' | 'commerce' | 'operations'
-  | 'analytics' | 'finance' | 'communication' | 'ecommerce' | 'payments'
-  | 'crm' | 'field_service';
+  | 'analytics' | 'finance' | 'communication' | 'field_service';
 ```
 
 ### Migration

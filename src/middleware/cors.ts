@@ -18,7 +18,9 @@ export const corsMiddleware = honoCors({
       "http://localhost:5173",
       "http://127.0.0.1:3000",
       "http://127.0.0.1:3001",  // Dashboard local dev
-      "http://127.0.0.1:5173"
+      "http://127.0.0.1:5173",
+      "https://app-dev.clearlift.ai",  // Tunnel dev dashboard
+      "https://dev.clearlift.ai"       // Tunnel dev API (same-origin)
     ];
 
     // Allow if origin is in the list or if no origin (same-origin requests)
