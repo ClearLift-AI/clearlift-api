@@ -225,6 +225,7 @@ export class SmartAttributionService {
       hasTagData: boolean;
       hasClickIds: boolean;
       hasConnectorData: boolean;
+      hasTimeDecayData: boolean;
       recommendations: string[];
     };
   }> {
@@ -237,7 +238,7 @@ export class SmartAttributionService {
         attributions: SmartAttribution[];
         summary: { totalConversions: number; totalRevenue: number; dataCompleteness: number; signalBreakdown: Record<SignalType, { count: number; percentage: number }> };
         timeSeries: SmartAttributionTimeSeriesEntry[];
-        dataQuality: { hasPlatformData: boolean; hasTagData: boolean; hasClickIds: boolean; hasConnectorData: boolean; recommendations: string[] };
+        dataQuality: { hasPlatformData: boolean; hasTagData: boolean; hasClickIds: boolean; hasConnectorData: boolean; hasTimeDecayData: boolean; recommendations: string[] };
       }>(cacheKey);
 
       if (cached) {
@@ -281,7 +282,9 @@ export class SmartAttributionService {
       utmPerformance,
       connectorRevenue,
       funnelData,
-      clickLevelAttribution
+      clickLevelAttribution,
+      dailyUtmPerformance,
+      dailyConnectorRevenue
     );
 
     // Calculate summary
@@ -304,7 +307,8 @@ export class SmartAttributionService {
       utmPerformance,
       connectorRevenue,
       !!orgTag,
-      clickIdStats
+      clickIdStats,
+      dailyConnectorRevenue.length >= 2 && dailyUtmPerformance.length > 0
     );
 
     const result = { attributions, summary, timeSeries, dataQuality };
@@ -844,19 +848,137 @@ export class SmartAttributionService {
   }
 
   /**
+   * Compute daily time-decay distribution of connector revenue across channels.
+   *
+   * For each conversion day, looks back through past days of UTM session data
+   * and weights each day's sessions with exponential decay. Channels with more
+   * sessions on/near conversion days get proportionally more credit.
+   *
+   * Formula: weight = exp(-daysBack × ln(2) / halfLifeDays)
+   * Default: 2-day half-life, 7-day lookback
+   *
+   * Uses the SAME utm_source channel names as utm_performance, avoiding the
+   * channel classification mismatch that would occur with hourly_metrics.by_channel.
+   *
+   * Returns per-channel credit (sums match connector totals exactly).
+   */
+  private computeDailyTimeDecayDistribution(
+    dailyUtm: DailyUtmPerformance[],
+    dailyConnector: DailyConnectorRevenue[],
+    aggregatedChannels: Map<string, { channel: string; platform: string | null; sessions: number; sources: string[] }>,
+    remainingConversions: number,
+    remainingRevenue: number,
+    halfLifeDays: number = 2,
+    lookbackDays: number = 7
+  ): Map<string, { credit: number; revenue: number; matchedDays: number }> | null {
+    // Aggregate daily connector conversions by date
+    const convByDate = new Map<string, { conversions: number; revenue: number }>();
+    for (const dc of dailyConnector) {
+      const existing = convByDate.get(dc.date);
+      if (existing) {
+        existing.conversions += dc.conversions;
+        existing.revenue += dc.revenue;
+      } else {
+        convByDate.set(dc.date, { conversions: dc.conversions, revenue: dc.revenue });
+      }
+    }
+
+    if (convByDate.size < 2) return null; // Need at least 2 conversion days
+
+    // Build daily sessions per channel: "channelKey|date" → sessions
+    const channelDailyMap = new Map<string, number>();
+    for (const utm of dailyUtm) {
+      const sourceLower = (utm.utmSource || '').toLowerCase().trim();
+      const isDirect = sourceLower === '(direct)' || sourceLower === 'direct' || sourceLower === '';
+      const matchedPlatform = isDirect ? null : UTM_SOURCE_PLATFORMS[sourceLower];
+      const channelKey = isDirect ? 'direct' : (matchedPlatform || sourceLower);
+
+      const key = `${channelKey}|${utm.date}`;
+      channelDailyMap.set(key, (channelDailyMap.get(key) || 0) + utm.sessions);
+    }
+
+    const ln2 = Math.LN2;
+    const decayRate = ln2 / halfLifeDays;
+    const channels = Array.from(aggregatedChannels.keys());
+
+    const channelCredits = new Map<string, { credit: number; revenue: number; matchedDays: number }>();
+    for (const ch of channels) {
+      channelCredits.set(ch, { credit: 0, revenue: 0, matchedDays: 0 });
+    }
+
+    let totalDistributedConv = 0;
+    let totalDistributedRev = 0;
+
+    for (const [convDate, convData] of convByDate) {
+      const convTime = new Date(convDate + 'T12:00:00Z').getTime();
+
+      // Accumulate decay-weighted sessions per channel
+      const weightedSessions = new Map<string, number>();
+      let totalWeighted = 0;
+
+      for (let daysBack = 0; daysBack <= lookbackDays; daysBack++) {
+        const lookDate = new Date(convTime - daysBack * 86400_000);
+        const dateStr = lookDate.toISOString().split('T')[0];
+        const decayWeight = Math.exp(-daysBack * decayRate);
+
+        for (const ch of channels) {
+          const sessions = channelDailyMap.get(`${ch}|${dateStr}`) || 0;
+          if (sessions > 0) {
+            const weighted = sessions * decayWeight;
+            weightedSessions.set(ch, (weightedSessions.get(ch) || 0) + weighted);
+            totalWeighted += weighted;
+          }
+        }
+      }
+
+      if (totalWeighted > 0) {
+        for (const [ch, w] of weightedSessions) {
+          const share = w / totalWeighted;
+          const entry = channelCredits.get(ch);
+          if (entry) {
+            entry.credit += convData.conversions * share;
+            entry.revenue += convData.revenue * share;
+            entry.matchedDays++;
+          }
+        }
+        totalDistributedConv += convData.conversions;
+        totalDistributedRev += convData.revenue;
+      }
+    }
+
+    // Scale to match remaining connector totals (accounts for click-attributed deductions)
+    if (totalDistributedConv > 0) {
+      const convScale = remainingConversions / totalDistributedConv;
+      const revScale = remainingRevenue / totalDistributedRev;
+      for (const entry of channelCredits.values()) {
+        entry.credit = Math.round(entry.credit * convScale * 100) / 100;
+        entry.revenue = Math.round(entry.revenue * revScale * 100) / 100;
+      }
+    }
+
+    console.log(`[SmartAttribution] Time-decay distribution: ${convByDate.size} conversion days, ${channels.length} channels`);
+    return channelCredits;
+  }
+
+  /**
    * Build attributions using signal hierarchy with funnel weighting
    *
    * Priority order:
    * 1. Click ID matches from conversion_attribution table (100% confidence, measured)
    * 2. UTM-tracked conversions
-   * 3. Probabilistic distribution based on session share
+   * 3. Time-decay distribution based on daily session proximity to conversions
+   * 4. Flat session-share distribution (fallback)
    *
    * Key insight: When we have connector revenue (Stripe/Shopify) but no direct
    * click-level attribution, we probabilistically distribute the revenue based
-   * on session share WEIGHTED by funnel position. Sessions that reached higher
-   * funnel positions (closer to conversion) get proportionally more credit.
+   * on session share. With daily connector data available, time-decay weighting
+   * gives more credit to channels whose sessions occurred on/near conversion days.
    *
-   * Funnel Weight Formula:
+   * Time-Decay Formula (preferred when daily data available):
+   *   weight = sessions × exp(-daysBack × ln(2) / 2)
+   *   2-day half-life, 7-day lookback window
+   *
+   * Funnel Weight Formula (flat fallback):
    *   weight = sessionShare × (1 + funnelBonus)
    *   where funnelBonus = Σ(position × conversionRate) for all reached funnel steps
    */
@@ -872,7 +994,9 @@ export class SmartAttributionService {
       revenue: number;
       conversions: number;
       creditPercent: number;
-    }[] = []
+    }[] = [],
+    dailyUtm: DailyUtmPerformance[] = [],
+    dailyConnector: DailyConnectorRevenue[] = []
   ): SmartAttribution[] {
     const attributions: SmartAttribution[] = [];
 
@@ -1042,6 +1166,16 @@ export class SmartAttributionService {
     // doesn't have conversions, distribute based on session share
     const useSessionBasedDistribution = remainingConnectorConversions > 0 && totalUtmSessions > 0;
 
+    // Compute daily time-decay distribution when daily connector data is available
+    // Uses same utm_source channel names — no classification mismatch
+    let timeDecayCredits: Map<string, { credit: number; revenue: number; matchedDays: number }> | null = null;
+    if (useSessionBasedDistribution && dailyConnector.length >= 2 && dailyUtm.length > 0) {
+      timeDecayCredits = this.computeDailyTimeDecayDistribution(
+        dailyUtm, dailyConnector, aggregatedUtm,
+        remainingConnectorConversions, remainingConnectorRevenue
+      );
+    }
+
     // Build funnel bonus lookup by channel
     // Channels with visitors at higher funnel positions get bonus weighting
     const funnelBonusByChannel = new Map<string, { bonus: number; maxPosition: number; steps: string[]; flowTag: string | null }>();
@@ -1170,7 +1304,50 @@ export class SmartAttributionService {
           explanation = `${conversions} tracked conversion(s) from "${sourcesList}".${funnelSuffix}`;
         }
       }
-      // Otherwise, probabilistically distribute remaining connector revenue based on session share
+      // Time-decay distribution: weight by daily session proximity to conversions
+      else if (useSessionBasedDistribution && timeDecayCredits) {
+        const decayEntry = timeDecayCredits.get(channelKey);
+        if (decayEntry && decayEntry.credit > 0) {
+          conversions = decayEntry.credit;
+          revenue = decayEntry.revenue;
+          isEstimated = true;
+          estimationReason = `Distributed via time-decay weighting (2-day half-life) across ${decayEntry.matchedDays} conversion day(s) within 7-day lookback`;
+
+          const decayShare = remainingConnectorConversions > 0
+            ? (conversions / remainingConnectorConversions * 100).toFixed(1)
+            : '0.0';
+
+          const sampleSize = utm.sessions;
+
+          if (matchedPlatform && hasActiveSpend) {
+            signalType = 'utm_with_spend';
+            confidence = calculateConfidence(82, sampleSize);
+            dataQuality = 'estimated';
+            explanation = `Est. ${conversions.toFixed(1)} conv. (${decayShare}% time-decay share). UTM "${sourcesList}" + ${matchedPlatform} spend corroborates.${funnelSuffix}`;
+          } else if (matchedPlatform) {
+            signalType = 'utm_no_spend';
+            confidence = calculateConfidence(77, sampleSize);
+            dataQuality = 'estimated';
+            explanation = `Est. ${conversions.toFixed(1)} conv. (${decayShare}% time-decay share). UTM "${sourcesList}" matches ${matchedPlatform}.${funnelSuffix}`;
+          } else {
+            signalType = 'utm_only';
+            confidence = calculateConfidence(72, sampleSize);
+            dataQuality = 'estimated';
+            explanation = `Est. ${conversions.toFixed(1)} conv. (${decayShare}% time-decay share) from "${sourcesList}".${funnelSuffix}`;
+          }
+        } else {
+          // Channel had no sessions near conversion days
+          conversions = 0;
+          revenue = 0;
+          signalType = 'utm_only';
+          confidence = calculateConfidence(50, utm.sessions);
+          dataQuality = 'estimated';
+          isEstimated = true;
+          estimationReason = 'No sessions within 7-day lookback of any conversion day';
+          explanation = `${utm.sessions} sessions from "${sourcesList}", no temporal proximity to conversions.`;
+        }
+      }
+      // Fallback: flat session-share distribution (no daily connector data for time-decay)
       else if (useSessionBasedDistribution && sessionShare > 0) {
         conversions = Math.round(remainingConnectorConversions * sessionShare * 100) / 100;
         revenue = Math.round(remainingConnectorRevenue * sessionShare * 100) / 100;
@@ -1715,12 +1892,14 @@ export class SmartAttributionService {
     utmPerformance: UtmPerformance[],
     connectorRevenue: ConnectorRevenue[],
     hasTag: boolean,
-    clickIdStats: { hasClickIds: boolean; clickIdCount: number; byType: Record<string, number> }
+    clickIdStats: { hasClickIds: boolean; clickIdCount: number; byType: Record<string, number> },
+    hasTimeDecayData: boolean = false
   ): {
     hasPlatformData: boolean;
     hasTagData: boolean;
     hasClickIds: boolean;
     hasConnectorData: boolean;
+    hasTimeDecayData: boolean;
     clickIdCount: number;
     clickIdsByType: Record<string, number>;
     recommendations: string[];
@@ -1765,6 +1944,7 @@ export class SmartAttributionService {
       hasTagData,
       hasClickIds,
       hasConnectorData,
+      hasTimeDecayData,
       clickIdCount: clickIdStats.clickIdCount,
       clickIdsByType: clickIdStats.byType,
       recommendations

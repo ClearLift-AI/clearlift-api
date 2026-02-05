@@ -765,6 +765,12 @@ When quality is `verified` or `connector_only`, the response includes verificati
 - Monte Carlo approximation for >10 channels (5000 samples)
 - Most mathematically rigorous but computationally expensive
 
+**Daily Time-Decay Distribution (Smart Attribution):**
+- Distributes connector revenue (Stripe/Shopify) across UTM channels using temporal proximity
+- 2-day half-life, 7-day lookback window
+- Falls back to flat session-share when insufficient data (< 2 conversion days)
+- See `computeDailyTimeDecayDistribution()` in `smart-attribution.ts`
+
 ### User-Configurable LLM Settings
 
 Stored in `ai_optimization_settings` table:
@@ -794,6 +800,7 @@ See **`clearlift-cron/docs/SHARED_CODE.md`** for comprehensive cross-repo code s
 |---------|------|---------------------|
 | Attribution Models | `src/services/attribution-models.ts` | §1 Attribution Models |
 | Platform/UTM Mapping | `src/services/smart-attribution.ts` | §2 Platform/UTM Mapping |
+| Daily Time-Decay Distribution | `src/services/smart-attribution.ts` | §19.9d Time-Decay |
 | Markov Chain | `src/services/attribution-models.ts` | §4 Markov Chain |
 | Shapley Value | `src/services/attribution-models.ts` | §1 Attribution Models |
 | Stage Markov | `src/services/stage-markov.ts` | §4 Markov Chain |
@@ -809,13 +816,25 @@ See **`clearlift-cron/docs/SHARED_CODE.md`** for comprehensive cross-repo code s
 |---------|-----------------|-------|
 | Field Encryption | `clearlift-cron/shared/utils/crypto.ts` | Cron is canonical (better error handling) |
 
-### Time Decay Algorithm (Canonical)
+### Time Decay Algorithms (Canonical)
 
+**Touchpoint-level time decay** (attribution models):
 ```typescript
 // 7-day half-life - touchpoints lose half their credit every 7 days
 const daysBeforeConversion = (conversionTime - touchpointTime) / MS_PER_DAY;
 const weight = Math.pow(0.5, daysBeforeConversion / 7);
 ```
+
+**Daily session-to-conversion time decay** (Smart Attribution, `computeDailyTimeDecayDistribution()`):
+```typescript
+// 2-day half-life, 7-day lookback — distributes connector revenue across UTM channels
+const weight = Math.exp(-daysBack * Math.LN2 / 2);
+// Sessions closer to conversion day get exponentially more credit
+// Replaces flat session-share when ≥2 conversion days + UTM data exist
+// Uses dailyUtmPerformance + dailyConnectorRevenue (already queried, no new D1 calls)
+```
+
+See `SHARED_CODE.md §19.9d` for full algorithm details, data sources, and why hourly resolution was rejected.
 
 ### When Modifying Shared Logic
 
