@@ -81,6 +81,30 @@ export interface ShardRoutingInfo {
   metrics_row_count: number;
 }
 
+/**
+ * Get the correct D1 database for an org's shard tables (ad_campaigns, ad_metrics, ad_groups, ads).
+ * Fast path: when ACTIVE_SHARDS <= 1, returns ANALYTICS_DB directly (zero overhead).
+ * Multi-shard path: creates ShardRouter, looks up shard assignment.
+ *
+ * Non-shard tables (stripe_charges, shopify_orders, daily_metrics, attribution_results)
+ * always live in ANALYTICS_DB — use env.ANALYTICS_DB directly for those.
+ */
+export async function getShardDbForOrg(env: ShardEnv & { DB: D1Database }, orgId: string): Promise<D1Database> {
+  if (!env.ANALYTICS_DB) {
+    throw new Error('ANALYTICS_DB not configured');
+  }
+
+  // Fast path: single shard means everything is in ANALYTICS_DB
+  if (ACTIVE_SHARDS <= 1) {
+    return env.ANALYTICS_DB;
+  }
+
+  // Multi-shard path: route to correct shard
+  const shards = getShards(env);
+  const router = new ShardRouter(env.DB, shards);
+  return router.getShardForOrg(orgId);
+}
+
 export class ShardRouter {
   private shardCache = new Map<string, number>();
   private activeShardCount: number;

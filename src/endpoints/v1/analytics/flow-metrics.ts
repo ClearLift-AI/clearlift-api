@@ -11,6 +11,7 @@ import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { SmartAttributionService, type SignalType } from "../../../services/smart-attribution";
 import { StageMarkovService } from "../../../services/stage-markov";
+import { getShardDbForOrg } from "../../../services/shard-router";
 
 // Enhanced channel attribution with confidence
 interface EnhancedChannelAttribution {
@@ -258,6 +259,7 @@ Returns stage-by-stage metrics for the acquisition flow:
 
       // 5. Query stage metrics based on connector type
       const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+      const shardDb = await getShardDbForOrg(c.env, orgId);
 
       // Get channel distribution for session-level attribution
       let channelDistribution: Record<string, number> = {};
@@ -304,8 +306,8 @@ Returns stage-by-stage metrics for the acquisition flow:
         try {
           // Query based on connector type (using unified ad_metrics table)
           if (connector === "google_ads") {
-            // Google Ads clicks from unified ad_metrics
-            const result = await analyticsDb.prepare(`
+            // Google Ads clicks from unified ad_metrics (shard table)
+            const result = await shardDb.prepare(`
               SELECT COALESCE(SUM(m.clicks), 0) as clicks
               FROM ad_metrics m
               WHERE m.organization_id = ?
@@ -317,8 +319,8 @@ Returns stage-by-stage metrics for the acquisition flow:
             visitors = result?.clicks || 0;
             conversions = visitors; // For traffic stages, visitors = conversions
           } else if (connector === "facebook_ads") {
-            // Facebook Ads clicks from unified ad_metrics
-            const result = await analyticsDb.prepare(`
+            // Facebook Ads clicks from unified ad_metrics (shard table)
+            const result = await shardDb.prepare(`
               SELECT COALESCE(SUM(m.clicks), 0) as clicks
               FROM ad_metrics m
               WHERE m.organization_id = ?
@@ -330,8 +332,8 @@ Returns stage-by-stage metrics for the acquisition flow:
             visitors = result?.clicks || 0;
             conversions = visitors;
           } else if (connector === "tiktok_ads") {
-            // TikTok Ads clicks from unified ad_metrics
-            const result = await analyticsDb.prepare(`
+            // TikTok Ads clicks from unified ad_metrics (shard table)
+            const result = await shardDb.prepare(`
               SELECT COALESCE(SUM(m.clicks), 0) as clicks
               FROM ad_metrics m
               WHERE m.organization_id = ?

@@ -13,6 +13,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { getShardDbForOrg } from "../../../services/shard-router";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GET /v1/analytics/cac/timeline
@@ -612,8 +613,9 @@ export class BackfillCACHistory extends OpenAPIRoute {
     const { org_id, days } = data.body;
 
     try {
-      // Query daily spend and conversions from unified ad_metrics table
-      const metricsResult = await c.env.ANALYTICS_DB.prepare(`
+      // Query daily spend and conversions from unified ad_metrics table (shard table)
+      const shardDb = await getShardDbForOrg(c.env, org_id);
+      const metricsResult = await shardDb.prepare(`
         SELECT
           metric_date as date,
           SUM(spend_cents) as spend_cents,

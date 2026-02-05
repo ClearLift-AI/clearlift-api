@@ -12,6 +12,7 @@ import { success, error } from "../../../utils/response";
 import { getSecret } from "../../../utils/secrets";
 import { GoogleAdsOAuthProvider } from "../../../services/oauth/google";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
+import { getShardDbForOrg } from "../../../services/shard-router";
 
 /**
  * GET /v1/analytics/google/campaigns
@@ -100,13 +101,10 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
     const endDate = query.query.end_date || new Date().toISOString().split('T')[0];
     const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    if (!c.env.ANALYTICS_DB) {
-      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
-    }
-
     try {
-      console.log('[Google Campaigns] Using D1 ANALYTICS_DB');
-      const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
+      const shardDb = await getShardDbForOrg(c.env, orgId);
+      console.log('[Google Campaigns] Using D1 shard DB');
+      const d1Analytics = new D1AnalyticsService(shardDb);
       const campaigns = await d1Analytics.getGoogleCampaignsWithMetrics(
         orgId,
         startDate,

@@ -23,6 +23,7 @@ import {
 // Import from providers to ensure all revenue sources are registered
 import { getCombinedRevenueByDateRange, CombinedRevenueResult } from "../../../services/revenue-sources/providers";
 import { AD_PLATFORM_IDS, ACTIVE_REVENUE_PLATFORM_IDS } from "../../../config/platforms";
+import { getShardDbForOrg } from "../../../services/shard-router";
 
 /**
  * Check organization setup status for attribution.
@@ -641,7 +642,7 @@ interface DataQualityInfo {
  * Helper: Build platform fallback attributions from D1 ANALYTICS_DB
  */
 async function buildPlatformFallbackD1(
-  analyticsDb: D1Database,
+  shardDb: D1Database,
   mainDb: D1Database,
   orgId: string,
   dateRange: { start: string; end: string }
@@ -670,9 +671,9 @@ async function buildPlatformFallbackD1(
     let totalConversions = 0;
     let totalRevenue = 0;
 
-    // Use unified ad_metrics table instead of per-platform tables
+    // Use unified ad_metrics table (shard table)
     try {
-      const metricsResult = await analyticsDb.prepare(`
+      const metricsResult = await shardDb.prepare(`
         SELECT
           m.platform,
           m.entity_ref,
@@ -933,6 +934,8 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
 
     // Get ANALYTICS_DB binding (with fallback to DB for backwards compat)
     const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    // Shard DB for ad_metrics/ad_campaigns queries
+    const shardDb = await getShardDbForOrg(c.env, orgId);
     const dateRange = { start: dateFrom, end: dateTo };
 
     // Check setup status for guidance (non-blocking - failures shouldn't break attribution)
@@ -1126,7 +1129,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
           if (conversionSource === 'all') {
             // Get ad platform data too and merge
             const adPlatformData = await buildPlatformFallbackD1(
-              analyticsDb,
+              shardDb,
               c.env.DB,
               orgId,
               dateRange
@@ -1144,7 +1147,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
           console.log(`[Attribution] No connector conversions found, falling back to ad platforms`);
           warnings.push('no_connector_conversions');
           attributionData = await buildPlatformFallbackD1(
-            analyticsDb,
+            shardDb,
             c.env.DB,
             orgId,
             dateRange
@@ -1158,7 +1161,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         console.error(`[Attribution] Error querying revenue sources:`, err);
         // Fall back to ad platforms on error, but surface the issue
         attributionData = await buildPlatformFallbackD1(
-          analyticsDb,
+          shardDb,
           c.env.DB,
           orgId,
           dateRange
@@ -1174,7 +1177,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       // Use ad platform data directly
       console.log(`[Attribution] Using D1 ad platform data`);
       attributionData = await buildPlatformFallbackD1(
-        analyticsDb,
+        shardDb,
         c.env.DB,
         orgId,
         dateRange
@@ -1187,7 +1190,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       console.log(`[Attribution] Tag source requested but events table not available, falling back to ad platforms`);
       warnings.push('no_events');
       attributionData = await buildPlatformFallbackD1(
-        analyticsDb,
+        shardDb,
         c.env.DB,
         orgId,
         dateRange
@@ -1308,6 +1311,8 @@ export class GetAttributionComparison extends OpenAPIRoute {
 
     // Get ANALYTICS_DB binding
     const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    // Shard DB for ad_metrics/ad_campaigns queries
+    const shardDb = await getShardDbForOrg(c.env, orgId);
 
     // Query attribution_results from D1 ANALYTICS_DB
     let attributionResults: Array<{
@@ -1407,7 +1412,7 @@ export class GetAttributionComparison extends OpenAPIRoute {
     console.log(`[Attribution Compare] No D1 attribution data, falling back to platform data`);
 
     const fallback = await buildPlatformFallbackD1(
-      analyticsDb,
+      shardDb,
       c.env.DB,
       orgId,
       { start: dateFrom, end: dateTo }
@@ -1854,11 +1859,13 @@ Works even without click tracking or event data.
     const dateTo = query.date_to;
 
     const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    // Shard DB for ad_metrics queries
+    const shardDb = await getShardDbForOrg(c.env, orgId);
 
-    // 1. Query ad platform data
-    const adPlatformData = await this.getAdPlatformData(analyticsDb, c.env.DB, orgId, dateFrom, dateTo);
+    // 1. Query ad platform data (ad_metrics is a shard table)
+    const adPlatformData = await this.getAdPlatformData(shardDb, c.env.DB, orgId, dateFrom, dateTo);
 
-    // 2. Query connector revenue (Stripe, Shopify, etc.)
+    // 2. Query connector revenue (Stripe, Shopify, etc. — non-shard tables)
     const connectorData = await this.getConnectorData(analyticsDb, orgId, dateFrom, dateTo);
 
     // 3. Calculate spend gap
