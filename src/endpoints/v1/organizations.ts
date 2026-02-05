@@ -11,6 +11,21 @@ import { success, error } from "../../utils/response";
 import { generateInviteCode } from "../../utils/auth";
 import { createEmailService } from "../../utils/email";
 
+/** Retry a D1 query once on transient failure (D1_ERROR, SQLITE_BUSY, etc.) */
+async function withD1Retry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  try {
+    return await fn();
+  } catch (err: any) {
+    const msg = err?.message || '';
+    const isTransient = msg.includes('D1_') || msg.includes('SQLITE_BUSY') ||
+      msg.includes('database is locked') || msg.includes('network');
+    if (!isTransient) throw err;
+    console.warn(`D1 transient error in ${label}, retrying once:`, msg);
+    await new Promise(r => setTimeout(r, 200));
+    return await fn();
+  }
+}
+
 /**
  * POST /v1/organizations - Create a new organization
  */
@@ -441,14 +456,13 @@ export class JoinOrganization extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>();
     const { invite_code } = data.body;
 
-    // 1. First check if invite exists at all
-    const inviteExists = await c.env.DB.prepare(`
-      SELECT i.id, i.expires_at, i.email, i.is_shareable, i.accepted_at, i.max_uses, i.use_count,
-             i.organization_id, i.role, o.name, o.slug
-      FROM invitations i
-      JOIN organizations o ON i.organization_id = o.id
-      WHERE i.invite_code = ?
-    `).bind(invite_code).first<{
+    // 0. Validate session has required fields
+    if (!session?.user_id) {
+      return error(c, "SESSION_INVALID", "Your session has expired. Please sign in again.", 401);
+    }
+
+    // 1. First check if invite exists at all (with D1 retry)
+    let inviteExists: {
       id: string;
       expires_at: string;
       email: string | null;
@@ -460,7 +474,23 @@ export class JoinOrganization extends OpenAPIRoute {
       role: string;
       name: string;
       slug: string;
-    }>();
+    } | null;
+
+    try {
+      inviteExists = await withD1Retry(
+        () => c.env.DB.prepare(`
+          SELECT i.id, i.expires_at, i.email, i.is_shareable, i.accepted_at, i.max_uses, i.use_count,
+                 i.organization_id, i.role, o.name, o.slug
+          FROM invitations i
+          JOIN organizations o ON i.organization_id = o.id
+          WHERE i.invite_code = ?
+        `).bind(invite_code).first(),
+        'invite-lookup'
+      );
+    } catch (dbError: any) {
+      console.error('D1 error looking up invite:', dbError.message);
+      return error(c, "DATABASE_ERROR", "A temporary database error occurred. Please try again.", 503, { retryable: true });
+    }
 
     if (!inviteExists) {
       return error(c, "INVALID_CODE", "This invite code does not exist", 400);
@@ -501,53 +531,79 @@ export class JoinOrganization extends OpenAPIRoute {
       use_count: inviteExists.use_count,
     };
 
-    // Check if already a member
-    const existingMembership = await c.env.DB.prepare(`
-      SELECT id FROM organization_members
-      WHERE organization_id = ? AND user_id = ?
-    `).bind(invitation.organization_id, session.user_id).first();
+    // Check if already a member (with D1 retry)
+    let existingMembership;
+    try {
+      existingMembership = await withD1Retry(
+        () => c.env.DB.prepare(`
+          SELECT organization_id FROM organization_members
+          WHERE organization_id = ? AND user_id = ?
+        `).bind(invitation.organization_id, session.user_id).first(),
+        'membership-check'
+      );
+    } catch (dbError: any) {
+      console.error('D1 error checking membership:', dbError.message);
+      return error(c, "DATABASE_ERROR", "A temporary database error occurred. Please try again.", 503, { retryable: true });
+    }
 
     if (existingMembership) {
-      return error(c, "ALREADY_MEMBER", "You are already a member of this organization", 409);
+      // Return the org data so the frontend can still navigate
+      return error(c, "ALREADY_MEMBER", "You are already a member of this organization", 409, {
+        organization: {
+          id: invitation.organization_id,
+          name: invitation.name,
+          slug: invitation.slug,
+          role: invitation.role
+        }
+      });
     }
 
     const now = new Date().toISOString();
 
-    // Add user to organization with explicit error handling
+    // Add user to organization with retry
     try {
-      await c.env.DB.prepare(`
-        INSERT INTO organization_members (organization_id, user_id, role, joined_at)
-        VALUES (?, ?, ?, ?)
-      `).bind(invitation.organization_id, session.user_id, invitation.role, now).run();
+      await withD1Retry(
+        () => c.env.DB.prepare(`
+          INSERT INTO organization_members (organization_id, user_id, role, joined_at)
+          VALUES (?, ?, ?, ?)
+        `).bind(invitation.organization_id, session.user_id, invitation.role, now).run(),
+        'member-insert'
+      );
     } catch (dbError: any) {
+      // Check if it's a unique constraint violation (already member from a race condition)
+      if (dbError.message?.includes('UNIQUE') || dbError.message?.includes('PRIMARY KEY')) {
+        return success(c, {
+          organization: {
+            id: invitation.organization_id,
+            name: invitation.name,
+            slug: invitation.slug,
+            role: invitation.role
+          }
+        });
+      }
       console.error('Failed to insert organization member:', {
         error: dbError.message,
         org_id: invitation.organization_id,
         user_id: session.user_id,
         role: invitation.role
       });
-      return error(c, "JOIN_FAILED", `Failed to add you to the organization: ${dbError.message}`, 500);
+      return error(c, "JOIN_FAILED", "Failed to add you to the organization. Please try again.", 503, { retryable: true });
     }
 
-    // Handle invitation tracking based on type
+    // Handle invitation tracking based on type (non-critical)
     try {
       if (invitation.is_shareable) {
-        // Shareable invite: increment use count
         await c.env.DB.prepare(`
           UPDATE invitations SET use_count = use_count + 1 WHERE id = ?
         `).bind(invitation.id).run();
       } else {
-        // Regular invite: mark as accepted
         await c.env.DB.prepare(`
           UPDATE invitations SET accepted_at = ? WHERE id = ?
         `).bind(now, invitation.id).run();
       }
 
-      // Update organization timestamp
       await c.env.DB.prepare(`
-        UPDATE organizations
-        SET updated_at = ?
-        WHERE id = ?
+        UPDATE organizations SET updated_at = ? WHERE id = ?
       `).bind(now, invitation.organization_id).run();
     } catch (updateError: any) {
       // Non-critical - membership was already added, just log the error
