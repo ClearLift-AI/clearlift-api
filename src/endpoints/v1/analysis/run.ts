@@ -108,6 +108,32 @@ export class RunAnalysis extends OpenAPIRoute {
       }
     };
 
+    const jobs = new JobManager(c.env.AI_DB);
+
+    // Mark stuck jobs as failed (>30 min without completing)
+    await c.env.AI_DB.prepare(`
+      UPDATE analysis_jobs
+      SET status = 'failed', error = 'Timed out after 30 minutes'
+      WHERE organization_id = ? AND status IN ('pending', 'in_progress')
+        AND created_at < datetime('now', '-30 minutes')
+    `).bind(orgId).run();
+
+    // Dedup: return existing job if one is already running (<30 min old)
+    const existingJob = await c.env.AI_DB.prepare(`
+      SELECT id, status FROM analysis_jobs
+      WHERE organization_id = ? AND status IN ('pending', 'in_progress')
+        AND created_at > datetime('now', '-30 minutes')
+      ORDER BY created_at DESC LIMIT 1
+    `).bind(orgId).first<{ id: string; status: string }>();
+
+    if (existingJob) {
+      return success(c, {
+        job_id: existingJob.id,
+        status: existingJob.status as 'pending',
+        message: 'Analysis already running'
+      });
+    }
+
     // Expire any pending recommendations from previous analysis runs
     await c.env.AI_DB.prepare(`
       UPDATE ai_decisions
@@ -116,7 +142,6 @@ export class RunAnalysis extends OpenAPIRoute {
     `).bind(orgId).run();
 
     // Create job in D1 (for status polling)
-    const jobs = new JobManager(c.env.AI_DB);
     const jobId = await jobs.createJob(orgId, days, webhookUrl);
 
     // Start the durable workflow (replaces waitUntil)

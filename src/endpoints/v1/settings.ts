@@ -484,8 +484,17 @@ export class AcceptAIDecision extends OpenAPIRoute {
   }
 
   private async executeDecision(c: AppContext, decision: any, orgId: string): Promise<any> {
-    const { tool, platform, entity_type, entity_id } = decision;
+    const { platform, entity_type, entity_id } = decision;
     const params = JSON.parse(decision.parameters || '{}');
+
+    // Normalize tool name: simulation-executor renames set_status → pause/enable in DB
+    let tool = decision.tool;
+    if (tool === 'pause') { tool = 'set_status'; if (!params.status) params.status = params.recommended_status || 'PAUSED'; }
+    else if (tool === 'enable') { tool = 'set_status'; if (!params.status) params.status = params.recommended_status || 'ENABLED'; }
+    // Normalize param: LLM stores recommended_status, execute expects status
+    if (tool === 'set_status' && !params.status && params.recommended_status) {
+      params.status = params.recommended_status;
+    }
 
     // Get platform connection
     const connection = await c.env.DB.prepare(`

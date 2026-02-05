@@ -482,14 +482,25 @@ async function storeRecommendation(
   recommendation: Recommendation,
   simulation: SimulationResult
 ): Promise<string> {
-  const id = crypto.randomUUID().replace(/-/g, '').slice(0, 32);
-  const expiresAt = addDays(new Date(), 7).toISOString();
-
   // Determine the correct tool name for ai_decisions
   let tool = recommendation.tool;
   if (tool === 'set_status') {
     tool = recommendation.parameters.recommended_status === 'PAUSED' ? 'pause' : 'enable';
   }
+
+  // Dedup: skip if an identical pending decision already exists (workflow retry safety)
+  const existing = await aiDb.prepare(`
+    SELECT id FROM ai_decisions
+    WHERE organization_id = ? AND tool = ? AND platform = ? AND entity_type = ? AND entity_id = ?
+      AND status = 'pending'
+    LIMIT 1
+  `).bind(orgId, tool, recommendation.platform, recommendation.entity_type, recommendation.entity_id)
+    .first<{ id: string }>();
+
+  if (existing) return existing.id;
+
+  const id = crypto.randomUUID().replace(/-/g, '').slice(0, 32);
+  const expiresAt = addDays(new Date(), 7).toISOString();
 
   await aiDb.prepare(`
     INSERT INTO ai_decisions (

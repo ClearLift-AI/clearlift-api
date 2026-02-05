@@ -1657,6 +1657,16 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     rec: Recommendation,
     analysisRunId: string
   ): Promise<void> {
+    // Dedup: skip if an identical pending decision already exists (workflow retry safety)
+    const existing = await this.env.AI_DB.prepare(`
+      SELECT id FROM ai_decisions
+      WHERE organization_id = ? AND tool = ? AND platform = ? AND entity_type = ? AND entity_id = ?
+        AND status = 'pending'
+      LIMIT 1
+    `).bind(orgId, rec.tool, rec.platform, rec.entity_type, rec.entity_id).first<{ id: string }>();
+
+    if (existing) return;
+
     const id = crypto.randomUUID().replace(/-/g, '');
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
