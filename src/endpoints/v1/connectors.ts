@@ -1422,10 +1422,11 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
             reauth_reason = NULL,
             reauth_detected_at = NULL,
             consecutive_auth_failures = 0,
-            sync_status = 'pending'
+            sync_status = 'pending',
+            last_synced_at = NULL
         WHERE id = ?
       `).bind(connectionId).run();
-      console.log('Cleared needs_reauth flag for connection:', connectionId);
+      console.log('Cleared needs_reauth flag and reset sync watermark for connection:', connectionId);
 
       // For Facebook, fetch connected pages (pages_read_engagement + read_insights for Page insights)
       if (provider === 'facebook') {

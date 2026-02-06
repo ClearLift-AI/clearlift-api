@@ -69,7 +69,8 @@ import {
   GetCACTimeline,
   GenerateCACPredictions,
   BackfillCACHistory,
-  ComputeCACBaselines
+  ComputeCACBaselines,
+  GetCACSummary
 } from "./endpoints/v1/analytics/cac-timeline";
 import {
   GetFacebookCampaigns,
@@ -556,6 +557,7 @@ openapi.get("/v1/analytics/realtime/goals/:id/timeseries", auth, requireOrg, Get
 
 // CAC Timeline endpoints (truthful predictions based on simulation data)
 openapi.get("/v1/analytics/cac/timeline", auth, requireOrg, GetCACTimeline);
+openapi.get("/v1/analytics/cac/summary", auth, requireOrg, GetCACSummary);
 openapi.post("/v1/analytics/cac/generate", auth, requireOrg, GenerateCACPredictions);
 openapi.post("/v1/analytics/cac/backfill", auth, requireOrg, BackfillCACHistory);
 openapi.post("/v1/analytics/cac/compute-baselines", auth, requireOrg, ComputeCACBaselines);
@@ -990,7 +992,7 @@ export default {
     }
   },
 
-  // Backfill CAC history for all organizations from unified ad_metrics table
+  // Backfill CAC history for all organizations from ad_metrics + goal_conversions
   async backfillCACHistoryForAllOrgs(env: Env): Promise<void> {
     const DAYS_TO_BACKFILL = 30;
 
@@ -1010,7 +1012,17 @@ export default {
 
       for (const org of orgs) {
         try {
-          // Query daily spend and conversions from unified ad_metrics for this org
+          const orgId = org.organization_id;
+
+          // Check for macro conversion goals
+          const goalsResult = await env.DB.prepare(`
+            SELECT id, name FROM conversion_goals
+            WHERE organization_id = ? AND is_conversion = 1 AND category = 'macro_conversion'
+          `).bind(orgId).all<{ id: string; name: string }>();
+          const macroGoals = goalsResult.results || [];
+          const hasGoals = macroGoals.length > 0;
+
+          // Query daily spend and conversions from unified ad_metrics
           const metricsResult = await env.ANALYTICS_DB.prepare(`
             SELECT
               metric_date as date,
@@ -1022,40 +1034,88 @@ export default {
               AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
             GROUP BY metric_date
             ORDER BY metric_date ASC
-          `).bind(org.organization_id).all<{
+          `).bind(orgId).all<{
             date: string;
             spend_cents: number;
             conversions: number;
           }>();
 
-          if (!metricsResult.results || metricsResult.results.length === 0) {
-            continue;
+          // Build platform map
+          const platformMap = new Map<string, { spend_cents: number; conversions: number }>();
+          for (const row of metricsResult.results || []) {
+            platformMap.set(row.date, { spend_cents: row.spend_cents, conversions: row.conversions });
           }
 
-          for (const row of metricsResult.results) {
-            if (row.conversions === 0) continue;
+          // If goals exist, fetch goal-linked conversions (deduplicated)
+          let goalMap = new Map<string, { conversions: number; revenue_cents: number }>();
+          if (hasGoals) {
+            const goalIds = macroGoals.map(g => g.id);
+            const placeholders = goalIds.map(() => '?').join(',');
 
-            const cacCents = Math.round(row.spend_cents / row.conversions);
+            const goalResult = await env.ANALYTICS_DB.prepare(`
+              WITH unique_conversions AS (
+                SELECT DISTINCT
+                  COALESCE(conversion_id, id) as unique_id,
+                  DATE(conversion_timestamp) as date,
+                  value_cents
+                FROM goal_conversions
+                WHERE organization_id = ?
+                  AND goal_id IN (${placeholders})
+                  AND DATE(conversion_timestamp) >= date('now', '-${DAYS_TO_BACKFILL} days')
+              )
+              SELECT date, COUNT(*) as conversions, SUM(value_cents) as revenue_cents
+              FROM unique_conversions
+              GROUP BY date
+            `).bind(orgId, ...goalIds).all<{
+              date: string;
+              conversions: number;
+              revenue_cents: number;
+            }>();
+
+            for (const row of goalResult.results || []) {
+              goalMap.set(row.date, { conversions: row.conversions, revenue_cents: row.revenue_cents || 0 });
+            }
+          }
+
+          // Merge dates from both sources
+          const allDates = new Set([...platformMap.keys(), ...goalMap.keys()]);
+          const goalIdsJson = hasGoals ? JSON.stringify(macroGoals.map(g => g.id)) : null;
+
+          for (const date of [...allDates].sort()) {
+            const platform = platformMap.get(date) || { spend_cents: 0, conversions: 0 };
+            const goal = goalMap.get(date);
+
+            const useGoals = hasGoals && goal && goal.conversions > 0;
+            const primaryConversions = useGoals ? goal.conversions : platform.conversions;
+            const conversionSource = useGoals ? 'goal' : 'platform';
+
+            if (platform.spend_cents === 0 && primaryConversions === 0) continue;
+
+            const cacCents = primaryConversions > 0 ? Math.round(platform.spend_cents / primaryConversions) : 0;
 
             await env.AI_DB.prepare(`
               INSERT INTO cac_history (
-                organization_id, date, spend_cents, conversions, revenue_cents, cac_cents
+                organization_id, date, spend_cents, conversions, revenue_cents, cac_cents,
+                conversions_goal, conversions_platform, conversion_source, goal_ids, revenue_goal_cents
               )
-              VALUES (?, ?, ?, ?, ?, ?)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(organization_id, date)
               DO UPDATE SET
                 spend_cents = excluded.spend_cents,
                 conversions = excluded.conversions,
                 revenue_cents = excluded.revenue_cents,
                 cac_cents = excluded.cac_cents,
+                conversions_goal = excluded.conversions_goal,
+                conversions_platform = excluded.conversions_platform,
+                conversion_source = excluded.conversion_source,
+                goal_ids = excluded.goal_ids,
+                revenue_goal_cents = excluded.revenue_goal_cents,
                 created_at = datetime('now')
             `).bind(
-              org.organization_id,
-              row.date,
-              row.spend_cents,
-              row.conversions,
-              0, // revenue_cents - not available in campaign metrics, would need Stripe/Shopify
-              cacCents
+              orgId, date, platform.spend_cents, primaryConversions,
+              goal?.revenue_cents || 0, cacCents,
+              goal?.conversions || 0, platform.conversions,
+              conversionSource, goalIdsJson, goal?.revenue_cents || 0
             ).run();
 
             totalRowsInserted++;

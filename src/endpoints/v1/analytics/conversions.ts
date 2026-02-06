@@ -102,14 +102,25 @@ export class GetConversions extends OpenAPIRoute {
     }
 
     try {
-      // Check if org has any revenue connectors (not just Stripe)
-      const connections = await c.env.DB.prepare(`
-        SELECT platform FROM platform_connections
-        WHERE organization_id = ? AND platform IN ('stripe', 'shopify', 'jobber') AND is_active = 1
-      `).bind(orgId).all<{ platform: string }>();
+      // Check if org has revenue connectors OR active tag goals (parallel queries)
+      const [connections, tagGoals] = await Promise.all([
+        c.env.DB.prepare(`
+          SELECT platform FROM platform_connections
+          WHERE organization_id = ? AND platform IN ('stripe', 'shopify', 'jobber') AND is_active = 1
+        `).bind(orgId).all<{ platform: string }>(),
+        c.env.DB.prepare(`
+          SELECT COUNT(*) as count FROM conversion_goals
+          WHERE organization_id = ?
+            AND (goal_type = 'tag_event' OR goal_type IS NULL)
+            AND (is_active = 1 OR is_active IS NULL)
+        `).bind(orgId).first<{ count: number }>(),
+      ]);
 
-      if (!connections.results || connections.results.length === 0) {
-        // No revenue connections - return empty with setup guidance
+      const hasRevenueConnectors = connections.results && connections.results.length > 0;
+      const hasTagGoals = (tagGoals?.count || 0) > 0;
+
+      if (!hasRevenueConnectors && !hasTagGoals) {
+        // No revenue connections and no tag goals - return empty with setup guidance
         const setupStatus = await checkConversionSetupStatus(c.env.DB, orgId);
         const setupGuidance = buildDataQualityResponse(setupStatus);
 
@@ -119,7 +130,7 @@ export class GetConversions extends OpenAPIRoute {
             ...this.formatEmptyResponse(groupBy),
             data_source: 'd1_unified',
             setup_guidance: setupGuidance,
-            _message: 'No revenue source connected. Connect Stripe, Shopify, or Jobber to track conversions.'
+            _message: 'No revenue source connected. Connect Stripe, Shopify, or Jobber, or configure tag conversion goals to track conversions.'
           },
           { date_range: dateRange }
         );

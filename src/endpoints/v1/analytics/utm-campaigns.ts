@@ -93,6 +93,23 @@ Fetches aggregated UTM campaign performance data including:
     const utmSourceFilter = query.utm_source;
     const limit = parseInt(query.limit || "100", 10);
 
+    // Return empty data when required date params are missing
+    if (!dateFrom || !dateTo) {
+      return success(c, {
+        campaigns: [],
+        summary: {
+          total_sessions: 0,
+          total_users: 0,
+          total_page_views: 0,
+          total_conversions: 0,
+          total_revenue_cents: 0,
+          avg_conversion_rate: 0,
+          avg_bounce_rate: 0,
+        },
+        sources: [],
+      });
+    }
+
     // Get org_tag for querying analytics
     const tagMapping = await c.env.DB.prepare(`
       SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
@@ -186,7 +203,7 @@ Fetches aggregated UTM campaign performance data including:
       const totalConversions = campaigns.reduce((sum, c) => sum + c.conversions, 0);
       const totalRevenueCents = campaigns.reduce((sum, c) => sum + c.conversion_value_cents, 0);
       const avgConversionRate = totalSessions > 0 ? Math.round((totalConversions / totalSessions) * 10000) / 100 : 0;
-      const avgBounceRate = campaigns.length > 0
+      const avgBounceRate = campaigns.length > 0 && totalSessions > 0
         ? Math.round(campaigns.reduce((sum, c) => sum + (c.bounce_rate || 0) * c.sessions, 0) / totalSessions * 100) / 100
         : 0;
 
@@ -282,6 +299,21 @@ Fetches daily UTM traffic metrics as a time series:
     const dateFrom = query.date_from;
     const dateTo = query.date_to;
     const groupBy = query.group_by || "date";
+
+    // Return empty data when required date params are missing
+    if (!dateFrom || !dateTo) {
+      return success(c, {
+        time_series: [],
+        summary: {
+          total_sessions: 0,
+          total_users: 0,
+          total_conversions: 0,
+          total_revenue_cents: 0,
+          avg_conversion_rate: 0,
+          sources: [],
+        },
+      });
+    }
 
     // Get org_tag for querying analytics
     const tagMapping = await c.env.DB.prepare(`
