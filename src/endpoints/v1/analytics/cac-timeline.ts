@@ -900,11 +900,17 @@ export class GetCACSummary extends OpenAPIRoute {
         total_revenue_goal_cents: number | null;
       }>();
 
-      const spendCents = historyResult?.total_spend_cents || 0;
-      const conversions = historyResult?.total_conversions || 0;
-      const conversionsGoal = historyResult?.total_conversions_goal || 0;
-      const conversionsPlatform = historyResult?.total_conversions_platform || 0;
-      const revenueGoalCents = historyResult?.total_revenue_goal_cents || 0;
+      // SUM returns null when no rows match the date range — propagate as null
+      // so the dashboard fallback chain fires. 0 is only returned for genuine zeros.
+      if (!historyResult || historyResult.total_conversions === null) {
+        return success(c, null);
+      }
+
+      const spendCents = historyResult.total_spend_cents ?? 0;
+      const conversions = historyResult.total_conversions;
+      const conversionsGoal = historyResult.total_conversions_goal ?? 0;
+      const conversionsPlatform = historyResult.total_conversions_platform ?? 0;
+      const revenueGoalCents = historyResult.total_revenue_goal_cents ?? 0;
 
       // Determine dominant conversion source
       const conversionSource = conversionsGoal > 0 ? 'goal' : 'platform';
