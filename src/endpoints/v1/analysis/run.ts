@@ -123,15 +123,15 @@ export class RunAnalysis extends OpenAPIRoute {
     // Mark stuck jobs as failed (>30 min without completing)
     await c.env.AI_DB.prepare(`
       UPDATE analysis_jobs
-      SET status = 'failed', error = 'Timed out after 30 minutes'
-      WHERE organization_id = ? AND status IN ('pending', 'in_progress')
+      SET status = 'failed', error_message = 'Timed out after 30 minutes'
+      WHERE organization_id = ? AND status IN ('pending', 'in_progress', 'running')
         AND created_at < datetime('now', '-30 minutes')
     `).bind(orgId).run();
 
     // Dedup: return existing job if one is already running (<30 min old)
     const existingJob = await c.env.AI_DB.prepare(`
       SELECT id, status FROM analysis_jobs
-      WHERE organization_id = ? AND status IN ('pending', 'in_progress')
+      WHERE organization_id = ? AND status IN ('pending', 'in_progress', 'running')
         AND created_at > datetime('now', '-30 minutes')
       ORDER BY created_at DESC LIMIT 1
     `).bind(orgId).first<{ id: string; status: string }>();
