@@ -42,7 +42,13 @@ export type UnifiedEventType =
   // Retention
   | 'subscription.renewed'
   | 'subscription.cancelled'
-  | 'refund.issued';
+  | 'refund.issued'
+  // Lifecycle
+  | 'app.uninstalled'
+  // GDPR Compliance
+  | 'gdpr.customers_data_request'
+  | 'gdpr.customers_redact'
+  | 'gdpr.shop_redact';
 
 /**
  * Connector event mappings to unified types.
@@ -76,6 +82,10 @@ const CONNECTOR_EVENT_MAPPINGS: Record<string, Record<string, UnifiedEventType>>
     'checkouts/create': 'order.placed',
     'checkout_started': 'order.placed',
     'refunds/create': 'refund.issued',
+    'app/uninstalled': 'app.uninstalled',
+    'customers/data_request': 'gdpr.customers_data_request',
+    'customers/redact': 'gdpr.customers_redact',
+    'shop/redact': 'gdpr.shop_redact',
   },
 
   // HubSpot

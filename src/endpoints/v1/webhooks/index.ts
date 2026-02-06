@@ -13,8 +13,10 @@
 
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { getSecret } from "../../../utils/secrets";
 import { getWebhookHandler, getSupportedConnectors } from "./handlers";
 
 // =============================================================================
@@ -552,4 +554,400 @@ async function hashPayload(payload: string): Promise<string> {
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// =============================================================================
+// Shopify GDPR Compliance Helpers
+// =============================================================================
+
+/**
+ * Verify Shopify webhook HMAC signature.
+ * Used by GDPR endpoints which bypass the generic ReceiveWebhook flow.
+ */
+async function verifyShopifyHmac(
+  headers: Headers,
+  body: string,
+  secret: string
+): Promise<boolean> {
+  const signature = headers.get("X-Shopify-Hmac-Sha256");
+  if (!signature) return false;
+
+  try {
+    const expectedSignature = createHmac("sha256", secret)
+      .update(body, "utf8")
+      .digest("base64");
+
+    const sigBuffer = Buffer.from(signature, "base64");
+    const expectedBuffer = Buffer.from(expectedSignature, "base64");
+
+    return sigBuffer.length === expectedBuffer.length &&
+      timingSafeEqual(sigBuffer, expectedBuffer);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Look up organization by Shopify shop domain from platform_connections.
+ */
+async function getOrgByShopDomain(
+  db: D1Database,
+  shopDomain: string
+): Promise<{ organization_id: string; connection_id: string } | null> {
+  const row = await db.prepare(
+    `SELECT id, organization_id FROM platform_connections
+     WHERE platform = 'shopify' AND LOWER(account_id) = LOWER(?) AND is_active = 1
+     LIMIT 1`
+  )
+    .bind(shopDomain)
+    .first<{ id: string; organization_id: string }>();
+
+  if (!row) return null;
+  return { organization_id: row.organization_id, connection_id: row.id };
+}
+
+// =============================================================================
+// Shopify GDPR: Customer Data Request
+// =============================================================================
+
+/**
+ * Shopify mandatory GDPR webhook: customers/data_request
+ *
+ * When a customer requests their data from a store, Shopify sends this webhook.
+ * We must respond with 200 and process the request asynchronously.
+ */
+export class ShopifyCustomerDataRequest extends OpenAPIRoute {
+  public schema = {
+    tags: ["Webhooks", "GDPR"],
+    summary: "Shopify GDPR: Customer data request",
+    operationId: "shopify-gdpr-customer-data-request",
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              shop_id: z.number(),
+              shop_domain: z.string(),
+              customer: z.object({
+                id: z.number(),
+                email: z.string(),
+                phone: z.string().nullable().optional(),
+              }),
+              orders_requested: z.array(z.number()),
+              data_request: z.object({ id: z.number() }),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      "200": {
+        description: "Data request acknowledged",
+        content: {
+          "application/json": {
+            schema: z.object({ success: z.boolean() }),
+          },
+        },
+      },
+    },
+  };
+
+  public async handle(c: AppContext) {
+    const body = await c.req.text();
+
+    // Verify HMAC — mandatory for all Shopify webhooks
+    const secret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+    if (!secret) {
+      console.error("[GDPR] SHOPIFY_CLIENT_SECRET not configured");
+      return error(c, "CONFIG_ERROR", "Webhook secret not configured", 500);
+    }
+
+    const isValid = await verifyShopifyHmac(c.req.raw.headers, body, secret);
+    if (!isValid) {
+      console.warn("[GDPR] customers/data_request HMAC verification failed");
+      return error(c, "INVALID_SIGNATURE", "HMAC verification failed", 401);
+    }
+
+    const payload = JSON.parse(body);
+    const { shop_domain, customer, orders_requested, data_request } = payload;
+
+    console.log(
+      `[GDPR] Customer data request: shop=${shop_domain} customer_id=${customer.id} request_id=${data_request.id} orders=${orders_requested.length}`
+    );
+
+    // Look up org for audit trail
+    const org = await getOrgByShopDomain(c.env.DB, shop_domain);
+
+    // Log the GDPR request for compliance audit
+    await c.env.DB.prepare(
+      `INSERT INTO webhook_events
+       (id, organization_id, endpoint_id, connector, event_type, unified_event_type, event_id, payload_hash, payload, status, received_at)
+       VALUES (?, ?, 'gdpr', 'shopify', 'customers/data_request', 'gdpr.customers_data_request', ?, ?, ?, 'pending', datetime('now'))`
+    )
+      .bind(
+        crypto.randomUUID(),
+        org?.organization_id || `shop:${shop_domain}`,
+        `data_request_${data_request.id}`,
+        await hashPayload(body),
+        body
+      )
+      .run();
+
+    // ClearLift stores minimal PII (only email hashes, not raw emails).
+    // The actual data package would be assembled asynchronously if needed.
+    // For now, acknowledge receipt — Shopify requires 200 within 5 seconds.
+
+    return success(c, { received: true });
+  }
+}
+
+// =============================================================================
+// Shopify GDPR: Customer Redact
+// =============================================================================
+
+/**
+ * Shopify mandatory GDPR webhook: customers/redact
+ *
+ * When a store owner requests deletion of a customer's data, Shopify sends this.
+ * We must delete all PII associated with this customer.
+ */
+export class ShopifyCustomerRedact extends OpenAPIRoute {
+  public schema = {
+    tags: ["Webhooks", "GDPR"],
+    summary: "Shopify GDPR: Customer data redaction",
+    operationId: "shopify-gdpr-customer-redact",
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              shop_id: z.number(),
+              shop_domain: z.string(),
+              customer: z.object({
+                id: z.number(),
+                email: z.string(),
+                phone: z.string().nullable().optional(),
+              }),
+              orders_to_redact: z.array(z.number()),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      "200": {
+        description: "Redaction acknowledged",
+        content: {
+          "application/json": {
+            schema: z.object({ success: z.boolean() }),
+          },
+        },
+      },
+    },
+  };
+
+  public async handle(c: AppContext) {
+    const body = await c.req.text();
+
+    const secret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+    if (!secret) {
+      console.error("[GDPR] SHOPIFY_CLIENT_SECRET not configured");
+      return error(c, "CONFIG_ERROR", "Webhook secret not configured", 500);
+    }
+
+    const isValid = await verifyShopifyHmac(c.req.raw.headers, body, secret);
+    if (!isValid) {
+      console.warn("[GDPR] customers/redact HMAC verification failed");
+      return error(c, "INVALID_SIGNATURE", "HMAC verification failed", 401);
+    }
+
+    const payload = JSON.parse(body);
+    const { shop_domain, customer, orders_to_redact } = payload;
+    const shopifyCustomerId = String(customer.id);
+
+    console.log(
+      `[GDPR] Customer redact: shop=${shop_domain} customer_id=${shopifyCustomerId} orders=${orders_to_redact.length}`
+    );
+
+    const org = await getOrgByShopDomain(c.env.DB, shop_domain);
+
+    // Log for compliance audit
+    await c.env.DB.prepare(
+      `INSERT INTO webhook_events
+       (id, organization_id, endpoint_id, connector, event_type, unified_event_type, event_id, payload_hash, payload, status, received_at)
+       VALUES (?, ?, 'gdpr', 'shopify', 'customers/redact', 'gdpr.customers_redact', ?, ?, ?, 'processing', datetime('now'))`
+    )
+      .bind(
+        crypto.randomUUID(),
+        org?.organization_id || `shop:${shop_domain}`,
+        `redact_customer_${shopifyCustomerId}`,
+        await hashPayload(body),
+        body
+      )
+      .run();
+
+    if (org) {
+      // Redact customer PII from all tables
+      const statements = [];
+
+      // 1. Null out email hashes in shopify_orders (ANALYTICS_DB)
+      statements.push(
+        c.env.ANALYTICS_DB.prepare(
+          `UPDATE shopify_orders SET customer_email_hash = NULL
+           WHERE organization_id = ? AND customer_id = ?`
+        ).bind(org.organization_id, shopifyCustomerId)
+      );
+
+      // 2. Null out customer data in ecommerce_orders (ANALYTICS_DB)
+      statements.push(
+        c.env.ANALYTICS_DB.prepare(
+          `UPDATE ecommerce_orders SET customer_email_hash = NULL, customer_external_id = NULL
+           WHERE organization_id = ? AND platform = 'shopify' AND customer_external_id = ?`
+        ).bind(org.organization_id, shopifyCustomerId)
+      );
+
+      // 3. Null out customer data in ecommerce_customers (ANALYTICS_DB)
+      statements.push(
+        c.env.ANALYTICS_DB.prepare(
+          `UPDATE ecommerce_customers SET email_hash = NULL, name = NULL, phone_hash = NULL
+           WHERE organization_id = ? AND platform = 'shopify' AND external_id = ?`
+        ).bind(org.organization_id, shopifyCustomerId)
+      );
+
+      // 4. Remove from customer_identities (ANALYTICS_DB)
+      statements.push(
+        c.env.ANALYTICS_DB.prepare(
+          `DELETE FROM customer_identities
+           WHERE organization_id = ? AND source_platform = 'shopify' AND source_id = ?`
+        ).bind(org.organization_id, shopifyCustomerId)
+      );
+
+      try {
+        await c.env.ANALYTICS_DB.batch(statements);
+        console.log(`[GDPR] Redacted customer ${shopifyCustomerId} for org ${org.organization_id}`);
+      } catch (err) {
+        console.error(`[GDPR] Redaction DB error for customer ${shopifyCustomerId}:`, err);
+        // Still return 200 — we've logged the request and will retry
+      }
+    }
+
+    return success(c, { received: true });
+  }
+}
+
+// =============================================================================
+// Shopify GDPR: Shop Redact
+// =============================================================================
+
+/**
+ * Shopify mandatory GDPR webhook: shop/redact
+ *
+ * Sent 48 hours after a store uninstalls the app.
+ * We must delete all data associated with this shop.
+ */
+export class ShopifyShopRedact extends OpenAPIRoute {
+  public schema = {
+    tags: ["Webhooks", "GDPR"],
+    summary: "Shopify GDPR: Shop data redaction",
+    operationId: "shopify-gdpr-shop-redact",
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              shop_id: z.number(),
+              shop_domain: z.string(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      "200": {
+        description: "Shop redaction acknowledged",
+        content: {
+          "application/json": {
+            schema: z.object({ success: z.boolean() }),
+          },
+        },
+      },
+    },
+  };
+
+  public async handle(c: AppContext) {
+    const body = await c.req.text();
+
+    const secret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+    if (!secret) {
+      console.error("[GDPR] SHOPIFY_CLIENT_SECRET not configured");
+      return error(c, "CONFIG_ERROR", "Webhook secret not configured", 500);
+    }
+
+    const isValid = await verifyShopifyHmac(c.req.raw.headers, body, secret);
+    if (!isValid) {
+      console.warn("[GDPR] shop/redact HMAC verification failed");
+      return error(c, "INVALID_SIGNATURE", "HMAC verification failed", 401);
+    }
+
+    const payload = JSON.parse(body);
+    const { shop_id, shop_domain } = payload;
+
+    console.log(`[GDPR] Shop redact: shop=${shop_domain} shop_id=${shop_id}`);
+
+    const org = await getOrgByShopDomain(c.env.DB, shop_domain);
+
+    // Log for compliance audit
+    await c.env.DB.prepare(
+      `INSERT INTO webhook_events
+       (id, organization_id, endpoint_id, connector, event_type, unified_event_type, event_id, payload_hash, payload, status, received_at)
+       VALUES (?, ?, 'gdpr', 'shopify', 'shop/redact', 'gdpr.shop_redact', ?, ?, ?, 'processing', datetime('now'))`
+    )
+      .bind(
+        crypto.randomUUID(),
+        org?.organization_id || `shop:${shop_domain}`,
+        `redact_shop_${shop_id}`,
+        await hashPayload(body),
+        body
+      )
+      .run();
+
+    if (org) {
+      try {
+        // Delete all Shopify data for this organization
+        const analyticsStatements = [
+          c.env.ANALYTICS_DB.prepare(
+            `DELETE FROM shopify_orders WHERE organization_id = ?`
+          ).bind(org.organization_id),
+          c.env.ANALYTICS_DB.prepare(
+            `DELETE FROM shopify_refunds WHERE organization_id = ?`
+          ).bind(org.organization_id),
+          c.env.ANALYTICS_DB.prepare(
+            `DELETE FROM ecommerce_orders WHERE organization_id = ? AND platform = 'shopify'`
+          ).bind(org.organization_id),
+          c.env.ANALYTICS_DB.prepare(
+            `DELETE FROM ecommerce_customers WHERE organization_id = ? AND platform = 'shopify'`
+          ).bind(org.organization_id),
+          c.env.ANALYTICS_DB.prepare(
+            `DELETE FROM ecommerce_products WHERE organization_id = ? AND platform = 'shopify'`
+          ).bind(org.organization_id),
+          c.env.ANALYTICS_DB.prepare(
+            `DELETE FROM customer_identities WHERE organization_id = ? AND source_platform = 'shopify'`
+          ).bind(org.organization_id),
+        ];
+        await c.env.ANALYTICS_DB.batch(analyticsStatements);
+
+        // Deactivate the platform connection (don't delete — keep for audit trail)
+        await c.env.DB.prepare(
+          `UPDATE platform_connections SET is_active = 0, sync_status = 'disabled', sync_error = 'Shop redacted via GDPR webhook'
+           WHERE organization_id = ? AND platform = 'shopify'`
+        ).bind(org.organization_id).run();
+
+        console.log(`[GDPR] Redacted all Shopify data for org ${org.organization_id}`);
+      } catch (err) {
+        console.error(`[GDPR] Shop redaction DB error for ${shop_domain}:`, err);
+      }
+    }
+
+    return success(c, { received: true });
+  }
 }

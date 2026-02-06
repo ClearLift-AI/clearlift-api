@@ -325,7 +325,10 @@ import {
   ListWebhookEndpoints,
   CreateWebhookEndpoint,
   DeleteWebhookEndpoint,
-  GetWebhookEvents
+  GetWebhookEvents,
+  ShopifyCustomerDataRequest,
+  ShopifyCustomerRedact,
+  ShopifyShopRedact,
 } from "./endpoints/v1/webhooks";
 
 // Import types
@@ -764,6 +767,12 @@ openapi.post("/v1/analysis/run", auth, requireOrg, RunAnalysis);
 openapi.get("/v1/analysis/status/:job_id", auth, requireOrg, GetAnalysisStatus);
 openapi.get("/v1/analysis/latest", auth, requireOrg, GetLatestAnalysis);
 openapi.get("/v1/analysis/entity/:level/:entity_id", auth, requireOrg, GetEntityAnalysis);
+
+// Shopify GDPR mandatory compliance webhooks (no auth - uses HMAC verification)
+// Registered before generic :connector route to ensure exact match takes priority
+openapi.post("/v1/webhooks/shopify/gdpr/customers/data_request", ShopifyCustomerDataRequest);
+openapi.post("/v1/webhooks/shopify/gdpr/customers/redact", ShopifyCustomerRedact);
+openapi.post("/v1/webhooks/shopify/gdpr/shop/redact", ShopifyShopRedact);
 
 // Webhook endpoints (no auth required for receiving webhooks - uses signature verification)
 openapi.post("/v1/webhooks/:connector", ReceiveWebhook);

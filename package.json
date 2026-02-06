@@ -50,6 +50,6 @@
     "@types/uuid": "^10.0.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.2",
-    "wrangler": "^4.49.1"
+    "wrangler": "^4.63.0"
   }
 }

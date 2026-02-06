@@ -1,0 +1,49 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "466ac32d6fea6129ef1d47edf29206ce"
+name = "ClearLift"
+application_url = "https://clearlift.ai"
+embedded = false
+
+[build]
+automatically_update_urls_on_dev = false
+
+[access_scopes]
+scopes = "read_customer_events,read_customers,read_orders,read_products"
+optional_scopes = []
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [
+  "http://localhost:8787/v1/connectors/shopify/callback",
+  "https://api.clearlift.ai/v1/connectors/shopify/callback",
+  "https://dev.clearlift.ai/v1/connectors/shopify/callback",
+]
+
+[webhooks]
+api_version = "2026-01"
+
+  [[webhooks.subscriptions]]
+  topics = ["orders/create"]
+  uri = "https://api.clearlift.ai/v1/webhooks/shopify"
+
+  [[webhooks.subscriptions]]
+  topics = ["orders/updated"]
+  uri = "https://api.clearlift.ai/v1/webhooks/shopify"
+
+  [[webhooks.subscriptions]]
+  topics = ["products/update"]
+  uri = "https://api.clearlift.ai/v1/webhooks/shopify"
+
+  [[webhooks.subscriptions]]
+  topics = ["customers/update"]
+  uri = "https://api.clearlift.ai/v1/webhooks/shopify"
+
+  [[webhooks.subscriptions]]
+  topics = ["app/uninstalled"]
+  uri = "https://api.clearlift.ai/v1/webhooks/shopify"
+
+[webhooks.privacy_compliance]
+customer_data_request_url = "https://api.clearlift.ai/v1/webhooks/shopify/gdpr/customers/data_request"
+customer_deletion_url = "https://api.clearlift.ai/v1/webhooks/shopify/gdpr/customers/redact"
+shop_deletion_url = "https://api.clearlift.ai/v1/webhooks/shopify/gdpr/shop/redact"
