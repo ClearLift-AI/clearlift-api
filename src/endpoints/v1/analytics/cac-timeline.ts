@@ -76,8 +76,8 @@ export class GetCACTimeline extends OpenAPIRoute {
     const forecastEndStr = forecastEndDate.toISOString().split('T')[0];
 
     try {
-      // Fetch actual CAC history (now includes goal columns)
-      const historyResult = await c.env.AI_DB.prepare(`
+      // Fetch actual CAC history (now in ANALYTICS_DB)
+      const historyResult = await c.env.ANALYTICS_DB.prepare(`
         SELECT date, cac_cents, spend_cents, conversions,
                conversions_goal, conversions_platform, conversion_source,
                revenue_goal_cents
@@ -341,7 +341,7 @@ export class GenerateCACPredictions extends OpenAPIRoute {
       }
 
       // Get current CAC
-      const currentCacResult = await c.env.AI_DB.prepare(`
+      const currentCacResult = await c.env.ANALYTICS_DB.prepare(`
         SELECT cac_cents
         FROM cac_history
         WHERE organization_id = ?
@@ -471,8 +471,8 @@ export class ComputeCACBaselines extends OpenAPIRoute {
 
       const firstAIDate = firstDecisionResult?.first_ai_date;
 
-      // 2. Get all CAC history
-      const historyResult = await c.env.AI_DB.prepare(`
+      // 2. Get all CAC history (from ANALYTICS_DB)
+      const historyResult = await c.env.ANALYTICS_DB.prepare(`
         SELECT date, cac_cents, spend_cents, conversions
         FROM cac_history
         WHERE organization_id = ?
@@ -807,7 +807,7 @@ export class BackfillCACHistory extends OpenAPIRoute {
 
         const cacCents = primaryConversions > 0 ? Math.round(platform.spend_cents / primaryConversions) : 0;
 
-        await c.env.AI_DB.prepare(`
+        await c.env.ANALYTICS_DB.prepare(`
           INSERT INTO cac_history (
             organization_id, date, spend_cents, conversions, revenue_cents, cac_cents,
             conversions_goal, conversions_platform, conversion_source, goal_ids, revenue_goal_cents
@@ -881,8 +881,8 @@ export class GetCACSummary extends OpenAPIRoute {
     const { org_id, days } = data.query;
 
     try {
-      // Aggregate cac_history for the period
-      const historyResult = await c.env.AI_DB.prepare(`
+      // Aggregate cac_history for the period (from ANALYTICS_DB)
+      const historyResult = await c.env.ANALYTICS_DB.prepare(`
         SELECT
           SUM(spend_cents) as total_spend_cents,
           SUM(conversions) as total_conversions,
