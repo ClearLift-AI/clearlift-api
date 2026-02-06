@@ -4,6 +4,16 @@ import { AppContext } from "../../types";
 import { success, error } from "../../utils/response";
 import { CacheService } from "../../services/cache";
 
+/** Safely parse a JSON string, returning fallback on any error */
+function safeJsonParse(value: string | null | undefined, fallback: any = {}): any {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 const MatrixSettingsSchema = z.object({
   growth_strategy: z.enum(['lean', 'balanced', 'bold']),
   budget_optimization: z.enum(['conservative', 'moderate', 'aggressive']),
@@ -61,21 +71,11 @@ export class GetMatrixSettings extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
-    const data = await this.getValidatedData<typeof this.schema>();
-    const orgId = data.query?.org_id || c.get("org_id");
+    // requireOrg middleware already validated access and resolved org_id
+    const orgId = c.get("org_id");
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
-    }
-
-    // Verify user has access to this organization (handles super admin bypass)
-    const { D1Adapter } = await import("../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
     // Use KV cache for settings (5 min TTL)
@@ -195,21 +195,12 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
-    const orgId = data.query?.org_id || c.get("org_id");
+    // requireOrg middleware already validated access and resolved org_id
+    const orgId = c.get("org_id");
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
-    }
-
-    // Verify user has access to this organization (handles super admin bypass)
-    const { D1Adapter } = await import("../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
     const body = data.body;
@@ -333,21 +324,12 @@ export class GetAIDecisions extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
-    const orgId = data.query?.org_id || c.get("org_id");
+    // requireOrg middleware already validated access and resolved org_id
+    const orgId = c.get("org_id");
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
-    }
-
-    // Verify user has access (handles super admin bypass)
-    const { D1Adapter } = await import("../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
     let query = `SELECT * FROM ai_decisions WHERE organization_id = ?`;
@@ -381,14 +363,13 @@ export class GetAIDecisions extends OpenAPIRoute {
 
     const result = await c.env.AI_DB.prepare(query).bind(...bindings).all();
 
-    // Parse JSON fields
+    // Parse JSON fields — safe parse prevents one corrupted row from crashing the entire response
     const decisions = (result.results || []).map((row: any) => ({
       ...row,
-      parameters: JSON.parse(row.parameters || '{}'),
-      current_state: JSON.parse(row.current_state || '{}'),
-      supporting_data: JSON.parse(row.supporting_data || '{}'),
-      // Include simulation data for detailed display
-      simulation_data: row.simulation_data ? JSON.parse(row.simulation_data) : null,
+      parameters: safeJsonParse(row.parameters),
+      current_state: safeJsonParse(row.current_state),
+      supporting_data: safeJsonParse(row.supporting_data),
+      simulation_data: safeJsonParse(row.simulation_data, null),
       simulation_confidence: row.simulation_confidence || null
     }));
 
@@ -423,19 +404,11 @@ export class AcceptAIDecision extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
-    const orgId = data.query?.org_id || c.get("org_id");
+    // requireOrg middleware already validated access and resolved org_id
+    const orgId = c.get("org_id");
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
-    }
-
-    // Verify user has access to this organization (handles super admin bypass)
-    const { D1Adapter } = await import("../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
     // Get decision from AI_DB
@@ -454,6 +427,19 @@ export class AcceptAIDecision extends OpenAPIRoute {
     if (new Date(decision.expires_at) < new Date()) {
       await c.env.AI_DB.prepare(`UPDATE ai_decisions SET status = 'expired' WHERE id = ?`).bind(decision.id).run();
       return error(c, "EXPIRED", "Decision has expired", 400);
+    }
+
+    // Pre-validate platform connection BEFORE marking as approved
+    // This prevents the bad state where a decision is "approved" but can't execute
+    const { platform } = decision;
+    const connection = await c.env.DB.prepare(`
+      SELECT id FROM platform_connections
+      WHERE organization_id = ? AND platform = ? AND is_active = 1
+      LIMIT 1
+    `).bind(orgId, platform).first<{ id: string }>();
+
+    if (!connection) {
+      return error(c, "CONNECTION_INACTIVE", `No active ${platform} connection. Reconnect ${platform} in Connectors and try again.`, 400);
     }
 
     // Mark as approved
@@ -665,19 +651,11 @@ export class RejectAIDecision extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
-    const orgId = data.query?.org_id || c.get("org_id");
+    // requireOrg middleware already validated access and resolved org_id
+    const orgId = c.get("org_id");
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
-    }
-
-    // Verify user has access to this organization (handles super admin bypass)
-    const { D1Adapter } = await import("../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
     const decision = await c.env.AI_DB.prepare(`
@@ -736,19 +714,11 @@ export class RateAIDecision extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
-    const orgId = data.query?.org_id || c.get("org_id");
+    // requireOrg middleware already validated access and resolved org_id
+    const orgId = c.get("org_id");
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
-    }
-
-    // Verify user has access to this organization (handles super admin bypass)
-    const { D1Adapter } = await import("../../adapters/d1");
-    const d1 = new D1Adapter(c.env.DB);
-    const hasAccess = await d1.checkOrgAccess(session.user_id, orgId);
-
-    if (!hasAccess) {
-      return error(c, "FORBIDDEN", "Access denied to this organization", 403);
     }
 
     // Get decision from AI_DB

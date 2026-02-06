@@ -67,11 +67,21 @@ export class RunAnalysis extends OpenAPIRoute {
     const webhookUrl = body.webhook_url;
 
     // Verify API keys are configured (workflow will access them directly)
-    const anthropicKey = await getSecret(c.env.ANTHROPIC_API_KEY);
-    const geminiKey = await getSecret(c.env.GEMINI_API_KEY);
+    // Retry once on failure — Secret Store bindings can have transient errors
+    let anthropicKey = await getSecret(c.env.ANTHROPIC_API_KEY);
+    let geminiKey = await getSecret(c.env.GEMINI_API_KEY);
 
     if (!anthropicKey || !geminiKey) {
-      return error(c, "CONFIGURATION_ERROR", "AI service not configured", 500);
+      // One retry after 500ms — handles transient Secret Store failures
+      await new Promise(r => setTimeout(r, 500));
+      if (!anthropicKey) anthropicKey = await getSecret(c.env.ANTHROPIC_API_KEY);
+      if (!geminiKey) geminiKey = await getSecret(c.env.GEMINI_API_KEY);
+    }
+
+    if (!anthropicKey || !geminiKey) {
+      const missing = [!anthropicKey && 'ANTHROPIC_API_KEY', !geminiKey && 'GEMINI_API_KEY'].filter(Boolean).join(', ');
+      console.error(`[RunAnalysis] Secret Store keys unavailable: ${missing}`);
+      return error(c, "CONFIGURATION_ERROR", "AI service not configured — secret keys unavailable", 500);
     }
 
     // Load settings from org (including LLM configuration)
