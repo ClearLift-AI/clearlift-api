@@ -249,6 +249,47 @@ AI-specific tables (isolated for performance):
    - `computation_date`, `expires_at` (7-day TTL)
    - Populated by Attribution Workflow, read by attribution endpoint
 
+9. **cac_history** - Daily CAC records (goal-aware since 0006 migration)
+   - `organization_id`, `date`, `spend_cents`, `conversions`, `cac_cents`, `revenue_cents`
+   - `conversions_goal` — deduplicated count from goal_conversions for macro goals
+   - `conversions_platform` — count from ad_metrics (platform-reported)
+   - `conversion_source` — `'goal'` | `'platform'` — which source was used for primary `conversions`
+   - `goal_ids` — JSON array of macro goal IDs used
+   - `revenue_goal_cents` — actual revenue from Stripe/Shopify/Jobber charges
+   - When macro goals exist, `conversions` = goal count; otherwise fallback to platform count
+
+10. **cac_predictions** - CAC forecasts
+    - `organization_id`, `prediction_date`, `predicted_cac_cents`
+
+11. **cac_baselines** - CAC baselines for anomaly detection
+    - `organization_id`, `date`, `baseline_cac_cents`, `method`
+
+### CAC API Endpoints
+
+```
+GET  /v1/analytics/cac/timeline?org_id=xxx&days=30
+  → Returns daily CAC data points with goal/platform split per day
+
+GET  /v1/analytics/cac/summary?org_id=xxx&days=30
+  → Returns aggregated CAC summary: cac_cents, conversions, conversion_source,
+    conversions_goal, conversions_platform, revenue_goal_cents, goal_count, goal_names
+
+POST /v1/analytics/cac/backfill
+  → Body: { org_id, days }. Goal-aware: queries macro goals → goal_conversions → cac_history
+```
+
+### Unified Conversions Endpoint
+
+```
+GET /v1/analytics/conversions?org_id=xxx&date_from=2025-01-01&date_to=2025-02-05
+  → Queries unified `conversions` D1 table (ALL sources: Stripe, Shopify, Jobber, tag, platform)
+  → Returns: { conversions: [...], summary: { total_conversions, total_revenue }, data_source: 'd1_unified' }
+  → Group by: channel (conversion_source) or date. Optional channel filter.
+  → Revenue returned in dollars (value_cents / 100 in SQL)
+```
+
+**Note (Feb 2026):** This endpoint was rewired from `stripe_charges` to the unified `conversions` table. Empty state checks for ANY revenue connector (stripe/shopify/jobber), not just Stripe.
+
 ## Development Commands
 
 ```bash
@@ -1033,7 +1074,7 @@ Seeds 25+ connector definitions across 15 categories:
 
 New connectors are seeded with `is_active: false, is_beta: true` until sync handlers are implemented.
 
-### Known Issues (Jan 2026)
+### Known Issues
 
 **Google Ads — Unagi (org `125da223`): 0 records syncing**
 - Account `4417684447` is likely a manager account
