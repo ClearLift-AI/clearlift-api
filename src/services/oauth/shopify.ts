@@ -141,9 +141,8 @@ export class ShopifyOAuthProvider extends OAuthProvider {
       state
     });
 
-    // Add grant_options[] for offline access (default)
-    // We want offline tokens that don't expire
-    params.append('grant_options[]', 'value');
+    // Offline access tokens (default): omit grant_options[] entirely.
+    // Only set grant_options[]=per-user for online (session) tokens.
 
     // Add any additional params
     if (additionalParams) {
