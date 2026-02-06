@@ -97,6 +97,77 @@ export class GetCACTimeline extends OpenAPIRoute {
         revenue_goal_cents: number | null;
       }>();
 
+      // Live-compute today's CAC if missing from cac_history
+      // (cron backfill may not have run yet for today)
+      const todayStr = new Date().toISOString().split('T')[0];
+      const hasTodayInHistory = (historyResult.results || []).some(r => r.date === todayStr);
+
+      if (!hasTodayInHistory && todayStr >= startDateStr && todayStr <= endDateStr) {
+        try {
+          const shardDb = await getShardDbForOrg(c.env, org_id);
+
+          // Step 1: Fetch macro goal IDs from DB + today's ad spend from shard (parallel)
+          const [todayMetrics, macroGoalsResult] = await Promise.all([
+            shardDb.prepare(`
+              SELECT SUM(spend_cents) as spend_cents, SUM(conversions) as conversions
+              FROM ad_metrics
+              WHERE organization_id = ? AND entity_type = 'campaign' AND metric_date = ?
+            `).bind(org_id, todayStr).first<{ spend_cents: number | null; conversions: number | null }>(),
+
+            c.env.DB.prepare(`
+              SELECT id FROM conversion_goals
+              WHERE organization_id = ? AND is_conversion = 1 AND category = 'macro_conversion'
+            `).bind(org_id).all<{ id: string }>(),
+          ]);
+
+          // Step 2: If macro goals exist, fetch today's goal conversions from ANALYTICS_DB
+          const macroGoalIds = (macroGoalsResult.results || []).map(g => g.id);
+          let todayGoals: { conversions: number | null; revenue_cents: number | null } | null = null;
+
+          if (macroGoalIds.length > 0 && c.env.ANALYTICS_DB) {
+            const placeholders = macroGoalIds.map(() => '?').join(',');
+            todayGoals = await c.env.ANALYTICS_DB.prepare(`
+              WITH unique_conversions AS (
+                SELECT DISTINCT COALESCE(conversion_id, id) as unique_id, value_cents
+                FROM goal_conversions
+                WHERE organization_id = ?
+                  AND goal_id IN (${placeholders})
+                  AND DATE(conversion_timestamp) = ?
+              )
+              SELECT COUNT(*) as conversions, SUM(value_cents) as revenue_cents
+              FROM unique_conversions
+            `).bind(org_id, ...macroGoalIds, todayStr).first<{ conversions: number | null; revenue_cents: number | null }>();
+          }
+
+          const todaySpend = todayMetrics?.spend_cents || 0;
+          const todayPlatformConv = todayMetrics?.conversions || 0;
+          const todayGoalConv = todayGoals?.conversions || 0;
+          const todayGoalRevenue = todayGoals?.revenue_cents || 0;
+
+          // Only add if there's any data for today
+          if (todaySpend > 0 || todayPlatformConv > 0 || todayGoalConv > 0) {
+            const useGoals = todayGoalConv > 0;
+            const primaryConversions = useGoals ? todayGoalConv : todayPlatformConv;
+            const cacCents = primaryConversions > 0 ? Math.round(todaySpend / primaryConversions) : 0;
+
+            historyResult.results = historyResult.results || [];
+            historyResult.results.push({
+              date: todayStr,
+              cac_cents: cacCents,
+              spend_cents: todaySpend,
+              conversions: primaryConversions,
+              conversions_goal: todayGoalConv,
+              conversions_platform: todayPlatformConv,
+              conversion_source: useGoals ? 'goal' : 'platform',
+              revenue_goal_cents: todayGoalRevenue,
+            });
+          }
+        } catch (liveErr) {
+          console.warn('Failed to compute live CAC for today:', liveErr);
+          // Non-fatal — timeline just won't have today's point
+        }
+      }
+
       // Fetch predictions (for forecast period)
       const predictionsResult = await c.env.AI_DB.prepare(`
         SELECT prediction_date as date, predicted_cac_cents
