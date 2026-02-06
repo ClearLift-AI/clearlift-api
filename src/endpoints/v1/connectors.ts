@@ -1500,6 +1500,15 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementServicesConnected(oauthState.user_id);
 
+      // Auto-register default conversion goal for revenue-capable connectors
+      try {
+        const { GoalService } = await import('../../services/goals/index');
+        const goalService = new GoalService(c.env.DB, c.env.ANALYTICS_DB);
+        await goalService.ensureDefaultGoalForPlatform(oauthState.organization_id, provider);
+      } catch (goalErr) {
+        console.warn(`[FinalizeOAuth] Failed to auto-register goal for ${provider}:`, goalErr);
+      }
+
       // Check if running in local development mode
       const isLocal = c.req.url.startsWith('http://localhost') || c.req.url.startsWith('http://127.0.0.1');
 

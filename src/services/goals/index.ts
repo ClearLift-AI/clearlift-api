@@ -241,6 +241,67 @@ export class GoalService {
   }
 
   /**
+   * Ensure a default conversion goal exists for a revenue-capable platform.
+   * Called automatically when a connector is first connected.
+   * Idempotent: skips if a goal already references this platform.
+   */
+  async ensureDefaultGoalForPlatform(orgId: string, platform: string): Promise<ConversionGoal | null> {
+    // Revenue-capable connector types
+    const REVENUE_TYPES = ['revenue', 'payments', 'ecommerce', 'field_service'];
+
+    // Check connector_configs to see if this platform is revenue-capable
+    const connectorDef = await this.db.prepare(`
+      SELECT connector_type, has_actual_value, name FROM connector_configs
+      WHERE provider = ? AND is_active = 1
+    `).bind(platform).first<{ connector_type: string; has_actual_value: number; name: string }>();
+
+    if (!connectorDef) return null;
+
+    const isRevenue = REVENUE_TYPES.includes(connectorDef.connector_type) ||
+      (connectorDef.connector_type === 'crm' && connectorDef.has_actual_value);
+    if (!isRevenue) return null;
+
+    // Check if a goal already exists for this platform
+    const existing = await this.db.prepare(`
+      SELECT id FROM conversion_goals
+      WHERE organization_id = ? AND is_active = 1
+        AND (revenue_sources LIKE ? OR goal_type = 'revenue_source')
+        AND revenue_sources LIKE ?
+    `).bind(orgId, `%${platform}%`, `%${platform}%`).first();
+
+    if (existing) {
+      console.log(`[GoalService] Default goal already exists for ${platform} in org ${orgId}`);
+      return null;
+    }
+
+    // Default goal names per platform
+    const PLATFORM_GOAL_NAMES: Record<string, string> = {
+      stripe: 'Stripe Payment',
+      shopify: 'Shopify Order',
+      jobber: 'Jobber Job Completed',
+      hubspot: 'HubSpot Deal Won',
+    };
+
+    const goalName = PLATFORM_GOAL_NAMES[platform] || `${connectorDef.name || platform} Conversion`;
+
+    try {
+      const goal = await this.createGoal(orgId, {
+        name: goalName,
+        goal_type: 'revenue_source',
+        revenue_sources: [platform],
+        value_type: connectorDef.has_actual_value ? 'from_source' : 'none',
+        is_primary: false,
+      });
+      console.log(`[GoalService] Auto-created default goal '${goalName}' for ${platform} in org ${orgId}`);
+      return goal;
+    } catch (err) {
+      // Slug collision or other error — non-fatal
+      console.warn(`[GoalService] Failed to auto-create goal for ${platform}: ${err}`);
+      return null;
+    }
+  }
+
+  /**
    * Update an existing goal
    */
   async updateGoal(orgId: string, goalId: string, input: Partial<ConversionGoalInput>): Promise<ConversionGoal> {
