@@ -72,15 +72,26 @@ export class ReceiveWebhook extends OpenAPIRoute {
       return error(c, "EMPTY_BODY", "Webhook body is empty", 400);
     }
 
-    // Get organization from webhook path or lookup
-    // Webhooks use a URL pattern like /v1/webhooks/:connector/:org_id
-    // or we can lookup by connector + some identifier in the payload
-    const orgId = c.req.query("org_id");
+    // Get organization from query param or reverse-lookup from platform headers
+    let orgId = c.req.query("org_id");
+
+    // Shopify: look up org from X-Shopify-Shop-Domain header when org_id is missing
+    if (!orgId && connector === "shopify") {
+      const shopDomain = c.req.raw.headers.get("X-Shopify-Shop-Domain");
+      if (shopDomain) {
+        const org = await getOrgByShopDomain(c.env.DB, shopDomain);
+        if (org) {
+          orgId = org.organization_id;
+          console.log(`[Webhook] Resolved org ${orgId} from shop domain ${shopDomain}`);
+        } else {
+          console.warn(`[Webhook] No org found for shop domain: ${shopDomain}`);
+          return error(c, "UNKNOWN_SHOP", `No connection found for shop: ${shopDomain}`, 404);
+        }
+      }
+    }
 
     if (!orgId) {
-      // Try to find org from endpoint registration
-      // For now, require org_id in query string
-      return error(c, "MISSING_ORG", "Organization ID required", 400);
+      return error(c, "MISSING_ORG", "Organization ID required (pass ?org_id= or use platform-specific headers)", 400);
     }
 
     // Look up the webhook endpoint for this org/connector
@@ -96,6 +107,71 @@ export class ReceiveWebhook extends OpenAPIRoute {
         is_active: number;
         events_subscribed: string | null;
       }>();
+
+    // For Shopify with TOML-declared webhooks, endpoint row may not exist yet.
+    // Use the app-level SHOPIFY_CLIENT_SECRET for HMAC verification instead.
+    if (!endpoint && connector === "shopify") {
+      const appSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+      if (!appSecret) {
+        return error(c, "CONFIG_ERROR", "Shopify webhook secret not configured", 500);
+      }
+
+      // Verify HMAC with app-level secret
+      const isValid = await handler.verifySignature(c.req.raw.headers, body, appSecret);
+      if (!isValid) {
+        console.warn(`[Webhook] Shopify HMAC verification failed for org ${orgId}`);
+        return error(c, "INVALID_SIGNATURE", "Webhook signature verification failed", 400);
+      }
+
+      // Parse and process the event (skip endpoint-based filtering)
+      let event;
+      try {
+        event = handler.parseEvent(body);
+      } catch (e) {
+        return error(c, "INVALID_PAYLOAD", "Failed to parse webhook payload", 400);
+      }
+
+      const eventType = handler.getEventType(event);
+      const eventId = handler.getEventId(event);
+      const unifiedEventType = handler.getUnifiedEventType(event);
+
+      // Dedup check
+      if (eventId) {
+        const existing = await c.env.DB.prepare(
+          `SELECT id FROM webhook_events WHERE organization_id = ? AND connector = ? AND event_id = ?`
+        ).bind(orgId, connector, eventId).first();
+        if (existing) {
+          return success(c, { received: true, event_id: eventId, duplicate: true });
+        }
+      }
+
+      const webhookEventId = crypto.randomUUID();
+      const payloadHash = await hashPayload(body);
+
+      await c.env.DB.prepare(
+        `INSERT INTO webhook_events
+         (id, organization_id, endpoint_id, connector, event_type, unified_event_type, event_id, payload_hash, payload, status, received_at)
+         VALUES (?, ?, 'shopify_app', ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`
+      ).bind(webhookEventId, orgId, connector, eventType, unifiedEventType, eventId, payloadHash, body).run();
+
+      // Queue for processing
+      if (c.env.SYNC_QUEUE) {
+        try {
+          await c.env.SYNC_QUEUE.send({
+            type: "webhook_event",
+            organization_id: orgId,
+            connector,
+            event_type: eventType,
+            unified_event_type: unifiedEventType,
+            webhook_event_id: webhookEventId,
+          });
+        } catch (queueError) {
+          console.error("[Webhook] Failed to queue Shopify event:", queueError);
+        }
+      }
+
+      return success(c, { received: true, event_id: eventId });
+    }
 
     if (!endpoint) {
       return error(c, "ENDPOINT_NOT_FOUND", "Webhook endpoint not configured", 404);

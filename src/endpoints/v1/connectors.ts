@@ -1253,6 +1253,123 @@ export class GetChildAccounts extends OpenAPIRoute {
   }
 }
 
+// =============================================================================
+// Shopify Webhook Auto-Registration
+// =============================================================================
+
+const SHOPIFY_WEBHOOK_TOPICS = [
+  'ORDERS_CREATE',
+  'ORDERS_UPDATED',
+  'PRODUCTS_UPDATE',
+  'CUSTOMERS_UPDATE',
+  'APP_UNINSTALLED',
+] as const;
+
+const SHOPIFY_WEBHOOK_MUTATION = `
+  mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {
+    webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
+      webhookSubscription {
+        id
+        topic
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+/**
+ * Register webhook subscriptions with Shopify's GraphQL API and create
+ * a local webhook_endpoints row for the organization.
+ *
+ * Called automatically after Shopify OAuth finalization.
+ */
+async function registerShopifyWebhooks(
+  shopDomain: string,
+  accessToken: string,
+  organizationId: string,
+  db: D1Database
+): Promise<void> {
+  const apiVersion = '2026-01';
+  const graphqlUrl = `https://${shopDomain}/admin/api/${apiVersion}/graphql.json`;
+  const callbackBase = 'https://api.clearlift.ai';
+
+  // The webhook URL — Shopify will send X-Shopify-Shop-Domain header
+  // which the receiver uses to look up the org (no org_id needed in URL)
+  const webhookUrl = `${callbackBase}/v1/webhooks/shopify`;
+
+  console.log(`[Shopify Webhooks] Registering ${SHOPIFY_WEBHOOK_TOPICS.length} webhooks for ${shopDomain}`);
+
+  let registered = 0;
+  for (const topic of SHOPIFY_WEBHOOK_TOPICS) {
+    try {
+      const response = await fetch(graphqlUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': accessToken,
+        },
+        body: JSON.stringify({
+          query: SHOPIFY_WEBHOOK_MUTATION,
+          variables: {
+            topic,
+            webhookSubscription: { uri: webhookUrl },
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        console.warn(`[Shopify Webhooks] HTTP ${response.status} for topic ${topic}`);
+        continue;
+      }
+
+      const result = await response.json() as any;
+      const userErrors = result?.data?.webhookSubscriptionCreate?.userErrors;
+
+      if (userErrors?.length > 0) {
+        // "has already been taken" means it's already registered — that's fine
+        const alreadyExists = userErrors.some((e: any) =>
+          e.message?.includes('already been taken') || e.message?.includes('already exists')
+        );
+        if (alreadyExists) {
+          console.log(`[Shopify Webhooks] ${topic} already registered`);
+          registered++;
+        } else {
+          console.warn(`[Shopify Webhooks] Error for ${topic}:`, userErrors);
+        }
+      } else {
+        const subId = result?.data?.webhookSubscriptionCreate?.webhookSubscription?.id;
+        console.log(`[Shopify Webhooks] Registered ${topic}: ${subId}`);
+        registered++;
+      }
+    } catch (err) {
+      console.warn(`[Shopify Webhooks] Failed to register ${topic}:`, err);
+    }
+  }
+
+  console.log(`[Shopify Webhooks] ${registered}/${SHOPIFY_WEBHOOK_TOPICS.length} webhooks registered for ${shopDomain}`);
+
+  // Create a local webhook_endpoints row so the receiver can find it
+  // Use the app-level secret (HMAC is verified with SHOPIFY_CLIENT_SECRET)
+  const endpointId = crypto.randomUUID();
+  await db.prepare(
+    `INSERT INTO webhook_endpoints
+     (id, organization_id, connector, endpoint_secret, is_active, events_subscribed, created_at, updated_at)
+     VALUES (?, ?, 'shopify', 'shopify_app_secret', 1, ?, datetime('now'), datetime('now'))
+     ON CONFLICT(organization_id, connector) DO UPDATE SET
+       is_active = 1,
+       updated_at = datetime('now')`
+  ).bind(
+    endpointId,
+    organizationId,
+    JSON.stringify(SHOPIFY_WEBHOOK_TOPICS.map(t => t.toLowerCase().replace('_', '/')))
+  ).run();
+
+  console.log(`[Shopify Webhooks] Webhook endpoint row created for org ${organizationId}`);
+}
+
 /**
  * POST /v1/connectors/:provider/finalize - Finalize OAuth connection with selected account
  */
@@ -1486,7 +1603,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         }
       }
 
-      // For Shopify, also store shop domain in dedicated column
+      // For Shopify, also store shop domain and register webhooks
       if (provider === 'shopify' && shopDomain) {
         await c.env.DB.prepare(`
           UPDATE platform_connections
@@ -1494,6 +1611,19 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
           WHERE id = ?
         `).bind(shopDomain, metadata?.user_info?.id || null, connectionId).run();
         console.log('Shopify shop domain stored in connection:', shopDomain);
+
+        // Auto-register webhooks with Shopify via GraphQL API
+        try {
+          await registerShopifyWebhooks(
+            shopDomain,
+            accessToken,
+            oauthState.organization_id,
+            c.env.DB
+          );
+        } catch (webhookErr) {
+          console.warn('[FinalizeOAuth] Shopify webhook registration failed (non-fatal):', webhookErr);
+          // Non-fatal — batch sync still works, webhooks can be registered later
+        }
       }
 
       // Update onboarding progress
