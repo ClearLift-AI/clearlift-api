@@ -147,7 +147,7 @@ export class GoalService {
 
     const result = await this.db.prepare(query).bind(orgId).all<ConversionGoalRow>();
 
-    return result.results.map(this.rowToGoal);
+    return result.results.map((row) => this.rowToGoal(row));
   }
 
   /**
