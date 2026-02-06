@@ -3,9 +3,7 @@ import { z } from "zod";
 import { AppContext, SetupStatus, buildDataQualityResponse } from "../../../types";
 import { success, error, getDateRange } from "../../../utils/response";
 import {
-  ConversionRecordSchema,
   ConversionResponseSchema,
-  type ConversionRecord
 } from "../../../schemas/analytics";
 import { AD_PLATFORM_IDS, ACTIVE_REVENUE_PLATFORM_IDS } from "../../../config/platforms";
 
@@ -44,7 +42,7 @@ async function checkConversionSetupStatus(
 
 /**
  * GET /v1/analytics/conversions - Get conversion data from D1
- * Primary source: stripe_charges table in ANALYTICS_DB
+ * Primary source: unified conversions table in ANALYTICS_DB (Stripe + Shopify + Jobber + tag + platform)
  */
 export class GetConversions extends OpenAPIRoute {
   public schema = {
@@ -119,6 +117,7 @@ export class GetConversions extends OpenAPIRoute {
           c,
           {
             ...this.formatEmptyResponse(groupBy),
+            data_source: 'd1_unified',
             setup_guidance: setupGuidance,
             _message: 'No revenue source connected. Connect Stripe, Shopify, or Jobber to track conversions.'
           },
@@ -161,6 +160,7 @@ export class GetConversions extends OpenAPIRoute {
           c,
           {
             ...this.formatEmptyResponse(groupBy),
+            data_source: 'd1_unified',
             _message: 'Revenue sources connected but no conversions found in the selected date range.'
           },
           { date_range: dateRange }
