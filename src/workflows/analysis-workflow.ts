@@ -342,8 +342,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         return;
       }
 
-      // Get current CAC from cac_history
-      const currentCacResult = await this.env.AI_DB.prepare(`
+      // Get current CAC from cac_history (in ANALYTICS_DB)
+      const currentCacResult = await this.env.ANALYTICS_DB.prepare(`
         SELECT cac_cents FROM cac_history
         WHERE organization_id = ?
         ORDER BY date DESC
@@ -855,9 +855,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         } catch { /* daily_metrics may not exist */ }
       }
 
-      // CAC trend from AI_DB
+      // CAC trend from ANALYTICS_DB
       try {
-        const cacRows = await this.env.AI_DB.prepare(`
+        const cacRows = await this.env.ANALYTICS_DB.prepare(`
           SELECT date, cac_cents FROM cac_history
           WHERE organization_id = ?
           ORDER BY date DESC LIMIT 14

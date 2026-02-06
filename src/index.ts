@@ -1093,7 +1093,7 @@ export default {
 
             const cacCents = primaryConversions > 0 ? Math.round(platform.spend_cents / primaryConversions) : 0;
 
-            await env.AI_DB.prepare(`
+            await env.ANALYTICS_DB.prepare(`
               INSERT INTO cac_history (
                 organization_id, date, spend_cents, conversions, revenue_cents, cac_cents,
                 conversions_goal, conversions_platform, conversion_source, goal_ids, revenue_goal_cents

@@ -4077,9 +4077,9 @@ export class ExplorationToolExecutor {
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     const { days = 14, include_predictions = false, include_baselines = false } = input;
 
-    const db = this.aiDb;
+    const db = this.db;
     if (!db) {
-      return { success: false, error: 'AI database not available for CAC queries' };
+      return { success: false, error: 'Analytics database not available for CAC queries' };
     }
 
     try {
