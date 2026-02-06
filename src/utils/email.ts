@@ -7,7 +7,9 @@
 import { getSecret } from './secrets';
 
 export interface EmailTemplate {
-  to: string;
+  to: string | string[];
+  cc?: string[];
+  bcc?: string[];
   subject: string;
   html: string;
   text?: string;
@@ -55,9 +57,19 @@ export class EmailService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          personalizations: [{
-            to: [{ email: template.to }]
-          }],
+          personalizations: [(() => {
+            const toList = Array.isArray(template.to)
+              ? template.to.map(e => ({ email: e }))
+              : [{ email: template.to }];
+            const p: Record<string, any> = { to: toList };
+            if (template.cc?.length) {
+              p.cc = template.cc.map(e => ({ email: e }));
+            }
+            if (template.bcc?.length) {
+              p.bcc = template.bcc.map(e => ({ email: e }));
+            }
+            return p;
+          })()],
           from: {
             email: this.fromEmail,
             name: this.fromName
@@ -400,7 +412,11 @@ export class EmailService {
   /**
    * Send admin welcome invite email (static template)
    */
-  async sendAdminWelcomeInvite(email: string): Promise<SendGridResponse> {
+  async sendAdminWelcomeInvite(
+    to: string | string[],
+    cc?: string[],
+    bcc?: string[]
+  ): Promise<SendGridResponse> {
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -542,7 +558,9 @@ export class EmailService {
 </html>`;
 
     return this.sendEmail({
-      to: email,
+      to,
+      cc,
+      bcc,
       subject: 'Welcome to ClearLift',
       html
     });

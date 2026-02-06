@@ -23,7 +23,9 @@ export class SendAdminInvite extends OpenAPIRoute {
     request: {
       body: contentJson(
         z.object({
-          email: z.string().email('Invalid email address'),
+          to: z.array(z.string().email('Invalid email address')).min(1, 'At least one recipient required'),
+          cc: z.array(z.string().email('Invalid CC email')).optional(),
+          bcc: z.array(z.string().email('Invalid BCC email')).optional(),
         })
       )
     },
@@ -35,10 +37,14 @@ export class SendAdminInvite extends OpenAPIRoute {
             schema: z.object({
               success: z.boolean(),
               data: z.object({
-                id: z.string(),
-                email: z.string(),
-                sent_at: z.string(),
-                status: z.string(),
+                invites: z.array(z.object({
+                  id: z.string(),
+                  email: z.string(),
+                  sent_at: z.string(),
+                  status: z.string(),
+                })),
+                cc: z.array(z.string()).optional(),
+                bcc: z.array(z.string()).optional(),
               }),
             }),
           },
@@ -59,7 +65,7 @@ export class SendAdminInvite extends OpenAPIRoute {
   public async handle(c: AppContext) {
     const session = c.get('session');
     const data = await this.getValidatedData<typeof this.schema>();
-    const { email } = data.body;
+    const { to, cc, bcc } = data.body;
 
     // Check if user is admin
     const d1 = new D1Adapter(c.env.DB);
@@ -69,50 +75,55 @@ export class SendAdminInvite extends OpenAPIRoute {
       return error(c, 'FORBIDDEN', 'Admin access required', 403);
     }
 
-    const id = crypto.randomUUID();
     const now = new Date().toISOString();
 
     try {
       // Send the welcome email
       const emailService = createEmailService(c.env);
-      const result = await emailService.sendAdminWelcomeInvite(email);
+      const result = await emailService.sendAdminWelcomeInvite(to, cc, bcc);
 
-      // Record the invite in database
-      await c.env.DB.prepare(`
-        INSERT INTO admin_invites (id, email, sent_by, sent_at, status, sendgrid_message_id, error_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).bind(
-        id,
-        email.toLowerCase(),
-        session.user_id,
-        now,
-        result.success ? 'sent' : 'failed',
-        result.messageId || null,
-        result.error || null
-      ).run();
+      // Record each recipient in database
+      const invites: { id: string; email: string; sent_at: string; status: string }[] = [];
+      for (const email of to) {
+        const id = crypto.randomUUID();
+        await c.env.DB.prepare(`
+          INSERT INTO admin_invites (id, email, sent_by, sent_at, status, sendgrid_message_id, error_message)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          id,
+          email.toLowerCase(),
+          session.user_id,
+          now,
+          result.success ? 'sent' : 'failed',
+          result.messageId || null,
+          result.error || null
+        ).run();
+        invites.push({ id, email: email.toLowerCase(), sent_at: now, status: result.success ? 'sent' : 'failed' });
+      }
 
       if (!result.success) {
         return error(c, 'EMAIL_FAILED', result.error || 'Failed to send email', 500);
       }
 
       return success(c, {
-        id,
-        email: email.toLowerCase(),
-        sent_at: now,
-        status: 'sent',
+        invites,
+        ...(cc?.length ? { cc } : {}),
+        ...(bcc?.length ? { bcc } : {}),
       });
 
     } catch (err: any) {
       console.error('Admin invite error:', err);
 
-      // Still record the failed attempt
-      try {
-        await c.env.DB.prepare(`
-          INSERT INTO admin_invites (id, email, sent_by, sent_at, status, error_message)
-          VALUES (?, ?, ?, ?, 'failed', ?)
-        `).bind(id, email.toLowerCase(), session.user_id, now, err.message).run();
-      } catch (dbErr) {
-        console.error('Failed to record invite error:', dbErr);
+      // Still record the failed attempts
+      for (const email of to) {
+        try {
+          await c.env.DB.prepare(`
+            INSERT INTO admin_invites (id, email, sent_by, sent_at, status, error_message)
+            VALUES (?, ?, ?, ?, 'failed', ?)
+          `).bind(crypto.randomUUID(), email.toLowerCase(), session.user_id, now, err.message).run();
+        } catch (dbErr) {
+          console.error('Failed to record invite error:', dbErr);
+        }
       }
 
       return error(c, 'INVITE_FAILED', 'Failed to send invite', 500);
