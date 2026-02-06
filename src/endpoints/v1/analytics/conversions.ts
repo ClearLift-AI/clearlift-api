@@ -7,7 +7,6 @@ import {
   ConversionResponseSchema,
   type ConversionRecord
 } from "../../../schemas/analytics";
-import { D1AnalyticsService } from "../../../services/d1-analytics";
 import { AD_PLATFORM_IDS, ACTIVE_REVENUE_PLATFORM_IDS } from "../../../config/platforms";
 
 /**
@@ -104,17 +103,15 @@ export class GetConversions extends OpenAPIRoute {
       return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
-
     try {
-      // Get all Stripe connections for this org
+      // Check if org has any revenue connectors (not just Stripe)
       const connections = await c.env.DB.prepare(`
-        SELECT id FROM platform_connections
-        WHERE organization_id = ? AND platform = 'stripe' AND is_active = 1
-      `).bind(orgId).all<{ id: string }>();
+        SELECT platform FROM platform_connections
+        WHERE organization_id = ? AND platform IN ('stripe', 'shopify', 'jobber') AND is_active = 1
+      `).bind(orgId).all<{ platform: string }>();
 
       if (!connections.results || connections.results.length === 0) {
-        // No Stripe connections - return empty with setup guidance
+        // No revenue connections - return empty with setup guidance
         const setupStatus = await checkConversionSetupStatus(c.env.DB, orgId);
         const setupGuidance = buildDataQualityResponse(setupStatus);
 
@@ -129,52 +126,51 @@ export class GetConversions extends OpenAPIRoute {
         );
       }
 
-      // Query stripe_charges from D1 for all connections
-      const allConversions: any[] = [];
-      for (const conn of connections.results) {
-        const charges = await d1Analytics.getStripeCharges(
-          orgId,
-          conn.id,
-          dateRange.start_date,
-          dateRange.end_date,
-          {
-            status: 'succeeded', // Only successful charges count as conversions
-            limit: 1000,
-          }
-        );
+      // Query unified conversions table
+      const bindings: any[] = [orgId, dateRange.start_date + 'T00:00:00', dateRange.end_date + 'T23:59:59'];
+      let whereClause = 'WHERE organization_id = ? AND conversion_timestamp >= ? AND conversion_timestamp <= ?';
 
-        // Transform charges to conversion format
-        const conversions = charges.map(charge => ({
-          id: charge.id,
-          channel: channel || 'stripe',
-          date: charge.stripe_created_at.split('T')[0],
-          conversion_count: 1,
-          revenue: charge.amount_cents / 100,
-          conversion_type: 'purchase'
-        }));
-
-        allConversions.push(...conversions);
+      if (channel) {
+        whereClause += ' AND conversion_source = ?';
+        bindings.push(channel);
       }
 
+      const rows = await c.env.ANALYTICS_DB.prepare(`
+        SELECT conversion_source AS channel, DATE(conversion_timestamp) AS date,
+               COUNT(*) AS conversion_count, COALESCE(SUM(value_cents), 0) AS revenue_cents
+        FROM conversions
+        ${whereClause}
+        GROUP BY conversion_source, DATE(conversion_timestamp)
+        ORDER BY date ASC
+      `).bind(...bindings).all<{
+        channel: string;
+        date: string;
+        conversion_count: number;
+        revenue_cents: number;
+      }>();
+
+      const allConversions = (rows.results || []).map(row => ({
+        channel: row.channel,
+        date: row.date,
+        conversion_count: row.conversion_count,
+        revenue: row.revenue_cents / 100,
+      }));
+
       if (allConversions.length === 0) {
-        // Stripe connected but no conversions in date range
         return success(
           c,
           {
             ...this.formatEmptyResponse(groupBy),
-            _message: 'Stripe connected but no conversions found in the selected date range.'
+            _message: 'Revenue sources connected but no conversions found in the selected date range.'
           },
           { date_range: dateRange }
         );
       }
 
-      // Sort by date
-      allConversions.sort((a, b) => a.date.localeCompare(b.date));
-
       // Aggregate data based on group_by parameter
       const result = this.aggregateData(allConversions, groupBy);
 
-      return success(c, { ...result, data_source: 'd1_stripe' }, { date_range: dateRange });
+      return success(c, { ...result, data_source: 'd1_unified' }, { date_range: dateRange });
     } catch (err) {
       console.error("Failed to fetch conversions:", err);
       return error(c, "QUERY_FAILED", "Failed to fetch conversion data", 500);
