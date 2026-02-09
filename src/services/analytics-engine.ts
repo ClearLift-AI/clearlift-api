@@ -55,6 +55,8 @@ export interface AnalyticsEngineBreakdown {
   revenue: number;
 }
 
+import { sanitizeString, validatePositiveInt } from '../utils/sanitize';
+
 export class AnalyticsEngineService {
   private readonly apiUrl: string;
 
@@ -66,25 +68,12 @@ export class AnalyticsEngineService {
     this.apiUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/analytics_engine/sql`;
   }
 
-  /**
-   * Sanitize string values for Analytics Engine SQL (no parameterized queries available).
-   * Uses strict allowlist approach.
-   */
   private sanitizeString(value: string): string {
-    // Only allow alphanumeric, underscores, hyphens, dots
-    return value.replace(/[^a-zA-Z0-9_\-\.]/g, '');
+    return sanitizeString(value);
   }
 
-  /**
-   * Validate numeric inputs for SQL interpolation.
-   * Throws if value is not a finite positive number.
-   */
   private validatePositiveInt(value: number, name: string): number {
-    const n = Math.floor(Number(value));
-    if (!Number.isFinite(n) || n < 0 || n > 100000) {
-      throw new Error(`Invalid ${name}: must be a positive integer <= 100000`);
-    }
-    return n;
+    return validatePositiveInt(value, name);
   }
 
   /** Known-safe Analytics Engine column names for dimension queries */
