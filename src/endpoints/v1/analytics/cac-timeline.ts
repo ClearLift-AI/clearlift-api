@@ -696,6 +696,9 @@ export class BackfillCACHistory extends OpenAPIRoute {
     operationId: "backfill-cac-history",
     security: [{ bearerAuth: [] }],
     request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+      }),
       body: {
         content: {
           "application/json": {

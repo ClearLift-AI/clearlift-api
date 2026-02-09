@@ -2,7 +2,7 @@
 
 client_id = "466ac32d6fea6129ef1d47edf29206ce"
 name = "ClearLift"
-application_url = "https://clearlift.ai"
+application_url = "https://api.clearlift.ai/v1/connectors/shopify/install"
 embedded = false
 
 [build]

@@ -1040,6 +1040,9 @@ export class TriggerRecalculation extends OpenAPIRoute {
     operationId: "trigger-recalculation",
     security: [{ bearerAuth: [] }],
     request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+      }),
       body: {
         content: {
           "application/json": {
@@ -1072,14 +1075,14 @@ export class TriggerRecalculation extends OpenAPIRoute {
   };
 
   public async handle(c: AppContext) {
-    const org = c.get("org");
+    const orgId = c.get("org_id" as any) as string;
     const data = await this.getValidatedData<typeof this.schema>();
     const { days } = data.body;
 
     try {
       // Idempotency guard: check for a recent pending aggregation job for this org.
       // We track via a KV key with a short TTL rather than querying the queue.
-      const dedupeKey = `recalc:${org.id}`;
+      const dedupeKey = `recalc:${orgId}`;
       const existing = await c.env.CACHE?.get(dedupeKey);
       if (existing) {
         return c.json({
@@ -1099,7 +1102,7 @@ export class TriggerRecalculation extends OpenAPIRoute {
       await c.env.SYNC_QUEUE.send({
         job_type: 'conversion_aggregation',
         job_id: jobId,
-        organization_id: org.id,
+        organization_id: orgId,
         attribution_window_hours: days * 24,
         created_at: now,
       });
@@ -1134,6 +1137,9 @@ export class TriggerResyncAll extends OpenAPIRoute {
     operationId: "trigger-resync-all",
     security: [{ bearerAuth: [] }],
     request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+      }),
       body: {
         content: {
           "application/json": {
@@ -1168,12 +1174,12 @@ export class TriggerResyncAll extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const session = c.get("session");
-    const org = c.get("org");
+    const orgId = c.get("org_id" as any) as string;
     const data = await this.getValidatedData<typeof this.schema>();
     const { days, skip_platform_sync } = data.body;
 
     // Dedup guard: 5-minute cooldown via KV
-    const dedupKey = `resync-all:${org.id}`;
+    const dedupKey = `resync-all:${orgId}`;
     const existing = await c.env.CACHE?.get(dedupKey);
     if (existing) {
       return c.json({
@@ -1196,7 +1202,7 @@ export class TriggerResyncAll extends OpenAPIRoute {
         const connections = await c.env.DB.prepare(`
           SELECT id, platform, account_id FROM platform_connections
           WHERE organization_id = ? AND is_active = 1
-        `).bind(org.id).all<{
+        `).bind(orgId).all<{
           id: string;
           platform: string;
           account_id: string;
@@ -1208,7 +1214,7 @@ export class TriggerResyncAll extends OpenAPIRoute {
           await c.env.DB.prepare(`
             INSERT INTO sync_jobs (id, organization_id, connection_id, status, job_type, created_at, metadata)
             VALUES (?, ?, ?, 'pending', 'full', ?, ?)
-          `).bind(jobId, org.id, conn.id, now.toISOString(), JSON.stringify({
+          `).bind(jobId, orgId, conn.id, now.toISOString(), JSON.stringify({
             triggered_by: session.user_id,
             resync_historical: true,
             sync_window: {
@@ -1220,7 +1226,7 @@ export class TriggerResyncAll extends OpenAPIRoute {
           await c.env.SYNC_QUEUE.send({
             job_id: jobId,
             job_type: 'platform_sync',
-            organization_id: org.id,
+            organization_id: orgId,
             connection_id: conn.id,
             platform: conn.platform,
             account_id: conn.account_id,
@@ -1240,7 +1246,7 @@ export class TriggerResyncAll extends OpenAPIRoute {
       await c.env.SYNC_QUEUE.send({
         job_type: 'conversion_aggregation',
         job_id: aggJobId,
-        organization_id: org.id,
+        organization_id: orgId,
         attribution_window_hours: days * 24,
         created_at: now.toISOString(),
       });

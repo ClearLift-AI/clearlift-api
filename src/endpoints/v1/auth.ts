@@ -143,10 +143,11 @@ export class Register extends OpenAPIRoute {
         }
 
         // Create org_tag_mapping for analytics
+        const tagId = crypto.randomUUID();
         await c.env.DB.prepare(`
-          INSERT INTO org_tag_mappings (organization_id, short_tag, created_at)
-          VALUES (?, ?, ?)
-        `).bind(orgId, shortTag, now).run();
+          INSERT INTO org_tag_mappings (id, organization_id, short_tag, created_at)
+          VALUES (?, ?, ?, ?)
+        `).bind(tagId, orgId, shortTag, now).run();
 
         organization = {
           id: orgId,
