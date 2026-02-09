@@ -80,14 +80,13 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 
     const hashArray = new Uint8Array(hashBuffer);
 
-    // Compare hashes
-    if (hashArray.length !== storedHash.length) return false;
+    // Constant-time comparison to prevent timing attacks
+    const computedBuffer = new Uint8Array(hashArray).buffer;
+    const storedBuffer = new Uint8Array(storedHash).buffer;
+    if (computedBuffer.byteLength !== storedBuffer.byteLength) return false;
 
-    for (let i = 0; i < hashArray.length; i++) {
-      if (hashArray[i] !== storedHash[i]) return false;
-    }
-
-    return true;
+    const { timingSafeEqual } = await import('node:crypto');
+    return timingSafeEqual(Buffer.from(computedBuffer), Buffer.from(storedBuffer));
   } catch (error) {
     console.error("Password verification error:", error);
     return false;

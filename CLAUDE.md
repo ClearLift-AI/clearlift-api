@@ -825,6 +825,27 @@ See `clearlift-cron/docs/SHARED_CODE.md §19` for the comprehensive cross-repo i
 
 **Note:** `customer_identities` already existed in migration 0014. `shopify_orders` already existed in migration 0006.
 
+### Audit Migrations (Feb 2026)
+
+| Migration | Database | Purpose |
+|-----------|----------|---------|
+| `0041_attribution_unique_index.sql` | ANALYTICS_DB | Unique index on attribution results to prevent duplicates |
+| `0042_refund_tracking.sql` | ANALYTICS_DB | Refund tracking columns on conversions table |
+| `0043_per_source_cac.sql` | ANALYTICS_DB | Per-source CAC breakdown in cac_history |
+| `0081_drop_dead_tables.sql` | DB | Drops unused tables from infrastructure phase |
+
+**Dropped Tables (migration 0081):**
+- `conversion_configs` — replaced by `conversion_goals` + ConversionEventPicker
+- `interaction_nodes` / `interaction_edges` — replaced by FlowBuilder goal-relationship model
+- `funnel_metadata` — replaced by FlowBuilder 3-layer architecture
+- `acquisition_instances` — never populated, replaced by traffic source auto-detection
+
+### Security Improvements (Feb 2026 Audit)
+
+- **OAuth finalize requires auth:** `POST /v1/connectors/:platform/callback` now requires a valid session token (prevents unauthenticated token exchange)
+- **Analytics Engine query sanitization:** All AE SQL queries use parameterized values; user input is sanitized before interpolation
+- **Session refresh with 7-day expiry:** Session tokens are refreshed on activity but hard-expire after 7 days regardless
+
 ### Backend Workflows (clearlift-cron)
 
 The following workflows are now implemented:
@@ -981,8 +1002,8 @@ Five foundational backend improvements enabling the UI overhaul and scaling to 1
 
 **New Tables:**
 - `goal_branches` - Branch points (split/join)
-- `acquisition_instances` - Traffic source instances
-- `conversion_configs` - Conversion event configuration
+- ~~`acquisition_instances`~~ - **DROPPED** (migration 0081, Feb 2026 audit) — never populated
+- ~~`conversion_configs`~~ - **DROPPED** (migration 0081, Feb 2026 audit) — replaced by `conversion_goals` + ConversionEventPicker
 
 **Endpoints:**
 - `GET /v1/goals/graph` - Full funnel graph for Flow Builder

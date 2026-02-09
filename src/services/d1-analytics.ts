@@ -232,6 +232,7 @@ export class D1AnalyticsService {
         AND hour >= ?
         AND hour <= ?
       ORDER BY hour DESC
+      LIMIT 10000
     `).bind(orgTag, startDate, endDate).all<HourlyMetricRow>();
 
     return result.results;
@@ -248,6 +249,7 @@ export class D1AnalyticsService {
         AND date >= ?
         AND date <= ?
       ORDER BY date DESC
+      LIMIT 1000
     `).bind(orgTag, startDate, endDate).all<DailyMetricRow>();
 
     return result.results;
@@ -264,6 +266,7 @@ export class D1AnalyticsService {
         AND date >= ?
         AND date <= ?
       ORDER BY date DESC, sessions DESC
+      LIMIT 5000
     `).bind(orgTag, startDate, endDate).all<UTMPerformanceRow>();
 
     return result.results;
@@ -323,7 +326,7 @@ export class D1AnalyticsService {
       params.push(periodEnd);
     }
 
-    query += ` ORDER BY computed_at DESC, credit DESC`;
+    query += ` ORDER BY computed_at DESC, credit DESC LIMIT 1000`;
 
     const stmt = this.session.prepare(query);
     const result = await stmt.bind(...params).all<AttributionResultRow>();
@@ -465,7 +468,7 @@ export class D1AnalyticsService {
       params.push(options.minCount);
     }
 
-    query += ` ORDER BY transition_count DESC`;
+    query += ` ORDER BY transition_count DESC LIMIT 1000`;
 
     const stmt = this.session.prepare(query);
     const result = await stmt.bind(...params).all<{
@@ -512,6 +515,7 @@ export class D1AnalyticsService {
         AND m.metric_date >= ?
         AND m.metric_date <= ?
       ORDER BY m.metric_date DESC
+      LIMIT 10000
     `).bind(orgId, startDate, endDate).all<GoogleCampaignMetricsRow>();
 
     return result.results;

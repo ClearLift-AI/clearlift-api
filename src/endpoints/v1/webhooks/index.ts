@@ -166,7 +166,30 @@ export class ReceiveWebhook extends OpenAPIRoute {
             webhook_event_id: webhookEventId,
           });
         } catch (queueError) {
-          console.error("[Webhook] Failed to queue Shopify event:", queueError);
+          const errMsg = queueError instanceof Error ? queueError.message : String(queueError);
+          console.error("[Webhook] Queue send failed", {
+            connector,
+            event_type: eventType,
+            webhook_event_id: webhookEventId,
+            org_id: orgId,
+            error: errMsg,
+          });
+
+          // Mark the stored event as queue_failed so a sweep job can retry it
+          try {
+            await c.env.DB.prepare(
+              `UPDATE webhook_events SET status = 'queue_failed', error_message = ? WHERE id = ?`
+            ).bind(`Queue send failed: ${errMsg}`, webhookEventId).run();
+          } catch (d1Error) {
+            console.error("[Webhook] CRITICAL: Queue send AND D1 status update both failed", {
+              connector,
+              event_type: eventType,
+              webhook_event_id: webhookEventId,
+              org_id: orgId,
+              queue_error: errMsg,
+              d1_error: d1Error instanceof Error ? d1Error.message : String(d1Error),
+            });
+          }
         }
       }
 
@@ -274,8 +297,30 @@ export class ReceiveWebhook extends OpenAPIRoute {
           webhook_event_id: webhookEventId,
         });
       } catch (queueError) {
-        console.error("[Webhook] Failed to queue event:", queueError);
-        // Event is stored, can be retried later
+        const errMsg = queueError instanceof Error ? queueError.message : String(queueError);
+        console.error("[Webhook] Queue send failed", {
+          connector,
+          event_type: eventType,
+          webhook_event_id: webhookEventId,
+          org_id: orgId,
+          error: errMsg,
+        });
+
+        // Mark the stored event as queue_failed so a sweep job can retry it
+        try {
+          await c.env.DB.prepare(
+            `UPDATE webhook_events SET status = 'queue_failed', error_message = ? WHERE id = ?`
+          ).bind(`Queue send failed: ${errMsg}`, webhookEventId).run();
+        } catch (d1Error) {
+          console.error("[Webhook] CRITICAL: Queue send AND D1 status update both failed", {
+            connector,
+            event_type: eventType,
+            webhook_event_id: webhookEventId,
+            org_id: orgId,
+            queue_error: errMsg,
+            d1_error: d1Error instanceof Error ? d1Error.message : String(d1Error),
+          });
+        }
       }
     }
 

@@ -6,11 +6,10 @@
 
 import { MotherDuckService } from '../src/services/motherDuckService';
 
-// Get MotherDuck token from environment or use default
-const MOTHERDUCK_TOKEN = process.env.MOTHERDUCK_TOKEN || 'sk-WH8swnMv8e_3dPVmVCqnWg';
+const MOTHERDUCK_TOKEN = process.env.MOTHERDUCK_TOKEN;
 
 if (!MOTHERDUCK_TOKEN) {
-  console.error('❌ MOTHERDUCK_TOKEN is required');
+  console.error('❌ MOTHERDUCK_TOKEN environment variable is required. Set it in .dev.vars or your environment.');
   process.exit(1);
 }
 

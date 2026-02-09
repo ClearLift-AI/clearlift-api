@@ -540,9 +540,16 @@ export class AdminStartImpersonation extends OpenAPIRoute {
       exp: Math.floor(expires.getTime() / 1000),
     };
 
-    // For simplicity, we'll create a session token
-    // In production, you'd want a proper JWT
-    const token = btoa(JSON.stringify(tokenPayload));
+    // HMAC-sign the impersonation token to prevent forgery
+    const payload = btoa(JSON.stringify(tokenPayload));
+    const encoder = new TextEncoder();
+    const keyData = encoder.encode(c.env.SESSION_SECRET || 'impersonation-fallback-key');
+    const key = await crypto.subtle.importKey(
+      'raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+    const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+    const sigHex = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const token = `${payload}.${sigHex}`;
 
     return success(c, {
       token,

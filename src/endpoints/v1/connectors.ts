@@ -166,6 +166,102 @@ export class GetConnectionsNeedingReauth extends OpenAPIRoute {
 }
 
 /**
+ * GET /v1/connectors/shopify/install - Handle Shopify App Store install
+ *
+ * This endpoint is the `application_url` in shopify.app.toml. When a merchant
+ * installs the app from the Shopify App Store, Shopify redirects them here
+ * with ?shop=xxx&hmac=xxx&timestamp=xxx. We validate the request and immediately
+ * redirect to Shopify's OAuth authorize URL (required by Shopify review).
+ */
+export class ShopifyInstall extends OpenAPIRoute {
+  public schema = {
+    tags: ["Connectors"],
+    summary: "Handle Shopify app install from App Store",
+    operationId: "shopify-install",
+    request: {
+      query: z.object({
+        shop: z.string(),
+        hmac: z.string().optional(),
+        timestamp: z.string().optional(),
+        host: z.string().optional()
+      })
+    },
+    responses: {
+      "302": {
+        description: "Redirect to Shopify OAuth"
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { shop, hmac } = data.query;
+
+    // Validate shop domain
+    if (!shop || !ShopifyOAuthProvider.isValidShopDomain(shop)) {
+      const appBaseUrl = c.env.APP_BASE_URL || 'https://app.clearlift.ai';
+      return c.redirect(`${appBaseUrl}/connectors?error=invalid_shop`);
+    }
+
+    const normalizedShop = ShopifyOAuthProvider.normalizeShopDomain(shop);
+
+    // Validate HMAC if present (Shopify sends this on install)
+    if (hmac) {
+      const hmacSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+      if (hmacSecret) {
+        const queryParams = new URL(c.req.url).searchParams;
+        const hmacCallbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+        const hmacRedirectUri = `${hmacCallbackBase}/v1/connectors/shopify/callback`;
+        const hmacProvider = new ShopifyOAuthProvider('temp', hmacSecret, hmacRedirectUri, normalizedShop);
+        const isValidHmac = await hmacProvider.validateHmac(queryParams);
+        if (!isValidHmac) {
+          console.error('[ShopifyInstall] HMAC validation failed for shop:', normalizedShop);
+          const appBaseUrl = c.env.APP_BASE_URL || 'https://app.clearlift.ai';
+          return c.redirect(`${appBaseUrl}/connectors?error=invalid_hmac`);
+        }
+        console.log('[ShopifyInstall] HMAC validation passed');
+      }
+    }
+
+    // Get OAuth credentials
+    const clientId = await getSecret(c.env.SHOPIFY_CLIENT_ID);
+    const clientSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+    if (!clientId || !clientSecret) {
+      return error(c, "CONFIG_ERROR", "Shopify OAuth credentials not configured", 500);
+    }
+
+    const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+    const redirectUri = `${callbackBase}/v1/connectors/shopify/callback`;
+
+    // Generate HMAC-signed state token (no database row needed)
+    // oauth_states table has FK constraints on user_id/organization_id,
+    // so we can't insert placeholder values. Instead, encode the shop domain
+    // in a signed state token that the callback can verify.
+    const timestamp = Date.now().toString();
+    const statePayload = `install:${normalizedShop}:${timestamp}`;
+    const encoder = new TextEncoder();
+    const keyData = encoder.encode(clientSecret);
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+    const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(statePayload));
+    const sig = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const stateToken = `${statePayload}:${sig}`;
+
+    console.log('[ShopifyInstall] Redirecting to Shopify OAuth:', {
+      shop: normalizedShop,
+      statePrefix: stateToken.substring(0, 30) + '...'
+    });
+
+    // Build Shopify OAuth authorization URL and redirect immediately
+    const shopifyProvider = new ShopifyOAuthProvider(clientId, clientSecret, redirectUri, normalizedShop);
+    const authorizationUrl = shopifyProvider.getAuthorizationUrl(stateToken);
+
+    return c.redirect(authorizationUrl);
+  }
+}
+
+/**
  * POST /v1/connectors/:provider/connect - Initiate OAuth flow
  */
 export class InitiateOAuthFlow extends OpenAPIRoute {
@@ -425,7 +521,12 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     }
 
     try {
-      // Get state (don't consume yet - needed for account selection)
+      // ── Check for Shopify App Store install flow (signed state, no DB row) ──
+      if (provider === 'shopify' && state?.startsWith('install:')) {
+        return await this.handleShopifyInstallCallback(c, code, state, shop, hmac, appBaseUrl);
+      }
+
+      // ── Normal OAuth flow (state stored in database) ──
       const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
       const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
 
@@ -553,6 +654,100 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       }
 
       return c.redirect(`${appBaseUrl}/oauth/callback?error=connection_failed&error_description=${errorDetails}`);
+    }
+  }
+
+  /**
+   * Handle Shopify App Store install callback (signed state, no database row).
+   * Validates the signed state, exchanges code for token, and redirects to the
+   * dashboard connectors page. The merchant can complete setup there.
+   */
+  private async handleShopifyInstallCallback(
+    c: AppContext,
+    code: string,
+    state: string,
+    shop: string | undefined,
+    hmac: string | undefined,
+    appBaseUrl: string
+  ): Promise<Response> {
+    console.log('[HandleOAuthCallback] Detected Shopify install flow (signed state)');
+
+    // Parse signed state: "install:{shop}:{timestamp}:{hmac_signature}"
+    const parts = state.split(':');
+    if (parts.length !== 4 || parts[0] !== 'install') {
+      return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_state`);
+    }
+
+    const [, stateShop, stateTimestamp, stateSig] = parts;
+
+    // Verify state signature
+    const clientSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
+    if (!clientSecret) {
+      return c.redirect(`${appBaseUrl}/oauth/callback?error=config_error`);
+    }
+
+    const statePayload = `install:${stateShop}:${stateTimestamp}`;
+    const encoder = new TextEncoder();
+    const keyData = encoder.encode(clientSecret);
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+    const expectedSig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(statePayload));
+    const expectedHex = Array.from(new Uint8Array(expectedSig)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    if (stateSig !== expectedHex) {
+      console.error('[HandleOAuthCallback] Install state HMAC mismatch');
+      return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_state`);
+    }
+
+    // Check state age (15 minute expiry)
+    const stateAge = Date.now() - parseInt(stateTimestamp, 10);
+    if (stateAge > 15 * 60 * 1000) {
+      console.error('[HandleOAuthCallback] Install state expired');
+      return c.redirect(`${appBaseUrl}/oauth/callback?error=state_expired`);
+    }
+
+    const shopDomain = shop || stateShop;
+    if (!shopDomain || !ShopifyOAuthProvider.isValidShopDomain(shopDomain)) {
+      return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_shop`);
+    }
+
+    try {
+      // Exchange code for token
+      const clientId = await getSecret(c.env.SHOPIFY_CLIENT_ID);
+      if (!clientId) {
+        return c.redirect(`${appBaseUrl}/oauth/callback?error=config_error`);
+      }
+
+      const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+      const redirectUri = `${callbackBase}/v1/connectors/shopify/callback`;
+      const shopifyProvider = new ShopifyOAuthProvider(clientId, clientSecret, redirectUri, shopDomain);
+      const tokens = await shopifyProvider.exchangeCodeForToken(code);
+      const userInfo = await shopifyProvider.getUserInfo(tokens.access_token);
+
+      console.log('[HandleOAuthCallback] Install flow: token exchanged for shop:', shopDomain);
+
+      // Store tokens in KV for the dashboard to pick up during finalization
+      const installToken = crypto.randomUUID();
+      if (c.env.CACHE) {
+        await c.env.CACHE.put(
+          `shopify_install:${installToken}`,
+          JSON.stringify({
+            shop_domain: shopDomain,
+            access_token: tokens.access_token,
+            scope: tokens.scope,
+            user_info: userInfo
+          }),
+          { expirationTtl: 600 } // 10 minutes
+        );
+      }
+
+      // Redirect to dashboard connectors page — merchant completes setup there
+      return c.redirect(`${appBaseUrl}/connectors?shopify_install=${installToken}&shop=${encodeURIComponent(shopDomain)}`);
+    } catch (err) {
+      console.error('[HandleOAuthCallback] Install flow error:', err);
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      return c.redirect(`${appBaseUrl}/oauth/callback?error=connection_failed&error_description=${encodeURIComponent(msg)}`);
     }
   }
 
@@ -1637,6 +1832,63 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         await goalService.ensureDefaultGoalForPlatform(oauthState.organization_id, provider);
       } catch (goalErr) {
         console.warn(`[FinalizeOAuth] Failed to auto-register goal for ${provider}:`, goalErr);
+      }
+
+      // Create default filter rules for known platforms
+      const platformDefaults: Record<string, { name: string; description: string; rule_type: string; conditions: Array<{ type: string; field: string; operator: string; value: string | string[] }> }> = {
+        google: {
+          name: 'Exclude Removed Campaigns',
+          description: 'Filters out deleted/removed campaigns',
+          rule_type: 'exclude',
+          conditions: [{ type: 'standard', field: 'status', operator: 'in', value: ['REMOVED'] }]
+        },
+        facebook: {
+          name: 'Exclude Deleted Campaigns',
+          description: 'Filters out deleted campaigns',
+          rule_type: 'exclude',
+          conditions: [{ type: 'standard', field: 'status', operator: 'not_equals', value: 'DELETED' }]
+        },
+        tiktok: {
+          name: 'Exclude Deleted Campaigns',
+          description: 'Filters out deleted campaigns',
+          rule_type: 'exclude',
+          conditions: [{ type: 'standard', field: 'status', operator: 'not_equals', value: 'DELETE' }]
+        },
+        shopify: {
+          name: 'Exclude Test Orders',
+          description: 'Excludes test orders from conversion metrics',
+          rule_type: 'exclude',
+          conditions: [{ type: 'standard', field: 'test', operator: 'equals', value: 'true' }]
+        }
+      };
+
+      const defaultFilter = platformDefaults[provider];
+      if (defaultFilter) {
+        try {
+          const defaultFilterId = crypto.randomUUID();
+          await c.env.DB.prepare(`
+            INSERT INTO connector_filter_rules (
+              id, connection_id, name, description, rule_type,
+              operator, conditions, is_active, created_by
+            ) VALUES (?, ?, ?, ?, ?, 'AND', ?, 1, ?)
+          `).bind(
+            defaultFilterId,
+            connectionId,
+            defaultFilter.name,
+            defaultFilter.description,
+            defaultFilter.rule_type,
+            JSON.stringify(defaultFilter.conditions),
+            oauthState.user_id
+          ).run();
+
+          await c.env.DB.prepare(
+            `UPDATE platform_connections SET filter_rules_count = 1 WHERE id = ?`
+          ).bind(connectionId).run();
+
+          console.log(`[FinalizeOAuth] Default filter rule created for ${provider}:`, defaultFilter.name);
+        } catch (filterErr) {
+          console.warn('[FinalizeOAuth] Default filter creation failed:', filterErr);
+        }
       }
 
       // Check if running in local development mode

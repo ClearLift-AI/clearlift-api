@@ -67,6 +67,34 @@ export class AnalyticsEngineService {
   }
 
   /**
+   * Sanitize string values for Analytics Engine SQL (no parameterized queries available).
+   * Uses strict allowlist approach.
+   */
+  private sanitizeString(value: string): string {
+    // Only allow alphanumeric, underscores, hyphens, dots
+    return value.replace(/[^a-zA-Z0-9_\-\.]/g, '');
+  }
+
+  /**
+   * Validate numeric inputs for SQL interpolation.
+   * Throws if value is not a finite positive number.
+   */
+  private validatePositiveInt(value: number, name: string): number {
+    const n = Math.floor(Number(value));
+    if (!Number.isFinite(n) || n < 0 || n > 100000) {
+      throw new Error(`Invalid ${name}: must be a positive integer <= 100000`);
+    }
+    return n;
+  }
+
+  /** Known-safe Analytics Engine column names for dimension queries */
+  private static readonly ALLOWED_COLUMNS = new Set([
+    'index1', 'index2', 'index3', 'index4', 'index5', 'index6', 'index7', 'index8',
+    'blob1', 'blob2', 'blob3', 'blob4', 'blob5', 'blob6',
+    'double1', 'double2', 'double3', 'double4', 'double5', 'double6', 'double7', 'double8', 'double9',
+  ]);
+
+  /**
    * Query Analytics Engine via SQL API
    */
   async query<T = any>(sql: string): Promise<T[]> {
@@ -96,8 +124,8 @@ export class AnalyticsEngineService {
    * Get real-time summary for an organization
    */
   async getSummary(orgTag: string, hours: number = 24): Promise<AnalyticsEngineSummary> {
-    // Escape single quotes in orgTag to prevent SQL injection
-    const safeOrgTag = orgTag.replace(/'/g, "''");
+    const safeOrgTag = this.sanitizeString(orgTag);
+    const safeHours = this.validatePositiveInt(hours, 'hours');
 
     const sql = `
       SELECT
@@ -109,7 +137,7 @@ export class AnalyticsEngineService {
         SUM(double4) as page_views
       FROM ${this.dataset}
       WHERE index1 = '${safeOrgTag}'
-        AND timestamp > NOW() - INTERVAL '${hours}' HOUR
+        AND timestamp > NOW() - INTERVAL '${safeHours}' HOUR
     `;
 
     const rows = await this.query<{
@@ -141,7 +169,8 @@ export class AnalyticsEngineService {
     hours: number = 24,
     interval: 'hour' | '15min' = 'hour'
   ): Promise<AnalyticsEngineTimeSeries[]> {
-    const safeOrgTag = orgTag.replace(/'/g, "''");
+    const safeOrgTag = this.sanitizeString(orgTag);
+    const safeHours = this.validatePositiveInt(hours, 'hours');
 
     const bucket = interval === 'hour'
       ? "toStartOfHour(timestamp)"
@@ -156,7 +185,7 @@ export class AnalyticsEngineService {
         SUM(double7) as conversions
       FROM ${this.dataset}
       WHERE index1 = '${safeOrgTag}'
-        AND timestamp > NOW() - INTERVAL '${hours}' HOUR
+        AND timestamp > NOW() - INTERVAL '${safeHours}' HOUR
       GROUP BY bucket
       ORDER BY bucket ASC
     `;
@@ -186,7 +215,8 @@ export class AnalyticsEngineService {
     dimension: 'utm_source' | 'utm_medium' | 'utm_campaign' | 'device' | 'country' | 'page' | 'browser',
     hours: number = 24
   ): Promise<AnalyticsEngineBreakdown[]> {
-    const safeOrgTag = orgTag.replace(/'/g, "''");
+    const safeOrgTag = this.sanitizeString(orgTag);
+    const safeHours = this.validatePositiveInt(hours, 'hours');
 
     // Map dimension to Analytics Engine column
     const dimMap: Record<string, string> = {
@@ -204,6 +234,12 @@ export class AnalyticsEngineService {
       throw new Error(`Unknown dimension: ${dimension}`);
     }
 
+    // Validate column name against allowlist even though it comes from dimMap,
+    // as defense-in-depth against future code changes
+    if (!AnalyticsEngineService.ALLOWED_COLUMNS.has(col)) {
+      throw new Error(`Invalid column name: ${col}`);
+    }
+
     const sql = `
       SELECT
         ${col} as dimension,
@@ -213,7 +249,7 @@ export class AnalyticsEngineService {
         SUM(double2) as revenue_cents
       FROM ${this.dataset}
       WHERE index1 = '${safeOrgTag}'
-        AND timestamp > NOW() - INTERVAL '${hours}' HOUR
+        AND timestamp > NOW() - INTERVAL '${safeHours}' HOUR
         AND ${col} != ''
       GROUP BY ${col}
       ORDER BY events DESC
@@ -241,7 +277,8 @@ export class AnalyticsEngineService {
    * Get event types breakdown
    */
   async getEventTypes(orgTag: string, hours: number = 24): Promise<AnalyticsEngineBreakdown[]> {
-    const safeOrgTag = orgTag.replace(/'/g, "''");
+    const safeOrgTag = this.sanitizeString(orgTag);
+    const safeHours = this.validatePositiveInt(hours, 'hours');
 
     const sql = `
       SELECT
@@ -252,7 +289,7 @@ export class AnalyticsEngineService {
         SUM(double2) as revenue_cents
       FROM ${this.dataset}
       WHERE index1 = '${safeOrgTag}'
-        AND timestamp > NOW() - INTERVAL '${hours}' HOUR
+        AND timestamp > NOW() - INTERVAL '${safeHours}' HOUR
       GROUP BY index2
       ORDER BY events DESC
       LIMIT 20
@@ -279,7 +316,9 @@ export class AnalyticsEngineService {
    * Get real-time events (last N minutes)
    */
   async getRecentEvents(orgTag: string, minutes: number = 5, limit: number = 100): Promise<any[]> {
-    const safeOrgTag = orgTag.replace(/'/g, "''");
+    const safeOrgTag = this.sanitizeString(orgTag);
+    const safeMinutes = this.validatePositiveInt(minutes, 'minutes');
+    const safeLimit = this.validatePositiveInt(limit, 'limit');
 
     const sql = `
       SELECT
@@ -293,9 +332,9 @@ export class AnalyticsEngineService {
         double2 as goal_value
       FROM ${this.dataset}
       WHERE index1 = '${safeOrgTag}'
-        AND timestamp > NOW() - INTERVAL '${minutes}' MINUTE
+        AND timestamp > NOW() - INTERVAL '${safeMinutes}' MINUTE
       ORDER BY timestamp DESC
-      LIMIT ${limit}
+      LIMIT ${safeLimit}
     `;
 
     return this.query(sql);

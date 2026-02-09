@@ -1024,3 +1024,235 @@ export class TriggerSync extends OpenAPIRoute {
     }
   }
 }
+
+/**
+ * POST /v1/workers/recalculate/trigger - Trigger full recalculation pipeline after flow changes
+ *
+ * Cascade: ConversionAggregation → ConversionLinking → CAC Refresh
+ * The aggregation workflow triggers linking if it upserts any conversions,
+ * and linking triggers CAC refresh as its final step.
+ */
+export class TriggerRecalculation extends OpenAPIRoute {
+  public schema = {
+    tags: ["Workers"],
+    summary: "Trigger recalculation after flow/goal changes",
+    description: "Queues a conversion aggregation job that cascades through the full pipeline: aggregation → conversion linking → CAC refresh. Use after flow or goal changes instead of waiting for the 15-minute cron cycle.",
+    operationId: "trigger-recalculation",
+    security: [{ bearerAuth: [] }],
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              days: z.number().min(1).max(90).optional().default(30).describe("Lookback window in days"),
+            })
+          }
+        }
+      }
+    },
+    responses: {
+      "200": {
+        description: "Recalculation triggered",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                job_id: z.string(),
+                message: z.string(),
+              })
+            })
+          }
+        }
+      },
+      "429": {
+        description: "Recalculation already in progress",
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const org = c.get("org");
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { days } = data.body;
+
+    try {
+      // Idempotency guard: check for a recent pending aggregation job for this org.
+      // We track via a KV key with a short TTL rather than querying the queue.
+      const dedupeKey = `recalc:${org.id}`;
+      const existing = await c.env.CACHE?.get(dedupeKey);
+      if (existing) {
+        return c.json({
+          success: true,
+          data: {
+            job_id: existing,
+            message: 'Recalculation already queued — skipping duplicate.',
+          }
+        }, 200);
+      }
+
+      const jobId = crypto.randomUUID();
+      const now = new Date().toISOString();
+
+      // Send conversion aggregation job to queue (processed by clearlift-cron).
+      // Omit batch_size — let the consumer use its default based on org volume.
+      await c.env.SYNC_QUEUE.send({
+        job_type: 'conversion_aggregation',
+        job_id: jobId,
+        organization_id: org.id,
+        attribution_window_hours: days * 24,
+        created_at: now,
+      });
+
+      // Set dedup key with 60-second TTL to prevent rapid re-queueing
+      if (c.env.CACHE) {
+        await c.env.CACHE.put(dedupeKey, jobId, { expirationTtl: 60 });
+      }
+
+      return success(c, {
+        job_id: jobId,
+        message: `Recalculation queued for ${days}-day window. Pipeline: aggregation → linking → CAC refresh.`,
+      });
+    } catch (err) {
+      console.error("Trigger recalculation error:", err);
+      return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue recalculation", 500);
+    }
+  }
+}
+
+/**
+ * POST /v1/workers/resync-all/trigger - Trigger full historical resync for an organization
+ *
+ * Creates sync jobs for all active platform connections and triggers the
+ * conversion aggregation → linking → CAC refresh cascade.
+ */
+export class TriggerResyncAll extends OpenAPIRoute {
+  public schema = {
+    tags: ["Workers"],
+    summary: "Trigger full historical resync for an organization",
+    description: "Re-syncs all connected platforms and runs the full aggregation pipeline. Use after data issues or to backfill historical data.",
+    operationId: "trigger-resync-all",
+    security: [{ bearerAuth: [] }],
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              days: z.number().min(1).max(90).default(30).describe("Lookback window in days"),
+              skip_platform_sync: z.boolean().default(false).describe("Skip platform sync and only run aggregation cascade"),
+            })
+          }
+        }
+      }
+    },
+    responses: {
+      "200": {
+        description: "Resync triggered",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                message: z.string(),
+                jobs_created: z.number(),
+              })
+            })
+          }
+        }
+      },
+      "429": {
+        description: "Resync already in progress",
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const session = c.get("session");
+    const org = c.get("org");
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { days, skip_platform_sync } = data.body;
+
+    // Dedup guard: 5-minute cooldown via KV
+    const dedupKey = `resync-all:${org.id}`;
+    const existing = await c.env.CACHE?.get(dedupKey);
+    if (existing) {
+      return c.json({
+        success: false,
+        error: "RESYNC_IN_PROGRESS",
+        message: "Resync already in progress. Try again in 5 minutes.",
+      }, 429);
+    }
+    if (c.env.CACHE) {
+      await c.env.CACHE.put(dedupKey, "running", { expirationTtl: 300 });
+    }
+
+    const now = new Date();
+    const startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    let jobsCreated = 0;
+
+    try {
+      if (!skip_platform_sync) {
+        // Get all active connections for this org
+        const connections = await c.env.DB.prepare(`
+          SELECT id, platform, account_id FROM platform_connections
+          WHERE organization_id = ? AND is_active = 1
+        `).bind(org.id).all<{
+          id: string;
+          platform: string;
+          account_id: string;
+        }>();
+
+        // Create sync jobs for each connection
+        for (const conn of connections.results || []) {
+          const jobId = crypto.randomUUID();
+          await c.env.DB.prepare(`
+            INSERT INTO sync_jobs (id, organization_id, connection_id, status, job_type, created_at, metadata)
+            VALUES (?, ?, ?, 'pending', 'full', ?, ?)
+          `).bind(jobId, org.id, conn.id, now.toISOString(), JSON.stringify({
+            triggered_by: session.user_id,
+            resync_historical: true,
+            sync_window: {
+              start: startDate.toISOString().split('T')[0],
+              end: now.toISOString().split('T')[0],
+            }
+          })).run();
+
+          await c.env.SYNC_QUEUE.send({
+            job_id: jobId,
+            job_type: 'platform_sync',
+            organization_id: org.id,
+            connection_id: conn.id,
+            platform: conn.platform,
+            account_id: conn.account_id,
+            sync_window: {
+              start: startDate.toISOString(),
+              end: now.toISOString(),
+              type: 'full',
+            },
+            created_at: now.toISOString(),
+          });
+          jobsCreated++;
+        }
+      }
+
+      // Always trigger aggregation + linking cascade
+      const aggJobId = crypto.randomUUID();
+      await c.env.SYNC_QUEUE.send({
+        job_type: 'conversion_aggregation',
+        job_id: aggJobId,
+        organization_id: org.id,
+        attribution_window_hours: days * 24,
+        created_at: now.toISOString(),
+      });
+      jobsCreated++;
+
+      return success(c, {
+        message: `Resync triggered: ${jobsCreated} jobs created`,
+        jobs_created: jobsCreated,
+      });
+    } catch (err) {
+      console.error("Trigger resync-all error:", err);
+      return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue resync jobs", 500);
+    }
+  }
+}

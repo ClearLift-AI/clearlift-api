@@ -5,8 +5,8 @@ import { Hono } from "hono";
 import { corsMiddleware } from "./middleware/cors";
 import { auth, requireOrg, requireOrgAdmin, requireOrgOwner } from "./middleware/auth";
 import { errorHandler } from "./middleware/errorHandler";
-import { auditMiddleware, authAuditMiddleware } from "./middleware/audit";
-import { rateLimitMiddleware, authRateLimit, analyticsRateLimit } from "./middleware/rateLimit";
+import { auditMiddleware } from "./middleware/audit";
+import { rateLimitMiddleware } from "./middleware/rateLimit";
 import { securityHeaders, validateContentType, sanitizeInput } from "./middleware/security";
 
 // V1 Endpoints
@@ -150,6 +150,7 @@ import {
   ListConnectors,
   ListConnectedPlatforms,
   GetConnectionsNeedingReauth,
+  ShopifyInstall,
   InitiateOAuthFlow,
   HandleOAuthCallback,
   MockOAuthCallback,
@@ -213,6 +214,8 @@ import {
   TestConnectionToken,
   TriggerSync,
   TriggerEventsSync,
+  TriggerRecalculation,
+  TriggerResyncAll,
   GetD1Stats
 } from "./endpoints/v1/workers";
 import {
@@ -589,9 +592,9 @@ openapi.get("/v1/analytics/google/ad-groups", auth, requireOrg, GetGoogleAdGroup
 openapi.get("/v1/analytics/google/ads", auth, requireOrg, GetGoogleAds);
 openapi.get("/v1/analytics/google/metrics/daily", auth, requireOrg, GetGoogleMetrics);
 // Google write endpoints (AI_PLAN.md tools: set_active, set_budget)
-openapi.patch("/v1/analytics/google/campaigns/:campaign_id/status", auth, requireOrg, UpdateGoogleCampaignStatus);
-openapi.patch("/v1/analytics/google/ad-groups/:ad_group_id/status", auth, requireOrg, UpdateGoogleAdGroupStatus);
-openapi.patch("/v1/analytics/google/campaigns/:campaign_id/budget", auth, requireOrg, UpdateGoogleCampaignBudget);
+openapi.patch("/v1/analytics/google/campaigns/:campaign_id/status", auth, requireOrg, requireOrgAdmin, UpdateGoogleCampaignStatus);
+openapi.patch("/v1/analytics/google/ad-groups/:ad_group_id/status", auth, requireOrg, requireOrgAdmin, UpdateGoogleAdGroupStatus);
+openapi.patch("/v1/analytics/google/campaigns/:campaign_id/budget", auth, requireOrg, requireOrgAdmin, UpdateGoogleCampaignBudget);
 
 // TikTok Ads endpoints
 openapi.get("/v1/analytics/tiktok/campaigns", auth, requireOrg, GetTikTokCampaigns);
@@ -599,11 +602,11 @@ openapi.get("/v1/analytics/tiktok/ad-groups", auth, requireOrg, GetTikTokAdGroup
 openapi.get("/v1/analytics/tiktok/ads", auth, requireOrg, GetTikTokAds);
 openapi.get("/v1/analytics/tiktok/metrics/daily", auth, requireOrg, GetTikTokMetrics);
 // TikTok write endpoints (AI_PLAN.md tools: set_active, set_budget, set_audience)
-openapi.patch("/v1/analytics/tiktok/campaigns/:campaign_id/status", auth, requireOrg, UpdateTikTokCampaignStatus);
-openapi.patch("/v1/analytics/tiktok/ad-groups/:ad_group_id/status", auth, requireOrg, UpdateTikTokAdGroupStatus);
-openapi.patch("/v1/analytics/tiktok/campaigns/:campaign_id/budget", auth, requireOrg, UpdateTikTokCampaignBudget);
-openapi.patch("/v1/analytics/tiktok/ad-groups/:ad_group_id/budget", auth, requireOrg, UpdateTikTokAdGroupBudget);
-openapi.patch("/v1/analytics/tiktok/ad-groups/:ad_group_id/targeting", auth, requireOrg, UpdateTikTokAdGroupTargeting);
+openapi.patch("/v1/analytics/tiktok/campaigns/:campaign_id/status", auth, requireOrg, requireOrgAdmin, UpdateTikTokCampaignStatus);
+openapi.patch("/v1/analytics/tiktok/ad-groups/:ad_group_id/status", auth, requireOrg, requireOrgAdmin, UpdateTikTokAdGroupStatus);
+openapi.patch("/v1/analytics/tiktok/campaigns/:campaign_id/budget", auth, requireOrg, requireOrgAdmin, UpdateTikTokCampaignBudget);
+openapi.patch("/v1/analytics/tiktok/ad-groups/:ad_group_id/budget", auth, requireOrg, requireOrgAdmin, UpdateTikTokAdGroupBudget);
+openapi.patch("/v1/analytics/tiktok/ad-groups/:ad_group_id/targeting", auth, requireOrg, requireOrgAdmin, UpdateTikTokAdGroupTargeting);
 
 // Onboarding endpoints
 openapi.get("/v1/onboarding/status", auth, GetOnboardingStatus);
@@ -658,13 +661,16 @@ openapi.post("/v1/connectors/chargebee/:connection_id/test", auth, TestChargebee
 openapi.post("/v1/connectors/recurly/connect", auth, ConnectRecurly);
 openapi.post("/v1/connectors/recurly/:connection_id/test", auth, TestRecurlyConnection);
 
+// Shopify App Store install endpoint (no auth - Shopify redirects merchants here)
+openapi.get("/v1/connectors/shopify/install", ShopifyInstall);
+
 // Generic OAuth provider endpoints (after platform-specific routes)
 openapi.post("/v1/connectors/:provider/connect", auth, InitiateOAuthFlow);
 openapi.get("/v1/connectors/:provider/callback", HandleOAuthCallback); // No auth - OAuth callback
 openapi.get("/v1/connectors/:provider/mock-callback", MockOAuthCallback); // No auth - Mock OAuth for local dev
-openapi.get("/v1/connectors/:provider/accounts", GetOAuthAccounts); // No auth - called from callback page
-openapi.get("/v1/connectors/:provider/accounts/:account_id/children", GetChildAccounts); // No auth - called from callback page
-openapi.post("/v1/connectors/:provider/finalize", FinalizeOAuthConnection); // No auth - called from callback page
+openapi.get("/v1/connectors/:provider/accounts", auth, requireOrg, GetOAuthAccounts);
+openapi.get("/v1/connectors/:provider/accounts/:account_id/children", auth, requireOrg, GetChildAccounts);
+openapi.post("/v1/connectors/:provider/finalize", auth, requireOrg, FinalizeOAuthConnection);
 openapi.delete("/v1/connectors/:connection_id", auth, DisconnectPlatform);
 openapi.get("/v1/connectors/:connection_id/sync-status", auth, GetSyncStatus);
 
@@ -692,6 +698,8 @@ openapi.get("/v1/workers/d1/stats", auth, GetD1Stats);
 openapi.get("/v1/workers/test-token/:connection_id", auth, TestConnectionToken);
 openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
 openapi.post("/v1/workers/events-sync/trigger", auth, TriggerEventsSync);
+openapi.post("/v1/workers/recalculate/trigger", auth, requireOrg, TriggerRecalculation);
+openapi.post("/v1/workers/resync-all/trigger", auth, requireOrg, requireOrgAdmin, TriggerResyncAll);
 
 // Settings endpoints
 openapi.get("/v1/settings/matrix", auth, requireOrg, GetMatrixSettings);
@@ -995,9 +1003,82 @@ export default {
         console.log(`[Cron] Cleaned up ${cleanedWorkflows.meta.changes} stale workflow entries`);
       }
 
+      // Retry webhook events that failed to queue (status = 'queue_failed')
+      await this.retryFailedWebhookEvents(env);
+
       console.log('[Cron] Stale job cleanup completed');
     } catch (err) {
       console.error('[Cron] Error during stale job cleanup:', err);
+    }
+  },
+
+  // Retry webhook events that failed to queue
+  async retryFailedWebhookEvents(env: Env): Promise<void> {
+    const MAX_WEBHOOK_RETRIES = 5;
+    const MAX_AGE_HOURS = 24;
+
+    try {
+      // Find queue_failed webhook events that are less than 24 hours old
+      const failedEvents = await env.DB.prepare(`
+        SELECT id, organization_id, connector, event_type, unified_event_type, event_id, attempts
+        FROM webhook_events
+        WHERE status = 'queue_failed'
+          AND received_at > datetime('now', '-${MAX_AGE_HOURS} hours')
+        ORDER BY received_at ASC
+        LIMIT 20
+      `).all<{
+        id: string;
+        organization_id: string;
+        connector: string;
+        event_type: string;
+        unified_event_type: string | null;
+        event_id: string | null;
+        attempts: number;
+      }>();
+
+      const events = failedEvents.results || [];
+      if (events.length === 0) return;
+
+      console.log(`[Cron] Found ${events.length} webhook events to retry queue send`);
+
+      for (const evt of events) {
+        if (evt.attempts >= MAX_WEBHOOK_RETRIES) {
+          // Exceeded retries — mark as permanently failed
+          await env.DB.prepare(`
+            UPDATE webhook_events
+            SET status = 'failed', error_message = 'Queue send failed after ${MAX_WEBHOOK_RETRIES} retry attempts', processed_at = datetime('now')
+            WHERE id = ?
+          `).bind(evt.id).run();
+          console.warn(`[Cron] Webhook event ${evt.id} exceeded max retries, marked as failed`);
+          continue;
+        }
+
+        try {
+          await env.SYNC_QUEUE.send({
+            type: "webhook_event",
+            organization_id: evt.organization_id,
+            connector: evt.connector,
+            event_type: evt.event_type,
+            unified_event_type: evt.unified_event_type,
+            webhook_event_id: evt.id,
+          });
+
+          // Success — reset to pending so the consumer processes it
+          await env.DB.prepare(`
+            UPDATE webhook_events SET status = 'pending', attempts = attempts + 1, error_message = NULL WHERE id = ?
+          `).bind(evt.id).run();
+          console.log(`[Cron] Re-queued webhook event ${evt.id} (attempt ${evt.attempts + 1})`);
+        } catch (queueErr) {
+          // Still failing — increment attempts and leave as queue_failed
+          const errMsg = queueErr instanceof Error ? queueErr.message : String(queueErr);
+          await env.DB.prepare(`
+            UPDATE webhook_events SET attempts = attempts + 1, error_message = ? WHERE id = ?
+          `).bind(`Queue retry failed: ${errMsg}`, evt.id).run();
+          console.error(`[Cron] Webhook event ${evt.id} retry failed (attempt ${evt.attempts + 1}):`, errMsg);
+        }
+      }
+    } catch (err) {
+      console.error('[Cron] Error during webhook event retry sweep:', err);
     }
   },
 

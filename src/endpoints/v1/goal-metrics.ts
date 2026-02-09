@@ -21,7 +21,7 @@ const GoalMetricsDailySchema = z.object({
 const GoalConversionSchema = z.object({
   id: z.string(),
   goal_id: z.string(),
-  conversion_source: z.enum(['platform', 'tag']),
+  conversion_source: z.enum(['platform', 'tag', 'connector']),
   conversion_timestamp: z.string(),
   value_cents: z.number(),
   currency: z.string(),
@@ -261,7 +261,7 @@ export class GetGoalConversions extends OpenAPIRoute {
     `;
     const params: unknown[] = [orgId, goalId];
 
-    if (sourceFilter && (sourceFilter === 'platform' || sourceFilter === 'tag')) {
+    if (sourceFilter && (sourceFilter === 'platform' || sourceFilter === 'tag' || sourceFilter === 'connector')) {
       query += ` AND conversion_source = ?`;
       params.push(sourceFilter);
     }
@@ -290,7 +290,7 @@ export class GetGoalConversions extends OpenAPIRoute {
     `;
     const countParams: unknown[] = [orgId, goalId];
 
-    if (sourceFilter && (sourceFilter === 'platform' || sourceFilter === 'tag')) {
+    if (sourceFilter && (sourceFilter === 'platform' || sourceFilter === 'tag' || sourceFilter === 'connector')) {
       countQuery += ` AND conversion_source = ?`;
       countParams.push(sourceFilter);
     }
@@ -300,7 +300,7 @@ export class GetGoalConversions extends OpenAPIRoute {
     const data = result.results.map(row => ({
       id: row.id,
       goal_id: row.goal_id,
-      conversion_source: row.conversion_source as 'platform' | 'tag',
+      conversion_source: row.conversion_source as 'platform' | 'tag' | 'connector',
       conversion_timestamp: row.conversion_timestamp,
       value_cents: row.value_cents || 0,
       currency: row.currency || 'USD',

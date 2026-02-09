@@ -332,12 +332,16 @@ export class Logout extends OpenAPIRoute {
 }
 
 /**
- * POST /v1/auth/refresh - Refresh session
+ * POST /v1/auth/refresh - Refresh session token
+ *
+ * Security: Rotates session tokens to reduce the window for stolen tokens.
+ * Only refreshes if the current session is more than 1 day old to prevent spam.
+ * New sessions expire after 7 days (shorter window than initial 30-day login).
  */
 export class RefreshSession extends OpenAPIRoute {
   public schema = {
     tags: ["Authentication"],
-    summary: "Refresh session",
+    summary: "Refresh session token",
     operationId: "refresh-session",
     security: [{ bearerAuth: [] }],
     responses: {
@@ -356,30 +360,62 @@ export class RefreshSession extends OpenAPIRoute {
             })
           }
         }
+      },
+      "429": {
+        description: "Session is too new to refresh (less than 1 day old)"
       }
     }
   };
 
   public async handle(c: AppContext) {
-    const oldSession = c.get("session");
+    const session = c.get("session");
+
+    // Look up the current session to check created_at
+    const currentSession = await c.env.DB.prepare(
+      "SELECT token, user_id, created_at, expires_at FROM sessions WHERE token = ? AND expires_at > datetime('now')"
+    ).bind(session.token).first<{
+      token: string;
+      user_id: string;
+      created_at: string;
+      expires_at: string;
+    }>();
+
+    if (!currentSession) {
+      return error(c, "INVALID_SESSION", "Session not found or expired", 401);
+    }
+
+    // Only refresh if the session is more than 1 day old (prevent refresh spam)
+    const sessionAge = Date.now() - new Date(currentSession.created_at).getTime();
+    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+    if (sessionAge < ONE_DAY_MS) {
+      return success(c, {
+        session: {
+          token: currentSession.token,
+          expires_at: currentSession.expires_at
+        }
+      });
+    }
+
+    // Generate new token and invalidate the old one
+    const newToken = generateSessionToken();
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    const now = new Date().toISOString();
 
     // Delete old session
     await c.env.DB.prepare(
       "DELETE FROM sessions WHERE token = ?"
-    ).bind(oldSession.token).run();
+    ).bind(currentSession.token).run();
 
     // Create new session
-    const sessionToken = generateSessionToken();
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
-
     await c.env.DB.prepare(`
       INSERT INTO sessions (token, user_id, expires_at, created_at)
       VALUES (?, ?, ?, ?)
-    `).bind(sessionToken, oldSession.user_id, expiresAt.toISOString(), new Date().toISOString()).run();
+    `).bind(newToken, currentSession.user_id, expiresAt.toISOString(), now).run();
 
     return success(c, {
       session: {
-        token: sessionToken,
+        token: newToken,
         expires_at: expiresAt.toISOString()
       }
     });

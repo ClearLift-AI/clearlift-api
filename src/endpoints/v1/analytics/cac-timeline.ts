@@ -888,7 +888,14 @@ export class GetCACSummary extends OpenAPIRoute {
           SUM(conversions) as total_conversions,
           SUM(conversions_goal) as total_conversions_goal,
           SUM(conversions_platform) as total_conversions_platform,
-          SUM(revenue_goal_cents) as total_revenue_goal_cents
+          SUM(revenue_goal_cents) as total_revenue_goal_cents,
+          SUM(conversions_stripe) as total_conversions_stripe,
+          SUM(conversions_shopify) as total_conversions_shopify,
+          SUM(conversions_jobber) as total_conversions_jobber,
+          SUM(conversions_tag) as total_conversions_tag,
+          SUM(revenue_stripe_cents) as total_revenue_stripe_cents,
+          SUM(revenue_shopify_cents) as total_revenue_shopify_cents,
+          SUM(revenue_jobber_cents) as total_revenue_jobber_cents
         FROM cac_history
         WHERE organization_id = ?
           AND date >= date('now', '-' || ? || ' days')
@@ -898,6 +905,13 @@ export class GetCACSummary extends OpenAPIRoute {
         total_conversions_goal: number | null;
         total_conversions_platform: number | null;
         total_revenue_goal_cents: number | null;
+        total_conversions_stripe: number | null;
+        total_conversions_shopify: number | null;
+        total_conversions_jobber: number | null;
+        total_conversions_tag: number | null;
+        total_revenue_stripe_cents: number | null;
+        total_revenue_shopify_cents: number | null;
+        total_revenue_jobber_cents: number | null;
       }>();
 
       // SUM returns null when no rows match the date range — propagate as null
@@ -938,6 +952,23 @@ export class GetCACSummary extends OpenAPIRoute {
         spend_cents: spendCents,
         goal_count: goalCount,
         goal_names: goalNames,
+        per_source: {
+          stripe: {
+            conversions: historyResult.total_conversions_stripe ?? 0,
+            revenue_cents: historyResult.total_revenue_stripe_cents ?? 0,
+          },
+          shopify: {
+            conversions: historyResult.total_conversions_shopify ?? 0,
+            revenue_cents: historyResult.total_revenue_shopify_cents ?? 0,
+          },
+          jobber: {
+            conversions: historyResult.total_conversions_jobber ?? 0,
+            revenue_cents: historyResult.total_revenue_jobber_cents ?? 0,
+          },
+          tag: {
+            conversions: historyResult.total_conversions_tag ?? 0,
+          },
+        },
       });
 
     } catch (err) {
