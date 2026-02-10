@@ -176,8 +176,8 @@ export class SalesforceOAuthProvider extends OAuthProvider {
    * @returns Salesforce tokens including instance_url
    */
   async exchangeCodeForToken(code: string, codeVerifier: string): Promise<SalesforceTokens> {
-    console.log('Exchanging Salesforce code for token', {
-      tokenUrl: this.config.tokenUrl,
+    structuredLog('INFO', 'Exchanging Salesforce code for token', {
+      service: 'salesforce-oauth',
       hasCode: !!code,
       hasCodeVerifier: !!codeVerifier,
     });
@@ -216,10 +216,10 @@ export class SalesforceOAuthProvider extends OAuthProvider {
 
       const tokens = (await response.json()) as SalesforceTokens;
 
-      console.log('Salesforce token exchange successful', {
+      structuredLog('INFO', 'Salesforce token exchange successful', {
+        service: 'salesforce-oauth',
         hasAccessToken: !!tokens.access_token,
         hasRefreshToken: !!tokens.refresh_token,
-        instanceUrl: tokens.instance_url,
       });
 
       return tokens;
@@ -241,7 +241,7 @@ export class SalesforceOAuthProvider extends OAuthProvider {
    * @returns New tokens (note: instance_url remains the same)
    */
   async refreshAccessToken(refreshToken: string): Promise<SalesforceTokens> {
-    console.log('Refreshing Salesforce access token');
+    structuredLog('INFO', 'Refreshing Salesforce access token', { service: 'salesforce-oauth' });
 
     const response = await fetch(this.config.tokenUrl, {
       method: 'POST',
@@ -266,9 +266,9 @@ export class SalesforceOAuthProvider extends OAuthProvider {
 
     const tokens = (await response.json()) as SalesforceTokens;
 
-    console.log('Salesforce token refresh successful', {
+    structuredLog('INFO', 'Salesforce token refresh successful', {
+      service: 'salesforce-oauth',
       hasAccessToken: !!tokens.access_token,
-      instanceUrl: tokens.instance_url,
     });
 
     return tokens;

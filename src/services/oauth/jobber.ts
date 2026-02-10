@@ -102,10 +102,10 @@ export class JobberOAuthProvider extends OAuthProvider {
    * @returns OAuth tokens
    */
   async exchangeCodeForToken(code: string, codeVerifier: string): Promise<OAuthTokens> {
-    console.log('Exchanging Jobber code for token', {
-      tokenUrl: this.config.tokenUrl,
+    structuredLog('INFO', 'Exchanging Jobber code for token', {
+      service: 'jobber-oauth',
       hasCode: !!code,
-      hasCodeVerifier: !!codeVerifier
+      hasCodeVerifier: !!codeVerifier,
     });
 
     try {
@@ -143,10 +143,11 @@ export class JobberOAuthProvider extends OAuthProvider {
 
       const tokens = await response.json() as OAuthTokens;
 
-      console.log('Jobber token exchange successful', {
+      structuredLog('INFO', 'Jobber token exchange successful', {
+        service: 'jobber-oauth',
         hasAccessToken: !!tokens.access_token,
         hasRefreshToken: !!tokens.refresh_token,
-        expiresIn: tokens.expires_in
+        expiresIn: tokens.expires_in,
       });
 
       return tokens;
@@ -233,7 +234,7 @@ export class JobberOAuthProvider extends OAuthProvider {
    * Refresh access token using refresh token
    */
   async refreshAccessToken(refreshToken: string): Promise<OAuthTokens> {
-    console.log('Refreshing Jobber access token');
+    structuredLog('INFO', 'Refreshing Jobber access token', { service: 'jobber-oauth' });
 
     const response = await fetch(this.config.tokenUrl, {
       method: 'POST',
@@ -257,10 +258,11 @@ export class JobberOAuthProvider extends OAuthProvider {
 
     const tokens = await response.json() as OAuthTokens;
 
-    console.log('Jobber token refresh successful', {
+    structuredLog('INFO', 'Jobber token refresh successful', {
+      service: 'jobber-oauth',
       hasAccessToken: !!tokens.access_token,
       hasRefreshToken: !!tokens.refresh_token,
-      expiresIn: tokens.expires_in
+      expiresIn: tokens.expires_in,
     });
 
     return tokens;

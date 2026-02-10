@@ -98,15 +98,14 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
     try {
       // Get user info first to identify the user
       const userInfo = await this.getUserInfo(accessToken);
-      console.log('Got user info for Google Ads account fetch:', { userId: userInfo.id, email: userInfo.email });
+      structuredLog('INFO', 'Retrieved user info for Google Ads account fetch', { service: 'google-oauth' });
 
       // Call Google Ads API to list accessible customer accounts
       // https://developers.google.com/google-ads/api/rest/reference/rest/v22/customers/listAccessibleCustomers
       const apiUrl = 'https://googleads.googleapis.com/v22/customers:listAccessibleCustomers';
-      console.log('Calling Google Ads API:', {
-        url: apiUrl,
+      structuredLog('INFO', 'Calling Google Ads listAccessibleCustomers API', {
+        service: 'google-oauth',
         hasAccessToken: !!accessToken,
-        developerTokenPrefix: developerToken.substring(0, 10) + '...'
       });
 
       const response = await fetch(apiUrl, {
@@ -156,7 +155,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
       });
 
       if (customerIds.length === 0) {
-        console.log('No Google Ads accounts found for user');
+        structuredLog('INFO', 'No Google Ads accounts found for user', { service: 'google-oauth' });
         return [];
       }
 

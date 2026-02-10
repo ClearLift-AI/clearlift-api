@@ -41,6 +41,23 @@ export interface LogEntry {
 // =============================================================================
 
 /**
+ * JSON.stringify with circular reference protection and Error serialization.
+ * Prevents crashes when context contains circular refs, functions, or BigInts.
+ */
+function safeStringify(obj: unknown): string {
+  const seen = new WeakSet();
+  return JSON.stringify(obj, (_key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) return '[Circular]';
+      seen.add(value);
+    }
+    if (typeof value === 'bigint') return value.toString();
+    if (typeof value === 'function') return '[Function]';
+    return value;
+  });
+}
+
+/**
  * Emit a structured JSON log entry.
  *
  * Routes to the appropriate console method based on severity:
@@ -57,17 +74,34 @@ export function structuredLog(level: LogLevel, message: string, context?: LogCon
     ...context,
   };
 
+  const json = safeStringify(entry);
+
   switch (level) {
     case 'CRITICAL':
     case 'ERROR':
-      console.error(JSON.stringify(entry));
+      console.error(json);
       break;
     case 'WARN':
-      console.warn(JSON.stringify(entry));
+      console.warn(json);
       break;
     default:
-      console.log(JSON.stringify(entry));
+      console.log(json);
   }
+}
+
+/**
+ * Extract error details including stack trace for structured logging.
+ * Use this when logging errors to capture full debugging context.
+ */
+export function errorContext(error: unknown): { error: string; error_type: string; stack?: string } {
+  if (error instanceof Error) {
+    return {
+      error: error.message,
+      error_type: error.constructor.name,
+      ...(error.stack ? { stack: error.stack.split('\n').slice(1, 4).join(' | ') } : {}),
+    };
+  }
+  return { error: String(error), error_type: typeof error };
 }
 
 // =============================================================================

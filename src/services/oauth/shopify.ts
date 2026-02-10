@@ -236,10 +236,9 @@ export class ShopifyOAuthProvider extends OAuthProvider {
    * @returns Shopify tokens
    */
   async exchangeCodeForToken(code: string, _codeVerifier?: string): Promise<ShopifyTokens> {
-    console.log('Exchanging Shopify code for token', {
-      tokenUrl: this.config.tokenUrl,
-      shopDomain: this.shopDomain,
-      hasCode: !!code
+    structuredLog('INFO', 'Exchanging Shopify code for token', {
+      service: 'shopify-oauth',
+      hasCode: !!code,
     });
 
     try {
@@ -274,10 +273,10 @@ export class ShopifyOAuthProvider extends OAuthProvider {
 
       const tokens = await response.json() as ShopifyTokens;
 
-      console.log('Shopify token exchange successful', {
+      structuredLog('INFO', 'Shopify token exchange successful', {
+        service: 'shopify-oauth',
         hasAccessToken: !!tokens.access_token,
-        scope: tokens.scope,
-        hasAssociatedUser: !!tokens.associated_user
+        hasAssociatedUser: !!tokens.associated_user,
       });
 
       return tokens;

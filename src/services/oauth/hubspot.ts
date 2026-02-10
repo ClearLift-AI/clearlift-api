@@ -115,8 +115,8 @@ export class HubSpotOAuthProvider extends OAuthProvider {
    * @returns HubSpot tokens
    */
   async exchangeCodeForToken(code: string, codeVerifier: string): Promise<HubSpotTokens> {
-    console.log('Exchanging HubSpot code for token', {
-      tokenUrl: this.config.tokenUrl,
+    structuredLog('INFO', 'Exchanging HubSpot code for token', {
+      service: 'hubspot-oauth',
       hasCode: !!code,
       hasCodeVerifier: !!codeVerifier,
     });
@@ -155,7 +155,8 @@ export class HubSpotOAuthProvider extends OAuthProvider {
 
       const tokens = (await response.json()) as HubSpotTokens;
 
-      console.log('HubSpot token exchange successful', {
+      structuredLog('INFO', 'HubSpot token exchange successful', {
+        service: 'hubspot-oauth',
         hasAccessToken: !!tokens.access_token,
         hasRefreshToken: !!tokens.refresh_token,
         expiresIn: tokens.expires_in,
@@ -180,7 +181,7 @@ export class HubSpotOAuthProvider extends OAuthProvider {
    * @returns New tokens
    */
   async refreshAccessToken(refreshToken: string): Promise<HubSpotTokens> {
-    console.log('Refreshing HubSpot access token');
+    structuredLog('INFO', 'Refreshing HubSpot access token', { service: 'hubspot-oauth' });
 
     const response = await fetch(this.config.tokenUrl, {
       method: 'POST',
@@ -205,7 +206,8 @@ export class HubSpotOAuthProvider extends OAuthProvider {
 
     const tokens = (await response.json()) as HubSpotTokens;
 
-    console.log('HubSpot token refresh successful', {
+    structuredLog('INFO', 'HubSpot token refresh successful', {
+      service: 'hubspot-oauth',
       hasAccessToken: !!tokens.access_token,
       hasRefreshToken: !!tokens.refresh_token,
       expiresIn: tokens.expires_in,

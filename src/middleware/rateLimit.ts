@@ -123,7 +123,7 @@ async function ensureRateLimitTable(db: D1Database) {
   } catch (error) {
     // Table might already exist, mark as initialized
     rateLimitTableInitialized = true;
-    console.log("[RateLimit] Table check completed:", error);
+    structuredLog('WARN', 'Rate limit table check error', { service: 'rate-limiter', error: error instanceof Error ? error.message : String(error) });
   }
 }
 

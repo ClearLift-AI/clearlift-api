@@ -145,7 +145,7 @@ export class StripeAPIProvider {
       }
 
       // If /v1/account fails (likely restricted key), validate with charges endpoint
-      console.log('[Stripe] Account endpoint failed (status:', accountResponse.status, '), trying charges validation for restricted key');
+      structuredLog('WARN', 'Stripe account endpoint failed, trying charges validation for restricted key', { service: 'stripe-provider', status: accountResponse.status });
 
       console.log('[Stripe] Trying /v1/charges?limit=1 endpoint...');
       const chargesResponse = await fetch(`${this.baseUrl}/charges?limit=1`, {

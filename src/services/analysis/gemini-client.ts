@@ -11,6 +11,7 @@ import {
   GenerateOptions,
   GEMINI_MODELS
 } from './llm-provider';
+import { structuredLog } from '../../utils/structured-logger';
 
 interface GeminiContent {
   role: 'user' | 'model';
@@ -115,7 +116,7 @@ export class GeminiClient implements LLMClient {
           // Rate limited - log full error for debugging
           const errorBody = await response.text();
           console.log(`[Gemini AUDIT] 429 Rate Limited! Request #${this.requestCount}, ${this.requestsThisMinute} RPM`);
-          console.log(`[Gemini AUDIT] Error body: ${errorBody}`);
+          structuredLog('WARN', 'Gemini API error response', { service: 'gemini-client', error: errorBody });
           console.log(`[Gemini AUDIT] Headers: ${JSON.stringify(Object.fromEntries(response.headers.entries()))}`);
 
           // Exponential backoff with jitter
@@ -167,7 +168,7 @@ export class GeminiClient implements LLMClient {
         if (attempt < this.maxRetries - 1) {
           const backoffMs = this.baseRetryDelayMs * Math.pow(2, attempt);
           const jitter = Math.random() * 1000;
-          console.log(`[Gemini] Network error, retrying in ${Math.round((backoffMs + jitter) / 1000)}s (attempt ${attempt + 1}/${this.maxRetries}): ${lastError.message}`);
+          structuredLog('WARN', 'Gemini network error, retrying', { service: 'gemini-client', delay_s: Math.round((backoffMs + jitter) / 1000), attempt: attempt + 1, max_retries: this.maxRetries, error: lastError.message });
           await this.sleep(backoffMs + jitter);
           continue;
         }

@@ -1242,7 +1242,7 @@ export class GetOAuthAccounts extends OpenAPIRoute {
       // Clean up the OAuth state on failure to prevent accumulation
       try {
         await c.env.DB.prepare(`DELETE FROM oauth_states WHERE state = ?`).bind(state).run();
-        console.log('Cleaned up failed OAuth state');
+        structuredLog('WARN', 'Cleaned up failed OAuth state', { service: 'connectors' });
       } catch (cleanupErr) {
         structuredLog('ERROR', 'Failed to cleanup oauth state', { endpoint: 'connectors', step: 'get_oauth_accounts_cleanup', error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr) });
       }

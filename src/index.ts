@@ -879,7 +879,7 @@ export default {
 
         if (retryCount >= MAX_RETRIES) {
           // Too many retries - mark as failed
-          console.log(`[Cron] Job ${job.id} exceeded max retries, marking as failed`);
+          structuredLog('WARN', 'Job exceeded max retries, marking as failed', { service: 'cron', job_id: job.id });
           await env.DB.prepare(`
             UPDATE sync_jobs
             SET status = 'failed',
@@ -932,7 +932,7 @@ export default {
       `).all<{ id: string; metadata: string | null }>();
 
       if (veryOldJobs.results?.length) {
-        console.log(`[Cron] Marking ${veryOldJobs.results.length} very old pending jobs as failed`);
+        structuredLog('WARN', 'Marking very old pending jobs as failed', { service: 'cron', count: veryOldJobs.results.length });
 
         for (const job of veryOldJobs.results) {
           const metadata = job.metadata ? JSON.parse(job.metadata) : {};
@@ -961,7 +961,7 @@ export default {
       `).all<{ id: string; connection_id: string | null; metadata: string | null }>();
 
       if (staleRunningJobs.results?.length) {
-        console.log(`[Cron] Marking ${staleRunningJobs.results.length} stale running jobs as failed`);
+        structuredLog('WARN', 'Marking stale running jobs as failed', { service: 'cron', count: staleRunningJobs.results.length });
 
         for (const job of staleRunningJobs.results) {
           const metadata = job.metadata ? JSON.parse(job.metadata) : {};
