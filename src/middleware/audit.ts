@@ -8,6 +8,7 @@
 import { Context, Next } from "hono";
 import { AppContext } from "../types";
 import { AuditLogger, createAuditLogger } from "../services/auditLogger";
+import { structuredLog } from "../utils/structured-logger";
 
 /**
  * Extract client IP address from request
@@ -169,7 +170,7 @@ export async function auditMiddleware(c: AppContext, next: Next) {
       metadata: {
         query_params: Object.fromEntries(new URL(c.req.url).searchParams)
       }
-    }).catch(err => console.error('Failed to write audit log:', err));
+    }).catch(err => structuredLog('ERROR', 'Failed to write audit log', { service: 'audit', error: err instanceof Error ? err.message : String(err) }));
 
     // Log data access for analytics endpoints (fire-and-forget)
     if (path.includes('/analytics') && session) {
@@ -186,7 +187,7 @@ export async function auditMiddleware(c: AppContext, next: Next) {
         request_id: requestId,
         ip_address: ipAddress,
         data_classification: 'internal'
-      }).catch(err => console.error('Failed to write data access log:', err));
+      }).catch(err => structuredLog('ERROR', 'Failed to write data access log', { service: 'audit', error: err instanceof Error ? err.message : String(err) }));
     }
 
   } catch (error) {
@@ -210,7 +211,7 @@ export async function auditMiddleware(c: AppContext, next: Next) {
       error_code: (error as any).code || 'INTERNAL_ERROR',
       error_message: (error as any).message || 'Unknown error',
       response_time_ms: responseTime
-    }).catch(err => console.error('Failed to write audit log:', err));
+    }).catch(err => structuredLog('ERROR', 'Failed to write audit log', { service: 'audit', step: 'error_logging', error: err instanceof Error ? err.message : String(err) }));
 
     // Log security events for suspicious activity (fire-and-forget)
     if (shouldLogSecurityEvent(error, path)) {
@@ -229,7 +230,7 @@ export async function auditMiddleware(c: AppContext, next: Next) {
           path,
           error_details: (error as any).details
         }
-      }).catch(err => console.error('Failed to write security log:', err));
+      }).catch(err => structuredLog('ERROR', 'Failed to write security log', { service: 'audit', step: 'security_event', error: err instanceof Error ? err.message : String(err) }));
     }
 
     throw error; // Re-throw to maintain normal error flow
@@ -274,7 +275,7 @@ export async function authAuditMiddleware(c: AppContext, next: Next) {
         success: true,
         session_id: session.token,
         session_created: eventType === 'login'
-      }).catch(err => console.error('Failed to write auth audit log:', err));
+      }).catch(err => structuredLog('ERROR', 'Failed to write auth audit log', { service: 'audit', step: 'auth_event', error: err instanceof Error ? err.message : String(err) }));
     }
   } catch (error) {
     // Log failed auth attempt (fire-and-forget, don't block error response)
@@ -290,7 +291,7 @@ export async function authAuditMiddleware(c: AppContext, next: Next) {
         path,
         error_code: (error as any).code
       }
-    }).catch(err => console.error('Failed to write auth audit log:', err));
+    }).catch(err => structuredLog('ERROR', 'Failed to write auth audit log', { service: 'audit', step: 'failed_auth', error: err instanceof Error ? err.message : String(err) }));
 
     throw error;
   }

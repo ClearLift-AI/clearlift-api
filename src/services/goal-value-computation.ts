@@ -10,6 +10,8 @@
  * 4. Markov Removal: Uses existing Markov chain removal effect
  */
 
+import { structuredLog } from '../utils/structured-logger';
+
 // D1Database type is provided by wrangler-generated types (worker-configuration.d.ts)
 // Using global declaration to avoid external package dependency
 declare const D1Database: any;
@@ -777,7 +779,7 @@ export class GoalValueComputationService {
           )
           .run();
       } catch (err) {
-        console.error(`Failed to compute value for goal ${goal.id}:`, err);
+        structuredLog('ERROR', 'Failed to compute value for goal', { service: 'goal-value-computation', goal_id: goal.id, error: err instanceof Error ? err.message : String(err) });
       }
     }
   }

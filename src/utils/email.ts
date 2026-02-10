@@ -5,6 +5,7 @@
  */
 
 import { getSecret } from './secrets';
+import { structuredLog } from './structured-logger';
 
 export interface EmailTemplate {
   to: string | string[];
@@ -45,7 +46,7 @@ export class EmailService {
     await this.init();
 
     if (!this.apiKey) {
-      console.error('SendGrid API key not found');
+      structuredLog('ERROR', 'SendGrid API key not found', { service: 'email' });
       return { success: false, error: 'Email service not configured' };
     }
 
@@ -93,11 +94,11 @@ export class EmailService {
         return { success: true, messageId: messageId || undefined };
       } else {
         const error = await response.text();
-        console.error('SendGrid error:', error);
+        structuredLog('ERROR', 'SendGrid error', { service: 'email', status: response.status, error });
         return { success: false, error: `SendGrid error: ${response.status}` };
       }
     } catch (error: any) {
-      console.error('Email send error:', error);
+      structuredLog('ERROR', 'Email send error', { service: 'email', error: error instanceof Error ? error.message : String(error) });
       return { success: false, error: error.message };
     }
   }

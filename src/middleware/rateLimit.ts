@@ -9,6 +9,7 @@ import { Context, Next } from "hono";
 import { AppContext } from "../types";
 import { ApiError } from "./errorHandler";
 import { createAuditLogger } from "../services/auditLogger";
+import { structuredLog } from "../utils/structured-logger";
 
 export interface RateLimitConfig {
   windowMs: number;        // Time window in milliseconds
@@ -137,7 +138,7 @@ async function cleanupExpiredEntries(db: D1Database) {
       WHERE window_end < ?
     `).bind(now).run();
   } catch (error) {
-    console.error("Failed to cleanup rate limit entries:", error);
+    structuredLog('ERROR', 'Failed to cleanup rate limit entries', { service: 'rate-limiter', error: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -217,7 +218,7 @@ export function rateLimitMiddleware(config: RateLimitConfig) {
           });
         } catch (logErr) {
           // Ignore audit log failures - don't let them block the rate limit response
-          console.error("Failed to log rate limit event:", logErr);
+          structuredLog('ERROR', 'Failed to log rate limit event', { service: 'rate-limiter', error: logErr instanceof Error ? logErr.message : String(logErr) });
         }
 
         // Return rate limit error
@@ -272,7 +273,7 @@ export function rateLimitMiddleware(config: RateLimitConfig) {
           newCount,
           newWindowEnd,
           nowIso
-        ).run().catch(err => console.error("Rate limit update failed:", err));
+        ).run().catch(err => structuredLog('ERROR', 'Rate limit update failed', { service: 'rate-limiter', error: err instanceof Error ? err.message : String(err) }));
 
         // Add rate limit headers
         c.header("X-RateLimit-Limit", String(config.maxRequests));
@@ -282,11 +283,11 @@ export function rateLimitMiddleware(config: RateLimitConfig) {
 
       // Occasionally clean up expired entries (1% chance)
       if (Math.random() < 0.01) {
-        cleanupExpiredEntries(db).catch(console.error);
+        cleanupExpiredEntries(db).catch(err => structuredLog('ERROR', 'Rate limit cleanup failed', { service: 'rate-limiter', error: err instanceof Error ? err.message : String(err) }));
       }
     } catch (error) {
       // If rate limiting fails, log but don't block the request
-      console.error("Rate limiting error:", error);
+      structuredLog('ERROR', 'Rate limiting error', { service: 'rate-limiter', error: error instanceof Error ? error.message : String(error) });
 
       // Re-throw if it's our rate limit error
       if (error instanceof ApiError && error.code === "RATE_LIMIT_EXCEEDED") {

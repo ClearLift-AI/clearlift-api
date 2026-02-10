@@ -5,6 +5,7 @@ import { success, error } from "../../../utils/response";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
 import { getDBSession } from "../../../utils/db-session";
 import { getShardDbForOrg } from "../../../services/shard-router";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * DEPRECATED: GetPlatformData class removed - broken table naming
@@ -190,7 +191,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         time_series: timeSeries
       });
     } catch (err) {
-      console.error("Unified data fetch error:", err);
+      structuredLog('ERROR', 'Unified data fetch error', { endpoint: 'platforms', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", "Failed to fetch unified data", 500);
     }
   }
@@ -226,7 +227,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         by_date: byDate
       };
     } catch (err) {
-      console.error('Failed to fetch Stripe conversions from D1:', err);
+      structuredLog('ERROR', 'Failed to fetch Stripe conversions from D1', { endpoint: 'platforms', step: 'stripe_conversions', error: err instanceof Error ? err.message : String(err) });
       return null;
     }
   }
@@ -343,7 +344,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
       console.log(`[TimeSeries] Final dailyData has ${dailyData.size} dates`);
       return Array.from(dailyData.values()).sort((a, b) => a.date.localeCompare(b.date));
     } catch (err) {
-      console.error('[TimeSeries] UNION ALL query failed:', err);
+      structuredLog('ERROR', 'Time series UNION ALL query failed', { endpoint: 'platforms', step: 'timeseries', error: err instanceof Error ? err.message : String(err) });
       return [];
     }
   }

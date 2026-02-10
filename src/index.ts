@@ -8,6 +8,7 @@ import { errorHandler } from "./middleware/errorHandler";
 import { auditMiddleware } from "./middleware/audit";
 import { rateLimitMiddleware } from "./middleware/rateLimit";
 import { securityHeaders, validateContentType, sanitizeInput } from "./middleware/security";
+import { structuredLog } from "./utils/structured-logger";
 
 // V1 Endpoints
 import { HealthEndpoint } from "./endpoints/v1/health";
@@ -809,7 +810,7 @@ export default {
       const shards = [env.SHARD_0, env.SHARD_1, env.SHARD_2, env.SHARD_3].filter(Boolean);
 
       if (shards.length === 0) {
-        console.error('[Cron] No shard databases configured');
+        structuredLog('ERROR', 'No shard databases configured', { endpoint: 'cron', step: 'daily_aggregation' });
         return;
       }
 
@@ -822,7 +823,7 @@ export default {
       console.log(`[Cron] Shards processed: ${result.shards.length}`);
 
       if (result.errors.length > 0) {
-        console.error(`[Cron] Errors: ${result.errors.join(', ')}`);
+        structuredLog('ERROR', `Aggregation errors: ${result.errors.join(', ')}`, { endpoint: 'cron', step: 'daily_aggregation', errors: result.errors });
       }
 
       // Log summary per shard
@@ -917,7 +918,7 @@ export default {
             });
             console.log(`[Cron] Successfully re-queued job ${job.id}`);
           } catch (queueErr) {
-            console.error(`[Cron] Failed to re-queue job ${job.id}:`, queueErr);
+            structuredLog('ERROR', `Failed to re-queue job ${job.id}`, { endpoint: 'cron', step: 'stale_job_cleanup', job_id: job.id, error: queueErr instanceof Error ? queueErr.message : String(queueErr) });
           }
         }
       }
@@ -1008,7 +1009,7 @@ export default {
 
       console.log('[Cron] Stale job cleanup completed');
     } catch (err) {
-      console.error('[Cron] Error during stale job cleanup:', err);
+      structuredLog('ERROR', 'Error during stale job cleanup', { endpoint: 'cron', step: 'stale_job_cleanup', error: err instanceof Error ? err.message : String(err) });
     }
   },
 
@@ -1049,7 +1050,7 @@ export default {
             SET status = 'failed', error_message = 'Queue send failed after ${MAX_WEBHOOK_RETRIES} retry attempts', processed_at = datetime('now')
             WHERE id = ?
           `).bind(evt.id).run();
-          console.warn(`[Cron] Webhook event ${evt.id} exceeded max retries, marked as failed`);
+          structuredLog('WARN', `Webhook event ${evt.id} exceeded max retries, marked as failed`, { endpoint: 'cron', step: 'webhook_retry', event_id: evt.id });
           continue;
         }
 
@@ -1074,11 +1075,11 @@ export default {
           await env.DB.prepare(`
             UPDATE webhook_events SET attempts = attempts + 1, error_message = ? WHERE id = ?
           `).bind(`Queue retry failed: ${errMsg}`, evt.id).run();
-          console.error(`[Cron] Webhook event ${evt.id} retry failed (attempt ${evt.attempts + 1}):`, errMsg);
+          structuredLog('ERROR', `Webhook event ${evt.id} retry failed`, { endpoint: 'cron', step: 'webhook_retry', event_id: evt.id, attempt: evt.attempts + 1, error: errMsg });
         }
       }
     } catch (err) {
-      console.error('[Cron] Error during webhook event retry sweep:', err);
+      structuredLog('ERROR', 'Error during webhook event retry sweep', { endpoint: 'cron', step: 'webhook_retry', error: err instanceof Error ? err.message : String(err) });
     }
   },
 
@@ -1211,14 +1212,14 @@ export default {
             totalRowsInserted++;
           }
         } catch (orgErr) {
-          console.error(`[Cron] Error backfilling CAC for org ${org.organization_id}:`, orgErr);
+          structuredLog('ERROR', `Error backfilling CAC for org ${org.organization_id}`, { endpoint: 'cron', step: 'cac_backfill', org_id: org.organization_id, error: orgErr instanceof Error ? orgErr.message : String(orgErr) });
           // Continue with other orgs
         }
       }
 
       console.log(`[Cron] CAC history backfill completed: ${totalRowsInserted} rows upserted across ${orgs.length} orgs`);
     } catch (err) {
-      console.error('[Cron] Error during CAC history backfill:', err);
+      structuredLog('ERROR', 'Error during CAC history backfill', { endpoint: 'cron', step: 'cac_backfill', error: err instanceof Error ? err.message : String(err) });
     }
   }
 };

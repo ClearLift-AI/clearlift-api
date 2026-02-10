@@ -6,6 +6,7 @@
  */
 
 import { FilterRule, FilterCondition } from '../filters/types';
+import { structuredLog } from '../../utils/structured-logger';
 
 export interface StripeConfig {
   apiKey: string;
@@ -158,7 +159,7 @@ export class StripeAPIProvider {
 
       if (!chargesResponse.ok) {
         const errorText = await chargesResponse.text();
-        console.error('[Stripe] Charges endpoint failed:', errorText);
+        structuredLog('ERROR', 'Charges endpoint failed', { service: 'stripe', method: 'validateApiKey', error: errorText });
         throw new Error(`Invalid API key - cannot read charges (${chargesResponse.status}): ${errorText}`);
       }
 
@@ -206,7 +207,7 @@ export class StripeAPIProvider {
         default_currency: currency
       };
     } catch (error) {
-      console.error('[Stripe] Validation failed with error:', error);
+      structuredLog('ERROR', 'Validation failed', { service: 'stripe', method: 'validateApiKey', error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to validate Stripe API key: ${error instanceof Error ? error.message : error}`);
     }
   }
@@ -561,14 +562,14 @@ export class StripeAPIProvider {
     // Batch fetch products and prices
     const productPromises = Array.from(productIds).map(id =>
       this.getProduct(id).catch(err => {
-        console.error(`Failed to fetch product ${id}:`, err);
+        structuredLog('ERROR', 'Failed to fetch product', { service: 'stripe', method: 'enrichCharges', product_id: id, error: err instanceof Error ? err.message : String(err) });
         return null;
       })
     );
 
     const pricePromises = Array.from(priceIds).map(id =>
       this.getPrice(id, ['product']).catch(err => {
-        console.error(`Failed to fetch price ${id}:`, err);
+        structuredLog('ERROR', 'Failed to fetch price', { service: 'stripe', method: 'enrichCharges', price_id: id, error: err instanceof Error ? err.message : String(err) });
         return null;
       })
     );

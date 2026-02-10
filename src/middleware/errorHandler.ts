@@ -1,6 +1,7 @@
 import { Context } from "hono";
 import type { ApiErrorResponse, ApiSuccessResponse } from "../types/response";
 import { getRequestId } from "../utils/response";
+import { structuredLog } from "../utils/structured-logger";
 
 type StatusCode = number;
 
@@ -29,7 +30,7 @@ export type { ApiSuccessResponse as SuccessResponse } from "../types/response";
  * Consistent meta structure with request_id for tracing.
  */
 export function errorHandler(error: Error, c: Context): Response {
-  console.error("Error:", error);
+  structuredLog('ERROR', 'Unhandled error', { service: 'error-handler', error: error instanceof Error ? error.message : String(error) });
 
   const requestId = getRequestId(c);
 

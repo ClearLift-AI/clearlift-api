@@ -11,6 +11,8 @@
  * - org:{id}:pending_ai - Pending AI decisions count
  */
 
+import { structuredLog } from '../utils/structured-logger';
+
 export class CacheService {
   constructor(private kv: KVNamespace) {}
 
@@ -39,7 +41,7 @@ export class CacheService {
     this.kv.put(key, JSON.stringify(value), {
       expirationTtl: ttlSeconds
     }).catch(err => {
-      console.error(`[Cache] Failed to set ${key}:`, err);
+      structuredLog('ERROR', 'Failed to set cache key', { service: 'cache', key, error: err instanceof Error ? err.message : String(err) });
     });
 
     return value;

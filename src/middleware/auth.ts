@@ -1,5 +1,6 @@
 import { Context, Next } from "hono";
 import { AppContext } from "../types";
+import { structuredLog } from "../utils/structured-logger";
 
 export interface Session {
   user_id: string;
@@ -95,7 +96,7 @@ export async function auth(c: AppContext, next: Next) {
 
     await next();
   } catch (error) {
-    console.error("Auth middleware error:", error);
+    structuredLog('ERROR', 'Auth middleware error', { service: 'auth-middleware', error: error instanceof Error ? error.message : String(error) });
     return c.json({
       success: false,
       error: {
@@ -266,7 +267,7 @@ export function requireRole(roles: string[]) {
 
       await next();
     } catch (error) {
-      console.error("Role check error:", error);
+      structuredLog('ERROR', 'Role check error', { service: 'auth-middleware', error: error instanceof Error ? error.message : String(error) });
       return c.json({
         success: false,
         error: {

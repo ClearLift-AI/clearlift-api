@@ -13,6 +13,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from "../../../utils/structured-logger";
 import { getShardDbForOrg } from "../../../services/shard-router";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -163,7 +164,7 @@ export class GetCACTimeline extends OpenAPIRoute {
             });
           }
         } catch (liveErr) {
-          console.warn('Failed to compute live CAC for today:', liveErr);
+          structuredLog('WARN', 'Failed to compute live CAC for today', { endpoint: 'cac-timeline', step: 'live_cac', error: liveErr instanceof Error ? liveErr.message : String(liveErr) });
           // Non-fatal — timeline just won't have today's point
         }
       }
@@ -272,7 +273,7 @@ export class GetCACTimeline extends OpenAPIRoute {
       });
 
     } catch (err) {
-      console.error('CAC timeline error:', err);
+      structuredLog('ERROR', 'CAC timeline error', { endpoint: 'cac-timeline', step: 'timeline', error: err instanceof Error ? err.message : String(err) });
       return error(c, 'CAC_TIMELINE_ERROR', 'Failed to fetch CAC timeline', 500);
     }
   }
@@ -420,7 +421,7 @@ export class GenerateCACPredictions extends OpenAPIRoute {
       });
 
     } catch (err) {
-      console.error('CAC prediction generation error:', err);
+      structuredLog('ERROR', 'CAC prediction generation error', { endpoint: 'cac-timeline', step: 'generate_predictions', error: err instanceof Error ? err.message : String(err) });
       return error(c, 'CAC_PREDICTION_ERROR', 'Failed to generate CAC predictions', 500);
     }
   }
@@ -601,7 +602,7 @@ export class ComputeCACBaselines extends OpenAPIRoute {
       });
 
     } catch (err) {
-      console.error('CAC baseline computation error:', err);
+      structuredLog('ERROR', 'CAC baseline computation error', { endpoint: 'cac-timeline', step: 'compute_baselines', error: err instanceof Error ? err.message : String(err) });
       return error(c, 'CAC_BASELINE_ERROR', 'Failed to compute CAC baselines', 500);
     }
   }
@@ -851,7 +852,7 @@ export class BackfillCACHistory extends OpenAPIRoute {
       });
 
     } catch (err) {
-      console.error('CAC backfill error:', err);
+      structuredLog('ERROR', 'CAC backfill error', { endpoint: 'cac-timeline', step: 'backfill', error: err instanceof Error ? err.message : String(err) });
       return error(c, 'CAC_BACKFILL_ERROR', 'Failed to backfill CAC history', 500);
     }
   }
@@ -975,7 +976,7 @@ export class GetCACSummary extends OpenAPIRoute {
       });
 
     } catch (err) {
-      console.error('CAC summary error:', err);
+      structuredLog('ERROR', 'CAC summary error', { endpoint: 'cac-timeline', step: 'summary', error: err instanceof Error ? err.message : String(err) });
       return error(c, 'CAC_SUMMARY_ERROR', 'Failed to fetch CAC summary', 500);
     }
   }

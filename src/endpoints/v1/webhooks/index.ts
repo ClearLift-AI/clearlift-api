@@ -18,6 +18,7 @@ import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { getSecret } from "../../../utils/secrets";
 import { getWebhookHandler, getSupportedConnectors } from "./handlers";
+import { structuredLog } from "../../../utils/structured-logger";
 
 // =============================================================================
 // Receive Webhook Event
@@ -84,7 +85,7 @@ export class ReceiveWebhook extends OpenAPIRoute {
           orgId = org.organization_id;
           console.log(`[Webhook] Resolved org ${orgId} from shop domain ${shopDomain}`);
         } else {
-          console.warn(`[Webhook] No org found for shop domain: ${shopDomain}`);
+          structuredLog('WARN', 'No org found for shop domain', { endpoint: 'webhooks', connector: 'shopify', shop_domain: shopDomain });
           return error(c, "UNKNOWN_SHOP", `No connection found for shop: ${shopDomain}`, 404);
         }
       }
@@ -119,7 +120,7 @@ export class ReceiveWebhook extends OpenAPIRoute {
       // Verify HMAC with app-level secret
       const isValid = await handler.verifySignature(c.req.raw.headers, body, appSecret);
       if (!isValid) {
-        console.warn(`[Webhook] Shopify HMAC verification failed for org ${orgId}`);
+        structuredLog('WARN', 'Shopify HMAC verification failed', { endpoint: 'webhooks', connector: 'shopify', org_id: orgId });
         return error(c, "INVALID_SIGNATURE", "Webhook signature verification failed", 400);
       }
 
@@ -167,7 +168,8 @@ export class ReceiveWebhook extends OpenAPIRoute {
           });
         } catch (queueError) {
           const errMsg = queueError instanceof Error ? queueError.message : String(queueError);
-          console.error("[Webhook] Queue send failed", {
+          structuredLog('ERROR', 'Queue send failed', {
+            endpoint: 'webhooks',
             connector,
             event_type: eventType,
             webhook_event_id: webhookEventId,
@@ -181,7 +183,8 @@ export class ReceiveWebhook extends OpenAPIRoute {
               `UPDATE webhook_events SET status = 'queue_failed', error_message = ? WHERE id = ?`
             ).bind(`Queue send failed: ${errMsg}`, webhookEventId).run();
           } catch (d1Error) {
-            console.error("[Webhook] CRITICAL: Queue send AND D1 status update both failed", {
+            structuredLog('CRITICAL', 'Queue send AND D1 status update both failed', {
+              endpoint: 'webhooks',
               connector,
               event_type: eventType,
               webhook_event_id: webhookEventId,
@@ -213,7 +216,7 @@ export class ReceiveWebhook extends OpenAPIRoute {
 
     if (!isValid) {
       // Log failed verification for security monitoring
-      console.warn(`[Webhook] Signature verification failed for ${connector}/${orgId}`);
+      structuredLog('WARN', 'Signature verification failed', { endpoint: 'webhooks', connector, org_id: orgId });
       return error(c, "INVALID_SIGNATURE", "Webhook signature verification failed", 400);
     }
 
@@ -298,7 +301,8 @@ export class ReceiveWebhook extends OpenAPIRoute {
         });
       } catch (queueError) {
         const errMsg = queueError instanceof Error ? queueError.message : String(queueError);
-        console.error("[Webhook] Queue send failed", {
+        structuredLog('ERROR', 'Queue send failed', {
+          endpoint: 'webhooks',
           connector,
           event_type: eventType,
           webhook_event_id: webhookEventId,
@@ -312,7 +316,8 @@ export class ReceiveWebhook extends OpenAPIRoute {
             `UPDATE webhook_events SET status = 'queue_failed', error_message = ? WHERE id = ?`
           ).bind(`Queue send failed: ${errMsg}`, webhookEventId).run();
         } catch (d1Error) {
-          console.error("[Webhook] CRITICAL: Queue send AND D1 status update both failed", {
+          structuredLog('CRITICAL', 'Queue send AND D1 status update both failed', {
+            endpoint: 'webhooks',
             connector,
             event_type: eventType,
             webhook_event_id: webhookEventId,
@@ -779,13 +784,13 @@ export class ShopifyCustomerDataRequest extends OpenAPIRoute {
     // Verify HMAC — mandatory for all Shopify webhooks
     const secret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
     if (!secret) {
-      console.error("[GDPR] SHOPIFY_CLIENT_SECRET not configured");
+      structuredLog('ERROR', 'SHOPIFY_CLIENT_SECRET not configured', { endpoint: 'webhooks', step: 'gdpr_customer_data_request' });
       return error(c, "CONFIG_ERROR", "Webhook secret not configured", 500);
     }
 
     const isValid = await verifyShopifyHmac(c.req.raw.headers, body, secret);
     if (!isValid) {
-      console.warn("[GDPR] customers/data_request HMAC verification failed");
+      structuredLog('WARN', 'GDPR customers/data_request HMAC verification failed', { endpoint: 'webhooks', step: 'gdpr_customer_data_request' });
       return error(c, "INVALID_SIGNATURE", "HMAC verification failed", 401);
     }
 
@@ -872,13 +877,13 @@ export class ShopifyCustomerRedact extends OpenAPIRoute {
 
     const secret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
     if (!secret) {
-      console.error("[GDPR] SHOPIFY_CLIENT_SECRET not configured");
+      structuredLog('ERROR', 'SHOPIFY_CLIENT_SECRET not configured', { endpoint: 'webhooks', step: 'gdpr_customer_redact' });
       return error(c, "CONFIG_ERROR", "Webhook secret not configured", 500);
     }
 
     const isValid = await verifyShopifyHmac(c.req.raw.headers, body, secret);
     if (!isValid) {
-      console.warn("[GDPR] customers/redact HMAC verification failed");
+      structuredLog('WARN', 'GDPR customers/redact HMAC verification failed', { endpoint: 'webhooks', step: 'gdpr_customer_redact' });
       return error(c, "INVALID_SIGNATURE", "HMAC verification failed", 401);
     }
 
@@ -947,7 +952,7 @@ export class ShopifyCustomerRedact extends OpenAPIRoute {
         await c.env.ANALYTICS_DB.batch(statements);
         console.log(`[GDPR] Redacted customer ${shopifyCustomerId} for org ${org.organization_id}`);
       } catch (err) {
-        console.error(`[GDPR] Redaction DB error for customer ${shopifyCustomerId}:`, err);
+        structuredLog('ERROR', `Redaction DB error for customer ${shopifyCustomerId}`, { endpoint: 'webhooks', step: 'gdpr_customer_redact', customer_id: shopifyCustomerId, error: err instanceof Error ? err.message : String(err) });
         // Still return 200 — we've logged the request and will retry
       }
     }
@@ -1000,13 +1005,13 @@ export class ShopifyShopRedact extends OpenAPIRoute {
 
     const secret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
     if (!secret) {
-      console.error("[GDPR] SHOPIFY_CLIENT_SECRET not configured");
+      structuredLog('ERROR', 'SHOPIFY_CLIENT_SECRET not configured', { endpoint: 'webhooks', step: 'gdpr_shop_redact' });
       return error(c, "CONFIG_ERROR", "Webhook secret not configured", 500);
     }
 
     const isValid = await verifyShopifyHmac(c.req.raw.headers, body, secret);
     if (!isValid) {
-      console.warn("[GDPR] shop/redact HMAC verification failed");
+      structuredLog('WARN', 'GDPR shop/redact HMAC verification failed', { endpoint: 'webhooks', step: 'gdpr_shop_redact' });
       return error(c, "INVALID_SIGNATURE", "HMAC verification failed", 401);
     }
 
@@ -1065,7 +1070,7 @@ export class ShopifyShopRedact extends OpenAPIRoute {
 
         console.log(`[GDPR] Redacted all Shopify data for org ${org.organization_id}`);
       } catch (err) {
-        console.error(`[GDPR] Shop redaction DB error for ${shop_domain}:`, err);
+        structuredLog('ERROR', `Shop redaction DB error for ${shop_domain}`, { endpoint: 'webhooks', step: 'gdpr_shop_redact', shop_domain, error: err instanceof Error ? err.message : String(err) });
       }
     }
 

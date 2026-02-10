@@ -12,6 +12,7 @@ import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { getSecret } from "../../../utils/secrets";
 import { JobManager, AnalysisConfig } from "../../../services/analysis";
+import { structuredLog } from "../../../utils/structured-logger";
 
 export class RunAnalysis extends OpenAPIRoute {
   public schema = {
@@ -80,7 +81,7 @@ export class RunAnalysis extends OpenAPIRoute {
 
     if (!anthropicKey || !geminiKey) {
       const missing = [!anthropicKey && 'ANTHROPIC_API_KEY', !geminiKey && 'GEMINI_API_KEY'].filter(Boolean).join(', ');
-      console.error(`[RunAnalysis] Secret Store keys unavailable: ${missing}`);
+      structuredLog('ERROR', 'Secret Store keys unavailable', { endpoint: 'analysis', step: 'run', missing_keys: missing });
       return error(c, "CONFIGURATION_ERROR", "AI service not configured — secret keys unavailable", 500);
     }
 
@@ -170,7 +171,7 @@ export class RunAnalysis extends OpenAPIRoute {
     } catch (err) {
       // If workflow creation fails, mark job as failed
       const message = err instanceof Error ? err.message : "Failed to start workflow";
-      console.error("Workflow creation failed:", err);
+      structuredLog('ERROR', 'Workflow creation failed', { endpoint: 'analysis', step: 'run', error: err instanceof Error ? err.message : String(err) });
       await jobs.failJob(jobId, message);
       return error(c, "WORKFLOW_ERROR", message, 500);
     }

@@ -13,6 +13,7 @@ import { z } from "zod";
 import { AppContext, SetupStatus, DataQualityResponse, buildDataQualityResponse } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1Adapter } from "../../../adapters/d1";
+import { structuredLog } from "../../../utils/structured-logger";
 import {
   AttributionModel,
   AttributionConfig,
@@ -191,7 +192,7 @@ async function checkVerificationStatus(
     };
   } catch (err) {
     // Table might not exist or query failed
-    console.error(`[Attribution] Verification check failed:`, err);
+    structuredLog('ERROR', 'Verification check failed', { endpoint: 'attribution', step: 'verification_check', error: err instanceof Error ? err.message : String(err) });
     return {
       verified_count: 0,
       avg_confidence: 0,
@@ -717,7 +718,7 @@ async function buildPlatformFallbackD1(
         totalRevenue += revenue;
       }
     } catch (err) {
-      console.error(`[Attribution D1 Fallback] Unified ad_metrics query failed:`, err);
+      structuredLog('ERROR', 'Unified ad_metrics query failed (D1 fallback)', { endpoint: 'attribution', step: 'd1_fallback', error: err instanceof Error ? err.message : String(err) });
     }
 
     // Sort by attributed_conversions descending
@@ -729,7 +730,7 @@ async function buildPlatformFallbackD1(
       summary: { total_conversions: totalConversions, total_revenue: totalRevenue }
     };
   } catch (err) {
-    console.error('[Attribution D1 Fallback] Error:', err);
+    structuredLog('ERROR', 'D1 fallback error', { endpoint: 'attribution', step: 'd1_fallback', error: err instanceof Error ? err.message : String(err) });
     return { attributions: [], summary: { total_conversions: 0, total_revenue: 0 } };
   }
 }
@@ -955,7 +956,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       setupGuidance = buildDataQualityResponse(setupStatus);
       console.log(`[Attribution] Setup: tag=${setupStatus.hasTrackingTag}, platforms=${setupStatus.connectedPlatforms.join(',')}, connectors=${setupStatus.connectedConnectors.join(',')}, completeness=${setupGuidance.completeness}%`);
     } catch (setupErr) {
-      console.warn(`[Attribution] Setup check failed, using defaults:`, setupErr);
+      structuredLog('WARN', 'Setup check failed, using defaults', { endpoint: 'attribution', step: 'setup_check', error: setupErr instanceof Error ? setupErr.message : String(setupErr) });
       setupGuidance = buildDataQualityResponse(setupStatus);
     }
 
@@ -1002,7 +1003,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     try {
       verificationMetrics = await checkVerificationStatus(analyticsDb, orgId, dateRange);
     } catch (err) {
-      console.warn('[Attribution] Verification check failed:', err);
+      structuredLog('WARN', 'Verification check failed', { endpoint: 'attribution', step: 'verification_check', error: err instanceof Error ? err.message : String(err) });
     }
 
     // See SHARED_CODE.md §19.9 — Pre-computed attribution results
@@ -1095,7 +1096,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
           }
         }
       } catch (err) {
-        console.warn('[Attribution] Pre-computed query failed, falling back to live query:', err);
+        structuredLog('WARN', 'Pre-computed query failed, falling back to live query', { endpoint: 'attribution', step: 'precomputed_query', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -1158,7 +1159,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : 'Unknown error';
-        console.error(`[Attribution] Error querying revenue sources:`, err);
+        structuredLog('ERROR', 'Error querying revenue sources', { endpoint: 'attribution', step: 'revenue_sources', error: err instanceof Error ? err.message : String(err) });
         // Fall back to ad platforms on error, but surface the issue
         attributionData = await buildPlatformFallbackD1(
           shardDb,
@@ -1358,7 +1359,7 @@ export class GetAttributionComparison extends OpenAPIRoute {
         }>;
         console.log(`[Attribution Compare] Found ${attributionResults.length} results from attribution_results table`);
       } catch (err) {
-        console.warn('[Attribution Compare] Failed to query attribution_results:', err);
+        structuredLog('WARN', 'Failed to query attribution_results', { endpoint: 'attribution', step: 'compare', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -1513,7 +1514,7 @@ export class RunAttributionAnalysis extends OpenAPIRoute {
         WHERE id = ?
       `).bind(JSON.stringify({ error: err.message }), jobId).run();
 
-      console.error(`[Attribution] Failed to start workflow:`, err);
+      structuredLog('ERROR', 'Failed to start attribution workflow', { endpoint: 'attribution', step: 'start_workflow', error: err instanceof Error ? err.message : String(err) });
       return error(c, "WORKFLOW_START_FAILED", `Failed to start attribution analysis: ${err.message}`, 500);
     }
   }
@@ -1738,7 +1739,7 @@ export class GetComputedAttribution extends OpenAPIRoute {
           });
         }
       } catch (err) {
-        console.warn('[GetComputedAttribution] Fallback to ANALYTICS_DB failed:', err);
+        structuredLog('WARN', 'Fallback to ANALYTICS_DB failed', { endpoint: 'attribution', step: 'get_computed', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -1959,7 +1960,7 @@ Works even without click tracking or event data.
         }
       }
     } catch (err) {
-      console.error(`[Blended Attribution] Failed to query unified ad_metrics:`, err);
+      structuredLog('ERROR', 'Failed to query unified ad_metrics', { endpoint: 'attribution', step: 'blended_ad_metrics', error: err instanceof Error ? err.message : String(err) });
     }
 
     return {
@@ -2023,7 +2024,7 @@ Works even without click tracking or event data.
         if (stripeResult.max_date) maxDate = stripeResult.max_date;
       }
     } catch (err) {
-      console.warn('[Blended Attribution] Failed to query Stripe:', err);
+      structuredLog('WARN', 'Failed to query Stripe', { endpoint: 'attribution', step: 'blended_stripe', error: err instanceof Error ? err.message : String(err) });
     }
 
     // Query Shopify orders (if table exists)
@@ -2334,7 +2335,7 @@ Returns a job ID to poll for completion.
         WHERE id = ?
       `).bind(err.message, jobId).run();
 
-      console.error(`[ProbabilisticAttribution] Failed to start workflow:`, err);
+      structuredLog('ERROR', 'Failed to start probabilistic attribution workflow', { endpoint: 'attribution', step: 'probabilistic_workflow', error: err instanceof Error ? err.message : String(err) });
       return error(c, "WORKFLOW_START_FAILED", `Failed to start probabilistic attribution: ${err.message}`, 500);
     }
   }

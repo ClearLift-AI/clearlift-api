@@ -14,6 +14,7 @@
  */
 
 import { OAuthProvider, OAuthTokens, OAuthUserInfo, PKCEChallenge } from './base';
+import { structuredLog } from '../../utils/structured-logger';
 
 /**
  * Salesforce-specific token response
@@ -200,10 +201,7 @@ export class SalesforceOAuthProvider extends OAuthProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Salesforce token exchange failed:', {
-          status: response.status,
-          error: errorText,
-        });
+        structuredLog('ERROR', 'Salesforce token exchange failed', { service: 'salesforce-oauth', method: 'exchangeCodeForToken', status: response.status, error: errorText });
 
         let errorMessage = errorText;
         try {
@@ -261,10 +259,7 @@ export class SalesforceOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Salesforce token refresh failed:', {
-        status: response.status,
-        error: errorText,
-      });
+      structuredLog('ERROR', 'Salesforce token refresh failed', { service: 'salesforce-oauth', method: 'refreshAccessToken', status: response.status, error: errorText });
 
       throw new Error(`Salesforce token refresh failed (${response.status}): ${errorText}`);
     }

@@ -6,6 +6,7 @@
  */
 
 import { Platform, EntityLevel } from './entity-tree';
+import { structuredLog } from '../../utils/structured-logger';
 
 // D1 types (D1Database, D1DatabaseSession, etc.) come from worker-configuration.d.ts
 
@@ -87,7 +88,7 @@ export class MetricsFetcher {
         conversion_value_cents: r.conversion_value_cents || 0
       }));
     } catch (err) {
-      console.error(`D1 metrics query failed for ${table}:`, err);
+      structuredLog('ERROR', 'D1 metrics query failed', { service: 'metrics-fetcher', table, error: err instanceof Error ? err.message : String(err) });
       return [];
     }
   }

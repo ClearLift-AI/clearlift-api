@@ -6,6 +6,7 @@
  */
 
 import { FieldEncryption } from '../utils/crypto';
+import { structuredLog } from '../utils/structured-logger';
 
 export interface ConnectorConfig {
   id: string;
@@ -415,7 +416,7 @@ export class ConnectorService {
           scopes: conn.scopes ? JSON.parse(conn.scopes as any) : []
         };
       } catch (err) {
-        console.error(`Failed to parse scopes for connection ${conn.id}:`, err);
+        structuredLog('ERROR', 'Failed to parse scopes for connection', { service: 'connectors', connection_id: conn.id, error: err instanceof Error ? err.message : String(err) });
         return {
           ...conn,
           scopes: []

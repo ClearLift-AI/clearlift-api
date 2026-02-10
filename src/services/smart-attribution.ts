@@ -17,6 +17,7 @@
  */
 
 import { CacheService } from './cache';
+import { structuredLog } from '../utils/structured-logger';
 
 // Signal types ordered by confidence
 export type SignalType =
@@ -317,7 +318,7 @@ export class SmartAttributionService {
     if (this.cache) {
       const cacheKey = CacheService.smartAttributionKey(orgId, startDate, endDate);
       this.cache.set(cacheKey, result, 300).catch(err => {
-        console.error(`[SmartAttribution] Failed to cache result:`, err);
+        structuredLog('ERROR', 'Failed to cache result', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
       });
       console.log(`[SmartAttribution] Cached result to ${cacheKey}`);
     }
@@ -336,7 +337,7 @@ export class SmartAttributionService {
       `).bind(orgId).first<{ short_tag: string }>();
       return result?.short_tag || null;
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to get org tag:', err);
+      structuredLog('WARN', 'Failed to get org tag', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
       return null;
     }
   }
@@ -391,7 +392,7 @@ export class SmartAttributionService {
         }
       }
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query platform metrics from unified tables:', err);
+      structuredLog('WARN', 'Failed to query platform metrics from unified tables', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
     }
 
     return results;
@@ -448,7 +449,7 @@ export class SmartAttributionService {
         });
       }
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query UTM performance:', err);
+      structuredLog('WARN', 'Failed to query UTM performance', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
     }
 
     // Get DIRECT traffic (sessions without UTM source)
@@ -481,7 +482,7 @@ export class SmartAttributionService {
         console.log(`[SmartAttribution] Direct traffic: ${directResult.sessions} sessions, ${directResult.conversions} conversions`);
       }
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query direct traffic:', err);
+      structuredLog('WARN', 'Failed to query direct traffic', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
     }
 
     return results;
@@ -527,7 +528,7 @@ export class SmartAttributionService {
         });
       }
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query Stripe revenue:', err);
+      structuredLog('WARN', 'Failed to query Stripe revenue', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
     }
 
     // Query Shopify if available
@@ -652,7 +653,7 @@ export class SmartAttributionService {
               totalChannelEvents += count;
             }
           } catch (err) {
-            console.warn(`[SmartAttribution] Failed to parse by_channel JSON:`, err);
+            structuredLog('WARN', 'Failed to parse by_channel JSON', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
           }
         }
       }
@@ -695,7 +696,7 @@ export class SmartAttributionService {
             visitors = result?.conversions || 0;
           }
         } catch (err) {
-          console.warn(`[SmartAttribution] Failed to fetch visitors for connector ${connector}:`, err);
+          structuredLog('WARN', 'Failed to fetch visitors for connector', { service: 'smart-attribution', connector, error: err instanceof Error ? err.message : String(err) });
         }
 
         // Build by_channel for this goal
@@ -742,7 +743,7 @@ export class SmartAttributionService {
       console.log(`[SmartAttribution] Funnel data: ${funnelData.length} goals from flow builder`);
       return funnelData;
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query funnel position data:', err);
+      structuredLog('WARN', 'Failed to query funnel position data', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
       return [];
     }
   }
@@ -798,7 +799,7 @@ export class SmartAttributionService {
         creditPercent: row.avg_credit_percent || 0,
       }));
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query click-level attribution:', err);
+      structuredLog('WARN', 'Failed to query click-level attribution', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
       return [];
     }
   }
@@ -842,7 +843,7 @@ export class SmartAttributionService {
       };
     } catch (err) {
       // Table might not exist or have different schema
-      console.warn('[SmartAttribution] Failed to query click ID stats:', err);
+      structuredLog('WARN', 'Failed to query click ID stats', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
       return { hasClickIds: false, clickIdCount: 0, byType: {} };
     }
   }
@@ -1617,7 +1618,7 @@ export class SmartAttributionService {
         });
       }
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query daily UTM performance:', err);
+      structuredLog('WARN', 'Failed to query daily UTM performance', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
     }
 
     return results;
@@ -1668,7 +1669,7 @@ export class SmartAttributionService {
         });
       }
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query daily Stripe revenue:', err);
+      structuredLog('WARN', 'Failed to query daily Stripe revenue', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
     }
 
     // Query Shopify by date
@@ -1751,7 +1752,7 @@ export class SmartAttributionService {
         });
       }
     } catch (err) {
-      console.warn('[SmartAttribution] Failed to query daily platform metrics from unified tables:', err);
+      structuredLog('WARN', 'Failed to query daily platform metrics from unified tables', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
     }
 
     return results;

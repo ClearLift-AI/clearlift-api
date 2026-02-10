@@ -8,6 +8,8 @@
 // D1 types come from worker-configuration.d.ts (global Cloudflare types)
 // D1Database, D1DatabaseSession, D1PreparedStatement, D1Result are globally available
 
+import { structuredLog } from '../utils/structured-logger';
+
 /**
  * Hourly metrics row from D1
  */
@@ -378,7 +380,7 @@ export class D1AnalyticsService {
           channelAgg[channel].sessions += count;
         }
       } catch (err) {
-        console.warn(`[D1Analytics] Failed to parse by_channel JSON:`, err);
+        structuredLog('WARN', 'Failed to parse by_channel JSON', { service: 'd1-analytics', error: err instanceof Error ? err.message : String(err) });
       }
     }
 

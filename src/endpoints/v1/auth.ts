@@ -11,6 +11,7 @@ import { success, error } from "../../utils/response";
 import { hashPassword, verifyPassword, generateSessionToken } from "../../utils/auth";
 import { getSecret } from "../../utils/secrets";
 import { createEmailService } from "../../utils/email";
+import { structuredLog } from "../../utils/structured-logger";
 
 /**
  * POST /v1/auth/register - Register a new user
@@ -183,8 +184,7 @@ export class Register extends OpenAPIRoute {
       }, 201);
 
     } catch (err: any) {
-      console.error("Registration error:", err);
-      console.error("Error details:", err.message, err.stack);
+      structuredLog('ERROR', 'Registration error', { endpoint: 'auth', step: 'register', error: err instanceof Error ? err.message : String(err), stack: err.stack });
       return error(c, "REGISTRATION_FAILED", `Failed to register user: ${err.message || 'Unknown error'}`, 500);
     }
   }
@@ -797,7 +797,7 @@ export class DeleteAccount extends OpenAPIRoute {
       });
 
     } catch (err: any) {
-      console.error("Account deletion error:", err);
+      structuredLog('ERROR', 'Account deletion error', { endpoint: 'auth', step: 'delete_account', error: err instanceof Error ? err.message : String(err) });
       return error(c, "DELETION_FAILED", `Failed to delete account: ${err.message || 'Unknown error'}`, 500);
     }
   }

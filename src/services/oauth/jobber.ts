@@ -21,6 +21,7 @@
  */
 
 import { OAuthProvider, OAuthTokens, OAuthUserInfo, PKCEChallenge } from './base';
+import { structuredLog } from '../../utils/structured-logger';
 
 /**
  * Jobber GraphQL API version
@@ -127,10 +128,7 @@ export class JobberOAuthProvider extends OAuthProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Jobber token exchange failed:', {
-          status: response.status,
-          error: errorText
-        });
+        structuredLog('ERROR', 'Jobber token exchange failed', { service: 'jobber-oauth', method: 'exchangeCodeForToken', status: response.status, error: errorText });
 
         let errorMessage = errorText;
         try {

@@ -6,6 +6,7 @@
 
 import { AnalysisLevel } from './llm-provider';
 import { JobStatus } from '../../types';
+import { structuredLog } from '../../utils/structured-logger';
 
 // Re-export for backward compatibility
 export type { JobStatus } from '../../types';
@@ -212,7 +213,7 @@ export class JobManager {
       });
     } catch (error) {
       // Webhook failure shouldn't affect job completion
-      console.error('Webhook trigger failed:', error);
+      structuredLog('ERROR', 'Webhook trigger failed', { service: 'job-manager', error: error instanceof Error ? error.message : String(error) });
     }
   }
 }

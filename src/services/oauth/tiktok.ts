@@ -8,6 +8,7 @@
  */
 
 import { OAuthProvider, OAuthUserInfo, PKCEChallenge } from './base';
+import { structuredLog } from '../../utils/structured-logger';
 import {
   API_BASE_URL,
   RATE_LIMITS,
@@ -69,7 +70,7 @@ export class TikTokAdsOAuthProvider extends OAuthProvider {
       if (RATE_LIMIT_ERROR_CODES.includes(errorCode) && retryCount < RATE_LIMITS.MAX_RETRIES) {
         const delay = RATE_LIMITS.INITIAL_RETRY_DELAY_MS * Math.pow(RATE_LIMITS.RETRY_BACKOFF_MULTIPLIER, retryCount);
 
-        console.warn(`TikTok API rate limit hit (code ${errorCode}). Retrying in ${delay}ms... (attempt ${retryCount + 1}/${RATE_LIMITS.MAX_RETRIES})`);
+        structuredLog('WARN', 'TikTok API rate limit hit', { service: 'tiktok-oauth', error_code: errorCode, delay_ms: delay, attempt: retryCount + 1, max_retries: RATE_LIMITS.MAX_RETRIES });
 
         await new Promise(resolve => setTimeout(resolve, delay));
         return this.fetchWithRetry(url, options, retryCount + 1);

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { success, error } from "../../utils/response";
 import { getSecret } from "../../utils/secrets";
+import { structuredLog } from "../../utils/structured-logger";
 
 /**
  * Worker health status schema
@@ -123,7 +124,7 @@ export class GetWorkersHealth extends OpenAPIRoute {
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      console.error(`[WorkerHealth] Failed to check ${workerName} at ${url}:`, errorMsg);
+      structuredLog('ERROR', `Failed to check worker health for ${workerName}`, { endpoint: 'workers', step: 'health_check', worker: workerName, url, error: errorMsg });
       return {
         worker: workerName,
         status: 'unhealthy',
@@ -308,7 +309,7 @@ export class GetDeadLetterQueue extends OpenAPIRoute {
         total: countResult?.total || 0
       });
     } catch (err) {
-      console.error("DLQ query error:", err);
+      structuredLog('ERROR', 'DLQ query error', { endpoint: 'workers', step: 'get_dlq', error: err instanceof Error ? err.message : String(err) });
       return error(c, "DATABASE_ERROR", "Failed to query dead letter queue", 500);
     }
   }
@@ -469,7 +470,7 @@ export class TestConnectionToken extends OpenAPIRoute {
         error: "Token testing not implemented for this platform yet"
       });
     } catch (err) {
-      console.error("Test token error:", err);
+      structuredLog('ERROR', 'Test token error', { endpoint: 'workers', step: 'test_token', error: err instanceof Error ? err.message : String(err) });
       return error(c, "TEST_ERROR", err instanceof Error ? err.message : "Failed to test token", 500);
     }
   }
@@ -640,7 +641,7 @@ export class TriggerEventsSync extends OpenAPIRoute {
         }
       });
     } catch (err) {
-      console.error("Trigger events sync error:", err);
+      structuredLog('ERROR', 'Trigger events sync error', { endpoint: 'workers', step: 'trigger_events_sync', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue events sync", 500);
     }
   }
@@ -741,7 +742,7 @@ export class GetD1Stats extends OpenAPIRoute {
         status: getStatus((sizeBytes / STORAGE_LIMIT_BYTES) * 100)
       });
     } catch (err) {
-      console.error('DB stats error:', err);
+      structuredLog('ERROR', 'DB stats error', { endpoint: 'workers', step: 'd1_stats', database: 'DB', error: err instanceof Error ? err.message : String(err) });
       databases.push({
         name: 'Main DB (clearlift-db-prod)',
         size_bytes: 0,
@@ -786,7 +787,7 @@ export class GetD1Stats extends OpenAPIRoute {
           status: getStatus((sizeBytes / STORAGE_LIMIT_BYTES) * 100)
         });
       } catch (err) {
-        console.error('AI_DB stats error:', err);
+        structuredLog('ERROR', 'AI_DB stats error', { endpoint: 'workers', step: 'd1_stats', database: 'AI_DB', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -839,7 +840,7 @@ export class GetD1Stats extends OpenAPIRoute {
           }
         });
       } catch (err) {
-        console.error('ANALYTICS_DB stats error:', err);
+        structuredLog('ERROR', 'ANALYTICS_DB stats error', { endpoint: 'workers', step: 'd1_stats', database: 'ANALYTICS_DB', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -1019,7 +1020,7 @@ export class TriggerSync extends OpenAPIRoute {
         message: `Sync job queued and processing. ${job_type === 'full' ? `Syncing ${syncStart.split('T')[0]} to ${syncEnd.split('T')[0]}.` : 'Incremental sync in progress.'}`
       });
     } catch (err) {
-      console.error("Trigger sync error:", err);
+      structuredLog('ERROR', 'Trigger sync error', { endpoint: 'workers', step: 'trigger_sync', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue sync job", 500);
     }
   }
@@ -1117,7 +1118,7 @@ export class TriggerRecalculation extends OpenAPIRoute {
         message: `Recalculation queued for ${days}-day window. Pipeline: aggregation → linking → CAC refresh.`,
       });
     } catch (err) {
-      console.error("Trigger recalculation error:", err);
+      structuredLog('ERROR', 'Trigger recalculation error', { endpoint: 'workers', step: 'trigger_recalculation', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue recalculation", 500);
     }
   }
@@ -1257,7 +1258,7 @@ export class TriggerResyncAll extends OpenAPIRoute {
         jobs_created: jobsCreated,
       });
     } catch (err) {
-      console.error("Trigger resync-all error:", err);
+      structuredLog('ERROR', 'Trigger resync-all error', { endpoint: 'workers', step: 'trigger_resync_all', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue resync jobs", 500);
     }
   }

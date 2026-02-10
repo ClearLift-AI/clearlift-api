@@ -15,6 +15,7 @@
  */
 
 import { OAuthProvider, OAuthTokens, OAuthUserInfo, OAuthConfig, PKCEChallenge } from './base';
+import { structuredLog } from '../../utils/structured-logger';
 
 /**
  * Shopify-specific token response
@@ -169,7 +170,7 @@ export class ShopifyOAuthProvider extends OAuthProvider {
   async validateHmac(queryParams: URLSearchParams): Promise<boolean> {
     const hmac = queryParams.get('hmac');
     if (!hmac) {
-      console.error('HMAC validation failed: no hmac parameter');
+      structuredLog('ERROR', 'HMAC validation failed: no hmac parameter', { service: 'shopify-oauth', method: 'validateHmac' });
       return false;
     }
 
@@ -258,10 +259,7 @@ export class ShopifyOAuthProvider extends OAuthProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Shopify token exchange failed:', {
-          status: response.status,
-          error: errorText
-        });
+        structuredLog('ERROR', 'Shopify token exchange failed', { service: 'shopify-oauth', method: 'exchangeCodeForToken', status: response.status, error: errorText });
 
         let errorMessage = errorText;
         try {

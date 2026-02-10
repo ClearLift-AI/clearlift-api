@@ -13,6 +13,7 @@ import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1Adapter } from "../../../adapters/d1";
 import { getSecret } from "../../../utils/secrets";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * Verify internal auth (shared secret or API key)
@@ -30,7 +31,7 @@ async function verifyInternalAuth(c: AppContext): Promise<boolean> {
     const internalApiKeyBinding = (c.env as any).INTERNAL_API_KEY;
     if (!internalApiKeyBinding) {
       // If INTERNAL_API_KEY is not configured, deny all internal requests
-      console.warn('INTERNAL_API_KEY binding not configured — denying internal request');
+      structuredLog('WARN', 'INTERNAL_API_KEY binding not configured, denying internal request', { endpoint: 'identify', step: 'auth_check' });
       return false;
     }
     const expectedKey = await getSecret(internalApiKeyBinding);
@@ -54,7 +55,7 @@ async function verifyInternalAuth(c: AppContext): Promise<boolean> {
     }
     return result === 0;
   } catch (e) {
-    console.error('Internal auth verification failed:', e);
+    structuredLog('ERROR', 'Internal auth verification failed', { endpoint: 'identify', step: 'auth_check', error: e instanceof Error ? e.message : String(e) });
     return false;
   }
 }
@@ -152,7 +153,7 @@ export class PostIdentify extends OpenAPIRoute {
         linked_anonymous_ids: linkedCount
       });
     } catch (err: any) {
-      console.error("Identity mapping error:", err);
+      structuredLog('ERROR', 'Identity mapping error', { endpoint: 'identify', step: 'map_identity', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INTERNAL_ERROR", "Failed to record identity mapping", 500);
     }
   }
@@ -237,7 +238,7 @@ export class PostIdentityMerge extends OpenAPIRoute {
         total_linked_anonymous_ids: linkedCount
       });
     } catch (err: any) {
-      console.error("Identity merge error:", err);
+      structuredLog('ERROR', 'Identity merge error', { endpoint: 'identify', step: 'merge_identity', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INTERNAL_ERROR", "Failed to merge identities", 500);
     }
   }

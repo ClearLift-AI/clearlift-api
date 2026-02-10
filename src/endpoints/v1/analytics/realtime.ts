@@ -9,6 +9,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * GET /v1/analytics/realtime/summary
@@ -108,7 +109,7 @@ export class GetRealtimeSummary extends OpenAPIRoute {
         pageViews: result?.page_views || 0
       });
     } catch (err) {
-      console.error('[Realtime] Summary query failed:', err);
+      structuredLog('ERROR', 'Summary query failed', { endpoint: 'realtime', step: 'summary', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
   }
@@ -204,7 +205,7 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
         conversions: row.conversions || 0
       })));
     } catch (err) {
-      console.error('[Realtime] Time series query failed:', err);
+      structuredLog('ERROR', 'Time series query failed', { endpoint: 'realtime', step: 'timeseries', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
   }
@@ -401,7 +402,7 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       // Would need additional JSON columns or Analytics Engine API token
       return success(c, []);
     } catch (err) {
-      console.error('[Realtime] Breakdown query failed:', err);
+      structuredLog('ERROR', 'Breakdown query failed', { endpoint: 'realtime', step: 'breakdown', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
   }
@@ -532,7 +533,7 @@ export class GetRealtimeEvents extends OpenAPIRoute {
 
       return success(c, events.slice(0, limit));
     } catch (err) {
-      console.error('[Realtime] Recent events query failed:', err);
+      structuredLog('ERROR', 'Recent events query failed', { endpoint: 'realtime', step: 'recent_events', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
   }
@@ -629,7 +630,7 @@ export class GetRealtimeEventTypes extends OpenAPIRoute {
 
       return success(c, eventTypes);
     } catch (err) {
-      console.error('[Realtime] Event types query failed:', err);
+      structuredLog('ERROR', 'Event types query failed', { endpoint: 'realtime', step: 'event_types', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
   }
@@ -724,7 +725,7 @@ export class GetRealtimeStripe extends OpenAPIRoute {
 
       return success(c, result);
     } catch (err) {
-      console.error('[Realtime] Revenue query failed:', err);
+      structuredLog('ERROR', 'Revenue query failed', { endpoint: 'realtime', step: 'revenue', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
   }
@@ -827,7 +828,7 @@ export class GetRealtimeGoals extends OpenAPIRoute {
       const allMetrics = await goalService.getRealtimeMetrics(orgId, hours);
       return success(c, allMetrics);
     } catch (err) {
-      console.error('[Realtime] Goals query failed:', err);
+      structuredLog('ERROR', 'Goals query failed', { endpoint: 'realtime', step: 'goals', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
   }
@@ -893,7 +894,7 @@ export class GetRealtimeGoalTimeSeries extends OpenAPIRoute {
       const timeSeries = await goalService.getGoalTimeSeries(orgId, goalId, hours);
       return success(c, timeSeries);
     } catch (err) {
-      console.error('[Realtime] Goal time series query failed:', err);
+      structuredLog('ERROR', 'Goal time series query failed', { endpoint: 'realtime', step: 'goal_timeseries', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
   }

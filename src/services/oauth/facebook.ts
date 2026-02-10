@@ -10,6 +10,7 @@
  */
 
 import { OAuthProvider, OAuthUserInfo} from './base';
+import { structuredLog } from '../../utils/structured-logger';
 import {
   RATE_LIMITS,
   RATE_LIMIT_ERROR_CODES,
@@ -63,7 +64,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
         // Calculate delay with exponential backoff
         const delay = RATE_LIMITS.INITIAL_RETRY_DELAY_MS * Math.pow(RATE_LIMITS.RETRY_BACKOFF_MULTIPLIER, retryCount);
 
-        console.warn(`Facebook API rate limit hit (code ${errorCode}). Retrying in ${delay}ms... (attempt ${retryCount + 1}/${RATE_LIMITS.MAX_RETRIES})`);
+        structuredLog('WARN', 'Facebook API rate limit hit', { service: 'facebook-oauth', error_code: errorCode, delay_ms: delay, attempt: retryCount + 1, max_retries: RATE_LIMITS.MAX_RETRIES });
 
         // Wait before retrying
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -103,7 +104,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Facebook getUserInfo failed:', errorText);
+      structuredLog('ERROR', 'Facebook getUserInfo failed', { service: 'facebook-oauth', method: 'getUserInfo', error: errorText });
       throw new Error(`Failed to fetch Facebook user info: ${response.statusText}`);
     }
 
@@ -163,7 +164,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      console.error('Facebook token exchange failed:', error);
+      structuredLog('ERROR', 'Facebook token exchange failed', { service: 'facebook-oauth', method: 'exchangeForLongLivedToken', error });
       throw new Error(`Failed to exchange token: ${error}`);
     }
 
@@ -184,10 +185,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Facebook getAdAccounts failed:', {
-        status: response.status,
-        error: errorText
-      });
+      structuredLog('ERROR', 'Facebook getAdAccounts failed', { service: 'facebook-oauth', method: 'getAdAccounts', status: response.status, error: errorText });
       throw new Error(`Failed to fetch ad accounts (${response.status}): ${errorText}`);
     }
 
@@ -220,11 +218,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Facebook updateCampaignStatus failed:', {
-        campaignId,
-        status,
-        error: errorText
-      });
+      structuredLog('ERROR', 'Facebook updateCampaignStatus failed', { service: 'facebook-oauth', method: 'updateCampaignStatus', campaign_id: campaignId, status, error: errorText });
       throw new Error(`Failed to update campaign status: ${errorText}`);
     }
 
@@ -257,11 +251,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Facebook updateAdSetStatus failed:', {
-        adSetId,
-        status,
-        error: errorText
-      });
+      structuredLog('ERROR', 'Facebook updateAdSetStatus failed', { service: 'facebook-oauth', method: 'updateAdSetStatus', ad_set_id: adSetId, status, error: errorText });
       throw new Error(`Failed to update ad set status: ${errorText}`);
     }
 
@@ -294,11 +284,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Facebook updateAdStatus failed:', {
-        adId,
-        status,
-        error: errorText
-      });
+      structuredLog('ERROR', 'Facebook updateAdStatus failed', { service: 'facebook-oauth', method: 'updateAdStatus', ad_id: adId, status, error: errorText });
       throw new Error(`Failed to update ad status: ${errorText}`);
     }
 
@@ -381,11 +367,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Facebook updateCampaignBudget failed:', {
-        campaignId,
-        budget,
-        error: errorText
-      });
+      structuredLog('ERROR', 'Facebook updateCampaignBudget failed', { service: 'facebook-oauth', method: 'updateCampaignBudget', campaign_id: campaignId, error: errorText });
       throw new Error(`Failed to update campaign budget: ${errorText}`);
     }
 
@@ -464,11 +446,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Facebook updateAdSetBudget failed:', {
-        adSetId,
-        budget,
-        error: errorText
-      });
+      structuredLog('ERROR', 'Facebook updateAdSetBudget failed', { service: 'facebook-oauth', method: 'updateAdSetBudget', ad_set_id: adSetId, error: errorText });
       throw new Error(`Failed to update ad set budget: ${errorText}`);
     }
 
@@ -541,10 +519,7 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Facebook updateAdSetTargeting failed:', {
-        adSetId,
-        error: errorText
-      });
+      structuredLog('ERROR', 'Facebook updateAdSetTargeting failed', { service: 'facebook-oauth', method: 'updateAdSetTargeting', ad_set_id: adSetId, error: errorText });
       throw new Error(`Failed to update ad set targeting: ${errorText}`);
     }
 

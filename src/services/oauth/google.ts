@@ -6,6 +6,7 @@
  */
 
 import { OAuthProvider, OAuthUserInfo, OAuthConfig } from './base';
+import { structuredLog } from '../../utils/structured-logger';
 
 export class GoogleAdsOAuthProvider extends OAuthProvider {
   constructor(clientId: string, clientSecret: string, redirectUri: string) {
@@ -90,7 +91,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
    */
   async getAdAccounts(accessToken: string, developerToken: string): Promise<any[]> {
     if (!developerToken || developerToken.trim() === '') {
-      console.error('Google Ads Developer Token is missing or empty');
+      structuredLog('ERROR', 'Google Ads Developer Token is missing or empty', { service: 'google-oauth', method: 'getAdAccounts' });
       throw new Error('DEVELOPER_TOKEN_MISSING: Google Ads Developer Token is required. Get yours at: https://developers.google.com/google-ads/api/docs/get-started/dev-token');
     }
 
@@ -119,11 +120,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Google Ads API listAccessibleCustomers error:', {
-          status: response.status,
-          statusText: response.statusText,
-          error: errorText
-        });
+        structuredLog('ERROR', 'Google Ads API listAccessibleCustomers error', { service: 'google-oauth', method: 'getAdAccounts', status: response.status, error: errorText });
 
         // Parse error for better messaging
         let errorMessage = `Google Ads API returned ${response.status}`;
@@ -204,10 +201,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
             } else {
               // Log the error response
               const errorText = await detailResponse.text();
-              console.error(`Failed to get customer ${customerId} details:`, {
-                status: detailResponse.status,
-                error: errorText
-              });
+              structuredLog('ERROR', 'Failed to get customer details', { service: 'google-oauth', method: 'getAdAccounts', customer_id: customerId, status: detailResponse.status, error: errorText });
             }
 
             // If we can't get details, return basic info
@@ -221,7 +215,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
               status: isTestAccount ? 'TEST_ACCOUNT' : 'ACTIVE'
             };
           } catch (error) {
-            console.error(`Exception getting details for customer ${customerId}:`, error);
+            structuredLog('ERROR', 'Exception getting customer details', { service: 'google-oauth', method: 'getAdAccounts', customer_id: customerId, error: error instanceof Error ? error.message : String(error) });
             const isTestAccount = customerId.endsWith('0');
             return {
               id: customerId,
@@ -238,7 +232,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
       return accounts;
 
     } catch (error) {
-      console.error('Failed to fetch Google Ads accounts:', error);
+      structuredLog('ERROR', 'Failed to fetch Google Ads accounts', { service: 'google-oauth', method: 'getAdAccounts', error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }

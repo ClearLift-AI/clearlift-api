@@ -13,7 +13,11 @@
  * - Schedule changes: Dayparting analysis
  *
  * Works with all entity levels: campaigns, ad sets/groups, and ads
+ *
+ * @module simulation-service
  */
+
+import { structuredLog } from '../../utils/structured-logger';
 
 // D1Database type from Cloudflare Workers
 type D1Database = {
@@ -1203,7 +1207,7 @@ RESULT:
       const result = await this.analyticsDb.prepare(query).bind(entityType, this.orgId, unifiedEntityType).all();
       return (result.results || []) as EntityMetrics[];
     } catch (err) {
-      console.error('Error fetching portfolio metrics:', err);
+      structuredLog('ERROR', 'Error fetching portfolio metrics', { service: 'simulation', org_id: this.orgId, error: err instanceof Error ? err.message : String(err) });
       return [];
     }
   }
@@ -1237,7 +1241,7 @@ RESULT:
         .all();
       return (result.results || []) as HistoricalDataPoint[];
     } catch (err) {
-      console.error('Error fetching entity history:', err);
+      structuredLog('ERROR', 'Error fetching entity history', { service: 'simulation', org_id: this.orgId, error: err instanceof Error ? err.message : String(err) });
       return [];
     }
   }

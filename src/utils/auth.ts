@@ -2,6 +2,8 @@
  * Authentication utility functions
  */
 
+import { structuredLog } from './structured-logger';
+
 /**
  * Hash a password using Web Crypto API
  */
@@ -88,7 +90,7 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
     const { timingSafeEqual } = await import('node:crypto');
     return timingSafeEqual(Buffer.from(computedBuffer), Buffer.from(storedBuffer));
   } catch (error) {
-    console.error("Password verification error:", error);
+    structuredLog('ERROR', 'Password verification error', { service: 'auth-utils', error: error instanceof Error ? error.message : String(error) });
     return false;
   }
 }

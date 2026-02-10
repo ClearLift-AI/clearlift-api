@@ -10,6 +10,7 @@ import { AppContext } from "../../types";
 import { success, error } from "../../utils/response";
 import { generateInviteCode } from "../../utils/auth";
 import { createEmailService } from "../../utils/email";
+import { structuredLog } from "../../utils/structured-logger";
 
 /** Retry a D1 query once on transient failure (D1_ERROR, SQLITE_BUSY, etc.) */
 async function withD1Retry<T>(fn: () => Promise<T>, label: string): Promise<T> {
@@ -20,7 +21,7 @@ async function withD1Retry<T>(fn: () => Promise<T>, label: string): Promise<T> {
     const isTransient = msg.includes('D1_') || msg.includes('SQLITE_BUSY') ||
       msg.includes('database is locked') || msg.includes('network');
     if (!isTransient) throw err;
-    console.warn(`D1 transient error in ${label}, retrying once:`, msg);
+    structuredLog('WARN', `D1 transient error in ${label}, retrying once`, { endpoint: 'organizations', step: label, error: msg });
     await new Promise(r => setTimeout(r, 200));
     return await fn();
   }
@@ -141,7 +142,7 @@ export class CreateOrganization extends OpenAPIRoute {
       }, 201);
 
     } catch (err) {
-      console.error("Organization creation error:", err);
+      structuredLog('ERROR', 'Organization creation error', { endpoint: 'organizations', step: 'create', error: err instanceof Error ? err.message : String(err) });
       return error(c, "CREATION_FAILED", "Failed to create organization", 500);
     }
   }
@@ -387,7 +388,7 @@ export class InviteToOrganization extends OpenAPIRoute {
     if (!emailResult.success) {
       // Rollback - delete the invite since email failed
       await c.env.DB.prepare(`DELETE FROM invitations WHERE id = ?`).bind(inviteId).run();
-      console.error('Invite email failed:', emailResult.error);
+      structuredLog('ERROR', 'Invite email failed', { endpoint: 'organizations', step: 'invite', error: emailResult.error });
       return error(c, "EMAIL_FAILED",
         "Failed to send invitation email. Please try again or contact support.", 500);
     }
@@ -488,7 +489,7 @@ export class JoinOrganization extends OpenAPIRoute {
         'invite-lookup'
       );
     } catch (dbError: any) {
-      console.error('D1 error looking up invite:', dbError.message);
+      structuredLog('ERROR', 'D1 error looking up invite', { endpoint: 'organizations', step: 'accept_invite', error: dbError.message });
       return error(c, "DATABASE_ERROR", "A temporary database error occurred. Please try again.", 503, { retryable: true });
     }
 
@@ -542,7 +543,7 @@ export class JoinOrganization extends OpenAPIRoute {
         'membership-check'
       );
     } catch (dbError: any) {
-      console.error('D1 error checking membership:', dbError.message);
+      structuredLog('ERROR', 'D1 error checking membership', { endpoint: 'organizations', step: 'accept_invite', error: dbError.message });
       return error(c, "DATABASE_ERROR", "A temporary database error occurred. Please try again.", 503, { retryable: true });
     }
 
@@ -581,7 +582,9 @@ export class JoinOrganization extends OpenAPIRoute {
           }
         });
       }
-      console.error('Failed to insert organization member:', {
+      structuredLog('ERROR', 'Failed to insert organization member', {
+        endpoint: 'organizations',
+        step: 'accept_invite',
         error: dbError.message,
         org_id: invitation.organization_id,
         user_id: session.user_id,
@@ -607,7 +610,7 @@ export class JoinOrganization extends OpenAPIRoute {
       `).bind(now, invitation.organization_id).run();
     } catch (updateError: any) {
       // Non-critical - membership was already added, just log the error
-      console.error('Failed to update invitation/org timestamps:', updateError.message);
+      structuredLog('ERROR', 'Failed to update invitation/org timestamps', { endpoint: 'organizations', step: 'accept_invite', error: updateError.message });
     }
 
     return success(c, {

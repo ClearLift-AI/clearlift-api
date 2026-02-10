@@ -6,6 +6,7 @@ import {
   ConversionResponseSchema,
 } from "../../../schemas/analytics";
 import { AD_PLATFORM_IDS, ACTIVE_REVENUE_PLATFORM_IDS } from "../../../config/platforms";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * Check setup status for conversions
@@ -183,7 +184,7 @@ export class GetConversions extends OpenAPIRoute {
 
       return success(c, { ...result, data_source: 'd1_unified' }, { date_range: dateRange });
     } catch (err) {
-      console.error("Failed to fetch conversions:", err);
+      structuredLog('ERROR', 'Failed to fetch conversions', { endpoint: 'conversions', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", "Failed to fetch conversion data", 500);
     }
   }

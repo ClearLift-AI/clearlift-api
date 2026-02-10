@@ -8,6 +8,7 @@
  * 4. Log recommendations to ai_decisions table
  */
 
+import { structuredLog } from '../../utils/structured-logger';
 import {
   RECOMMENDATION_TOOLS,
   getAnthropicTools,
@@ -426,7 +427,7 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
       }));
     } catch (err) {
       // If query fails (e.g., schema mismatch), return empty array
-      console.error('Failed to fetch recent recommendations:', err);
+      structuredLog('ERROR', 'Failed to fetch recent recommendations', { service: 'agentic-loop', error: err instanceof Error ? err.message : String(err) });
       return [];
     }
   }

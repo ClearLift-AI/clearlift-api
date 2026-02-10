@@ -3,6 +3,7 @@
  */
 
 import type { AppContext } from "../types";
+import { structuredLog } from './structured-logger';
 
 /**
  * Helper to get a secret value from either Secrets Store binding or plain string
@@ -19,7 +20,7 @@ export async function getSecret(
     try {
       return await value.get();
     } catch (error) {
-      console.error('Failed to get secret from Secrets Store:', error);
+      structuredLog('ERROR', 'Failed to get secret from Secrets Store', { service: 'secrets', error: error instanceof Error ? error.message : String(error) });
       return defaultValue;
     }
   }

@@ -18,6 +18,8 @@
  * @see https://datatracker.ietf.org/doc/html/rfc7636 (PKCE)
  */
 
+import { structuredLog } from '../../utils/structured-logger';
+
 export interface OAuthConfig {
   clientId: string;
   clientSecret: string;
@@ -166,11 +168,7 @@ export abstract class OAuthProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Token exchange failed:', {
-          status: response.status,
-          statusText: response.statusText,
-          error: errorText
-        });
+        structuredLog('ERROR', 'Token exchange failed', { service: 'oauth-base', method: 'exchangeCodeForToken', status: response.status, error: errorText });
 
         // Try to parse error response
         let errorMessage = errorText;

@@ -17,6 +17,8 @@
 
 // D1Database type comes from worker-configuration.d.ts
 
+import { structuredLog } from '../utils/structured-logger';
+
 export interface AggregationResult {
   shardId: number;
   success: boolean;
@@ -92,7 +94,7 @@ export class AggregationService {
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
         errors.push(`ANALYTICS_DB Stripe: ${error}`);
-        console.error(`[Aggregation] Stripe aggregation failed: ${error}`);
+        structuredLog('ERROR', 'Stripe aggregation failed', { service: 'aggregation', step: 'stripe', error });
       }
     }
 
@@ -141,7 +143,7 @@ export class AggregationService {
       };
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
-      console.error(`[Aggregation] Shard ${shardId} failed: ${error}`);
+      structuredLog('ERROR', 'Shard aggregation failed', { service: 'aggregation', shard_id: shardId, error });
       return {
         shardId,
         success: false,

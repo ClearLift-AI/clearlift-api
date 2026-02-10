@@ -11,6 +11,7 @@ import { HubSpotOAuthProvider } from "../../services/oauth/hubspot";
 import { SalesforceOAuthProvider } from "../../services/oauth/salesforce";
 import { success, error } from "../../utils/response";
 import { getSecret } from "../../utils/secrets";
+import { structuredLog } from "../../utils/structured-logger";
 
 /**
  * GET /v1/connectors - List available connectors
@@ -87,7 +88,7 @@ export class ListConnectedPlatforms extends OpenAPIRoute {
 
       return success(c, { connections });
     } catch (err: any) {
-      console.error("ListConnectedPlatforms error:", err);
+      structuredLog('ERROR', 'Failed to list connected platforms', { endpoint: 'connectors', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INTERNAL_ERROR", `Failed to fetch connections: ${err.message}`, 500);
     }
   }
@@ -159,7 +160,7 @@ export class GetConnectionsNeedingReauth extends OpenAPIRoute {
 
       return success(c, { connections: result.results || [] });
     } catch (err: any) {
-      console.error("GetConnectionsNeedingReauth error:", err);
+      structuredLog('ERROR', 'Failed to get connections needing reauth', { endpoint: 'connectors', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INTERNAL_ERROR", `Failed to fetch connections: ${err.message}`, 500);
     }
   }
@@ -215,7 +216,7 @@ export class ShopifyInstall extends OpenAPIRoute {
         const hmacProvider = new ShopifyOAuthProvider('temp', hmacSecret, hmacRedirectUri, normalizedShop);
         const isValidHmac = await hmacProvider.validateHmac(queryParams);
         if (!isValidHmac) {
-          console.error('[ShopifyInstall] HMAC validation failed for shop:', normalizedShop);
+          structuredLog('ERROR', 'Shopify install HMAC validation failed', { endpoint: 'connectors', step: 'shopify_install', shop: normalizedShop });
           const appBaseUrl = c.env.APP_BASE_URL || 'https://app.clearlift.ai';
           return c.redirect(`${appBaseUrl}/connectors?error=invalid_hmac`);
         }
@@ -508,7 +509,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       `).run();
       console.log('[HandleOAuthCallback] Cleanup deleted expired rows:', cleanupResult.meta?.changes || 0);
     } catch (cleanupErr) {
-      console.error('OAuth state cleanup error:', cleanupErr);
+      structuredLog('ERROR', 'OAuth state cleanup error', { endpoint: 'connectors', step: 'oauth_state_cleanup', error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr) });
       // Don't fail the request if cleanup fails
     }
 
@@ -534,7 +535,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       const oauthState = await connectorService.getOAuthState(state);
 
       if (!oauthState) {
-        console.error('[HandleOAuthCallback] OAuth state not found in database:', { state, provider });
+        structuredLog('ERROR', 'OAuth state not found in database', { endpoint: 'connectors', step: 'oauth_callback', state, provider });
         return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_state`);
       }
 
@@ -554,13 +555,13 @@ export class HandleOAuthCallback extends OpenAPIRoute {
         // Get shop domain from query params (Shopify sends it) or state metadata
         shopDomain = shop || stateMetadata?.shop_domain;
         if (!shopDomain) {
-          console.error('Shopify shop domain not found');
+          structuredLog('ERROR', 'Shopify shop domain not found', { endpoint: 'connectors', step: 'oauth_callback', provider: 'shopify' });
           return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_state&error_description=Shop+domain+missing`);
         }
 
         // Validate shop domain format
         if (!ShopifyOAuthProvider.isValidShopDomain(shopDomain)) {
-          console.error('Invalid Shopify shop domain:', shopDomain);
+          structuredLog('ERROR', 'Invalid Shopify shop domain', { endpoint: 'connectors', step: 'oauth_callback', shop_domain: shopDomain });
           return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_shop&error_description=Invalid+shop+domain`);
         }
 
@@ -574,7 +575,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
             const queryParams = new URL(c.req.url).searchParams;
             const isValidHmac = await shopifyProvider.validateHmac(queryParams);
             if (!isValidHmac) {
-              console.error('Shopify HMAC validation failed');
+              structuredLog('ERROR', 'Shopify HMAC validation failed', { endpoint: 'connectors', step: 'oauth_callback', provider: 'shopify' });
               return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_hmac&error_description=HMAC+validation+failed`);
             }
             console.log('Shopify HMAC validation passed');
@@ -585,7 +586,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       // Get PKCE code verifier from state metadata (not used for Shopify)
       const codeVerifier = stateMetadata?.code_verifier;
       if (provider !== 'shopify' && (!codeVerifier || typeof codeVerifier !== 'string')) {
-        console.error('PKCE code verifier not found in OAuth state', { hasMetadata: !!stateMetadata, metadataType: typeof stateMetadata });
+        structuredLog('ERROR', 'PKCE code verifier not found in OAuth state', { endpoint: 'connectors', step: 'oauth_callback', provider, hasMetadata: !!stateMetadata, metadataType: typeof stateMetadata });
         return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_state&error_description=PKCE+verifier+missing`);
       }
 
@@ -642,7 +643,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       return c.redirect(`${redirectUri}?code=${code}&state=${state}&step=select_account&provider=${provider}`);
 
     } catch (err) {
-      console.error('OAuth callback error:', err);
+      structuredLog('ERROR', 'OAuth callback error', { endpoint: 'connectors', step: 'oauth_callback', error: err instanceof Error ? err.message : String(err) });
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       const errorDetails = encodeURIComponent(errorMessage);
 
@@ -650,7 +651,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       try {
         await c.env.DB.prepare(`DELETE FROM oauth_states WHERE state = ?`).bind(state).run();
       } catch (cleanupErr) {
-        console.error('Failed to cleanup oauth state:', cleanupErr);
+        structuredLog('ERROR', 'Failed to cleanup oauth state after error', { endpoint: 'connectors', step: 'oauth_callback_cleanup', error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr) });
       }
 
       return c.redirect(`${appBaseUrl}/oauth/callback?error=connection_failed&error_description=${errorDetails}`);
@@ -696,14 +697,14 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     const expectedHex = Array.from(new Uint8Array(expectedSig)).map(b => b.toString(16).padStart(2, '0')).join('');
 
     if (stateSig !== expectedHex) {
-      console.error('[HandleOAuthCallback] Install state HMAC mismatch');
+      structuredLog('ERROR', 'Install state HMAC mismatch', { endpoint: 'connectors', step: 'shopify_install_callback' });
       return c.redirect(`${appBaseUrl}/oauth/callback?error=invalid_state`);
     }
 
     // Check state age (15 minute expiry)
     const stateAge = Date.now() - parseInt(stateTimestamp, 10);
     if (stateAge > 15 * 60 * 1000) {
-      console.error('[HandleOAuthCallback] Install state expired');
+      structuredLog('ERROR', 'Install state expired', { endpoint: 'connectors', step: 'shopify_install_callback' });
       return c.redirect(`${appBaseUrl}/oauth/callback?error=state_expired`);
     }
 
@@ -745,7 +746,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
       // Redirect to dashboard connectors page — merchant completes setup there
       return c.redirect(`${appBaseUrl}/connectors?shopify_install=${installToken}&shop=${encodeURIComponent(shopDomain)}`);
     } catch (err) {
-      console.error('[HandleOAuthCallback] Install flow error:', err);
+      structuredLog('ERROR', 'Install flow error', { endpoint: 'connectors', step: 'shopify_install_callback', error: err instanceof Error ? err.message : String(err) });
       const msg = err instanceof Error ? err.message : 'Unknown error';
       return c.redirect(`${appBaseUrl}/oauth/callback?error=connection_failed&error_description=${encodeURIComponent(msg)}`);
     }
@@ -920,7 +921,7 @@ export class MockOAuthCallback extends OpenAPIRoute {
       return c.redirect(`${redirectUri}?code=mock_code&state=${state}&step=select_account&provider=${provider}`);
 
     } catch (err) {
-      console.error('Mock OAuth callback error:', err);
+      structuredLog('ERROR', 'Mock OAuth callback error', { endpoint: 'connectors', step: 'mock_oauth_callback', error: err instanceof Error ? err.message : String(err) });
       return c.redirect(`http://localhost:3001/oauth/callback?error=mock_failed`);
     }
   }
@@ -1109,7 +1110,7 @@ export class GetOAuthAccounts extends OpenAPIRoute {
           });
 
           if (!developerToken || developerToken.trim() === '') {
-            console.error('GOOGLE_ADS_DEVELOPER_TOKEN is not configured');
+            structuredLog('ERROR', 'GOOGLE_ADS_DEVELOPER_TOKEN is not configured', { endpoint: 'connectors', step: 'get_oauth_accounts', provider: 'google' });
             return error(c, "DEVELOPER_TOKEN_MISSING",
               "Google Ads Developer Token is not configured. Please add it to Cloudflare Secrets Store. " +
               "Get your token at: https://developers.google.com/google-ads/api/docs/get-started/dev-token",
@@ -1235,17 +1236,15 @@ export class GetOAuthAccounts extends OpenAPIRoute {
       return success(c, { accounts });
 
     } catch (err: any) {
-      console.error('Get OAuth accounts error:', err);
-      console.error('Error stack:', err.stack);
+      structuredLog('ERROR', 'Get OAuth accounts error', { endpoint: 'connectors', step: 'get_oauth_accounts', error: err instanceof Error ? err.message : String(err), stack: err.stack });
       const errorMessage = err.message || "Failed to fetch ad accounts";
-      console.error('Returning error to client:', errorMessage);
 
       // Clean up the OAuth state on failure to prevent accumulation
       try {
         await c.env.DB.prepare(`DELETE FROM oauth_states WHERE state = ?`).bind(state).run();
         console.log('Cleaned up failed OAuth state');
       } catch (cleanupErr) {
-        console.error('Failed to cleanup oauth state:', cleanupErr);
+        structuredLog('ERROR', 'Failed to cleanup oauth state', { endpoint: 'connectors', step: 'get_oauth_accounts_cleanup', error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr) });
       }
 
       return error(c, "FETCH_FAILED", errorMessage, 500);
@@ -1442,7 +1441,7 @@ export class GetChildAccounts extends OpenAPIRoute {
       }
 
     } catch (err: any) {
-      console.error('Get child accounts error:', err);
+      structuredLog('ERROR', 'Get child accounts error', { endpoint: 'connectors', step: 'get_child_accounts', error: err instanceof Error ? err.message : String(err) });
       return error(c, "FETCH_FAILED", err.message || "Failed to fetch child accounts", 500);
     }
   }
@@ -1516,7 +1515,7 @@ async function registerShopifyWebhooks(
       });
 
       if (!response.ok) {
-        console.warn(`[Shopify Webhooks] HTTP ${response.status} for topic ${topic}`);
+        structuredLog('WARN', `Shopify webhook registration HTTP ${response.status}`, { endpoint: 'connectors', step: 'shopify_webhook_register', topic, status: response.status });
         continue;
       }
 
@@ -1532,7 +1531,7 @@ async function registerShopifyWebhooks(
           console.log(`[Shopify Webhooks] ${topic} already registered`);
           registered++;
         } else {
-          console.warn(`[Shopify Webhooks] Error for ${topic}:`, userErrors);
+          structuredLog('WARN', `Shopify webhook registration error for ${topic}`, { endpoint: 'connectors', step: 'shopify_webhook_register', topic, user_errors: userErrors });
         }
       } else {
         const subId = result?.data?.webhookSubscriptionCreate?.webhookSubscription?.id;
@@ -1540,7 +1539,7 @@ async function registerShopifyWebhooks(
         registered++;
       }
     } catch (err) {
-      console.warn(`[Shopify Webhooks] Failed to register ${topic}:`, err);
+      structuredLog('WARN', `Failed to register Shopify webhook ${topic}`, { endpoint: 'connectors', step: 'shopify_webhook_register', topic, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -1622,7 +1621,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const oauthState = await connectorService.validateOAuthState(state);
 
       if (!oauthState) {
-        console.error('Invalid or expired OAuth state');
+        structuredLog('ERROR', 'Invalid or expired OAuth state', { endpoint: 'connectors', step: 'finalize_oauth', provider });
         return error(c, "INVALID_STATE", "OAuth state is invalid or expired", 400);
       }
 
@@ -1642,7 +1641,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const scope = metadata?.scope;
 
       if (!accessToken) {
-        console.error('No access token in OAuth state metadata');
+        structuredLog('ERROR', 'No access token in OAuth state metadata', { endpoint: 'connectors', step: 'finalize_oauth', provider });
         return error(c, "NO_TOKEN", "No access token found in OAuth state", 400);
       }
 
@@ -1780,7 +1779,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
                   ).run();
                   console.log(`Stored Facebook page: ${page.name} (${page.id})`);
                 } catch (pageErr) {
-                  console.warn(`Failed to store page ${page.id}:`, pageErr);
+                  structuredLog('WARN', `Failed to store Facebook page`, { endpoint: 'connectors', step: 'finalize_oauth', provider: 'facebook', page_id: page.id, error: pageErr instanceof Error ? pageErr.message : String(pageErr) });
                 }
               }
               console.log(`Stored ${pages.length} Facebook pages in ANALYTICS_DB`);
@@ -1789,11 +1788,11 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
             }
           } else {
             const errorText = await pagesResponse.text();
-            console.warn('Failed to fetch Facebook pages:', errorText);
+            structuredLog('WARN', 'Failed to fetch Facebook pages', { endpoint: 'connectors', step: 'finalize_oauth', provider: 'facebook', error: errorText });
             // Don't fail the connection - pages are optional
           }
         } catch (pagesErr) {
-          console.error('Error fetching Facebook pages:', pagesErr);
+          structuredLog('ERROR', 'Error fetching Facebook pages', { endpoint: 'connectors', step: 'finalize_oauth', provider: 'facebook', error: pagesErr instanceof Error ? pagesErr.message : String(pagesErr) });
           // Don't fail the connection - pages are optional
         }
       }
@@ -1816,7 +1815,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
             c.env.DB
           );
         } catch (webhookErr) {
-          console.warn('[FinalizeOAuth] Shopify webhook registration failed (non-fatal):', webhookErr);
+          structuredLog('WARN', 'Shopify webhook registration failed (non-fatal)', { endpoint: 'connectors', step: 'finalize_oauth', provider: 'shopify', error: webhookErr instanceof Error ? webhookErr.message : String(webhookErr) });
           // Non-fatal — batch sync still works, webhooks can be registered later
         }
       }
@@ -1831,7 +1830,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
         const goalService = new GoalService(c.env.DB, c.env.ANALYTICS_DB);
         await goalService.ensureDefaultGoalForPlatform(oauthState.organization_id, provider);
       } catch (goalErr) {
-        console.warn(`[FinalizeOAuth] Failed to auto-register goal for ${provider}:`, goalErr);
+        structuredLog('WARN', `Failed to auto-register goal for ${provider}`, { endpoint: 'connectors', step: 'finalize_oauth', provider, error: goalErr instanceof Error ? goalErr.message : String(goalErr) });
       }
 
       // Create default filter rules for known platforms
@@ -1887,7 +1886,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
 
           console.log(`[FinalizeOAuth] Default filter rule created for ${provider}:`, defaultFilter.name);
         } catch (filterErr) {
-          console.warn('[FinalizeOAuth] Default filter creation failed:', filterErr);
+          structuredLog('WARN', 'Default filter creation failed', { endpoint: 'connectors', step: 'finalize_oauth', provider, error: filterErr instanceof Error ? filterErr.message : String(filterErr) });
         }
       }
 
@@ -1966,13 +1965,13 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
 
           if (!response.ok) {
             const errorText = await response.text();
-            console.error('[LocalDev] Queue consumer returned error:', errorText);
+            structuredLog('ERROR', 'Queue consumer returned error', { endpoint: 'connectors', step: 'local_dev_sync', error: errorText });
           } else {
             const result = await response.json();
             console.log('[LocalDev] Sync job processed by queue consumer:', result);
           }
         } catch (err) {
-          console.error('[LocalDev] Failed to call queue consumer:', err);
+          structuredLog('ERROR', 'Failed to call queue consumer', { endpoint: 'connectors', step: 'local_dev_sync', error: err instanceof Error ? err.message : String(err) });
           // Don't fail the connection - sync can be retried from connectors page
         }
       } else if (c.env.SYNC_QUEUE) {
@@ -1981,11 +1980,11 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
           await c.env.SYNC_QUEUE.send(syncJobPayload);
           console.log('Sync job sent to queue with window:', syncWindow);
         } catch (queueErr) {
-          console.error('Failed to send sync job to queue:', queueErr);
+          structuredLog('ERROR', 'Failed to send sync job to queue', { endpoint: 'connectors', step: 'finalize_oauth', error: queueErr instanceof Error ? queueErr.message : String(queueErr) });
           // Don't fail the connection if queue send fails
         }
       } else {
-        console.error('SYNC_QUEUE not available! Job will remain pending. isLocal:', isLocal, 'hasQueue:', !!c.env.SYNC_QUEUE);
+        structuredLog('ERROR', 'SYNC_QUEUE not available, job will remain pending', { endpoint: 'connectors', step: 'finalize_oauth', isLocal, hasQueue: !!c.env.SYNC_QUEUE });
       }
 
       // Clean up OAuth state
@@ -1999,7 +1998,7 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       return response;
 
     } catch (err: any) {
-      console.error('Finalize OAuth connection error:', err);
+      structuredLog('ERROR', 'Finalize OAuth connection error', { endpoint: 'connectors', step: 'finalize_oauth', provider, error: err instanceof Error ? err.message : String(err) });
       return error(c, "FINALIZE_FAILED", err.message || "Failed to finalize connection", 500);
     }
   }
@@ -2074,7 +2073,7 @@ export class GetConnectorSettings extends OpenAPIRoute {
         try {
           settings = JSON.parse(connection.settings);
         } catch (e) {
-          console.error('Failed to parse connection settings:', e);
+          structuredLog('ERROR', 'Failed to parse connection settings', { endpoint: 'connectors', step: 'get_connector_settings', error: e instanceof Error ? e.message : String(e) });
         }
       }
 
@@ -2108,14 +2107,14 @@ export class GetConnectorSettings extends OpenAPIRoute {
             }
           }
         } catch (err) {
-          console.error('Failed to fetch Google Ads metadata:', err);
+          structuredLog('ERROR', 'Failed to fetch Google Ads metadata', { endpoint: 'connectors', step: 'get_connector_settings', provider: 'google', error: err instanceof Error ? err.message : String(err) });
           // Don't fail the request, just omit metadata
         }
       }
 
       return success(c, response);
     } catch (err: any) {
-      console.error("GetConnectorSettings error:", err);
+      structuredLog('ERROR', 'GetConnectorSettings error', { endpoint: 'connectors', step: 'get_connector_settings', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INTERNAL_ERROR", `Failed to fetch connector settings: ${err.message}`, 500);
     }
   }
@@ -2216,7 +2215,7 @@ export class UpdateConnectorSettings extends OpenAPIRoute {
 
       return success(c, { message: "Settings updated successfully", settings });
     } catch (err: any) {
-      console.error("UpdateConnectorSettings error:", err);
+      structuredLog('ERROR', 'UpdateConnectorSettings error', { endpoint: 'connectors', step: 'update_connector_settings', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INTERNAL_ERROR", `Failed to update settings: ${err.message}`, 500);
     }
   }
@@ -2318,7 +2317,7 @@ export class TriggerResync extends OpenAPIRoute {
         job_id: jobId
       });
     } catch (err: any) {
-      console.error("TriggerResync error:", err);
+      structuredLog('ERROR', 'TriggerResync error', { endpoint: 'connectors', step: 'trigger_resync', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INTERNAL_ERROR", `Failed to trigger resync: ${err.message}`, 500);
     }
   }
@@ -2382,7 +2381,7 @@ export class DisconnectPlatform extends OpenAPIRoute {
       `).bind(connection_id).run();
       console.log(`Deleted filter rules for connection ${connection_id}`);
     } catch (filterError) {
-      console.error('Failed to delete filter rules:', filterError);
+      structuredLog('ERROR', 'Failed to delete filter rules', { endpoint: 'connectors', step: 'disconnect_platform', error: filterError instanceof Error ? filterError.message : String(filterError) });
       // Don't fail the disconnect, just log the error
     }
 

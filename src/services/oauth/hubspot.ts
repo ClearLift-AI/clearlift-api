@@ -14,6 +14,7 @@
  */
 
 import { OAuthProvider, OAuthTokens, OAuthUserInfo, PKCEChallenge } from './base';
+import { structuredLog } from '../../utils/structured-logger';
 
 /**
  * HubSpot-specific token response
@@ -139,10 +140,7 @@ export class HubSpotOAuthProvider extends OAuthProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('HubSpot token exchange failed:', {
-          status: response.status,
-          error: errorText,
-        });
+        structuredLog('ERROR', 'HubSpot token exchange failed', { service: 'hubspot-oauth', method: 'exchangeCodeForToken', status: response.status, error: errorText });
 
         let errorMessage = errorText;
         try {
@@ -200,10 +198,7 @@ export class HubSpotOAuthProvider extends OAuthProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('HubSpot token refresh failed:', {
-        status: response.status,
-        error: errorText,
-      });
+      structuredLog('ERROR', 'HubSpot token refresh failed', { service: 'hubspot-oauth', method: 'refreshAccessToken', status: response.status, error: errorText });
 
       throw new Error(`HubSpot token refresh failed (${response.status}): ${errorText}`);
     }
