@@ -9,6 +9,7 @@ import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 import { getSecret } from "../../../utils/secrets";
 import { GoogleAdsOAuthProvider } from "../../../services/oauth/google";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
@@ -154,7 +155,7 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
         summary
       });
     } catch (err: any) {
-      console.error("Get Google campaigns error:", err);
+      structuredLog('ERROR', 'Get Google campaigns failed', { endpoint: 'analytics/google', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch campaigns: ${err.message}`, 500);
     }
   }
@@ -236,7 +237,7 @@ export class GetGoogleAdGroups extends OpenAPIRoute {
         total: adGroups.length
       });
     } catch (err: any) {
-      console.error("Get Google ad groups error:", err);
+      structuredLog('ERROR', 'Get Google ad groups failed', { endpoint: 'analytics/google', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch ad groups: ${err.message}`, 500);
     }
   }
@@ -327,7 +328,7 @@ export class GetGoogleAds extends OpenAPIRoute {
         total: ads.length
       });
     } catch (err: any) {
-      console.error("Get Google ads error:", err);
+      structuredLog('ERROR', 'Get Google ads failed', { endpoint: 'analytics/google', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch ads: ${err.message}`, 500);
     }
   }
@@ -466,7 +467,7 @@ export class GetGoogleMetrics extends OpenAPIRoute {
         level: query.query.level
       });
     } catch (err: any) {
-      console.error("Get Google metrics error:", err);
+      structuredLog('ERROR', 'Get Google metrics failed', { endpoint: 'analytics/google', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch metrics: ${err.message}`, 500);
     }
   }
@@ -564,7 +565,7 @@ export class UpdateGoogleCampaignStatus extends OpenAPIRoute {
         message: `Campaign ${status === 'ENABLED' ? 'enabled' : status === 'PAUSED' ? 'paused' : 'removed'} successfully`
       });
     } catch (err: any) {
-      console.error("Update Google campaign status error:", err);
+      structuredLog('ERROR', 'Update Google campaign status failed', { endpoint: 'analytics/google', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update campaign status: ${err.message}`, 500);
     }
   }
@@ -659,7 +660,7 @@ export class UpdateGoogleAdGroupStatus extends OpenAPIRoute {
         message: `Ad group ${status === 'ENABLED' ? 'enabled' : status === 'PAUSED' ? 'paused' : 'removed'} successfully`
       });
     } catch (err: any) {
-      console.error("Update Google ad group status error:", err);
+      structuredLog('ERROR', 'Update Google ad group status failed', { endpoint: 'analytics/google', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update ad group status: ${err.message}`, 500);
     }
   }
@@ -758,7 +759,7 @@ export class UpdateGoogleCampaignBudget extends OpenAPIRoute {
         message: `Campaign budget updated to $${(budget_cents / 100).toFixed(2)} daily`
       });
     } catch (err: any) {
-      console.error("Update Google campaign budget error:", err);
+      structuredLog('ERROR', 'Update Google campaign budget failed', { endpoint: 'analytics/google', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update campaign budget: ${err.message}`, 500);
     }
   }

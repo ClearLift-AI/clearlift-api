@@ -6,6 +6,7 @@
  */
 
 import { AppContext } from "../types";
+import { structuredLog } from '../utils/structured-logger';
 
 export interface AuditLogEntry {
   user_id?: string;
@@ -144,7 +145,7 @@ export class AuditLogger {
       ).run();
     } catch (error) {
       // Log to console but don't fail the request
-      console.error('Failed to write audit log:', error);
+      structuredLog('ERROR', 'Failed to write audit log', { service: 'AuditLogger', error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -174,7 +175,7 @@ export class AuditLogger {
         JSON.stringify(entry.metadata || {})
       ).run();
     } catch (error) {
-      console.error('Failed to write auth audit log:', error);
+      structuredLog('ERROR', 'Failed to write auth audit log', { service: 'AuditLogger', error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -214,7 +215,7 @@ export class AuditLogger {
         entry.ip_address || null
       ).run();
     } catch (error) {
-      console.error('Failed to write data access log:', error);
+      structuredLog('ERROR', 'Failed to write data access log', { service: 'AuditLogger', error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -250,7 +251,7 @@ export class AuditLogger {
         entry.reason || null
       ).run();
     } catch (error) {
-      console.error('Failed to write config audit log:', error);
+      structuredLog('ERROR', 'Failed to write config audit log', { service: 'AuditLogger', error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -284,11 +285,11 @@ export class AuditLogger {
 
       // Alert on critical events
       if (entry.severity === 'critical') {
-        console.error('CRITICAL SECURITY EVENT:', entry);
+        structuredLog('CRITICAL', 'Critical security event detected', { service: 'AuditLogger', event_type: entry.event_type, user_id: entry.user_id, organization_id: entry.organization_id });
         // In production, this would trigger alerts
       }
     } catch (error) {
-      console.error('Failed to write security event log:', error);
+      structuredLog('ERROR', 'Failed to write security event log', { service: 'AuditLogger', error: error instanceof Error ? error.message : String(error) });
     }
   }
 

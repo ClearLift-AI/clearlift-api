@@ -1,3 +1,5 @@
+import { structuredLog } from '../utils/structured-logger';
+
 // D1Database type is globally available in Cloudflare Workers environment
 
 export interface User {
@@ -114,7 +116,7 @@ export class D1Adapter {
       if (ALLOWED_FIELDS.has(key)) {
         safeUpdates[key] = value;
       } else {
-        console.warn(`[D1Adapter.updateUser] Blocked attempt to update disallowed field: ${key}`);
+        structuredLog('WARN', 'Blocked attempt to update disallowed field', { service: 'D1Adapter', method: 'updateUser', field: key });
       }
     }
 

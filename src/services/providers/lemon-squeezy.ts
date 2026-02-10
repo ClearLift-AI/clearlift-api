@@ -6,6 +6,8 @@
  * Rate limit: 300 calls/min
  */
 
+import { structuredLog } from '../../utils/structured-logger';
+
 export interface LemonSqueezyConfig {
   apiKey: string;
 }
@@ -101,7 +103,7 @@ export class LemonSqueezyAPIProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[LemonSqueezy] Validation failed:', errorText);
+      structuredLog('ERROR', 'Validation failed', { service: 'LemonSqueezy', error: errorText });
       throw new Error(`Invalid Lemon Squeezy API key: ${response.status}`);
     }
 

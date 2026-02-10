@@ -6,6 +6,8 @@
  * Rate limit: 150 requests/min
  */
 
+import { structuredLog } from '../../utils/structured-logger';
+
 export interface ChargebeeConfig {
   apiKey: string;
   site: string;  // e.g., "mycompany" for mycompany.chargebee.com
@@ -164,7 +166,7 @@ export class ChargebeeAPIProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[Chargebee] Validation failed:', errorText);
+      structuredLog('ERROR', 'Validation failed', { service: 'Chargebee', error: errorText });
       throw new Error(`Invalid Chargebee API key: ${response.status}`);
     }
 

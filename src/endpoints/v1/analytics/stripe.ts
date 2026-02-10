@@ -8,6 +8,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 import { D1AnalyticsService } from "../../../services/d1-analytics";
 import { StripeQueryBuilder } from "../../../services/filters/stripeQueryBuilder";
 import { FilterRule } from "../../../services/filters/types";
@@ -222,7 +223,7 @@ export class GetStripeAnalytics extends OpenAPIRoute {
         total_records: records.length
       });
     } catch (err) {
-      console.error("D1 Stripe query failed:", err);
+      structuredLog('ERROR', 'D1 Stripe query failed', { endpoint: 'analytics/stripe', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", "Failed to fetch Stripe data", 500);
     }
   }
@@ -503,7 +504,7 @@ export class GetStripeDailyAggregates extends OpenAPIRoute {
         days: formattedAggregates.length
       });
     } catch (err) {
-      console.error("D1 Stripe aggregates query failed:", err);
+      structuredLog('ERROR', 'D1 Stripe aggregates query failed', { endpoint: 'analytics/stripe', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", "Failed to fetch Stripe aggregates", 500);
     }
   }

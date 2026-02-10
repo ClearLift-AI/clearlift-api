@@ -6,6 +6,8 @@
  * API keys: pdl_live_* (live) or pdl_sdbx_* (sandbox)
  */
 
+import { structuredLog } from '../../utils/structured-logger';
+
 export interface PaddleConfig {
   apiKey: string;
   environment: 'live' | 'sandbox';
@@ -168,7 +170,7 @@ export class PaddleAPIProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[Paddle] Validation failed:', errorText);
+      structuredLog('ERROR', 'Validation failed', { service: 'Paddle', error: errorText });
       throw new Error(`Invalid Paddle API key: ${response.status}`);
     }
 

@@ -12,6 +12,7 @@ import { ConnectorService } from "../../../services/connectors";
 import { getSecret } from "../../../utils/secrets";
 import { StripeAPIProvider } from "../../../services/providers/stripe";
 import { OnboardingService } from "../../../services/onboarding";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * POST /v1/connectors/stripe/connect
@@ -249,7 +250,7 @@ export class ConnectStripe extends OpenAPIRoute {
         const goalService = new GoalService(c.env.DB, c.env.ANALYTICS_DB);
         await goalService.ensureDefaultGoalForPlatform(organization_id, 'stripe');
       } catch (goalErr) {
-        console.warn('[ConnectStripe] Failed to auto-register goal:', goalErr);
+        structuredLog('WARN', 'Failed to auto-register goal', { endpoint: 'POST /v1/connectors/stripe/connect', error: goalErr instanceof Error ? goalErr.message : String(goalErr) });
       }
 
       // Auto-trigger initial sync
@@ -320,13 +321,13 @@ export class ConnectStripe extends OpenAPIRoute {
 
           if (!response.ok) {
             const errorText = await response.text();
-            console.error('[ConnectStripe] Queue consumer returned error:', errorText);
+            structuredLog('ERROR', 'Queue consumer returned error', { endpoint: 'POST /v1/connectors/stripe/connect', error: errorText });
           } else {
             const result = await response.json();
             console.log('[ConnectStripe] Sync job processed by queue consumer:', result);
           }
         } catch (err) {
-          console.error('[ConnectStripe] Failed to call queue consumer:', err);
+          structuredLog('ERROR', 'Failed to call queue consumer', { endpoint: 'POST /v1/connectors/stripe/connect', error: err instanceof Error ? err.message : String(err) });
         }
       } else if (c.env.SYNC_QUEUE) {
         // PRODUCTION: Send to real Cloudflare Queue with retry
@@ -346,12 +347,12 @@ export class ConnectStripe extends OpenAPIRoute {
             break;
           } catch (err) {
             lastError = err instanceof Error ? err : new Error(String(err));
-            console.error(`[ConnectStripe] Queue send error (attempt ${attempt + 1}):`, lastError.message);
+            structuredLog('ERROR', 'Queue send error', { endpoint: 'POST /v1/connectors/stripe/connect', attempt: attempt + 1, error: lastError.message });
           }
         }
 
         if (lastError) {
-          console.error('[ConnectStripe] All queue send attempts failed:', lastError.message);
+          structuredLog('ERROR', 'All queue send attempts failed', { endpoint: 'POST /v1/connectors/stripe/connect', error: lastError.message });
           // Don't fail the request - connection was created successfully
         }
       }
@@ -368,7 +369,7 @@ export class ConnectStripe extends OpenAPIRoute {
         }
       }, undefined, 201);
     } catch (err: any) {
-      console.error("Stripe connection error:", err);
+      structuredLog('ERROR', 'Stripe connection error', { endpoint: 'POST /v1/connectors/stripe/connect', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INVALID_API_KEY", err.message || "Failed to validate Stripe API key", 400);
     }
   }
@@ -525,7 +526,7 @@ export class TriggerStripeSync extends OpenAPIRoute {
     try {
       connectionSettings = connection.settings ? JSON.parse(connection.settings as string) : {};
     } catch (e) {
-      console.warn('Failed to parse connection settings:', e);
+      structuredLog('WARN', 'Failed to parse connection settings', { endpoint: 'POST /v1/connectors/stripe/:id/sync', error: e instanceof Error ? e.message : String(e) });
     }
 
     // Determine sync parameters
@@ -602,10 +603,10 @@ export class TriggerStripeSync extends OpenAPIRoute {
           `).bind(JSON.stringify(updatedSettings), connectionId).run();
         }
       } catch (queueError) {
-        console.error('Queue send error:', queueError);
+        structuredLog('ERROR', 'Queue send error', { endpoint: 'POST /v1/connectors/stripe/:id/sync', error: queueError instanceof Error ? queueError.message : String(queueError) });
       }
     } else {
-      console.error('SYNC_QUEUE binding not available!');
+      structuredLog('ERROR', 'SYNC_QUEUE binding not available', { endpoint: 'POST /v1/connectors/stripe/:id/sync' });
     }
 
     return success(c, {
@@ -690,7 +691,7 @@ export class TestStripeConnection extends OpenAPIRoute {
           invoiceBreakdown[reason] = (invoiceBreakdown[reason] || 0) + 1;
         }
       } catch (invErr) {
-        console.warn('Could not fetch invoices:', invErr);
+        structuredLog('WARN', 'Could not fetch invoices', { endpoint: 'POST /v1/connectors/stripe/:id/test', error: invErr instanceof Error ? invErr.message : String(invErr) });
       }
 
       return success(c, {
@@ -707,7 +708,7 @@ export class TestStripeConnection extends OpenAPIRoute {
       });
 
     } catch (err: any) {
-      console.error('Stripe connection test error:', err);
+      structuredLog('ERROR', 'Stripe connection test error', { endpoint: 'POST /v1/connectors/stripe/:id/test', error: err instanceof Error ? err.message : String(err) });
 
       return success(c, {
         success: false,

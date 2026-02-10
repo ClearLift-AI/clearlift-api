@@ -2,6 +2,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { success } from "../../utils/response";
+import { structuredLog } from "../../utils/structured-logger";
 
 export class HealthEndpoint extends OpenAPIRoute {
   public schema = {
@@ -61,7 +62,7 @@ export class HealthEndpoint extends OpenAPIRoute {
         checks.database.latency_ms = Date.now() - start;
         checks.database.connected = result?.test === 1;
       } catch (error) {
-        console.error("D1 health check failed:", error);
+        structuredLog('ERROR', 'D1 health check failed', { endpoint: 'GET /v1/health', step: 'database', error: error instanceof Error ? error.message : String(error) });
         checks.database.connected = false;
       }
     }
@@ -74,7 +75,7 @@ export class HealthEndpoint extends OpenAPIRoute {
         checks.analytics_db.latency_ms = Date.now() - start;
         checks.analytics_db.connected = result?.test === 1;
       } catch (error) {
-        console.error("ANALYTICS_DB health check failed:", error);
+        structuredLog('ERROR', 'ANALYTICS_DB health check failed', { endpoint: 'GET /v1/health', step: 'analytics_db', error: error instanceof Error ? error.message : String(error) });
         checks.analytics_db.connected = false;
       }
     }

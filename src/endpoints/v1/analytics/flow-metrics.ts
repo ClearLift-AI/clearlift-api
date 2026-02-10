@@ -12,6 +12,7 @@ import { success, error } from "../../../utils/response";
 import { SmartAttributionService, type SignalType } from "../../../services/smart-attribution";
 import { StageMarkovService } from "../../../services/stage-markov";
 import { getShardDbForOrg } from "../../../services/shard-router";
+import { structuredLog } from '../../../utils/structured-logger';
 
 // Enhanced channel attribution with confidence
 interface EnhancedChannelAttribution {
@@ -284,7 +285,7 @@ Returns stage-by-stage metrics for the acquisition flow:
             }
           }
         } catch (err) {
-          console.warn("[FlowMetrics] Failed to get channel distribution:", err);
+          structuredLog('WARN', 'Failed to get channel distribution', { endpoint: 'analytics/flow-metrics', error: err instanceof Error ? err.message : String(err) });
         }
       }
 
@@ -464,7 +465,7 @@ Returns stage-by-stage metrics for the acquisition flow:
             }
           }
         } catch (err) {
-          console.warn(`[FlowMetrics] Query failed for ${goal.name} (${connector}):`, err);
+          structuredLog('WARN', 'Stage query failed', { endpoint: 'analytics/flow-metrics', step: `${goal.name} (${connector})`, error: err instanceof Error ? err.message : String(err) });
         }
 
         // Calculate by_channel for this stage
@@ -509,7 +510,7 @@ Returns stage-by-stage metrics for the acquisition flow:
                 }
               }
             } catch (err) {
-              console.warn(`[FlowMetrics] SmartAttribution failed for ${goal.name}:`, err);
+              structuredLog('WARN', 'SmartAttribution failed', { endpoint: 'analytics/flow-metrics', step: goal.name, error: err instanceof Error ? err.message : String(err) });
             }
 
             // Fallback to proportional distribution if SmartAttribution failed
@@ -658,7 +659,7 @@ Returns stage-by-stage metrics for the acquisition flow:
             }
           }
         } catch (err) {
-          console.warn("[FlowMetrics] Failed to get timing from funnel_transitions:", err);
+          structuredLog('WARN', 'Failed to get timing from funnel_transitions', { endpoint: 'analytics/flow-metrics', error: err instanceof Error ? err.message : String(err) });
         }
       }
 
@@ -742,7 +743,7 @@ Returns stage-by-stage metrics for the acquisition flow:
             };
           }
         } catch (err) {
-          console.warn("[FlowMetrics] Failed to get traffic sources:", err);
+          structuredLog('WARN', 'Failed to get traffic sources', { endpoint: 'analytics/flow-metrics', error: err instanceof Error ? err.message : String(err) });
         }
       }
 
@@ -771,7 +772,7 @@ Returns stage-by-stage metrics for the acquisition flow:
           }
           console.log(`[FlowMetrics] Applied removal effects to ${removalEffects.size} stages, ${criticalStagesCount} critical`);
         } catch (err) {
-          console.warn("[FlowMetrics] Failed to calculate removal effects:", err);
+          structuredLog('WARN', 'Failed to calculate removal effects', { endpoint: 'analytics/flow-metrics', error: err instanceof Error ? err.message : String(err) });
         }
       }
 
@@ -854,7 +855,7 @@ Returns stage-by-stage metrics for the acquisition flow:
         },
       });
     } catch (err) {
-      console.error("[FlowMetrics] Error:", err);
+      structuredLog('ERROR', 'Flow metrics query failed', { endpoint: 'analytics/flow-metrics', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Failed to get flow metrics", 500);
     }
   }
@@ -984,7 +985,7 @@ export class GetStageTransitions extends OpenAPIRoute {
           .first() as { count: number } | null;
         stageConversions = convResult?.count || 0;
       } catch (err) {
-        console.warn(`[StageTransitions] Failed to query conversions:`, err);
+        structuredLog('WARN', 'Failed to query stage conversions', { endpoint: 'analytics/flow-metrics/transitions', error: err instanceof Error ? err.message : String(err) });
       }
 
       // Build inbound sources (using conversion data from upstream stages)
@@ -1081,7 +1082,7 @@ export class GetStageTransitions extends OpenAPIRoute {
 
             avgTimeFromPrevious = inboundTiming?.avg_hours || null;
           } catch (err) {
-            console.warn(`[StageTransitions] Failed to query inbound timing:`, err);
+            structuredLog('WARN', 'Failed to query inbound timing', { endpoint: 'analytics/flow-metrics/transitions', error: err instanceof Error ? err.message : String(err) });
           }
         }
 
@@ -1099,7 +1100,7 @@ export class GetStageTransitions extends OpenAPIRoute {
 
             avgTimeToNext = outboundTiming?.avg_hours || null;
           } catch (err) {
-            console.warn(`[StageTransitions] Failed to query outbound timing:`, err);
+            structuredLog('WARN', 'Failed to query outbound timing', { endpoint: 'analytics/flow-metrics/transitions', error: err instanceof Error ? err.message : String(err) });
           }
         }
       }
@@ -1123,7 +1124,7 @@ export class GetStageTransitions extends OpenAPIRoute {
         },
       });
     } catch (err) {
-      console.error("[StageTransitions] Error:", err);
+      structuredLog('ERROR', 'Stage transitions query failed', { endpoint: 'analytics/flow-metrics/transitions', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Failed to get stage transitions", 500);
     }
   }

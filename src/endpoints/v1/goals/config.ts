@@ -1,6 +1,7 @@
 import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * Goal Configuration for Tag
@@ -128,7 +129,7 @@ export class GetGoalConfig extends OpenAPIRoute {
         triggerConfig = JSON.parse(row.trigger_config as string || '{}');
       } catch {
         // Skip goals with invalid trigger config
-        console.warn(`[GoalConfig] Invalid trigger_config for goal ${row.id}`);
+        structuredLog('WARN', 'Invalid trigger_config for goal', { endpoint: 'GET /v1/goals/config', goal_id: row.id as string });
         continue;
       }
 

@@ -10,6 +10,7 @@ import { createEmailService } from '../../utils/email';
 import { success, error } from '../../utils/response';
 import { AppContext } from '../../types';
 import { D1Adapter } from '../../adapters/d1';
+import { structuredLog } from '../../utils/structured-logger';
 
 /**
  * POST /v1/admin/invites - Send admin invite email
@@ -112,7 +113,7 @@ export class SendAdminInvite extends OpenAPIRoute {
       });
 
     } catch (err: any) {
-      console.error('Admin invite error:', err);
+      structuredLog('ERROR', 'Admin invite error', { endpoint: 'POST /v1/admin/invites', error: err instanceof Error ? err.message : String(err) });
 
       // Still record the failed attempts
       for (const email of to) {
@@ -122,7 +123,7 @@ export class SendAdminInvite extends OpenAPIRoute {
             VALUES (?, ?, ?, ?, 'failed', ?)
           `).bind(crypto.randomUUID(), email.toLowerCase(), session.user_id, now, err.message).run();
         } catch (dbErr) {
-          console.error('Failed to record invite error:', dbErr);
+          structuredLog('ERROR', 'Failed to record invite error', { endpoint: 'POST /v1/admin/invites', error: dbErr instanceof Error ? dbErr.message : String(dbErr) });
         }
       }
 

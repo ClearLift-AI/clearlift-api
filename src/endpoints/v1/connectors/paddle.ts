@@ -12,6 +12,7 @@ import { ConnectorService } from "../../../services/connectors";
 import { getSecret } from "../../../utils/secrets";
 import { PaddleAPIProvider } from "../../../services/providers/paddle";
 import { OnboardingService } from "../../../services/onboarding";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * POST /v1/connectors/paddle/connect
@@ -178,7 +179,7 @@ export class ConnectPaddle extends OpenAPIRoute {
         }
       }, undefined, 201);
     } catch (err: any) {
-      console.error("Paddle connection error:", err);
+      structuredLog('ERROR', 'Paddle connection error', { endpoint: 'POST /v1/connectors/paddle/connect', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INVALID_API_KEY", err.message || "Failed to validate Paddle API key", 400);
     }
   }
@@ -260,7 +261,7 @@ export class TestPaddleConnection extends OpenAPIRoute {
         message: "Connection is working correctly"
       });
     } catch (err: any) {
-      console.error('Paddle connection test error:', err);
+      structuredLog('ERROR', 'Paddle connection test error', { endpoint: 'POST /v1/connectors/paddle/:id/test', error: err instanceof Error ? err.message : String(err) });
       return success(c, {
         success: false,
         error: err.message,

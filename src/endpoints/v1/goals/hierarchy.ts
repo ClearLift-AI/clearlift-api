@@ -9,6 +9,7 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { GoalValueComputationService } from "../../../services/goal-value-computation";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * GET /v1/goals/hierarchy
@@ -90,7 +91,7 @@ export class GetGoalHierarchy extends OpenAPIRoute {
         },
       });
     } catch (err) {
-      console.error("[GoalHierarchy] Error:", err);
+      structuredLog('ERROR', 'Failed to get goal hierarchy', { endpoint: 'GET /v1/goals/hierarchy', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Failed to get hierarchy", 500);
     }
   }
@@ -305,7 +306,7 @@ export class ComputeGoalValue extends OpenAPIRoute {
 
       return success(c, result);
     } catch (err) {
-      console.error("[ComputeGoalValue] Error:", err);
+      structuredLog('ERROR', 'Failed to compute goal value', { endpoint: 'POST /v1/goals/:id/compute-value', error: err instanceof Error ? err.message : String(err) });
       return error(c, "COMPUTATION_FAILED", err instanceof Error ? err.message : "Failed to compute value", 500);
     }
   }
@@ -347,7 +348,7 @@ export class RecomputeAllGoalValues extends OpenAPIRoute {
 
       return success(c, { recomputed: true });
     } catch (err) {
-      console.error("[RecomputeAll] Error:", err);
+      structuredLog('ERROR', 'Failed to recompute all goal values', { endpoint: 'POST /v1/goals/recompute-all', error: err instanceof Error ? err.message : String(err) });
       return error(c, "COMPUTATION_FAILED", err instanceof Error ? err.message : "Failed to recompute", 500);
     }
   }
@@ -400,7 +401,7 @@ export class GetGoalTemplates extends OpenAPIRoute {
 
       return success(c, result.results || []);
     } catch (err) {
-      console.error("[GetTemplates] Error:", err);
+      structuredLog('ERROR', 'Failed to get goal templates', { endpoint: 'GET /v1/goals/templates', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Failed to get templates", 500);
     }
   }
@@ -454,7 +455,7 @@ export class CreateGoalsFromTemplates extends OpenAPIRoute {
 
       return success(c, { created: template_ids.length });
     } catch (err) {
-      console.error("[CreateFromTemplates] Error:", err);
+      structuredLog('ERROR', 'Failed to create goals from templates', { endpoint: 'POST /v1/goals/from-templates', error: err instanceof Error ? err.message : String(err) });
       return error(c, "CREATION_FAILED", err instanceof Error ? err.message : "Failed to create goals", 500);
     }
   }
@@ -550,7 +551,7 @@ export class GetGoalConversionStats extends OpenAPIRoute {
         relationships: stats,
       });
     } catch (err) {
-      console.error("[GetConversionStats] Error:", err);
+      structuredLog('ERROR', 'Failed to get conversion stats', { endpoint: 'GET /v1/goals/:id/conversion-stats', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Failed to get stats", 500);
     }
   }

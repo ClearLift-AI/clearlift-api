@@ -12,6 +12,7 @@ import { ConnectorService } from "../../../services/connectors";
 import { getSecret } from "../../../utils/secrets";
 import { RecurlyAPIProvider } from "../../../services/providers/recurly";
 import { OnboardingService } from "../../../services/onboarding";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * POST /v1/connectors/recurly/connect
@@ -168,7 +169,7 @@ export class ConnectRecurly extends OpenAPIRoute {
         }
       }, undefined, 201);
     } catch (err: any) {
-      console.error("Recurly connection error:", err);
+      structuredLog('ERROR', 'Recurly connection error', { endpoint: 'POST /v1/connectors/recurly/connect', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INVALID_API_KEY", err.message || "Failed to validate Recurly API key", 400);
     }
   }
@@ -242,7 +243,7 @@ export class TestRecurlyConnection extends OpenAPIRoute {
         message: "Connection is working correctly"
       });
     } catch (err: any) {
-      console.error('Recurly connection test error:', err);
+      structuredLog('ERROR', 'Recurly connection test error', { endpoint: 'POST /v1/connectors/recurly/:id/test', error: err instanceof Error ? err.message : String(err) });
       return success(c, {
         success: false,
         error: err.message,

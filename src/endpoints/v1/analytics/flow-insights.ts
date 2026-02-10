@@ -9,6 +9,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 
 interface StageInsight {
   goal_id: string;
@@ -225,7 +226,7 @@ export class GetFlowInsights extends OpenAPIRoute {
         },
       } satisfies FlowInsightsResponse);
     } catch (err: any) {
-      console.error('[FlowInsights] Error:', err);
+      structuredLog('ERROR', 'Flow insights query failed', { endpoint: 'analytics/flow-insights', error: err instanceof Error ? err.message : String(err) });
       return error(c, "FLOW_INSIGHTS_ERROR", `Failed to fetch flow insights: ${err.message}`, 500);
     }
   }

@@ -4,6 +4,7 @@ import { AppContext } from "../../types";
 import { success, error } from "../../utils/response";
 import { calculateGoalValue, validateGoalValueConfig } from "../../services/goal-value";
 import { OnboardingService } from "../../services/onboarding";
+import { structuredLog } from "../../utils/structured-logger";
 
 // ============== Schema Definitions ==============
 
@@ -259,7 +260,7 @@ export class CreateConversionGoal extends OpenAPIRoute {
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementGoalsCount(session.user_id);
     } catch (e) {
-      console.error('[GOALS] Failed to update onboarding progress:', e);
+      structuredLog('ERROR', 'Failed to update onboarding progress', { endpoint: 'POST /v1/goals', error: e instanceof Error ? e.message : String(e) });
     }
 
     // Calculate the effective value for the response
@@ -527,7 +528,7 @@ export class DeleteConversionGoal extends OpenAPIRoute {
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.decrementGoalsCount(session.user_id);
     } catch (e) {
-      console.error('[GOALS] Failed to update onboarding progress:', e);
+      structuredLog('ERROR', 'Failed to update onboarding progress', { endpoint: 'DELETE /v1/goals/:id', error: e instanceof Error ? e.message : String(e) });
     }
 
     return success(c, { deleted: true });

@@ -5,6 +5,8 @@
  * Each provider implements RevenueSourceProvider and handles its own query logic.
  */
 
+import { structuredLog } from '../../utils/structured-logger';
+
 // D1Database is globally available in the Workers environment
 
 // =============================================================================
@@ -200,7 +202,7 @@ export async function getCombinedRevenue(
         ]);
         return { provider, summary, timeSeries };
       } catch (e) {
-        console.error(`[RevenueSource] ${provider.meta.platform} query failed:`, e);
+        structuredLog('ERROR', 'Revenue source query failed', { service: 'RevenueSource', platform: provider.meta.platform, error: e instanceof Error ? e.message : String(e) });
         return null;
       }
     })
@@ -282,7 +284,7 @@ export async function getCombinedRevenueByDateRange(
         ]);
         return { provider, summary, timeSeries };
       } catch (e) {
-        console.error(`[RevenueSource] ${provider.meta.platform} date range query failed:`, e);
+        structuredLog('ERROR', 'Revenue source date range query failed', { service: 'RevenueSource', platform: provider.meta.platform, error: e instanceof Error ? e.message : String(e) });
         return null;
       }
     })

@@ -6,6 +6,8 @@
  * Requires version header: Recurly-Version: v2021-02-25
  */
 
+import { structuredLog } from '../../utils/structured-logger';
+
 export interface RecurlyConfig {
   apiKey: string;
 }
@@ -207,7 +209,7 @@ export class RecurlyAPIProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[Recurly] Validation failed:', errorText);
+      structuredLog('ERROR', 'Validation failed', { service: 'Recurly', error: errorText });
       throw new Error(`Invalid Recurly API key: ${response.status}`);
     }
 

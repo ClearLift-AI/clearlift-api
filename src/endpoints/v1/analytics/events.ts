@@ -5,6 +5,7 @@ import { success, error } from "../../../utils/response";
 import { EventResponseSchema } from "../../../schemas/analytics";
 import { getSecret } from "../../../utils/secrets";
 import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
+import { structuredLog } from '../../../utils/structured-logger';
 
 /**
  * GET /v1/analytics/events - Get raw events from R2 SQL
@@ -106,7 +107,7 @@ export class GetEvents extends OpenAPIRoute {
       });
 
       if (result.error) {
-        console.error("R2 SQL query error:", result.error);
+        structuredLog('ERROR', 'R2 SQL query error', { endpoint: 'analytics/events', error: result.error });
         return error(c, "QUERY_FAILED", result.error, 500);
       }
 
@@ -145,7 +146,7 @@ export class GetEvents extends OpenAPIRoute {
         }
       );
     } catch (err) {
-      console.error("Failed to fetch events:", err);
+      structuredLog('ERROR', 'Failed to fetch events', { endpoint: 'analytics/events', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", "Failed to fetch event data", 500);
     }
   }

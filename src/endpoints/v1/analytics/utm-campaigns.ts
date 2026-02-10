@@ -9,6 +9,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 
 const UtmCampaignSchema = z.object({
   utm_source: z.string(),
@@ -221,7 +222,7 @@ Fetches aggregated UTM campaign performance data including:
         sources: uniqueSources,
       });
     } catch (err: any) {
-      console.error("UTM campaigns error:", err);
+      structuredLog('ERROR', 'UTM campaigns query failed', { endpoint: 'analytics/utm-campaigns', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INTERNAL_ERROR", "Failed to fetch UTM campaign data", 500);
     }
   }
@@ -432,7 +433,7 @@ Fetches daily UTM traffic metrics as a time series:
         },
       });
     } catch (err: any) {
-      console.error("UTM time series error:", err);
+      structuredLog('ERROR', 'UTM time series query failed', { endpoint: 'analytics/utm-campaigns', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INTERNAL_ERROR", "Failed to fetch UTM time series data", 500);
     }
   }

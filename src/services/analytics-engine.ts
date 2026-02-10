@@ -56,6 +56,7 @@ export interface AnalyticsEngineBreakdown {
 }
 
 import { sanitizeString, validatePositiveInt } from '../utils/sanitize';
+import { structuredLog } from '../utils/structured-logger';
 
 export class AnalyticsEngineService {
   private readonly apiUrl: string;
@@ -100,7 +101,7 @@ export class AnalyticsEngineService {
 
     if (!response.ok) {
       const error = await response.text();
-      console.error('[AnalyticsEngine] Query failed:', error);
+      structuredLog('ERROR', 'Query failed', { service: 'AnalyticsEngine', error: error });
       throw new Error(`Analytics Engine query failed: ${error}`);
     }
 

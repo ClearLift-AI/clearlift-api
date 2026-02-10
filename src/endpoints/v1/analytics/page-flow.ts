@@ -9,6 +9,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 
 // Node in the page flow graph
 interface PageFlowNode {
@@ -216,7 +217,7 @@ Response includes:
           }
         }
       } catch (err) {
-        console.warn("[PageFlow] Failed to query funnel_transitions:", err);
+        structuredLog('WARN', 'Failed to query funnel_transitions', { endpoint: 'analytics/page-flow', error: err instanceof Error ? err.message : String(err) });
       }
 
       // Strategy 2: If no pre-computed data, build from journey_touchpoints
@@ -311,7 +312,7 @@ Response includes:
             }
           }
         } catch (err) {
-          console.warn("[PageFlow] Failed to query journey_touchpoints:", err);
+          structuredLog('WARN', 'Failed to query journey_touchpoints', { endpoint: 'analytics/page-flow', error: err instanceof Error ? err.message : String(err) });
         }
       }
 
@@ -388,7 +389,7 @@ Response includes:
             }
           }
         } catch (err) {
-          console.warn("[PageFlow] Failed to query touchpoints:", err);
+          structuredLog('WARN', 'Failed to query touchpoints', { endpoint: 'analytics/page-flow', error: err instanceof Error ? err.message : String(err) });
         }
       }
 
@@ -461,7 +462,7 @@ Response includes:
             console.log(`[PageFlow] Using hourly_metrics fallback with ${pageViews.size} pages`);
           }
         } catch (err) {
-          console.warn("[PageFlow] Failed to query hourly_metrics:", err);
+          structuredLog('WARN', 'Failed to query hourly_metrics', { endpoint: 'analytics/page-flow', error: err instanceof Error ? err.message : String(err) });
         }
       }
 
@@ -611,7 +612,7 @@ Response includes:
           }
         }
       } catch (err) {
-        console.warn("[PageFlow] Failed to query journey_analytics:", err);
+        structuredLog('WARN', 'Failed to query journey_analytics', { endpoint: 'analytics/page-flow', error: err instanceof Error ? err.message : String(err) });
       }
 
       console.log(`[PageFlow] org ${orgId} - ${nodes.length} nodes, ${links.length} links, ${totalEntrySessions} sessions`);
@@ -630,7 +631,7 @@ Response includes:
         topPaths,
       });
     } catch (err) {
-      console.error("[PageFlow] Error:", err);
+      structuredLog('ERROR', 'Page flow query failed', { endpoint: 'analytics/page-flow', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Failed to get page flow", 500);
     }
   }

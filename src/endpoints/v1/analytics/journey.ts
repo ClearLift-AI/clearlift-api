@@ -13,6 +13,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext, SetupStatus, DataQualityResponse, buildDataQualityResponse } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 import { D1Adapter } from "../../../adapters/d1";
 import { getCombinedRevenueByDateRange } from "../../../services/revenue-sources";
 import { AD_PLATFORM_IDS, ACTIVE_REVENUE_PLATFORM_IDS } from "../../../config/platforms";
@@ -143,7 +144,7 @@ async function queryConnectorConversionsD1(
     }
   } catch (err) {
     // Table may not exist yet
-    console.warn('[Journey] Failed to query stripe_charges from D1:', err);
+    structuredLog('WARN', 'Failed to query stripe_charges from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
   }
 
   // Query Shopify orders
@@ -204,7 +205,7 @@ async function queryConnectorConversionsD1(
       });
     }
   } catch (err) {
-    console.warn('[Journey] Failed to query shopify_orders from D1:', err);
+    structuredLog('WARN', 'Failed to query shopify_orders from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
   }
 
   // Query Jobber completed jobs
@@ -263,7 +264,7 @@ async function queryConnectorConversionsD1(
       });
     }
   } catch (err) {
-    console.warn('[Journey] Failed to query jobber_jobs from D1:', err);
+    structuredLog('WARN', 'Failed to query jobber_jobs from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
   }
 
   return conversions.sort((a, b) =>
@@ -564,7 +565,7 @@ Returns the complete journey for an identified user, including:
         }>;
       }
     } catch (err) {
-      console.warn('[Journey] Failed to query journeys from D1:', err);
+      structuredLog('WARN', 'Failed to query journeys from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
     }
 
     // Build journey data from journeys table
@@ -826,7 +827,7 @@ export class GetJourneysOverview extends OpenAPIRoute {
             AND date >= ? AND date <= ?
         `).bind(orgTag, dateFrom, dateTo).first() as { sessions: number; users: number } | null;
       } catch (err) {
-        console.warn('[Journey Overview] Failed to query daily_metrics:', err);
+        structuredLog('WARN', 'Failed to query daily_metrics', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -848,7 +849,7 @@ export class GetJourneysOverview extends OpenAPIRoute {
       revenueData = combinedRevenue.summary;
       console.log(`[Journey Overview] Revenue sources for org ${orgId}:`, Object.keys(revenueData.sources));
     } catch (err) {
-      console.warn('[Journey Overview] Failed to query unified revenue sources:', err);
+      structuredLog('WARN', 'Failed to query unified revenue sources', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
     }
 
     // Query journeys table for path analytics
@@ -880,7 +881,7 @@ export class GetJourneysOverview extends OpenAPIRoute {
           converted_journeys: number;
         } | null;
       } catch (err) {
-        console.warn('[Journey Overview] Failed to query journeys:', err);
+        structuredLog('WARN', 'Failed to query journeys', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -912,7 +913,7 @@ export class GetJourneysOverview extends OpenAPIRoute {
           conversion_rate: row.journeys > 0 ? Math.round((row.conversions || 0) / row.journeys * 100 * 100) / 100 : 0
         }));
       } catch (err) {
-        console.warn('[Journey Overview] Failed to query top journeys:', err);
+        structuredLog('WARN', 'Failed to query top journeys', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -942,7 +943,7 @@ export class GetJourneysOverview extends OpenAPIRoute {
           revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100
         }));
       } catch (err) {
-        console.warn('[Journey Overview] Failed to query top converting paths:', err);
+        structuredLog('WARN', 'Failed to query top converting paths', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -972,7 +973,7 @@ export class GetJourneysOverview extends OpenAPIRoute {
           conversion_rate: Math.round((row.conversion_rate || 0) * 100) / 100
         }));
       } catch (err) {
-        console.warn('[Journey Overview] Failed to query path length stats:', err);
+        structuredLog('WARN', 'Failed to query path length stats', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }
     }
 

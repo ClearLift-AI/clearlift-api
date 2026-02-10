@@ -9,6 +9,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 
 /**
  * GET /v1/analytics/events/d1
@@ -225,7 +226,7 @@ export class GetEventsD1 extends OpenAPIRoute {
         }))
       });
     } catch (err) {
-      console.error('[Events D1] Query failed:', err);
+      structuredLog('ERROR', 'Events D1 query failed', { endpoint: 'analytics/events-d1', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
   }

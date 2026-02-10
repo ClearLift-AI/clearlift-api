@@ -11,6 +11,7 @@ import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { StripeQueryBuilder } from "../../../services/filters/stripeQueryBuilder";
 import { D1Adapter } from "../../../adapters/d1";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * Helper to check if user has access to a connection (handles super admin bypass)
@@ -515,7 +516,7 @@ export class TestFilterRule extends OpenAPIRoute {
         };
       });
     } catch (err: any) {
-      console.error("Failed to get sample data from D1:", err);
+      structuredLog('ERROR', 'Failed to get sample data from D1', { endpoint: 'POST /v1/connectors/:id/filters/test', error: err instanceof Error ? err.message : String(err) });
       return success(c, {
         total_samples: 0,
         matched: 0,
@@ -648,7 +649,7 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
       keys.charge = Array.from(chargeKeys).sort();
       keys.product = Array.from(productKeys).sort();
     } catch (err: any) {
-      console.error("Failed to discover metadata keys from D1:", err);
+      structuredLog('ERROR', 'Failed to discover metadata keys from D1', { endpoint: 'GET /v1/connectors/:id/filters/discover', error: err instanceof Error ? err.message : String(err) });
       // Return empty keys if D1 query fails - don't block the response
     }
 
@@ -663,7 +664,7 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
       `).bind(connectionId).all();
       cachedKeys = result.results || [];
     } catch (err: any) {
-      console.error("Failed to get cached metadata keys:", err);
+      structuredLog('ERROR', 'Failed to get cached metadata keys', { endpoint: 'GET /v1/connectors/:id/filters/discover', error: err instanceof Error ? err.message : String(err) });
       // Table may not exist - not a critical error
     }
 

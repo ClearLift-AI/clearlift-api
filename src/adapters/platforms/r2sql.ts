@@ -7,6 +7,8 @@
  * aggregations client-side.
  */
 
+import { structuredLog } from '../../utils/structured-logger';
+
 // Event schema - matches R2 SQL schema (snake_case field names)
 export interface EventRecord {
   // Core fields
@@ -169,7 +171,7 @@ export class R2SQLAdapter {
       const data = await response.json() as R2SQLQueryResponse;
 
       if (!response.ok) {
-        console.error("R2 SQL query failed:", data);
+        structuredLog('ERROR', 'R2 SQL query failed', { service: 'R2SQLAdapter', error: JSON.stringify(data) });
         return {
           success: false,
           errors: data.errors || [{ message: `HTTP ${response.status}` }]
@@ -177,7 +179,7 @@ export class R2SQLAdapter {
       }
 
       if (data.errors && data.errors.length > 0) {
-        console.error("R2 SQL query errors:", data.errors);
+        structuredLog('ERROR', 'R2 SQL query errors', { service: 'R2SQLAdapter', error: JSON.stringify(data.errors) });
         return {
           success: false,
           errors: data.errors
@@ -191,7 +193,7 @@ export class R2SQLAdapter {
         result: data.result
       };
     } catch (error) {
-      console.error("R2 SQL query exception:", error);
+      structuredLog('ERROR', 'R2 SQL query exception', { service: 'R2SQLAdapter', error: error instanceof Error ? error.message : String(error) });
       return {
         success: false,
         errors: [{ message: error instanceof Error ? error.message : "Query failed" }]

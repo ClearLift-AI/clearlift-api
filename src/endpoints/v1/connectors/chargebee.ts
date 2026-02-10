@@ -12,6 +12,7 @@ import { ConnectorService } from "../../../services/connectors";
 import { getSecret } from "../../../utils/secrets";
 import { ChargebeeAPIProvider } from "../../../services/providers/chargebee";
 import { OnboardingService } from "../../../services/onboarding";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * POST /v1/connectors/chargebee/connect
@@ -171,7 +172,7 @@ export class ConnectChargebee extends OpenAPIRoute {
         }
       }, undefined, 201);
     } catch (err: any) {
-      console.error("Chargebee connection error:", err);
+      structuredLog('ERROR', 'Chargebee connection error', { endpoint: 'POST /v1/connectors/chargebee/connect', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INVALID_API_KEY", err.message || "Failed to validate Chargebee API key", 400);
     }
   }
@@ -259,7 +260,7 @@ export class TestChargebeeConnection extends OpenAPIRoute {
         message: "Connection is working correctly"
       });
     } catch (err: any) {
-      console.error('Chargebee connection test error:', err);
+      structuredLog('ERROR', 'Chargebee connection test error', { endpoint: 'POST /v1/connectors/chargebee/:id/test', error: err instanceof Error ? err.message : String(err) });
       return success(c, {
         success: false,
         error: err.message,

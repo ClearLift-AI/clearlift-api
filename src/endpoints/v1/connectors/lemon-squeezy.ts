@@ -12,6 +12,7 @@ import { ConnectorService } from "../../../services/connectors";
 import { getSecret } from "../../../utils/secrets";
 import { LemonSqueezyAPIProvider } from "../../../services/providers/lemon-squeezy";
 import { OnboardingService } from "../../../services/onboarding";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * POST /v1/connectors/lemon-squeezy/connect
@@ -167,7 +168,7 @@ export class ConnectLemonSqueezy extends OpenAPIRoute {
         }
       }, undefined, 201);
     } catch (err: any) {
-      console.error("Lemon Squeezy connection error:", err);
+      structuredLog('ERROR', 'Lemon Squeezy connection error', { endpoint: 'POST /v1/connectors/lemon-squeezy/connect', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INVALID_API_KEY", err.message || "Failed to validate Lemon Squeezy API key", 400);
     }
   }
@@ -242,7 +243,7 @@ export class TestLemonSqueezyConnection extends OpenAPIRoute {
         message: "Connection is working correctly"
       });
     } catch (err: any) {
-      console.error('Lemon Squeezy connection test error:', err);
+      structuredLog('ERROR', 'Lemon Squeezy connection test error', { endpoint: 'POST /v1/connectors/lemon-squeezy/:id/test', error: err instanceof Error ? err.message : String(err) });
       return success(c, {
         success: false,
         error: err.message,

@@ -2,6 +2,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error, getDateRange } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 
 /**
  * GET /v1/analytics/tracking-links - Get tracking link performance metrics
@@ -208,7 +209,7 @@ export class GetTrackingLinkPerformance extends OpenAPIRoute {
         { date_range: dateRange }
       );
     } catch (err) {
-      console.error("Failed to fetch tracking link performance:", err);
+      structuredLog('ERROR', 'Failed to fetch tracking link performance', { endpoint: 'analytics/tracking-links', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", "Failed to fetch tracking link performance", 500);
     }
   }

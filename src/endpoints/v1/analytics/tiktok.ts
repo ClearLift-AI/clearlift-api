@@ -9,6 +9,7 @@ import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 import { getSecret } from "../../../utils/secrets";
 import { BUDGET_LIMITS, AGE_GROUPS, STATUS } from "../../../constants/tiktok";
 import { TikTokAdsOAuthProvider, TikTokTargeting } from "../../../services/oauth/tiktok";
@@ -155,7 +156,7 @@ export class GetTikTokCampaigns extends OpenAPIRoute {
         summary
       });
     } catch (err: any) {
-      console.error("Get TikTok campaigns error:", err);
+      structuredLog('ERROR', 'Get TikTok campaigns failed', { endpoint: 'analytics/tiktok', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch campaigns: ${err.message}`, 500);
     }
   }
@@ -237,7 +238,7 @@ export class GetTikTokAdGroups extends OpenAPIRoute {
         total: adGroups.length
       });
     } catch (err: any) {
-      console.error("Get TikTok ad groups error:", err);
+      structuredLog('ERROR', 'Get TikTok ad groups failed', { endpoint: 'analytics/tiktok', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch ad groups: ${err.message}`, 500);
     }
   }
@@ -326,7 +327,7 @@ export class GetTikTokAds extends OpenAPIRoute {
         total: ads.length
       });
     } catch (err: any) {
-      console.error("Get TikTok ads error:", err);
+      structuredLog('ERROR', 'Get TikTok ads failed', { endpoint: 'analytics/tiktok', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch ads: ${err.message}`, 500);
     }
   }
@@ -484,7 +485,7 @@ export class GetTikTokMetrics extends OpenAPIRoute {
         level: query.query.level
       });
     } catch (err: any) {
-      console.error("Get TikTok metrics error:", err);
+      structuredLog('ERROR', 'Get TikTok metrics failed', { endpoint: 'analytics/tiktok', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch metrics: ${err.message}`, 500);
     }
   }
@@ -576,7 +577,7 @@ export class UpdateTikTokCampaignStatus extends OpenAPIRoute {
         message: `Campaign ${status === 'ENABLE' ? 'enabled' : 'disabled'} successfully`
       });
     } catch (err: any) {
-      console.error("Update TikTok campaign status error:", err);
+      structuredLog('ERROR', 'Update TikTok campaign status failed', { endpoint: 'analytics/tiktok', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update campaign status: ${err.message}`, 500);
     }
   }
@@ -665,7 +666,7 @@ export class UpdateTikTokAdGroupStatus extends OpenAPIRoute {
         message: `Ad group ${status === 'ENABLE' ? 'enabled' : 'disabled'} successfully`
       });
     } catch (err: any) {
-      console.error("Update TikTok ad group status error:", err);
+      structuredLog('ERROR', 'Update TikTok ad group status failed', { endpoint: 'analytics/tiktok', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update ad group status: ${err.message}`, 500);
     }
   }
@@ -760,7 +761,7 @@ export class UpdateTikTokCampaignBudget extends OpenAPIRoute {
         message: `Campaign budget updated to $${(budget_cents / 100).toFixed(2)} ${budget_mode === 'BUDGET_MODE_DAY' ? 'daily' : 'lifetime'}`
       });
     } catch (err: any) {
-      console.error("Update TikTok campaign budget error:", err);
+      structuredLog('ERROR', 'Update TikTok campaign budget failed', { endpoint: 'analytics/tiktok', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update campaign budget: ${err.message}`, 500);
     }
   }
@@ -855,7 +856,7 @@ export class UpdateTikTokAdGroupBudget extends OpenAPIRoute {
         message: `Ad group budget updated to $${(budget_cents / 100).toFixed(2)} ${budget_mode === 'BUDGET_MODE_DAY' ? 'daily' : 'lifetime'}`
       });
     } catch (err: any) {
-      console.error("Update TikTok ad group budget error:", err);
+      structuredLog('ERROR', 'Update TikTok ad group budget failed', { endpoint: 'analytics/tiktok', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update ad group budget: ${err.message}`, 500);
     }
   }
@@ -957,7 +958,7 @@ export class UpdateTikTokAdGroupTargeting extends OpenAPIRoute {
         message: "Ad group targeting updated successfully"
       });
     } catch (err: any) {
-      console.error("Update TikTok ad group targeting error:", err);
+      structuredLog('ERROR', 'Update TikTok ad group targeting failed', { endpoint: 'analytics/tiktok', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update ad group targeting: ${err.message}`, 500);
     }
   }

@@ -2,6 +2,7 @@ import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../types";
 import { success, error } from "../../utils/response";
+import { structuredLog } from "../../utils/structured-logger";
 
 const GoalConfigSchema = z.object({
   trigger: z.enum(['pageview', 'click', 'event']),
@@ -107,7 +108,7 @@ export class GetTagConfig extends OpenAPIRoute {
     try {
       goals = JSON.parse(config.goals as string || '{}');
     } catch (e) {
-      console.error('Failed to parse goals JSON:', e);
+      structuredLog('ERROR', 'Failed to parse goals JSON', { endpoint: '/v1/tracking-config', error: e instanceof Error ? e.message : String(e) });
     }
 
     return success(c, {
@@ -207,7 +208,7 @@ export class GetTrackingConfig extends OpenAPIRoute {
     try {
       goals = JSON.parse(config.goals as string || '{}');
     } catch (e) {
-      console.error('Failed to parse goals JSON:', e);
+      structuredLog('ERROR', 'Failed to parse goals JSON', { endpoint: '/v1/tracking-config', error: e instanceof Error ? e.message : String(e) });
     }
 
     return success(c, {

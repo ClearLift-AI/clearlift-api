@@ -2,6 +2,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 import { EventResponseSchema } from "../../../schemas/analytics";
 import { getSecret } from "../../../utils/secrets";
 import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
@@ -132,7 +133,7 @@ export class GetEventsHistorical extends OpenAPIRoute {
       domainPatterns = (domainClaimsResult.results || []).map(d => d.domain_pattern);
     } catch (err) {
       // Non-fatal: proceed without domain patterns (table may not exist)
-      console.warn("Failed to fetch domain patterns from D1:", err);
+      structuredLog('WARN', 'Failed to fetch domain patterns from D1', { endpoint: 'analytics/events-historical', error: err instanceof Error ? err.message : String(err) });
     }
 
     try {
@@ -170,7 +171,7 @@ export class GetEventsHistorical extends OpenAPIRoute {
       });
 
       if (result.error) {
-        console.error("R2 SQL query error:", result.error);
+        structuredLog('ERROR', 'R2 SQL query error', { endpoint: 'analytics/events-historical', error: result.error });
         return error(c, "QUERY_FAILED", result.error, 500);
       }
 
@@ -208,7 +209,7 @@ export class GetEventsHistorical extends OpenAPIRoute {
         }
       );
     } catch (err) {
-      console.error("Failed to fetch historical events:", err);
+      structuredLog('ERROR', 'Failed to fetch historical events', { endpoint: 'analytics/events-historical', error: err instanceof Error ? err.message : String(err) });
       const errorMessage = err instanceof Error ? err.message : "Query failed";
 
       // Check for timeout

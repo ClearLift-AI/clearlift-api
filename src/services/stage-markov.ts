@@ -65,6 +65,7 @@ interface StageData {
 }
 
 import { CacheService } from './cache';
+import { structuredLog } from '../utils/structured-logger';
 
 /**
  * Stage Markov Service
@@ -203,7 +204,7 @@ export class StageMarkovService {
     if (this.cache) {
       const cacheKey = CacheService.stageMarkovKey(orgId, startDate, endDate);
       this.cache.set(cacheKey, result, 300).catch(err => {
-        console.error(`[StageMarkov] Failed to cache result:`, err);
+        structuredLog('ERROR', 'Failed to cache result', { service: 'StageMarkov', error: err instanceof Error ? err.message : String(err) });
       });
       console.log(`[StageMarkov] Cached result to ${cacheKey}`);
     }
@@ -298,7 +299,7 @@ export class StageMarkovService {
 
       return result.results || [];
     } catch (err) {
-      console.warn('[StageMarkov] Failed to get transitions:', err);
+      structuredLog('WARN', 'Failed to get transitions', { service: 'StageMarkov', error: err instanceof Error ? err.message : String(err) });
       return [];
     }
   }

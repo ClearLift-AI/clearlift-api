@@ -9,6 +9,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 
 /**
  * GET /v1/analytics/events/sync-status - Get events sync workflow status
@@ -121,7 +122,7 @@ export class GetEventsSyncStatus extends OpenAPIRoute {
 
       return success(c, statusData);
     } catch (err) {
-      console.error("Error getting events sync status:", err);
+      structuredLog('ERROR', 'Failed to get events sync status', { endpoint: 'analytics/events-sync', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INTERNAL_ERROR", err instanceof Error ? err.message : "Unknown error", 500);
     }
   }

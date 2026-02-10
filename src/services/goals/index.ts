@@ -9,6 +9,7 @@
  */
 
 import { revenueSourceRegistry } from '../revenue-sources/index';
+import { structuredLog } from '../../utils/structured-logger';
 
 // =============================================================================
 // TYPES
@@ -296,7 +297,7 @@ export class GoalService {
       return goal;
     } catch (err) {
       // Slug collision or other error — non-fatal
-      console.warn(`[GoalService] Failed to auto-create goal for ${platform}: ${err}`);
+      structuredLog('WARN', 'Failed to auto-create goal for platform', { service: 'GoalService', platform, error: err instanceof Error ? err.message : String(err) });
       return null;
     }
   }
@@ -497,7 +498,7 @@ export class GoalService {
         totalCustomers += summary.uniqueCustomers;
       } catch (e) {
         // Provider query failed, skip
-        console.error(`[GoalService] Provider ${provider.meta.platform} failed:`, e);
+        structuredLog('ERROR', 'Provider query failed', { service: 'GoalService', platform: provider.meta.platform, error: e instanceof Error ? e.message : String(e) });
       }
     }
 
@@ -601,7 +602,7 @@ export class GoalService {
           revenue,
         };
       } catch (e) {
-        console.error(`[GoalService] hourly_metrics query failed:`, e);
+        structuredLog('ERROR', 'hourly_metrics query failed', { service: 'GoalService', error: e instanceof Error ? e.message : String(e) });
       }
     }
 
@@ -687,7 +688,7 @@ export class GoalService {
           });
         }
       } catch (e) {
-        console.error(`[GoalService] TimeSeries for ${provider.meta.platform} failed:`, e);
+        structuredLog('ERROR', 'TimeSeries query failed', { service: 'GoalService', platform: provider.meta.platform, error: e instanceof Error ? e.message : String(e) });
       }
     }
 
@@ -728,7 +729,7 @@ export class GoalService {
         revenue: this.applyValueType(goal, row.revenue_cents / 100, row.conversions),
       }));
     } catch (e) {
-      console.error(`[GoalService] GenericTimeSeries failed:`, e);
+      structuredLog('ERROR', 'GenericTimeSeries query failed', { service: 'GoalService', error: e instanceof Error ? e.message : String(e) });
       return [];
     }
   }

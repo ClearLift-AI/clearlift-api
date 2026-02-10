@@ -12,6 +12,7 @@ import { ConnectorService } from "../../../services/connectors";
 import { getSecret } from "../../../utils/secrets";
 import { AttentiveAPIProvider } from "../../../services/providers/attentive";
 import { OnboardingService } from "../../../services/onboarding";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * POST /v1/connectors/attentive/connect
@@ -161,7 +162,7 @@ export class ConnectAttentive extends OpenAPIRoute {
         }
       }, undefined, 201);
     } catch (err: any) {
-      console.error("Attentive connection error:", err);
+      structuredLog('ERROR', 'Attentive connection error', { endpoint: 'POST /v1/connectors/attentive/connect', error: err instanceof Error ? err.message : String(err) });
       return error(c, "INVALID_API_KEY", err.message || "Failed to validate Attentive API key", 400);
     }
   }
@@ -374,7 +375,7 @@ export class TriggerAttentiveSync extends OpenAPIRoute {
         };
         await c.env.SYNC_QUEUE.send(queueMessage);
       } catch (queueError) {
-        console.error('Queue send error:', queueError);
+        structuredLog('ERROR', 'Queue send error', { endpoint: 'POST /v1/connectors/attentive/:id/sync', error: queueError instanceof Error ? queueError.message : String(queueError) });
       }
     }
 
@@ -464,7 +465,7 @@ export class TestAttentiveConnection extends OpenAPIRoute {
       });
 
     } catch (err: any) {
-      console.error('Attentive connection test error:', err);
+      structuredLog('ERROR', 'Attentive connection test error', { endpoint: 'POST /v1/connectors/attentive/:id/test', error: err instanceof Error ? err.message : String(err) });
 
       return success(c, {
         success: false,

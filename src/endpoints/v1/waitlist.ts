@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { createEmailService } from '../../utils/email';
 import { success, error } from '../../utils/response';
 import { AppContext } from '../../types';
+import { structuredLog } from '../../utils/structured-logger';
 
 // SHA-256 hash utility for IP addresses
 async function sha256(text: string): Promise<string> {
@@ -153,11 +154,11 @@ export class JoinWaitlist extends OpenAPIRoute {
             if (result.success) {
               console.log(`[WAITLIST] ✅ Welcome email sent successfully to ${email}, messageId: ${result.messageId}`);
             } else {
-              console.error(`[WAITLIST] ❌ Welcome email failed for ${email}: ${result.error}`);
+              structuredLog('ERROR', 'Welcome email failed', { endpoint: 'POST /v1/waitlist', email, error: result.error });
             }
           })
           .catch(err => {
-            console.error(`[WAITLIST] ❌ Exception sending welcome email to ${email}:`, err);
+            structuredLog('ERROR', 'Exception sending welcome email', { endpoint: 'POST /v1/waitlist', email, error: err instanceof Error ? err.message : String(err) });
           });
 
         // Keep worker alive until email completes
@@ -179,7 +180,7 @@ export class JoinWaitlist extends OpenAPIRoute {
       );
 
     } catch (err: any) {
-      console.error('Waitlist signup error:', err);
+      structuredLog('ERROR', 'Waitlist signup error', { endpoint: 'POST /v1/waitlist', error: err instanceof Error ? err.message : String(err) });
 
       if (err.message?.includes('validation')) {
         return error(c, 'validation_error', err.message, 400);
@@ -237,7 +238,7 @@ export class GetWaitlistStats extends OpenAPIRoute {
       });
 
     } catch (err: any) {
-      console.error('Waitlist stats error:', err);
+      structuredLog('ERROR', 'Waitlist stats error', { endpoint: 'GET /v1/waitlist/stats', error: err instanceof Error ? err.message : String(err) });
       return error(c, 'server_error', 'Failed to get waitlist stats', 500);
     }
   }

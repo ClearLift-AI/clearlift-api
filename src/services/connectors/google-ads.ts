@@ -3,6 +3,8 @@
  * Simplified version for listing client accounts
  */
 
+import { structuredLog } from '../../utils/structured-logger';
+
 const GOOGLE_ADS_API_VERSION = 'v22';
 const GOOGLE_ADS_BASE_URL = 'https://googleads.googleapis.com';
 
@@ -66,7 +68,7 @@ export class GoogleAdsConnector {
       const data = await response.json() as GoogleAdsCustomerResponse;
       return Boolean(data.resourceName) && data.customer?.manager === true;
     } catch (error) {
-      console.error('Error checking if account is manager:', error);
+      structuredLog('ERROR', 'Error checking if account is manager', { service: 'GoogleAdsConnector', error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }

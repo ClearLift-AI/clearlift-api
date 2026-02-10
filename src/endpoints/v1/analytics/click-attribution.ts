@@ -10,6 +10,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 
 const PlatformAttributionSchema = z.object({
   click_id_type: z.enum(["gclid", "fbclid", "ttclid"]),
@@ -210,7 +211,7 @@ NOTE: Requires conversion_attribution data to be populated in D1.
         },
       });
     } catch (err) {
-      console.error(`[ClickAttribution] Error:`, err);
+      structuredLog('ERROR', 'Click attribution query failed', { endpoint: 'analytics/click-attribution', error: err instanceof Error ? err.message : String(err) });
       // Return empty on error
       return success(c, {
         by_platform: {

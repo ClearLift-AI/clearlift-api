@@ -11,6 +11,7 @@ import { OpenAPIRoute, contentJson } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 import { getSecret } from "../../../utils/secrets";
 import { AGE_LIMITS, BUDGET_LIMITS } from "../../../constants/facebook";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
@@ -154,7 +155,7 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
         summary
       });
     } catch (err: any) {
-      console.error("Get Facebook campaigns error:", err);
+      structuredLog('ERROR', 'Get Facebook campaigns failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch campaigns: ${err.message}`, 500);
     }
   }
@@ -271,7 +272,7 @@ export class GetFacebookAdSets extends OpenAPIRoute {
         total: adSets.length
       });
     } catch (err: any) {
-      console.error("Get Facebook ad sets error:", err);
+      structuredLog('ERROR', 'Get Facebook ad sets failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch ad sets: ${err.message}`, 500);
     }
   }
@@ -337,7 +338,7 @@ export class GetFacebookCreatives extends OpenAPIRoute {
         total: creatives.length
       });
     } catch (err: any) {
-      console.error("Get Facebook creatives error:", err);
+      structuredLog('ERROR', 'Get Facebook creatives failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch creatives: ${err.message}`, 500);
     }
   }
@@ -458,7 +459,7 @@ export class GetFacebookAds extends OpenAPIRoute {
         total: ads.length
       });
     } catch (err: any) {
-      console.error("Get Facebook ads error:", err);
+      structuredLog('ERROR', 'Get Facebook ads failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch ads: ${err.message}`, 500);
     }
   }
@@ -589,7 +590,7 @@ export class GetFacebookMetrics extends OpenAPIRoute {
         level
       });
     } catch (err: any) {
-      console.error("Get Facebook metrics error:", err);
+      structuredLog('ERROR', 'Get Facebook metrics failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch metrics: ${err.message}`, 500);
     }
   }
@@ -673,7 +674,7 @@ export class UpdateFacebookCampaignStatus extends OpenAPIRoute {
         message: `Campaign ${status === 'ACTIVE' ? 'resumed' : 'paused'} successfully`
       });
     } catch (err: any) {
-      console.error("Update campaign status error:", err);
+      structuredLog('ERROR', 'Update Facebook campaign status failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update campaign status: ${err.message}`, 500);
     }
   }
@@ -757,7 +758,7 @@ export class UpdateFacebookAdSetStatus extends OpenAPIRoute {
         message: `Ad set ${status === 'ACTIVE' ? 'resumed' : 'paused'} successfully`
       });
     } catch (err: any) {
-      console.error("Update ad set status error:", err);
+      structuredLog('ERROR', 'Update Facebook ad set status failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update ad set status: ${err.message}`, 500);
     }
   }
@@ -841,7 +842,7 @@ export class UpdateFacebookAdStatus extends OpenAPIRoute {
         message: `Ad ${status === 'ACTIVE' ? 'resumed' : 'paused'} successfully`
       });
     } catch (err: any) {
-      console.error("Update ad status error:", err);
+      structuredLog('ERROR', 'Update Facebook ad status failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update ad status: ${err.message}`, 500);
     }
   }
@@ -930,7 +931,7 @@ export class UpdateFacebookCampaignBudget extends OpenAPIRoute {
         message: `Campaign budget updated successfully`
       });
     } catch (err: any) {
-      console.error("Update campaign budget error:", err);
+      structuredLog('ERROR', 'Update Facebook campaign budget failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update campaign budget: ${err.message}`, 500);
     }
   }
@@ -1018,7 +1019,7 @@ export class UpdateFacebookAdSetBudget extends OpenAPIRoute {
         message: `Ad set budget updated successfully`
       });
     } catch (err: any) {
-      console.error("Update ad set budget error:", err);
+      structuredLog('ERROR', 'Update Facebook ad set budget failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update ad set budget: ${err.message}`, 500);
     }
   }
@@ -1153,7 +1154,7 @@ export class UpdateFacebookAdSetTargeting extends OpenAPIRoute {
         message: `Ad set targeting updated successfully`
       });
     } catch (err: any) {
-      console.error("Update ad set targeting error:", err);
+      structuredLog('ERROR', 'Update Facebook ad set targeting failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "UPDATE_FAILED", `Failed to update ad set targeting: ${err.message}`, 500);
     }
   }
@@ -1260,7 +1261,7 @@ export class GetFacebookPages extends OpenAPIRoute {
           note: "Facebook pages not yet synced to D1"
         });
       }
-      console.error("Get Facebook pages error:", err);
+      structuredLog('ERROR', 'Get Facebook pages failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch pages: ${err.message}`, 500);
     }
   }
@@ -1396,7 +1397,7 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
         const resp = await fetch(url.toString());
         if (!resp.ok) {
           const errBody = await resp.text();
-          console.warn(`Page insights failed for ${page_id} [${metrics.join(',')}]: ${resp.status} ${errBody}`);
+          structuredLog('WARN', 'Page insights API call failed', { endpoint: 'analytics/facebook', page_id, metrics: metrics.join(','), status: resp.status, error: errBody });
           return null;
         }
         return (await resp.json() as any).data || [];
@@ -1457,7 +1458,7 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
       insights.net_follows = insights.new_follows - insights.unfollows;
 
       if (failedMetrics.length > 0) {
-        console.warn(`Page ${page_id}: failed metrics: ${failedMetrics.join(', ')}`);
+        structuredLog('WARN', 'Page insights had failed metrics', { endpoint: 'analytics/facebook', page_id, failed_metrics: failedMetrics.join(', ') });
       }
 
       // 2. Metrics that only support period=day (lifetime totals)
@@ -1528,7 +1529,7 @@ export class GetFacebookPageInsights extends OpenAPIRoute {
         ...(hasData ? {} : { note: "Page insights not available — this page may not have enough data yet" })
       });
     } catch (err: any) {
-      console.error("Get Facebook page insights error:", err);
+      structuredLog('ERROR', 'Get Facebook page insights failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch page insights: ${err.message}`, 500);
     }
   }
@@ -1725,7 +1726,7 @@ export class GetFacebookAudienceInsights extends OpenAPIRoute {
             });
           }
         } catch (breakdownError) {
-          console.error(`Failed to fetch ${name} breakdown:`, breakdownError);
+          structuredLog('ERROR', `Failed to fetch ${name} breakdown`, { endpoint: 'analytics/facebook', error: breakdownError instanceof Error ? breakdownError.message : String(breakdownError) });
           // Continue with other breakdowns
         }
       }
@@ -1787,7 +1788,7 @@ export class GetFacebookAudienceInsights extends OpenAPIRoute {
         }
       });
     } catch (err: any) {
-      console.error("Get Facebook audience insights error:", err);
+      structuredLog('ERROR', 'Get Facebook audience insights failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch audience insights: ${err.message}`, 500);
     }
   }

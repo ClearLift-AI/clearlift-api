@@ -9,6 +9,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
+import { structuredLog } from '../../../utils/structured-logger';
 
 /**
  * POST /v1/analytics/click-extraction/run
@@ -131,7 +132,7 @@ This enables click-level attribution with 100% confidence for verified click IDs
         });
       }
     } catch (err) {
-      console.error("[ClickExtraction] Error:", err);
+      structuredLog('ERROR', 'Click extraction queue failed', { endpoint: 'analytics/click-extraction', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUEUE_ERROR", `Failed to queue click extraction: ${err instanceof Error ? err.message : 'Unknown error'}`, 500);
     }
   }
@@ -234,7 +235,7 @@ export class GetClickExtractionStats extends OpenAPIRoute {
         attribution_rate: totalClicks > 0 ? (convertedClicks / totalClicks) * 100 : 0,
       });
     } catch (err) {
-      console.error("[ClickExtractionStats] Error:", err);
+      structuredLog('ERROR', 'Click extraction stats query failed', { endpoint: 'analytics/click-extraction', error: err instanceof Error ? err.message : String(err) });
       return error(c, "STATS_ERROR", `Failed to get stats: ${err instanceof Error ? err.message : 'Unknown error'}`, 500);
     }
   }
