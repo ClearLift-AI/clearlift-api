@@ -1,0 +1,30 @@
+diff --git a/node_modules/chanfana/dist/index.js b/node_modules/chanfana/dist/index.js
+index 1c248a6..91105d8 100644
+--- a/node_modules/chanfana/dist/index.js
++++ b/node_modules/chanfana/dist/index.js
+@@ -314,8 +314,8 @@ var OpenAPIHandler = class {
+         return (...params2) => new handler({
+           router: this,
+           route: parsedRoute,
+-          urlParams
+-          // raiseUnknownParameters: openapiConfig.raiseUnknownParameters,  TODO
++          urlParams,
++          raiseUnknownParameters: this.options?.raiseUnknownParameters,
+         }).execute(...params2);
+       }
+       return handler;
+diff --git a/node_modules/chanfana/dist/index.mjs b/node_modules/chanfana/dist/index.mjs
+index b60284d..974185f 100644
+--- a/node_modules/chanfana/dist/index.mjs
++++ b/node_modules/chanfana/dist/index.mjs
+@@ -233,8 +233,8 @@ var OpenAPIHandler = class {
+         return (...params2) => new handler({
+           router: this,
+           route: parsedRoute,
+-          urlParams
+-          // raiseUnknownParameters: openapiConfig.raiseUnknownParameters,  TODO
++          urlParams,
++          raiseUnknownParameters: this.options?.raiseUnknownParameters,
+         }).execute(...params2);
+       }
+       return handler;

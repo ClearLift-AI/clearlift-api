@@ -52,6 +52,7 @@ const ConversionGoalSchema = z.object({
   is_conversion: z.union([z.boolean(), z.number()]).optional(), // Can be marked as conversion point
   position_col: z.number().int().min(0).optional(), // Graph X position
   position_row: z.number().int().min(0).optional(), // Graph Y position (funnel order)
+  step_requirement: z.enum(['required', 'optional', 'auto']).optional(), // Structural prior for attribution
 }).passthrough(); // Allow extra fields that may be sent by frontend
 
 // ============== Conversion Goals Endpoints ==============
@@ -99,7 +100,8 @@ export class ListConversionGoals extends OpenAPIRoute {
              slug, description, goal_type, revenue_sources, filter_config,
              value_type, fixed_value_cents, display_order, color, icon, is_active,
              avg_deal_value_cents, close_rate_percent,
-             connector, connector_event_type, is_conversion, position_col, position_row
+             connector, connector_event_type, is_conversion, position_col, position_row,
+             step_requirement
       FROM conversion_goals
       WHERE organization_id = ?
       ORDER BY COALESCE(position_row, display_order, priority) ASC, created_at DESC
@@ -136,6 +138,7 @@ export class ListConversionGoals extends OpenAPIRoute {
         is_conversion: Boolean(g.is_conversion),
         position_col: g.position_col ?? 0,
         position_row: g.position_row ?? null,
+        step_requirement: (g.step_requirement as string) || 'auto',
       };
     });
 
@@ -220,8 +223,9 @@ export class CreateConversionGoal extends OpenAPIRoute {
         slug, description, goal_type, revenue_sources, filter_config,
         display_order, color, icon, is_active,
         connector, connector_event_type, is_conversion, position_col, position_row,
+        step_requirement,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
       orgId,
@@ -251,6 +255,7 @@ export class CreateConversionGoal extends OpenAPIRoute {
       body.is_conversion ? 1 : 0,
       body.position_col ?? 0,
       body.position_row ?? null,
+      body.step_requirement ?? 'auto',
       now,
       now
     ).run();
@@ -285,6 +290,7 @@ export class CreateConversionGoal extends OpenAPIRoute {
       is_conversion: Boolean(body.is_conversion),
       position_col: body.position_col ?? 0,
       position_row: body.position_row ?? null,
+      step_requirement: body.step_requirement ?? 'auto',
       created_at: now,
       updated_at: now,
     }, undefined, 201);
@@ -464,6 +470,10 @@ export class UpdateConversionGoal extends OpenAPIRoute {
     if (body.position_row !== undefined) {
       updates.push('position_row = ?');
       values.push(body.position_row);
+    }
+    if ((body as any).step_requirement !== undefined) {
+      updates.push('step_requirement = ?');
+      values.push((body as any).step_requirement);
     }
 
     if (updates.length > 0) {

@@ -574,7 +574,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       // For parent entities, still include child summary rollup
       if (entity.children.length > 0) {
         const activeChildren = entity.children.filter(c =>
-          c.status === 'ACTIVE' || c.status === 'ENABLED'
+          isActiveStatus(c.status)
         ).length;
         const totalChildren = entity.children.length;
         const childType = entity.level === 'campaign' ? 'ad sets' : entity.level === 'adset' ? 'ads' : 'children';

@@ -34,6 +34,8 @@ export interface DateRange {
 
 export class MetricsFetcher {
   private session: D1DatabaseSession;
+  /** Track silent query failures for diagnostics */
+  failedQueries = 0;
 
   constructor(db: D1Database) {
     // Use Sessions API for read replication support
@@ -50,9 +52,9 @@ export class MetricsFetcher {
     dateRange: DateRange
   ): Promise<TimeseriesMetric[]> {
     const table = this.getMetricsTable(platform, level);
-    const refColumn = this.getRefColumn(platform, level);
+    const entityType = this.getEntityType(level);
 
-    if (!table || !refColumn) {
+    if (!table || !entityType) {
       return [];
     }
 
@@ -66,11 +68,13 @@ export class MetricsFetcher {
           COALESCE(conversions, 0) as conversions,
           COALESCE(conversion_value_cents, 0) as conversion_value_cents
         FROM ${table}
-        WHERE ${refColumn} = ?
+        WHERE entity_ref = ?
+          AND entity_type = ?
+          AND platform = ?
           AND metric_date >= ?
           AND metric_date <= ?
         ORDER BY metric_date ASC
-      `).bind(entityId, dateRange.start, dateRange.end).all<{
+      `).bind(entityId, entityType, platform, dateRange.start, dateRange.end).all<{
         metric_date: string;
         impressions: number;
         clicks: number;
@@ -88,14 +92,24 @@ export class MetricsFetcher {
         conversion_value_cents: r.conversion_value_cents || 0
       }));
     } catch (err) {
-      structuredLog('ERROR', 'D1 metrics query failed', { service: 'metrics-fetcher', table, error: err instanceof Error ? err.message : String(err) });
+      structuredLog('ERROR', 'D1 metrics query failed', {
+        service: 'metrics-fetcher',
+        table,
+        entityId,
+        entityType,
+        platform,
+        dateRange: `${dateRange.start}..${dateRange.end}`,
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined
+      });
+      this.failedQueries++;
       return [];
     }
   }
 
   /**
    * Fetch aggregated metrics for a parent entity
-   * Aggregates child metrics by date
+   * Aggregates child metrics by date, batched to avoid overwhelming D1
    */
   async fetchAggregatedMetrics(
     platform: Platform,
@@ -113,27 +127,45 @@ export class MetricsFetcher {
       return [];
     }
 
-    // Fetch metrics for all children
-    const childMetrics = await Promise.all(
-      childIds.map(id => this.fetchMetrics(platform, childLevel, id, dateRange))
-    );
-
-    // Aggregate by date
+    // Batch D1 queries to avoid overwhelming the session with concurrent requests.
+    // Previously this fired all childIds in a single Promise.all (e.g. 43+ concurrent
+    // queries for an account with many campaigns), which caused silent failures.
+    const BATCH_SIZE = 5;
+    const failedBefore = this.failedQueries;
     const metricsByDate = new Map<string, TimeseriesMetric>();
 
-    for (const metrics of childMetrics) {
-      for (const m of metrics) {
-        const existing = metricsByDate.get(m.date);
-        if (existing) {
-          existing.impressions += m.impressions;
-          existing.clicks += m.clicks;
-          existing.spend_cents += m.spend_cents;
-          existing.conversions += m.conversions;
-          existing.conversion_value_cents += m.conversion_value_cents;
-        } else {
-          metricsByDate.set(m.date, { ...m });
+    for (let i = 0; i < childIds.length; i += BATCH_SIZE) {
+      const batch = childIds.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(id => this.fetchMetrics(platform, childLevel, id, dateRange))
+      );
+
+      for (const metrics of batchResults) {
+        for (const m of metrics) {
+          const existing = metricsByDate.get(m.date);
+          if (existing) {
+            existing.impressions += m.impressions;
+            existing.clicks += m.clicks;
+            existing.spend_cents += m.spend_cents;
+            existing.conversions += m.conversions;
+            existing.conversion_value_cents += m.conversion_value_cents;
+          } else {
+            metricsByDate.set(m.date, { ...m });
+          }
         }
       }
+    }
+
+    const failedInThisCall = this.failedQueries - failedBefore;
+    if (failedInThisCall > 0) {
+      structuredLog('WARN', 'Aggregated metrics had D1 failures', {
+        service: 'metrics-fetcher',
+        platform,
+        entityLevel: level,
+        totalChildren: childIds.length,
+        failedQueries: failedInThisCall,
+        dateRange: `${dateRange.start}..${dateRange.end}`
+      });
     }
 
     // Sort by date
@@ -185,31 +217,17 @@ export class MetricsFetcher {
   }
 
   /**
-   * Get reference column name for platform/level
+   * Map entity level to the entity_type discriminator value in ad_metrics
    */
-  private getRefColumn(platform: Platform, level: EntityLevel): string | null {
-    const columns: Record<Platform, Record<EntityLevel, string | null>> = {
-      google: {
-        ad: 'ad_ref',
-        adset: 'ad_group_ref',
-        campaign: 'campaign_ref',
-        account: null
-      },
-      facebook: {
-        ad: 'ad_ref',
-        adset: 'ad_set_ref',
-        campaign: 'campaign_ref',
-        account: null
-      },
-      tiktok: {
-        ad: 'ad_ref',
-        adset: 'ad_group_ref',
-        campaign: 'campaign_ref',
-        account: null
-      }
+  private getEntityType(level: EntityLevel): string | null {
+    const typeMap: Record<EntityLevel, string | null> = {
+      campaign: 'campaign',
+      adset: 'ad_group',
+      ad: 'ad',
+      account: null
     };
 
-    return columns[platform]?.[level] || null;
+    return typeMap[level] || null;
   }
 
   /**

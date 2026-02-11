@@ -394,6 +394,7 @@ app.use("*", auditMiddleware);
 // The routes work correctly at runtime - this is purely a TypeScript type issue
 const openapi = fromHono(app, {
   docs_url: "/",
+  raiseUnknownParameters: false,
   schema: {
     info: {
       title: "ClearLift API",
@@ -836,10 +837,117 @@ export default {
       await this.backfillCACHistoryForAllOrgs(env);
     }
 
+    // Periodic platform sync cron (runs every 6 hours)
+    if (event.cron === '0 */6 * * *') {
+      console.log('[Cron] Running periodic platform sync...');
+      await this.syncAllActiveConnections(env);
+    }
+
     // Stale job cleanup cron (runs every 15 minutes)
     if (event.cron === '*/15 * * * *') {
       console.log('[Cron] Running stale job cleanup...');
       await this.cleanupStaleJobs(env);
+    }
+  },
+
+  // Periodic sync: create incremental sync jobs for all active platform connections
+  async syncAllActiveConnections(env: Env): Promise<void> {
+    const SYNC_LOOKBACK_DAYS = 7; // 7-day lookback catches retroactive platform data corrections
+    const SYNC_PLATFORMS = ['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot'];
+
+    try {
+      // Get all active connections for syncable platforms
+      const connections = await env.DB.prepare(`
+        SELECT pc.id, pc.platform, pc.account_id, pc.organization_id
+        FROM platform_connections pc
+        WHERE pc.is_active = 1
+          AND pc.platform IN (${SYNC_PLATFORMS.map(() => '?').join(',')})
+      `).bind(...SYNC_PLATFORMS).all<{
+        id: string;
+        platform: string;
+        account_id: string;
+        organization_id: string;
+      }>();
+
+      const allConnections = connections.results || [];
+      if (allConnections.length === 0) {
+        console.log('[Cron] No active connections to sync');
+        return;
+      }
+
+      console.log(`[Cron] Found ${allConnections.length} active connections to sync`);
+
+      // Check for existing pending/running jobs to avoid duplicates
+      const existingJobs = await env.DB.prepare(`
+        SELECT connection_id FROM sync_jobs
+        WHERE status IN ('pending', 'running')
+          AND created_at > datetime('now', '-6 hours')
+      `).all<{ connection_id: string }>();
+
+      const busyConnections = new Set((existingJobs.results || []).map(j => j.connection_id));
+
+      const now = new Date();
+      const startDate = new Date(now.getTime() - SYNC_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+      let queued = 0;
+      let skipped = 0;
+
+      for (const conn of allConnections) {
+        if (busyConnections.has(conn.id)) {
+          skipped++;
+          continue;
+        }
+
+        const jobId = crypto.randomUUID();
+        const syncWindow = {
+          type: 'incremental',
+          start: startDate.toISOString(),
+          end: now.toISOString()
+        };
+
+        try {
+          // Create sync job record
+          await env.DB.prepare(`
+            INSERT INTO sync_jobs (id, organization_id, connection_id, status, job_type, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, 'pending', 'incremental', ?, datetime('now'), datetime('now'))
+          `).bind(
+            jobId,
+            conn.organization_id,
+            conn.id,
+            JSON.stringify({
+              platform: conn.platform,
+              account_id: conn.account_id,
+              sync_window: syncWindow,
+              created_by: 'periodic_cron',
+              retry_count: 0
+            })
+          ).run();
+
+          // Send to queue
+          await env.SYNC_QUEUE.send({
+            job_id: jobId,
+            connection_id: conn.id,
+            organization_id: conn.organization_id,
+            platform: conn.platform,
+            account_id: conn.account_id,
+            sync_window: syncWindow,
+            job_type: 'incremental',
+            metadata: { created_at: now.toISOString(), created_by: 'periodic_cron', retry_count: 0 }
+          });
+
+          queued++;
+        } catch (err) {
+          structuredLog('ERROR', `Failed to queue periodic sync for connection ${conn.id}`, {
+            endpoint: 'cron', step: 'periodic_sync', connection_id: conn.id,
+            platform: conn.platform, error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
+
+      console.log(`[Cron] Periodic sync: queued ${queued}, skipped ${skipped} (already running)`);
+    } catch (err) {
+      structuredLog('ERROR', 'Error during periodic platform sync', {
+        endpoint: 'cron', step: 'periodic_sync', error: err instanceof Error ? err.message : String(err)
+      });
     }
   },
 
@@ -1002,6 +1110,44 @@ export default {
 
       if (cleanedWorkflows.meta.changes > 0) {
         console.log(`[Cron] Cleaned up ${cleanedWorkflows.meta.changes} stale workflow entries`);
+      }
+
+      // Proactive token expiry detection: flag connections expiring within 7 days
+      // that have NO refresh token (e.g. Facebook long-lived tokens)
+      const expiringConnections = await env.DB.prepare(`
+        SELECT id, platform, account_name, expires_at
+        FROM platform_connections
+        WHERE is_active = 1
+          AND needs_reauth = 0
+          AND refresh_token_encrypted IS NULL
+          AND expires_at IS NOT NULL
+          AND expires_at < datetime('now', '+7 days')
+          AND expires_at > datetime('now')
+      `).all<{ id: string; platform: string; account_name: string | null; expires_at: string }>();
+
+      for (const conn of expiringConnections.results || []) {
+        const expiresAt = new Date(conn.expires_at);
+        const daysUntil = Math.ceil((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+
+        await env.DB.prepare(`
+          UPDATE platform_connections
+          SET needs_reauth = 1,
+              reauth_reason = ?,
+              reauth_detected_at = datetime('now')
+          WHERE id = ?
+        `).bind(
+          `Token expires in ${daysUntil} day${daysUntil === 1 ? '' : 's'} (${conn.expires_at}). Please reconnect to continue syncing.`,
+          conn.id
+        ).run();
+
+        structuredLog('WARN', `Token expiring soon for ${conn.platform} connection`, {
+          service: 'cron', step: 'token_expiry_check', connection_id: conn.id,
+          platform: conn.platform, account_name: conn.account_name, days_until_expiry: daysUntil
+        });
+      }
+
+      if ((expiringConnections.results?.length || 0) > 0) {
+        console.log(`[Cron] Flagged ${expiringConnections.results!.length} connections with expiring tokens`);
       }
 
       // Retry webhook events that failed to queue (status = 'queue_failed')

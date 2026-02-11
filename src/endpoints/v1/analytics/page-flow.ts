@@ -21,6 +21,7 @@ interface PageFlowNode {
   conversions: number;
   conversionRate: number;
   avgTimeOnPage?: number;
+  stepRequirement?: 'required' | 'optional' | 'auto';
 }
 
 // Link between nodes
@@ -78,6 +79,7 @@ Response includes:
                   conversions: z.number(),
                   conversionRate: z.number(),
                   avgTimeOnPage: z.number().optional(),
+                  stepRequirement: z.enum(['required', 'optional', 'auto']).optional(),
                 })),
                 links: z.array(z.object({
                   source: z.string(),
@@ -466,6 +468,26 @@ Response includes:
         }
       }
 
+      // Fetch step_requirement from conversion_goals for page-matching
+      const goalStepReqs = new Map<string, 'required' | 'optional' | 'auto'>();
+      try {
+        const goalsResult = await c.env.DB.prepare(`
+          SELECT page_url, step_requirement
+          FROM conversion_goals
+          WHERE organization_id = ?
+            AND page_url IS NOT NULL
+            AND step_requirement IS NOT NULL
+        `).bind(orgId).all() as D1Result<{ page_url: string; step_requirement: string }>;
+        if (goalsResult.results) {
+          for (const row of goalsResult.results) {
+            const normalizedUrl = normalizePath(row.page_url);
+            goalStepReqs.set(normalizedUrl, row.step_requirement as 'required' | 'optional' | 'auto');
+          }
+        }
+      } catch {
+        // Non-critical — step_requirement is decorative
+      }
+
       // Build nodes and links for visualization
       const nodes: PageFlowNode[] = [];
       const links: PageFlowLink[] = [];
@@ -505,8 +527,9 @@ Response includes:
       for (const [page, visitors] of sortedPages) {
         const conversions = pageConversions.get(page) || 0;
         const isConversionPage = conversions > visitors * 0.1; // >10% conversion rate indicates conversion page
+        const stepReq = goalStepReqs.get(page);
 
-        nodes.push({
+        const node: PageFlowNode = {
           id: page,
           label: page === '/' ? 'Home' : page,
           type: isConversionPage ? 'conversion' : 'page',
@@ -514,7 +537,11 @@ Response includes:
           sessions: visitors,
           conversions,
           conversionRate: visitors > 0 ? Math.round((conversions / visitors) * 100 * 10) / 10 : 0,
-        });
+        };
+        if (stepReq) {
+          node.stepRequirement = stepReq;
+        }
+        nodes.push(node);
       }
 
       // Add entry links (Entry → first pages)
