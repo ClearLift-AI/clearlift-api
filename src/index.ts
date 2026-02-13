@@ -239,7 +239,8 @@ import {
   AdminResetConnection,
   AdminDisconnect,
   AdminListSyncJobs,
-  AdminRetrySyncJob
+  AdminRetrySyncJob,
+  AdminCheckConnectionPermissions
 } from "./endpoints/v1/admin/crm";
 import {
   AdminListTasks,
@@ -446,6 +447,7 @@ openapi.post("/v1/admin/connections/:id/reset", auth, AdminResetConnection);
 openapi.delete("/v1/admin/connections/:id", auth, AdminDisconnect);
 openapi.get("/v1/admin/sync-jobs", auth, AdminListSyncJobs);
 openapi.post("/v1/admin/sync-jobs/:id/retry", auth, AdminRetrySyncJob);
+openapi.get("/v1/admin/connections/:id/permissions", auth, AdminCheckConnectionPermissions);
 
 // Admin Tasks endpoints
 openapi.get("/v1/admin/tasks", auth, AdminListTasks);

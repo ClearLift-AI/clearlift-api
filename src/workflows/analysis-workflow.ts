@@ -61,6 +61,7 @@ import {
   ToolExecutionContext,
   SIMULATE_CHANGE_TOOL
 } from '../services/analysis/simulation-executor';
+import { SimulationResult } from '../services/analysis/simulation-service';
 import { getSecret } from '../utils/secrets';
 
 /**
@@ -1655,7 +1656,8 @@ If you cannot find any actionable recommendations, you MUST still generate an in
   private async logRecommendation(
     orgId: string,
     rec: Recommendation,
-    analysisRunId: string
+    analysisRunId: string,
+    simulationResult?: SimulationResult | null
   ): Promise<void> {
     // Dedup: skip if an identical pending decision already exists (workflow retry safety)
     const existing = await this.env.AI_DB.prepare(`
@@ -1679,12 +1681,20 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     if (params.current_bid_cents !== undefined) currentState.bid_cents = params.current_bid_cents;
     if (params.current_strategy !== undefined) currentState.strategy = params.current_strategy;
 
+    // Build simulation_data if simulation result is available
+    const simulationData = simulationResult ? JSON.stringify({
+      current_state: simulationResult.current_state,
+      simulated_state: simulationResult.simulated_state,
+      diminishing_returns_model: simulationResult.diminishing_returns_model
+    }) : null;
+    const simulationConfidence = simulationResult?.confidence ?? null;
+
     await this.env.AI_DB.prepare(`
       INSERT INTO ai_decisions (
         id, organization_id, tool, platform, entity_type, entity_id, entity_name,
         parameters, current_state, reason, predicted_impact, confidence, status, expires_at,
-        supporting_data
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        supporting_data, simulation_data, simulation_confidence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
     `).bind(
       id,
       orgId,
@@ -1699,7 +1709,9 @@ If you cannot find any actionable recommendations, you MUST still generate an in
       rec.predicted_impact,
       rec.confidence,
       expiresAt.toISOString(),
-      JSON.stringify({ analysis_run_id: analysisRunId })
+      JSON.stringify({ analysis_run_id: analysisRunId }),
+      simulationData,
+      simulationConfidence
     ).run();
   }
 
@@ -1719,8 +1731,8 @@ If you cannot find any actionable recommendations, you MUST still generate an in
       INSERT INTO ai_decisions (
         id, organization_id, tool, platform, entity_type, entity_id, entity_name,
         parameters, reason, predicted_impact, confidence, status, expires_at,
-        supporting_data
-      ) VALUES (?, ?, 'accumulated_insight', 'general', 'insight', 'accumulated', ?, ?, ?, NULL, 'medium', 'pending', ?, ?)
+        supporting_data, simulation_data, simulation_confidence
+      ) VALUES (?, ?, 'accumulated_insight', 'general', 'insight', 'accumulated', ?, ?, ?, NULL, 'medium', 'pending', ?, ?, NULL, NULL)
     `).bind(
       id,
       orgId,

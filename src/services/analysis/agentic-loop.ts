@@ -482,7 +482,8 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
   private async logRecommendation(
     orgId: string,
     rec: Recommendation,
-    analysisRunId: string
+    analysisRunId: string,
+    simulationResult?: { current_state: any; simulated_state: any; diminishing_returns_model?: any; confidence: string } | null
   ): Promise<void> {
     const id = crypto.randomUUID().replace(/-/g, '');
     const expiresAt = new Date();
@@ -496,12 +497,20 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
     if (params.current_bid_cents !== undefined) currentState.bid_cents = params.current_bid_cents;
     if (params.current_strategy !== undefined) currentState.strategy = params.current_strategy;
 
+    // Build simulation_data if simulation result is available
+    const simulationData = simulationResult ? JSON.stringify({
+      current_state: simulationResult.current_state,
+      simulated_state: simulationResult.simulated_state,
+      diminishing_returns_model: simulationResult.diminishing_returns_model
+    }) : null;
+    const simulationConfidence = simulationResult?.confidence ?? null;
+
     await this.db.prepare(`
       INSERT INTO ai_decisions (
         id, organization_id, tool, platform, entity_type, entity_id, entity_name,
         parameters, current_state, reason, predicted_impact, confidence, status, expires_at,
-        supporting_data
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        supporting_data, simulation_data, simulation_confidence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
     `).bind(
       id,
       orgId,
@@ -516,7 +525,9 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
       rec.predicted_impact,
       rec.confidence,
       expiresAt.toISOString(),
-      JSON.stringify({ analysis_run_id: analysisRunId })
+      JSON.stringify({ analysis_run_id: analysisRunId }),
+      simulationData,
+      simulationConfidence
     ).run();
   }
 }

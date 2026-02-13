@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { success, error } from '../../../utils/response';
 import { AppContext } from '../../../types';
 import { D1Adapter } from '../../../adapters/d1';
+import { getSecret } from '../../../utils/secrets';
+import { ConnectorService } from '../../../services/connectors';
 
 /**
  * Helper to check admin access
@@ -654,5 +656,136 @@ export class AdminRetrySyncJob extends OpenAPIRoute {
     });
 
     return success(c, { message: 'Job queued for retry' });
+  }
+}
+
+/**
+ * GET /v1/admin/connections/:id/permissions - Check OAuth permissions for a connection
+ * Diagnostic endpoint: decrypts token, calls provider's permissions endpoint
+ */
+export class AdminCheckConnectionPermissions extends OpenAPIRoute {
+  public schema = {
+    tags: ['Admin CRM'],
+    summary: 'Check connection OAuth permissions',
+    description: 'Decrypt stored token and check granted permissions against the provider (admin only)',
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({
+        id: z.string().describe('Connection ID'),
+      })
+    },
+    responses: {
+      '200': { description: 'Permission check result' },
+    },
+  };
+
+  public async handle(c: AppContext) {
+    const result = await requireAdmin(c);
+    if (result instanceof Response) return result;
+
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { id } = data.params;
+
+    // Get connection record
+    const connection = await c.env.DB.prepare(`
+      SELECT id, platform, account_id, account_name, scopes, is_active, expires_at
+      FROM platform_connections WHERE id = ?
+    `).bind(id).first<any>();
+
+    if (!connection) {
+      return error(c, 'NOT_FOUND', 'Connection not found', 404);
+    }
+
+    // Decrypt access token
+    const encryptionKey = await getSecret(c.env.ENCRYPTION_KEY);
+    if (!encryptionKey) return error(c, 'CONFIG_ERROR', 'Encryption key not configured', 500);
+
+    const connectorService = await ConnectorService.create(c.env.DB, encryptionKey);
+    const accessToken = await connectorService.getAccessToken(id);
+
+    if (!accessToken) {
+      return error(c, 'NO_TOKEN', 'Could not decrypt access token', 400);
+    }
+
+    const diagnostics: Record<string, any> = {
+      connection_id: id,
+      platform: connection.platform,
+      account_id: connection.account_id,
+      account_name: connection.account_name,
+      stored_scopes: connection.scopes,
+      is_active: connection.is_active,
+      expires_at: connection.expires_at,
+      token_prefix: accessToken.substring(0, 12) + '...',
+    };
+
+    // Platform-specific permission checks
+    if (connection.platform === 'facebook') {
+      // 1. /me/permissions — what the user granted
+      try {
+        const permsResp = await fetch(
+          `https://graph.facebook.com/v24.0/me/permissions?access_token=${accessToken}`
+        );
+        const permsData = await permsResp.json() as any;
+        diagnostics.me_permissions = permsData;
+        diagnostics.ads_management_granted = permsData.data?.some(
+          (p: any) => p.permission === 'ads_management' && p.status === 'granted'
+        ) ?? false;
+        diagnostics.ads_read_granted = permsData.data?.some(
+          (p: any) => p.permission === 'ads_read' && p.status === 'granted'
+        ) ?? false;
+      } catch (e: any) {
+        diagnostics.me_permissions_error = e.message;
+      }
+
+      // 2. /debug_token — token-level claims
+      try {
+        const appId = await getSecret(c.env.FACEBOOK_APP_ID);
+        const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
+        if (appId && appSecret) {
+          const appAccessToken = `${appId}|${appSecret}`;
+          const debugResp = await fetch(
+            `https://graph.facebook.com/v24.0/debug_token?input_token=${accessToken}&access_token=${appAccessToken}`
+          );
+          const debugData = await debugResp.json() as any;
+          diagnostics.debug_token = {
+            is_valid: debugData.data?.is_valid,
+            scopes: debugData.data?.scopes,
+            granular_scopes: debugData.data?.granular_scopes,
+            expires_at: debugData.data?.expires_at,
+            issued_at: debugData.data?.issued_at,
+            type: debugData.data?.type,
+            user_id: debugData.data?.user_id,
+          };
+        }
+      } catch (e: any) {
+        diagnostics.debug_token_error = e.message;
+      }
+    }
+
+    // 3. Check ad account role/permissions for the specific account
+    if (connection.platform === 'facebook' && connection.account_id) {
+      try {
+        const acctResp = await fetch(
+          `https://graph.facebook.com/v24.0/${connection.account_id}?fields=id,name,account_status,user_tasks,owner,funding_source_details&access_token=${accessToken}`
+        );
+        const acctData = await acctResp.json() as any;
+        diagnostics.ad_account_details = acctData;
+      } catch (e: any) {
+        diagnostics.ad_account_error = e.message;
+      }
+
+      // 4. Check the user's role on this ad account
+      try {
+        const usersResp = await fetch(
+          `https://graph.facebook.com/v24.0/${connection.account_id}/users?fields=id,name,permissions,role&access_token=${accessToken}`
+        );
+        const usersData = await usersResp.json() as any;
+        diagnostics.ad_account_users = usersData;
+      } catch (e: any) {
+        diagnostics.ad_account_users_error = e.message;
+      }
+    }
+
+    return success(c, diagnostics);
   }
 }
