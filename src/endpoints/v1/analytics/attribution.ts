@@ -2680,8 +2680,8 @@ are actually return visitors influenced by earlier marketing.
           t.anonymous_id,
           t.touchpoint_timestamp
         FROM journey_touchpoints t
-        WHERE t.org_tag = ?
-          AND t.channel = 'direct'
+        WHERE t.organization_id = ?
+          AND t.touchpoint_source = 'direct'
           AND DATE(t.touchpoint_timestamp) >= ?
           AND DATE(t.touchpoint_timestamp) <= ?
       ),
@@ -2690,11 +2690,11 @@ are actually return visitors influenced by earlier marketing.
           ds.session_id,
           ds.anonymous_id,
           (
-            SELECT jt.channel
+            SELECT jt.touchpoint_source
             FROM journey_touchpoints jt
-            WHERE jt.org_tag = ?
+            WHERE jt.organization_id = ?
               AND jt.anonymous_id = ds.anonymous_id
-              AND jt.channel != 'direct'
+              AND jt.touchpoint_source != 'direct'
               AND jt.touchpoint_timestamp < ds.touchpoint_timestamp
               AND jt.touchpoint_timestamp >= datetime(ds.touchpoint_timestamp, '-' || ? || ' hours')
             ORDER BY jt.touchpoint_timestamp DESC
@@ -2710,7 +2710,7 @@ are actually return visitors influenced by earlier marketing.
         COUNT(DISTINCT CASE WHEN assisted_by IS NOT NULL THEN session_id END) as count_by_channel
       FROM prior_touches
       GROUP BY assisted_by
-    `).bind(tagMapping.short_tag, dateFrom, dateTo, tagMapping.short_tag, lookbackHours).all();
+    `).bind(orgId, dateFrom, dateTo, orgId, lookbackHours).all();
 
     const stats = {
       total_direct_sessions: 0,

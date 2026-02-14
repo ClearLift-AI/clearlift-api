@@ -227,7 +227,7 @@ section "6" "Connectors — connected platforms"
 R=$(get_demo "/v1/connectors/connected")
 check_success "GET /connectors/connected (demo)" "$R"
 DEMO_CONNS=$(pyjson "$R" "len(d.get('data',{}).get('connections',[]))")
-check "demo has 3 connectors" "$R" "len(d.get('data',{}).get('connections',[]))" "3"
+check "demo has 4 connectors" "$R" "len(d.get('data',{}).get('connections',[]))" "4"
 
 R=$(get_fresh "/v1/connectors/connected")
 check_success "GET /connectors/connected (fresh)" "$R"
@@ -312,10 +312,11 @@ if [ "${DEMO_CAC:-0}" -gt 0 ]; then ok "demo CAC=$DEMO_CAC cents"; else fail "de
 if [ "${DEMO_CONVS:-0}" -gt 100 ]; then ok "demo conversions=$DEMO_CONVS"; else fail "demo conversions" "got $DEMO_CONVS"; fi
 
 # CAC timeline
-R=$(get_demo "/v1/analytics/cac/timeline")
+R=$(get_demo "/v1/analytics/cac/timeline?days=30")
 check_success "GET /cac/timeline (demo)" "$R"
-CAC_DAYS=$(pyjson "$R" "len(d.get('data',{}).get('timeline',[]))")
-if [ "${CAC_DAYS:-0}" -gt 20 ]; then ok "CAC timeline has $CAC_DAYS days"; else warn "CAC timeline days" "got $CAC_DAYS"; fi
+CAC_DAYS=$(pyjson "$R" "len(d.get('data',{}).get('data',[]))")
+CAC_WITH_DATA=$(pyjson "$R" "len([r for r in d.get('data',{}).get('data',[]) if r.get('actual_cac') is not None])")
+if [ "${CAC_WITH_DATA:-0}" -gt 10 ]; then ok "CAC timeline has $CAC_WITH_DATA days with data (of $CAC_DAYS total)"; else warn "CAC timeline days" "got $CAC_WITH_DATA with data"; fi
 
 # Fresh org — CAC should be empty/zero
 R=$(get_fresh "/v1/analytics/cac/summary")
@@ -330,12 +331,12 @@ check_success "GET /cac/timeline (fresh)" "$R"
 # ============================================================================
 section "9" "Conversions endpoint"
 # ============================================================================
-R=$(get_demo "/v1/analytics/conversions?from=2026-01-15&to=2026-02-14")
+R=$(get_demo "/v1/analytics/conversions?start_date=2026-02-01&end_date=2026-02-28")
 check_success "GET /conversions (demo 30d)" "$R"
-CONV_COUNT=$(pyjson "$R" "d.get('data',{}).get('total',0)")
+CONV_COUNT=$(pyjson "$R" "d.get('data',{}).get('total_conversions',0)")
 if [ "${CONV_COUNT:-0}" -gt 0 ]; then ok "conversions total=$CONV_COUNT"; else warn "conversions" "got $CONV_COUNT"; fi
 
-R=$(get_fresh "/v1/analytics/conversions?from=2026-01-15&to=2026-02-14")
+R=$(get_fresh "/v1/analytics/conversions?start_date=2026-01-15&end_date=2026-02-14")
 check_success "GET /conversions (fresh)" "$R"
 
 # ============================================================================
@@ -357,31 +358,25 @@ done
 R=$(get_demo "/v1/analytics/attribution/compare?models=last_click,first_click,linear&from=2026-01-15&to=2026-02-14")
 check_success "GET /attribution/compare (demo)" "$R"
 
-# Computed attribution (pre-computed by cron)
+# Computed attribution (seeded in AI_DB)
 R=$(get_demo "/v1/analytics/attribution/computed?model=markov_chain")
-S=$(pyjson "$R" "d.get('success')")
-if [ "$S" = "True" ]; then
-  ok "GET /attribution/computed markov (demo)"
-else
-  CODE=$(pyjson "$R" "d.get('error',{}).get('code','')")
-  warn "GET /attribution/computed markov (demo)" "code=$CODE (no cron data expected locally)"
-fi
+check_success "GET /attribution/computed markov (demo)" "$R"
 
 # Blended attribution
 R=$(get_demo "/v1/analytics/attribution/blended?from=2026-01-15&to=2026-02-14")
 check_success "GET /attribution/blended (demo)" "$R"
 
-# Journey analytics
+# Journey analytics (seeded in ANALYTICS_DB)
 R=$(get_demo "/v1/analytics/attribution/journey-analytics?from=2026-01-15&to=2026-02-14")
 S=$(pyjson "$R" "d.get('success')")
 if [ "$S" = "True" ]; then
   ok "GET /attribution/journey-analytics (demo)"
 else
-  warn "GET /attribution/journey-analytics (demo)" "no journey data locally"
+  warn "GET /attribution/journey-analytics (demo)" "no journey data"
 fi
 
-# Assisted/Direct stats
-R=$(get_demo "/v1/analytics/attribution/assisted-direct?from=2026-01-15&to=2026-02-14")
+# Assisted/Direct stats (seeded journey_touchpoints)
+R=$(get_demo "/v1/analytics/attribution/assisted-direct?date_from=2026-01-15&date_to=2026-02-14")
 S=$(pyjson "$R" "d.get('success')")
 if [ "$S" = "True" ]; then ok "GET /attribution/assisted-direct (demo)"; else warn "assisted-direct" "no data"; fi
 
@@ -472,15 +467,16 @@ check_success "GET /google/campaigns (fresh)" "$R"
 # ============================================================================
 section "12" "Revenue connectors (Stripe/Jobber)"
 # ============================================================================
-R=$(get_demo "/v1/analytics/stripe?from=2026-01-15&to=2026-02-14")
+STRIPE_CONN_ID="conn_demo_stripe"
+R=$(get_demo "/v1/analytics/stripe?date_from=2026-01-15&date_to=2026-02-28&connection_id=$STRIPE_CONN_ID")
 S=$(pyjson "$R" "d.get('success')")
 if [ "$S" = "True" ]; then ok "GET /stripe (demo)"; else warn "GET /stripe" "no live stripe data in local"; fi
 
-R=$(get_demo "/v1/analytics/stripe/daily-aggregates?from=2026-01-15&to=2026-02-14")
+R=$(get_demo "/v1/analytics/stripe/daily-aggregates?date_from=2026-01-15&date_to=2026-02-28&connection_id=$STRIPE_CONN_ID")
 S=$(pyjson "$R" "d.get('success')")
 if [ "$S" = "True" ]; then ok "GET /stripe/daily-aggregates (demo)"; else warn "stripe daily" "no data"; fi
 
-R=$(get_demo "/v1/analytics/jobber/revenue?from=2026-01-15&to=2026-02-14")
+R=$(get_demo "/v1/analytics/jobber/revenue?date_from=2026-01-15&date_to=2026-02-28")
 S=$(pyjson "$R" "d.get('success')")
 if [ "$S" = "True" ]; then ok "GET /jobber/revenue (demo)"; else warn "jobber revenue" "no data"; fi
 
@@ -592,7 +588,7 @@ if [ "$S" = "True" ]; then ok "GET /events (demo)"; else warn "events" "needs AE
 
 R=$(get_demo "/v1/analytics/events/d1")
 S=$(pyjson "$R" "d.get('success')")
-if [ "$S" = "True" ]; then ok "GET /events/d1 (demo)"; else warn "events/d1" "needs tag data"; fi
+if [ "$S" = "True" ]; then ok "GET /events/d1 (demo)"; else warn "events/d1" "may need tag data"; fi
 
 R=$(get_demo "/v1/analytics/events/sync-status")
 S=$(pyjson "$R" "d.get('success')")
@@ -629,14 +625,14 @@ check_success "GET /workers/d1/stats" "$R"
 # ============================================================================
 section "21" "Tracking config"
 # ============================================================================
-R=$(get_auth "/v1/tracking-config" "$DEMO_TOKEN")
+R=$(get_demo "/v1/tracking-config")
 S=$(pyjson "$R" "d.get('success')")
 if [ "$S" = "True" ]; then ok "GET /tracking-config (demo)"; else warn "tracking-config" "not configured"; fi
 
-# Public tag config
-R=$(get_noauth "/v1/config?tag=acme_demo")
+# Public tag config (param is org_tag, not tag)
+R=$(get_noauth "/v1/config?org_tag=acme_demo")
 S=$(pyjson "$R" "d.get('success')")
-if [ "$S" = "True" ]; then ok "GET /config?tag=acme_demo (public)"; else warn "public config" "tag not found"; fi
+if [ "$S" = "True" ]; then ok "GET /config?org_tag=acme_demo (public)"; else warn "public config" "tag not found"; fi
 
 # ============================================================================
 section "22" "Analysis (AI)"
