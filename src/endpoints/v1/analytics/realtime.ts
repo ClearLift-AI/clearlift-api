@@ -68,7 +68,7 @@ export class GetRealtimeSummary extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
     }
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
@@ -170,7 +170,7 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
     }
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
@@ -271,7 +271,7 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
     }
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
@@ -463,7 +463,7 @@ export class GetRealtimeEvents extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
     }
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
@@ -593,7 +593,7 @@ export class GetRealtimeEventTypes extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
     }
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
@@ -699,7 +699,7 @@ export class GetRealtimeStripe extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
@@ -799,7 +799,7 @@ export class GetRealtimeGoals extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
@@ -882,7 +882,7 @@ export class GetRealtimeGoalTimeSeries extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }

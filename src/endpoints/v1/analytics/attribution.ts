@@ -26,6 +26,11 @@ import { getCombinedRevenueByDateRange, CombinedRevenueResult } from "../../../s
 import { AD_PLATFORM_IDS, ACTIVE_REVENUE_PLATFORM_IDS } from "../../../config/platforms";
 import { getShardDbForOrg } from "../../../services/shard-router";
 
+/** Map API model names (markov_chain, shapley_value) to DB model names (markov, shapley). */
+const apiToDbModel = (m: string) => m === 'markov_chain' ? 'markov' : m === 'shapley_value' ? 'shapley' : m;
+/** Map DB model names (markov, shapley) back to API model names (markov_chain, shapley_value). */
+const dbToApiModel = (m: string) => m === 'markov' ? 'markov_chain' : m === 'shapley' ? 'shapley_value' : m;
+
 /**
  * Check organization setup status for attribution.
  * Returns what's configured and what's missing.
@@ -934,7 +939,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     console.log(`[Attribution] Request: orgId=${orgId}, dateFrom=${dateFrom}, dateTo=${dateTo}, model=${query.model}`);
 
     // Get ANALYTICS_DB binding (with fallback to DB for backwards compat)
-    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     // Shard DB for ad_metrics/ad_campaigns queries
     const shardDb = await getShardDbForOrg(c.env, orgId);
     const dateRange = { start: dateFrom, end: dateTo };
@@ -1014,9 +1019,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     const orgShortTag = orgTagRow?.short_tag;
 
     if (orgShortTag && requestedModel !== 'platform') {
-      const cronModelName = requestedModel === 'markov_chain' ? 'markov'
-        : requestedModel === 'shapley_value' ? 'shapley'
-        : requestedModel;
+      const cronModelName = apiToDbModel(requestedModel);
 
       try {
         const latestPeriod = await analyticsDb.prepare(`
@@ -1311,7 +1314,7 @@ export class GetAttributionComparison extends OpenAPIRoute {
     `).bind(orgId).first<{ short_tag: string }>();
 
     // Get ANALYTICS_DB binding
-    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     // Shard DB for ad_metrics/ad_campaigns queries
     const shardDb = await getShardDbForOrg(c.env, orgId);
 
@@ -1326,9 +1329,6 @@ export class GetAttributionComparison extends OpenAPIRoute {
       shapley_value: number | null;
     }> = [];
 
-    // Map API model names to DB model names (same mapping as GetAttribution)
-    const apiToDbModel = (m: string) => m === 'markov_chain' ? 'markov' : m === 'shapley_value' ? 'shapley' : m;
-    const dbToApiModel = (m: string) => m === 'markov' ? 'markov_chain' : m === 'shapley' ? 'shapley_value' : m;
     const dbModels = models.map(apiToDbModel);
 
     if (tagMapping?.short_tag) {
@@ -1681,8 +1681,8 @@ export class GetComputedAttribution extends OpenAPIRoute {
 
     // Fallback: try ANALYTICS_DB (from daily cron probabilistic attribution workflow)
     // The cron uses short model names: 'markov' / 'shapley'
-    const cronModelName = model === 'markov_chain' ? 'markov' : model === 'shapley_value' ? 'shapley' : model;
-    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    const cronModelName = apiToDbModel(model);
+    const analyticsDb = c.env.ANALYTICS_DB;
 
     // Resolve org_tag
     const tagMapping = await c.env.DB.prepare(
@@ -1723,6 +1723,11 @@ export class GetComputedAttribution extends OpenAPIRoute {
           const first = rows[0];
           const totalConversions = rows.reduce((s: number, r: { conversions: number }) => s + (r.conversions || 0), 0);
 
+          // Count journeys used in this attribution period
+          const pathCountResult = await analyticsDb.prepare(
+            `SELECT COUNT(*) as cnt FROM journeys WHERE org_tag = ? AND computed_at >= ?`
+          ).bind(tagMapping.short_tag, first.period_start).first<{ cnt: number }>();
+
           return success(c, {
             model,
             computation_date: first.period_start,
@@ -1734,7 +1739,7 @@ export class GetComputedAttribution extends OpenAPIRoute {
             })),
             metadata: {
               conversion_count: Math.round(totalConversions),
-              path_count: 0 // Not tracked by cron workflow
+              path_count: pathCountResult?.cnt || 0
             }
           });
         }
@@ -1859,7 +1864,7 @@ Works even without click tracking or event data.
     const dateFrom = query.date_from;
     const dateTo = query.date_to;
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     // Shard DB for ad_metrics queries
     const shardDb = await getShardDbForOrg(c.env, orgId);
 
@@ -2504,7 +2509,7 @@ Run probabilistic attribution first to generate this data.
       return error(c, "NO_TAG_CONFIGURED", "Organization has no tracking tag configured", 400);
     }
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "DATABASE_ERROR", "ANALYTICS_DB not configured", 500);
     }
@@ -2662,7 +2667,7 @@ are actually return visitors influenced by earlier marketing.
       return error(c, "NO_TRACKING_TAG", "Organization does not have a tracking tag configured", 400);
     }
 
-    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "DATABASE_ERROR", "ANALYTICS_DB not configured", 500);
     }

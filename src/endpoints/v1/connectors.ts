@@ -2209,7 +2209,7 @@ export class UpdateConnectorSettings extends OpenAPIRoute {
       // Update connection settings
       await c.env.DB.prepare(`
         UPDATE platform_connections
-        SET settings = ?, updated_at = datetime('now')
+        SET settings = ?
         WHERE id = ?
       `).bind(JSON.stringify(mergedSettings), connection_id).run();
 

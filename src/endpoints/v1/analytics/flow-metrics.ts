@@ -259,7 +259,7 @@ Returns stage-by-stage metrics for the acquisition flow:
       const endDateStr = endDate.toISOString().split("T")[0];
 
       // 5. Query stage metrics based on connector type
-      const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+      const analyticsDb = c.env.ANALYTICS_DB;
       const shardDb = await getShardDbForOrg(c.env, orgId);
 
       // Get channel distribution for session-level attribution
@@ -971,7 +971,7 @@ export class GetStageTransitions extends OpenAPIRoute {
       startDate.setDate(startDate.getDate() - days);
 
       // Get conversion counts for this stage
-      const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+      const analyticsDb = c.env.ANALYTICS_DB;
       let stageConversions = 0;
 
       try {

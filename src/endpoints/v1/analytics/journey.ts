@@ -457,7 +457,7 @@ Returns the complete journey for an identified user, including:
     const devices = anonymousIds.length;
 
     // Get ANALYTICS_DB binding
-    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
 
     // Query connector conversions from D1 (Stripe charges, etc.)
     const connectorConversions = await queryConnectorConversionsD1(
@@ -806,7 +806,7 @@ export class GetJourneysOverview extends OpenAPIRoute {
     }
 
     const orgTag = tagMapping.short_tag;
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
 
     // Get identity mappings count from D1
     const identityCount = await c.env.DB.prepare(`

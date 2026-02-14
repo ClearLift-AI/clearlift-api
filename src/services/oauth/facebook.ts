@@ -379,6 +379,10 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
    * Update ad set budget
    * Note: Ad set can have EITHER daily_budget OR lifetime_budget, not both
    *
+   * v24.0: Checks is_adset_budget_sharing_enabled on the parent campaign.
+   * When CBO (Advantage Campaign Budget) is enabled, ad set budgets are
+   * controlled at the campaign level and cannot be updated individually.
+   *
    * @param accessToken - Facebook access token
    * @param adSetId - Ad Set ID to update
    * @param budget - Budget configuration
@@ -420,6 +424,45 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
           `Minimum allowed: $${(minimumAllowed / 100).toFixed(2)} (spent: $${(currentSpent / 100).toFixed(2)})`
         );
       }
+    }
+
+    // v24.0: Check if parent campaign has CBO (Advantage Campaign Budget) enabled.
+    // When is_adset_budget_sharing_enabled=true, ad set budgets are controlled at
+    // the campaign level and cannot be updated individually.
+    try {
+      const adSetUrl = new URL(`https://graph.facebook.com/v24.0/${adSetId}`);
+      adSetUrl.searchParams.set('access_token', accessToken);
+      adSetUrl.searchParams.set('fields', 'campaign_id');
+      const adSetResp = await this.fetchWithRetry(adSetUrl.toString(), { method: 'GET' });
+      if (adSetResp.ok) {
+        const adSetData = await adSetResp.json() as any;
+        const campaignId = adSetData.campaign_id;
+        if (campaignId) {
+          const campUrl = new URL(`https://graph.facebook.com/v24.0/${campaignId}`);
+          campUrl.searchParams.set('access_token', accessToken);
+          campUrl.searchParams.set('fields', 'is_adset_budget_sharing_enabled');
+          const campResp = await this.fetchWithRetry(campUrl.toString(), { method: 'GET' });
+          if (campResp.ok) {
+            const campData = await campResp.json() as any;
+            if (campData.is_adset_budget_sharing_enabled === true) {
+              throw new Error(
+                'Cannot update ad set budget: parent campaign has Advantage Campaign Budget (CBO) enabled. ' +
+                'Update the campaign budget instead.'
+              );
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Re-throw CBO validation errors, but swallow fetch errors (budget update will
+      // fail with a clearer Facebook API error if CBO is actually blocking it)
+      if (e instanceof Error && e.message.includes('Advantage Campaign Budget')) {
+        throw e;
+      }
+      structuredLog('WARN', 'Could not check CBO status for ad set budget update', {
+        service: 'facebook-oauth', ad_set_id: adSetId,
+        error: e instanceof Error ? e.message : String(e)
+      });
     }
 
     // Use URL parameters for access token (Facebook API best practice)

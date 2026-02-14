@@ -104,7 +104,7 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
 
     try {
       const shardDb = await getShardDbForOrg(c.env, orgId);
-      console.log('[Facebook Campaigns] Using D1 shard DB');
+      structuredLog('INFO', 'Facebook campaigns query using D1 shard DB', { endpoint: 'analytics/facebook' });
       const d1Analytics = new D1AnalyticsService(shardDb);
       const campaigns = await d1Analytics.getFacebookCampaignsWithMetrics(
         orgId,
@@ -148,7 +148,7 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
         summary.average_ctr = (summary.total_clicks / summary.total_impressions) * 100;
       }
 
-      console.log(`[Facebook Campaigns] D1 returned ${results.length} campaigns`);
+      structuredLog('INFO', 'Facebook campaigns query complete', { endpoint: 'analytics/facebook', count: results.length });
       return success(c, {
         platform: 'facebook',
         results,
@@ -1638,11 +1638,20 @@ export class GetFacebookAudienceInsights extends OpenAPIRoute {
         : `act_${connection.account_id}`;
 
       // Fetch insights with different breakdowns in parallel
+      // Conversion action type matching — same logic as the cron connector
+      // Covers: Pixel/CAPI (offsite_conversion.*), Lead/Messenger/IG (onsite_conversion.*),
+      //         FB Shops (onsite_web_*), and omni-channel (omni_*)
+      const conversionPrefixes = ['offsite_conversion.', 'onsite_conversion.', 'onsite_web_'];
+      const conversionExact = ['omni_purchase', 'omni_complete_registration', 'omni_add_to_cart', 'omni_initiated_checkout', 'omni_view_content'];
+      const isConversionAction = (actionType: string): boolean =>
+        conversionPrefixes.some(p => actionType.startsWith(p)) || conversionExact.includes(actionType);
+
       const baseUrl = `https://graph.facebook.com/v24.0/${accountId}/insights`;
       const baseParams = {
         access_token: accessToken,
         time_range: JSON.stringify({ since: startDate, until: endDate }),
-        fields: 'spend,impressions,clicks,reach,actions',
+        fields: 'spend,impressions,clicks,reach,actions,action_values',
+        use_unified_attribution_setting: 'true',
         level: 'account'
       };
 
@@ -1688,13 +1697,13 @@ export class GetFacebookAudienceInsights extends OpenAPIRoute {
               const clicks = parseInt(entry.clicks || '0');
               const reach = parseInt(entry.reach || '0');
 
-              // Extract conversions from actions
+              // Extract conversions from actions — use full conversion prefix matching
+              // to be consistent with the cron connector (offsite_conversion.*, onsite_conversion.*, etc.)
               let conversions = 0;
               if (entry.actions) {
-                const purchaseAction = entry.actions.find((a: any) =>
-                  a.action_type === 'purchase' || a.action_type === 'omni_purchase'
-                );
-                conversions = purchaseAction ? parseInt(purchaseAction.value || '0') : 0;
+                conversions = entry.actions
+                  .filter((a: any) => isConversionAction(a.action_type))
+                  .reduce((sum: number, a: any) => sum + parseFloat(a.value || '0'), 0);
               }
 
               // Calculate derived metrics
@@ -1790,6 +1799,123 @@ export class GetFacebookAudienceInsights extends OpenAPIRoute {
     } catch (err: any) {
       structuredLog('ERROR', 'Get Facebook audience insights failed', { endpoint: 'analytics/facebook', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", `Failed to fetch audience insights: ${err.message}`, 500);
+    }
+  }
+}
+
+/**
+ * GET /v1/analytics/facebook/action-breakdown
+ *
+ * Returns per-day and total breakdown of Meta conversion action types from ad_metrics.extra_metrics.
+ * Used for charting which pixel actions are firing (purchases vs add-to-carts vs leads, etc.)
+ */
+export class GetFacebookActionBreakdown extends OpenAPIRoute {
+  public schema = {
+    tags: ["Analytics - Facebook"],
+    summary: "Get Meta action type breakdown",
+    operationId: "get-facebook-action-breakdown",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string(),
+        from: z.string().optional(),
+        to: z.string().optional(),
+        entity_type: z.enum(["campaign", "ad_group", "ad"]).optional(),
+      }),
+    },
+    responses: {
+      "200": {
+        description: "Action type breakdown",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.any(),
+            }),
+          },
+        },
+      },
+    },
+  };
+
+  public async handle(c: AppContext) {
+    try {
+      const data = await this.getValidatedData<typeof this.schema>();
+      const org_id = c.get("org_id" as any) as string;
+      const entityType = data.query.entity_type || "campaign";
+
+      const now = new Date();
+      const endDate = data.query.to || now.toISOString().split("T")[0];
+      const startDate =
+        data.query.from ||
+        new Date(now.getTime() - 30 * 86400000).toISOString().split("T")[0];
+
+      // Query ad_metrics for facebook rows with extra_metrics containing action_breakdown
+      const rows = await c.env.ANALYTICS_DB.prepare(
+        `SELECT metric_date, extra_metrics
+         FROM ad_metrics
+         WHERE organization_id = ? AND platform = 'facebook' AND entity_type = ?
+           AND metric_date BETWEEN ? AND ?
+         ORDER BY metric_date`
+      )
+        .bind(org_id, entityType, startDate, endDate)
+        .all<{ metric_date: string; extra_metrics: string | null }>();
+
+      // Aggregate breakdowns per day
+      const dailyMap = new Map<
+        string,
+        Record<string, { count: number; value_cents: number }>
+      >();
+      const totals: Record<string, { count: number; value_cents: number }> = {};
+
+      for (const row of rows.results || []) {
+        if (!row.extra_metrics) continue;
+        let extras: any;
+        try {
+          extras = JSON.parse(row.extra_metrics);
+        } catch {
+          continue;
+        }
+        const breakdown = extras.action_breakdown;
+        if (!breakdown || typeof breakdown !== "object") continue;
+
+        const date = row.metric_date;
+        if (!dailyMap.has(date)) dailyMap.set(date, {});
+        const dayEntry = dailyMap.get(date)!;
+
+        for (const [actionType, metrics] of Object.entries(breakdown)) {
+          const m = metrics as { count: number; value_cents: number };
+          // Daily
+          if (!dayEntry[actionType]) {
+            dayEntry[actionType] = { count: 0, value_cents: 0 };
+          }
+          dayEntry[actionType].count += m.count || 0;
+          dayEntry[actionType].value_cents += m.value_cents || 0;
+          // Totals
+          if (!totals[actionType]) {
+            totals[actionType] = { count: 0, value_cents: 0 };
+          }
+          totals[actionType].count += m.count || 0;
+          totals[actionType].value_cents += m.value_cents || 0;
+        }
+      }
+
+      const daily = Array.from(dailyMap.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, actions]) => ({ date, actions }));
+
+      return success(c, { daily, totals, date_range: { start_date: startDate, end_date: endDate } });
+    } catch (err: any) {
+      structuredLog("ERROR", "Get Facebook action breakdown failed", {
+        endpoint: "analytics/facebook",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return error(
+        c,
+        "QUERY_FAILED",
+        `Failed to fetch action breakdown: ${err.message}`,
+        500
+      );
     }
   }
 }

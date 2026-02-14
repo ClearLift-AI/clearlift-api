@@ -58,7 +58,7 @@ export class GetGoalHierarchy extends OpenAPIRoute {
     }
 
     try {
-      const service = new GoalValueComputationService(c.env.DB, (c.env as any).ANALYTICS_DB);
+      const service = new GoalValueComputationService(c.env.DB, c.env.ANALYTICS_DB);
       const hierarchy = await service.getGoalHierarchy(orgId);
 
       // Count goals by category
@@ -279,7 +279,7 @@ export class ComputeGoalValue extends OpenAPIRoute {
     }
 
     try {
-      const service = new GoalValueComputationService(c.env.DB, (c.env as any).ANALYTICS_DB);
+      const service = new GoalValueComputationService(c.env.DB, c.env.ANALYTICS_DB);
 
       let result;
       if (method === "funnel_position") {
@@ -343,7 +343,7 @@ export class RecomputeAllGoalValues extends OpenAPIRoute {
     }
 
     try {
-      const service = new GoalValueComputationService(c.env.DB, (c.env as any).ANALYTICS_DB);
+      const service = new GoalValueComputationService(c.env.DB, c.env.ANALYTICS_DB);
       await service.recomputeAllGoalValues(orgId);
 
       return success(c, { recomputed: true });
@@ -524,7 +524,7 @@ export class GetGoalConversionStats extends OpenAPIRoute {
         WHERE gr.organization_id = ? AND gr.upstream_goal_id = ?
       `).bind(orgId, id).all<any>();
 
-      const service = new GoalValueComputationService(c.env.DB, (c.env as any).ANALYTICS_DB);
+      const service = new GoalValueComputationService(c.env.DB, c.env.ANALYTICS_DB);
 
       const stats = await Promise.all(
         (relationships.results || []).map(async (rel: any) => {

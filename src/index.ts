@@ -87,7 +87,8 @@ import {
   UpdateFacebookAdSetTargeting,
   GetFacebookPages,
   GetFacebookPageInsights,
-  GetFacebookAudienceInsights
+  GetFacebookAudienceInsights,
+  GetFacebookActionBreakdown
 } from "./endpoints/v1/analytics/facebook";
 import {
   GetGoogleCampaigns,
@@ -589,6 +590,8 @@ openapi.get("/v1/analytics/facebook/pages", auth, requireOrg, GetFacebookPages);
 openapi.get("/v1/analytics/facebook/pages/:page_id/insights", auth, requireOrg, GetFacebookPageInsights);
 // Facebook Audience Insights (read_insights permission - for Meta App Review)
 openapi.get("/v1/analytics/facebook/audience-insights", auth, requireOrg, GetFacebookAudienceInsights);
+// Facebook action type breakdown (per-pixel-action conversion charting)
+openapi.get("/v1/analytics/facebook/action-breakdown", auth, requireOrg, GetFacebookActionBreakdown);
 
 // Google Ads endpoints
 openapi.get("/v1/analytics/google/campaigns", auth, requireOrg, GetGoogleCampaigns);

@@ -168,7 +168,7 @@ Intelligent attribution that combines ad platform data, UTM tracking, click IDs,
     console.log(`[SmartAttribution API] Request: orgId=${orgId}, startDate=${startDate}, endDate=${endDate}`);
 
     // Get ANALYTICS_DB binding
-    const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
 
     // Create service and get attribution
     const service = new SmartAttributionService(analyticsDb, c.env.DB);

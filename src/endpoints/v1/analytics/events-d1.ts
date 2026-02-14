@@ -98,7 +98,7 @@ export class GetEventsD1 extends OpenAPIRoute {
     }
 
     const orgTag = orgTagMapping.short_tag;
-    const analyticsDb = (c.env as any).ANALYTICS_DB;
+    const analyticsDb = c.env.ANALYTICS_DB;
 
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);

@@ -143,7 +143,7 @@ Response includes:
       }
 
       const orgTag = tagMapping.short_tag;
-      const analyticsDb = (c.env as any).ANALYTICS_DB || c.env.DB;
+      const analyticsDb = c.env.ANALYTICS_DB;
 
       // Calculate date range
       const endDate = new Date();
