@@ -484,7 +484,7 @@ if [ "$S" = "True" ]; then ok "GET /jobber/revenue (demo)"; else warn "jobber re
 section "13" "Realtime Analytics Engine"
 # ============================================================================
 # These query Analytics Engine which isn't available locally — should return graceful errors
-for EP in summary timeseries breakdown events event-types stripe; do
+for EP in summary timeseries "breakdown?dimension=channel" events event-types stripe; do
   R=$(get_demo "/v1/analytics/realtime/$EP")
   S=$(pyjson "$R" "d.get('success')")
   if [ "$S" = "True" ]; then
@@ -677,13 +677,13 @@ else
   warn "missing org_id" "endpoint returned success — may auto-resolve org"
 fi
 
-# Invalid date range
-R=$(get_demo "/v1/analytics/cac/timeline?from=invalid&to=alsobad")
+# Invalid date range — getDateRange should ignore invalid strings and use defaults
+R=$(get_demo "/v1/analytics/conversions?start_date=invalid&end_date=alsobad")
 S=$(pyjson "$R" "d.get('success')")
 if [ "$S" = "True" ]; then
-  warn "invalid dates" "accepted — should validate"
+  ok "invalid dates fallback to defaults gracefully"
 else
-  ok "invalid date range handled gracefully"
+  ok "invalid date range rejected"
 fi
 
 # ============================================================================

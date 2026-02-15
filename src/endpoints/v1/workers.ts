@@ -462,12 +462,83 @@ export class TestConnectionToken extends OpenAPIRoute {
         });
       }
 
+      if (connection.platform === 'google') {
+        // Test Google Ads token via tokeninfo endpoint
+        const tokenInfoResponse = await fetch(
+          `https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${accessToken}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+
+        if (!tokenInfoResponse.ok) {
+          return success(c, {
+            connection_id,
+            platform: 'google',
+            token_valid: false,
+            can_fetch_data: false,
+            error: `Token validation failed: ${tokenInfoResponse.status}`
+          });
+        }
+
+        const tokenData = await tokenInfoResponse.json() as { scope?: string; expires_in?: number };
+        const scopes = tokenData.scope?.split(' ') || [];
+        const hasAdsScope = scopes.some(s => s.includes('adwords'));
+
+        return success(c, {
+          connection_id,
+          platform: 'google',
+          token_valid: true,
+          can_fetch_data: hasAdsScope,
+          scopes,
+          expires_in: tokenData.expires_in,
+          ...(!hasAdsScope && { error: "Token missing Google Ads scope" })
+        });
+      }
+
+      if (connection.platform === 'stripe') {
+        // Test Stripe token via balance endpoint (lightest authenticated call)
+        const stripeResponse = await fetch(
+          'https://api.stripe.com/v1/balance',
+          {
+            headers: { 'Authorization': `Bearer ${accessToken}` },
+            signal: AbortSignal.timeout(5000)
+          }
+        );
+
+        return success(c, {
+          connection_id,
+          platform: 'stripe',
+          token_valid: stripeResponse.ok,
+          can_fetch_data: stripeResponse.ok,
+          ...(!stripeResponse.ok && { error: `Stripe API returned ${stripeResponse.status}` })
+        });
+      }
+
+      if (connection.platform === 'tiktok') {
+        // Test TikTok token via advertiser info
+        const tiktokResponse = await fetch(
+          `https://business-api.tiktok.com/open_api/v1.3/oauth2/advertiser/get/?app_id=${c.env.TIKTOK_APP_ID || ''}&secret=${c.env.TIKTOK_APP_SECRET || ''}&access_token=${accessToken}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+
+        const tiktokData = await tiktokResponse.json() as { code?: number; message?: string };
+        const tiktokValid = tiktokData.code === 0;
+
+        return success(c, {
+          connection_id,
+          platform: 'tiktok',
+          token_valid: tiktokValid,
+          can_fetch_data: tiktokValid,
+          ...(!tiktokValid && { error: tiktokData.message || `TikTok API error code ${tiktokData.code}` })
+        });
+      }
+
+      // Fallback for platforms without specific validation — check token exists
       return success(c, {
         connection_id,
         platform: connection.platform,
         token_valid: true,
         can_fetch_data: false,
-        error: "Token testing not implemented for this platform yet"
+        error: "Deep token testing not implemented for this platform — token exists but not validated"
       });
     } catch (err) {
       structuredLog('ERROR', 'Test token error', { endpoint: 'workers', step: 'test_token', error: err instanceof Error ? err.message : String(err) });

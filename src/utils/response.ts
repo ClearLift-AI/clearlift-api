@@ -114,14 +114,24 @@ export function getPagination(c: Context): { page: number; limit: number; offset
 }
 
 /**
- * Extract date range from query
+ * Validate YYYY-MM-DD date string. Returns true if valid.
+ */
+function isValidDateString(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + "T00:00:00Z").getTime());
+}
+
+/**
+ * Extract date range from query. Invalid date strings are ignored (defaults apply).
  */
 export function getDateRange(c: Context): { start_date: string; end_date: string } {
   const today = new Date();
   const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  const start_date = c.req.query("start_date") || thirtyDaysAgo.toISOString().split("T")[0];
-  const end_date = c.req.query("end_date") || today.toISOString().split("T")[0];
+  const rawStart = c.req.query("start_date");
+  const rawEnd = c.req.query("end_date");
+
+  const start_date = rawStart && isValidDateString(rawStart) ? rawStart : thirtyDaysAgo.toISOString().split("T")[0];
+  const end_date = rawEnd && isValidDateString(rawEnd) ? rawEnd : today.toISOString().split("T")[0];
 
   return { start_date, end_date };
 }
