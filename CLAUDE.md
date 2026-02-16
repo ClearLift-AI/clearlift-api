@@ -130,10 +130,10 @@ npx wrangler d1 execute clearlift-shard-0 --local --env local \
 **Production - Shard Migrations:**
 ```bash
 # Apply shard migrations to production shards (CAUTION: affects live data)
-npx wrangler d1 migrations apply SHARD_0 --remote
-npx wrangler d1 migrations apply SHARD_1 --remote
-npx wrangler d1 migrations apply SHARD_2 --remote
-npx wrangler d1 migrations apply SHARD_3 --remote
+npx wrangler d1 migrations apply SHARD_0 --env "" --remote
+npx wrangler d1 migrations apply SHARD_1 --env "" --remote
+npx wrangler d1 migrations apply SHARD_2 --env "" --remote
+npx wrangler d1 migrations apply SHARD_3 --env "" --remote
 ```
 
 **Current Status (Feb 2026):**
@@ -304,8 +304,8 @@ npx wrangler d1 migrations apply DB --local --env local      # Main database
 npx wrangler d1 migrations apply AI_DB --local --env local   # AI database
 
 # Apply D1 migrations to production (BOTH databases)
-npx wrangler d1 migrations apply DB --remote      # Main database
-npx wrangler d1 migrations apply AI_DB --remote   # AI database
+npx wrangler d1 migrations apply DB --env "" --remote      # Main database
+npx wrangler d1 migrations apply AI_DB --env "" --remote   # AI database
 
 # Check migration status
 npx wrangler d1 migrations list DB --local --env local
@@ -387,8 +387,8 @@ npx wrangler d1 migrations apply DB --local --env local
 npx wrangler d1 migrations apply ANALYTICS_DB --local --env local
 
 # Production (applies to remote Cloudflare D1)
-npx wrangler d1 migrations apply DB --remote
-npx wrangler d1 migrations apply ANALYTICS_DB --remote
+npx wrangler d1 migrations apply DB --env "" --remote
+npx wrangler d1 migrations apply ANALYTICS_DB --env "" --remote
 
 # Check status
 npx wrangler d1 migrations list ANALYTICS_DB --remote
