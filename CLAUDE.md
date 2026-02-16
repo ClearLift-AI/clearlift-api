@@ -364,15 +364,43 @@ GOOGLE_ADS_DEVELOPER_TOKEN=xxx
 FACEBOOK_APP_ID=xxx
 FACEBOOK_APP_SECRET=xxx
 
-# OAuth Tunnel - use dev.clearlift.ai for HTTPS callbacks
-OAUTH_CALLBACK_BASE=https://dev.clearlift.ai
-APP_BASE_URL=http://localhost:3001
+# OAuth Tunnel - use local.clearlift.ai for HTTPS callbacks
+OAUTH_CALLBACK_BASE=https://local.clearlift.ai
+APP_BASE_URL=https://app-local.clearlift.ai
 ```
 
-### Test Data Isolation
+### D1 Local vs Production Isolation
 
-- **D1 Database**: Completely isolated - local uses `.wrangler/state/` SQLite, production uses Cloudflare D1
-- **Test Org IDs**: Use `test-org-001` pattern locally; production has real UUIDs
+**Local dev (`wrangler dev`) ALWAYS uses local SQLite emulation — it NEVER hits production D1**, even though `database_id` values in `wrangler.jsonc` match production. Miniflare creates SQLite files in `.wrangler/state/v3/d1/miniflare-D1DatabaseObject/`.
+
+| Database | Local State | Production State | Notes |
+|----------|-------------|------------------|-------|
+| `DB` | `.wrangler/state/` SQLite (75 migrations) | Cloudflare D1 `89bd84be-...` | ✅ Both up to date |
+| `AI_DB` | `.wrangler/state/` SQLite (8 migrations) | Cloudflare D1 `0a8898ef-...` | ⚠️ Prod pending: `0008_drop_dead_cac_history.sql` |
+| `ANALYTICS_DB` | `.wrangler/state/` SQLite (47 migrations) | Cloudflare D1 `9d1524d4-...` | ⚠️ Prod pending: `0046`, `0047` |
+| `SHARD_0-3` | No local SQLite files (shards unused locally) | Cloudflare D1 (3 migrations each) | Shards only in production |
+
+**Migration commands:**
+```bash
+# Local (applies to SQLite files in .wrangler/state/)
+npx wrangler d1 migrations apply DB --local --env local
+npx wrangler d1 migrations apply ANALYTICS_DB --local --env local
+
+# Production (applies to remote Cloudflare D1)
+npx wrangler d1 migrations apply DB --remote
+npx wrangler d1 migrations apply ANALYTICS_DB --remote
+
+# Check status
+npx wrangler d1 migrations list ANALYTICS_DB --remote
+npx wrangler d1 migrations list ANALYTICS_DB --local --env local
+```
+
+**Key facts:**
+- `--local` flag → writes to `.wrangler/state/` SQLite (default for `wrangler dev`)
+- `--remote --env staging` → writes to staging Cloudflare D1 (fully isolated from prod)
+- `--remote --env ""` → writes to production Cloudflare D1
+- The Queue Consumer (`clearlift-cron`) must use `--persist-to` to share this repo's local D1 state
+- Test org IDs: Use `test-org-001` pattern locally; production has real UUIDs
 
 ## Full Stack Local Testing
 
@@ -391,8 +419,8 @@ cd ../clearlift-cron && npx wrangler dev \
 # Terminal 3: Dashboard
 cd ../clearlift-page-router/apps/dashboard && npm run dev
 
-# Terminal 4: Cloudflare Tunnel (for OAuth - routes dev.clearlift.ai → localhost)
-cloudflared tunnel run dev-api
+# Terminal 4: Cloudflare Tunnel (routes local.clearlift.ai → localhost:8787, app-local → localhost:3001)
+cloudflared tunnel --config ~/.cloudflared/config-clearlift-dev.yml run
 ```
 
 ### How Local Sync Works
@@ -426,26 +454,40 @@ The Queue Consumer must access the same D1 database as the API:
 
 **Without it:** Queue Consumer gets `"no such table: sync_jobs"` errors.
 
-### OAuth Testing with dev.clearlift.ai
+### OAuth Testing with local.clearlift.ai
 
-OAuth providers require HTTPS callback URLs. We use `dev.clearlift.ai` as a permanent Cloudflare tunnel to your local API.
+OAuth providers require HTTPS callback URLs. We use `local.clearlift.ai` as a permanent Cloudflare tunnel to your local API.
 
 **Setup:**
-1. Start the tunnel: `cloudflared tunnel run dev-api`
-2. Ensure `.dev.vars` has: `OAUTH_CALLBACK_BASE=https://dev.clearlift.ai`
+1. Start the tunnel: `cloudflared tunnel --config ~/.cloudflared/config-clearlift-dev.yml run`
+2. Ensure `.dev.vars` has: `OAUTH_CALLBACK_BASE=https://local.clearlift.ai`
 3. Start the API worker (it picks up the env var)
 
-**Why dev.clearlift.ai:**
-- Permanent redirect URIs already registered with OAuth providers (Google, Meta, HubSpot, TikTok)
-- No need to update OAuth app settings for each dev session
-- Enables remote team collaboration on local builds
-- HTTPS endpoints required for OAuth callbacks
+**Domain mapping (local → staging → production):**
+
+| Purpose | Local (tunnel) | Staging | Production |
+|---------|---------------|---------|------------|
+| Dashboard | `app-local.clearlift.ai` | `dev.clearlift.ai` | `app.clearlift.ai` |
+| API | `local.clearlift.ai` | `api-dev.clearlift.ai` | `api.clearlift.ai` |
+| Events | `events-local.clearlift.ai` | `iris-dev.clearlift.ai` | `iris.clearlift.ai` |
 
 **Registered redirect URIs** (already configured in provider consoles):
-- `https://dev.clearlift.ai/v1/connectors/google/callback`
-- `https://dev.clearlift.ai/v1/connectors/facebook/callback`
-- `https://dev.clearlift.ai/v1/connectors/hubspot/callback`
-- `https://dev.clearlift.ai/v1/connectors/tiktok/callback`
+- `https://local.clearlift.ai/v1/connectors/google/callback`
+- `https://local.clearlift.ai/v1/connectors/facebook/callback`
+- `https://local.clearlift.ai/v1/connectors/hubspot/callback`
+- `https://local.clearlift.ai/v1/connectors/tiktok/callback`
+- `https://local.clearlift.ai/v1/connectors/shopify/callback`
+
+### Branch Model & CI/CD
+
+```
+feature/* ──PR──→ staging ──PR──→ main
+                    │                │
+                    ▼                ▼
+              deploy staging    deploy production
+```
+
+GitHub Actions CI/CD deploys automatically on push to `staging` or `main`. See `.github/workflows/ci.yml`.
 
 ### Verify Local Sync
 
