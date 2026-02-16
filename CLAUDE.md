@@ -36,7 +36,7 @@ A third D1 database for pre-aggregated analytics (sub-millisecond queries):
 
 | Binding | Database Name | Migrations Dir | Purpose |
 |---------|--------------|----------------|---------|
-| `ANALYTICS_DB` | clearlift-analytics-dev | `migrations-analytics/` | Aggregated metrics, attribution, journeys |
+| `ANALYTICS_DB` | clearlift-analytics-prod | `migrations-analytics/` | Aggregated metrics, attribution, journeys |
 
 **Legacy Tables (per-platform):**
 - `hourly_metrics`, `daily_metrics` - Pre-aggregated event metrics
@@ -167,7 +167,7 @@ Summary endpoints can continue reading from ANALYTICS_DB (pre-aggregated by Aggr
 
 #### Other Data Sources
 1. **Analytics Engine** - Real-time event analytics with < 100ms latency (90-day retention). Layout: 1 index (org_tag) + 19 blobs + 11 doubles.
-2. **R2 SQL** - Historical event archive (Iceberg tables). Primary: `clearlift.event_data_v5` (96 fields, v3.1.0). Legacy: `clearlift.event_data` (backward compat).
+2. **R2 SQL** - Historical event archive (Iceberg tables). Primary: `clearlift.event_data_v4_1` (96 fields, v3.1.0). Legacy: `clearlift.event_data` (backward compat).
 
 ### Key Architectural Points
 - This API worker does NOT use containers
@@ -375,9 +375,9 @@ APP_BASE_URL=https://app-local.clearlift.ai
 
 | Database | Local State | Production State | Notes |
 |----------|-------------|------------------|-------|
-| `DB` | `.wrangler/state/` SQLite (75 migrations) | Cloudflare D1 `89bd84be-...` | ✅ Both up to date |
-| `AI_DB` | `.wrangler/state/` SQLite (8 migrations) | Cloudflare D1 `0a8898ef-...` | ⚠️ Prod pending: `0008_drop_dead_cac_history.sql` |
-| `ANALYTICS_DB` | `.wrangler/state/` SQLite (47 migrations) | Cloudflare D1 `9d1524d4-...` | ⚠️ Prod pending: `0046`, `0047` |
+| `DB` | `.wrangler/state/` SQLite (75 migrations) | Cloudflare D1 `8e55bba7-...` | ✅ Both up to date |
+| `AI_DB` | `.wrangler/state/` SQLite (8 migrations) | Cloudflare D1 `3fb300f4-...` | ⚠️ Prod pending: `0008_drop_dead_cac_history.sql` |
+| `ANALYTICS_DB` | `.wrangler/state/` SQLite (47 migrations) | Cloudflare D1 `a69beb57-...` | ⚠️ Prod pending: `0046`, `0047` |
 | `SHARD_0-3` | No local SQLite files (shards unused locally) | Cloudflare D1 (3 migrations each) | Shards only in production |
 
 **Migration commands:**
@@ -571,8 +571,8 @@ Tests use Vitest with Cloudflare Workers pool:
 
 - **Auto-deployment**: Pushes to GitHub main branch trigger deployment
 - **Databases**:
-  - Main DB (DB): `89bd84be-b517-4c72-ab61-422384319361`
-  - AI DB (AI_DB): `0a8898ef-9ce9-458f-90b9-a89db12c1078`
+  - Main DB (DB): `8e55bba7-4b54-4992-b5e5-050611499c18`
+  - AI DB (AI_DB): `3fb300f4-4523-4a29-9efc-955d1684f392`
 - **Domain**: api.clearlift.ai (configured in Cloudflare)
 - **Important**: After adding new migrations, apply to BOTH databases in production
 

@@ -12,9 +12,9 @@ The ClearLift API Worker serves as the central authentication and data access la
 
 ```
 Frontend Apps → api.clearlift.ai → Authentication → Data Access
-                                    ├── D1 Database (Config/Auth)
-                                    ├── Supabase (Ad Platform Data)
-                                    └── R2 SQL (Analytics/Events)
+                                    ├── D1 Database (Config/Auth/Analytics)
+                                    ├── D1 Shards (Platform Data)
+                                    └── R2 SQL (Historical Events)
 ```
 
 ## Features
@@ -33,7 +33,7 @@ Frontend Apps → api.clearlift.ai → Authentication → Data Access
 - **Stripe** - Conversion and payment tracking
 
 ### 📊 Data Access Layer
-- **Multi-Database Support** - Unified API for D1, Supabase, and R2 SQL
+- **Multi-Database Support** - Unified API for D1 and R2 SQL
 - **Multi-Tenant Isolation** - Organization-based data separation
 - **Query Optimization** - Intelligent routing and caching
 
@@ -47,7 +47,6 @@ Frontend Apps → api.clearlift.ai → Authentication → Data Access
 
 ### Prerequisites
 - **Cloudflare Workers** account (Paid plan required for D1)
-- **Supabase** project for advertising data storage
 - **Node.js** 20+ and npm
 - **Wrangler CLI** 4.45+
 
@@ -127,14 +126,13 @@ Operational database for authentication, configuration, and orchestration.
 - `audit_logs` - SOC 2 compliant audit trail
 - `sync_jobs` - Background sync job tracking
 
-#### 2. Supabase (PostgreSQL)
-Advertising platform data storage with Row-Level Security.
+#### 2. D1 ANALYTICS_DB + Shards
+Advertising platform data and pre-aggregated analytics.
 
 **Data:**
-- Google Ads campaigns, ad groups, and ads
-- Facebook Ads campaigns, ad sets, and creatives
-- TikTok Ads campaigns and creatives
-- Stripe conversion events
+- Pre-aggregated metrics, attribution, journeys, CAC history (ANALYTICS_DB)
+- Google Ads, Meta Ads, TikTok Ads campaigns and metrics (Shards 0-3)
+- Unified conversions from Stripe, Shopify, Jobber
 
 #### 3. R2 SQL (Iceberg Data Lake)
 Clickstream and behavioral analytics via R2 SQL API.
@@ -173,7 +171,6 @@ clearlift-api/
 │   │   └── audit.ts           # Audit logging
 │   ├── adapters/              # Database adapters
 │   │   ├── d1.ts             # D1 database operations
-│   │   ├── supabase.ts       # Supabase client
 │   │   └── r2sql.ts          # R2 SQL query builder
 │   └── utils/                # Utility functions
 │       ├── encryption.ts     # AES-256-GCM encryption
@@ -212,7 +209,7 @@ Supported providers: `google`, `facebook`, `tiktok`, `stripe`
 
 ```http
 GET /v1/analytics/events              # R2 SQL clickstream data
-GET /v1/analytics/platforms/:provider # Supabase ad platform data
+GET /v1/analytics/platforms/:provider # D1 ad platform data
 GET /v1/analytics/unified             # Cross-platform aggregated data
 ```
 
@@ -235,10 +232,6 @@ Set these secrets in Cloudflare Workers:
 ```bash
 # Master encryption key for D1 field encryption
 wrangler secret put ENCRYPTION_KEY
-
-# Supabase credentials
-wrangler secret put SUPABASE_SECRET_KEY
-wrangler secret put SUPABASE_URL
 
 # R2 SQL credentials
 wrangler secret put R2_SQL_TOKEN
@@ -318,7 +311,7 @@ wrangler d1 migrations create DB migration_name
 npm run db:migrate:remote
 ```
 
-**Production Database ID:** `89bd84be-b517-4c72-ab61-422384319361`
+**Production Database ID:** `8e55bba7-4b54-4992-b5e5-050611499c18`
 
 ## Testing
 
@@ -442,7 +435,7 @@ This is a private repository. For internal contributors:
 
 - **clearlift-cron** - Scheduled sync job orchestration
 - **clearlift-events** - Clickstream event collection and R2 Data Lake
-- **clearlift-frontend** - Web application UI
+- **clearlift-page-router** - Web application UI and static site serving
 
 ## License
 
@@ -459,4 +452,4 @@ For issues and questions:
 **Production Status:** ✅ Deployed
 **SOC 2 Compliance:** ✅ Type 2 Ready
 **Version:** 1.0.0
-**Last Updated:** November 2025
+**Last Updated:** February 2026
