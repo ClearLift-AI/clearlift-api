@@ -958,7 +958,8 @@ export class CreateShareableInviteLink extends OpenAPIRoute {
       max_uses || null
     ).run();
 
-    const joinUrl = `https://app.clearlift.ai/join?code=${inviteCode}`;
+    const appBase = c.env.APP_BASE_URL || 'https://app.clearlift.ai';
+    const joinUrl = `${appBase}/join?code=${inviteCode}`;
 
     return c.json({
       success: true,
@@ -1047,7 +1048,7 @@ export class GetShareableInviteLink extends OpenAPIRoute {
     return success(c, {
       invite_link: {
         ...inviteLink,
-        join_url: `https://app.clearlift.ai/join?code=${inviteLink.invite_code}`
+        join_url: `${c.env.APP_BASE_URL || 'https://app.clearlift.ai'}/join?code=${inviteLink.invite_code}`
       }
     });
   }
@@ -1599,7 +1600,8 @@ export class GetScriptHash extends OpenAPIRoute {
       scriptHash = { hash: newHash, org_tag: tagMapping.short_tag };
     }
 
-    const scriptUrl = `https://cdn.clearlift.ai/${scriptHash.hash}.js`;
+    const cdnBase = c.env.CDN_BASE_URL || 'https://cdn.clearlift.ai';
+    const scriptUrl = `${cdnBase}/${scriptHash.hash}.js`;
     const installationSnippet = `<!-- ClearLift Pixel -->
 <script src="${scriptUrl}" async></script>`;
 

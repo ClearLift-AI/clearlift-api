@@ -227,6 +227,34 @@ describe('CORS Headers', () => {
 
     expect(response.status).toBeLessThan(400);
   });
+
+  it('should accept staging dashboard origin', async () => {
+    const response = await SELF.fetch('http://localhost/v1/health', {
+      headers: { 'Origin': 'https://dev.clearlift.ai' }
+    });
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://dev.clearlift.ai');
+  });
+
+  it('should accept staging alt dashboard origin', async () => {
+    const response = await SELF.fetch('http://localhost/v1/health', {
+      headers: { 'Origin': 'https://app-dev.clearlift.ai' }
+    });
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://app-dev.clearlift.ai');
+  });
+
+  it('should accept local tunnel origin', async () => {
+    const response = await SELF.fetch('http://localhost/v1/health', {
+      headers: { 'Origin': 'https://local.clearlift.ai' }
+    });
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://local.clearlift.ai');
+  });
+
+  it('should accept local tunnel dashboard origin', async () => {
+    const response = await SELF.fetch('http://localhost/v1/health', {
+      headers: { 'Origin': 'https://app-local.clearlift.ai' }
+    });
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://app-local.clearlift.ai');
+  });
 });
 
 describe('Security Headers', () => {
@@ -236,6 +264,15 @@ describe('Security Headers', () => {
     // Check for common security headers
     const headers = response.headers;
     expect(headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('should include CSP with wildcard for clearlift subdomains', async () => {
+    const response = await SELF.fetch('http://localhost/v1/health');
+    const csp = response.headers.get('content-security-policy');
+    expect(csp).toBeDefined();
+    if (csp) {
+      expect(csp).toContain('*.clearlift.ai');
+    }
   });
 });
 

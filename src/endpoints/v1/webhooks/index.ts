@@ -500,7 +500,7 @@ export class CreateWebhookEndpoint extends OpenAPIRoute {
       .run();
 
     // Build webhook URL
-    const baseUrl = "https://api.clearlift.ai";
+    const baseUrl = c.env.OAUTH_CALLBACK_BASE || "https://api.clearlift.ai";
     const webhookUrl = `${baseUrl}/v1/webhooks/${connector}?org_id=${orgId}`;
 
     return success(c, {

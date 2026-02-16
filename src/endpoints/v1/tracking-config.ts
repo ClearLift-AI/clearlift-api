@@ -428,9 +428,10 @@ export class GenerateTrackingSnippet extends OpenAPIRoute {
         ? `\n    data-goals='${JSON.stringify(goals)}'`
         : '';
 
+      const cdnBase = c.env.CDN_BASE_URL || 'https://cdn.clearlift.ai';
       snippet = `<!-- Clearlift Analytics - Simple Integration -->
 <script
-    src="https://cdn.clearlift.ai/v3/clearlift-3.0.0.js"
+    src="${cdnBase}/v3/clearlift-3.0.0.js"
     data-org-tag="${orgTag}"${goalsAttr}
     async
 ></script>`;
@@ -441,9 +442,10 @@ export class GenerateTrackingSnippet extends OpenAPIRoute {
   clearlift.setGoals(${JSON.stringify(goals, null, 2)});`
         : '';
 
+      const cdnBaseAdv = c.env.CDN_BASE_URL || 'https://cdn.clearlift.ai';
       snippet = `<!-- Clearlift Analytics - Advanced Integration -->
 <script
-    src="https://cdn.clearlift.ai/v3/clearlift-3.0.0.js"
+    src="${cdnBaseAdv}/v3/clearlift-3.0.0.js"
     data-org-tag="${orgTag}"
     async
 ></script>

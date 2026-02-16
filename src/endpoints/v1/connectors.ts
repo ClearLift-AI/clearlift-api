@@ -1094,7 +1094,8 @@ export class GetOAuthAccounts extends OpenAPIRoute {
         case 'google': {
           const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
           const clientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
-          const redirectUri = `https://api.clearlift.ai/v1/connectors/google/callback`;
+          const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+          const redirectUri = `${callbackBase}/v1/connectors/google/callback`;
 
           if (!clientId || !clientSecret) {
             return error(c, "MISSING_CREDENTIALS", "Google OAuth credentials not configured", 500);
@@ -1123,7 +1124,8 @@ export class GetOAuthAccounts extends OpenAPIRoute {
         case 'facebook': {
           const appId = await getSecret(c.env.FACEBOOK_APP_ID);
           const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
-          const redirectUri = `https://api.clearlift.ai/v1/connectors/facebook/callback`;
+          const fbCallbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+          const redirectUri = `${fbCallbackBase}/v1/connectors/facebook/callback`;
 
           if (!appId || !appSecret) {
             return error(c, "MISSING_CREDENTIALS", "Facebook OAuth credentials not configured", 500);
@@ -1142,7 +1144,8 @@ export class GetOAuthAccounts extends OpenAPIRoute {
           const { TikTokAdsOAuthProvider } = await import("../../services/oauth/tiktok");
           const appId = await getSecret(c.env.TIKTOK_APP_ID);
           const appSecret = await getSecret(c.env.TIKTOK_APP_SECRET);
-          const redirectUri = `https://api.clearlift.ai/v1/connectors/tiktok/callback`;
+          const ttCallbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+          const redirectUri = `${ttCallbackBase}/v1/connectors/tiktok/callback`;
 
           if (!appId || !appSecret) {
             return error(c, "MISSING_CREDENTIALS", "TikTok OAuth credentials not configured", 500);
@@ -1484,11 +1487,12 @@ async function registerShopifyWebhooks(
   shopDomain: string,
   accessToken: string,
   organizationId: string,
-  db: D1Database
+  db: D1Database,
+  callbackBaseUrl?: string
 ): Promise<void> {
   const apiVersion = '2026-01';
   const graphqlUrl = `https://${shopDomain}/admin/api/${apiVersion}/graphql.json`;
-  const callbackBase = 'https://api.clearlift.ai';
+  const callbackBase = callbackBaseUrl || 'https://api.clearlift.ai';
 
   // The webhook URL — Shopify will send X-Shopify-Shop-Domain header
   // which the receiver uses to look up the org (no org_id needed in URL)
@@ -1812,7 +1816,8 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
             shopDomain,
             accessToken,
             oauthState.organization_id,
-            c.env.DB
+            c.env.DB,
+            c.env.OAUTH_CALLBACK_BASE
           );
         } catch (webhookErr) {
           structuredLog('WARN', 'Shopify webhook registration failed (non-fatal)', { endpoint: 'connectors', step: 'finalize_oauth', provider: 'shopify', error: webhookErr instanceof Error ? webhookErr.message : String(webhookErr) });

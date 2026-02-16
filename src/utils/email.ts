@@ -26,9 +26,13 @@ export class EmailService {
   private apiKey: string | null = null;
   private readonly fromEmail = 'noreply@clearlift.ai';
   private readonly fromName = 'ClearLift';
-  private readonly baseUrl = 'https://app.clearlift.ai';
+  private readonly baseUrl: string;
+  private readonly dryRun: boolean;
 
-  constructor(private env: any) {}
+  constructor(private env: any) {
+    this.baseUrl = env.APP_BASE_URL || 'https://app.clearlift.ai';
+    this.dryRun = env.EMAIL_DRY_RUN === 'true';
+  }
 
   /**
    * Initialize the email service with SendGrid API key
@@ -43,6 +47,11 @@ export class EmailService {
    * Send an email via SendGrid
    */
   private async sendEmail(template: EmailTemplate): Promise<SendGridResponse> {
+    if (this.dryRun) {
+      structuredLog('INFO', 'Email dry run — skipping SendGrid', { service: 'email', to: Array.isArray(template.to) ? template.to.join(',') : template.to, subject: template.subject });
+      return { success: true, messageId: 'dry-run' };
+    }
+
     await this.init();
 
     if (!this.apiKey) {
@@ -545,7 +554,7 @@ export class EmailService {
       </p>
 
       <div class="cta-section">
-        <a href="https://app.clearlift.ai/register?utm_source=email&utm_medium=welcome&utm_campaign=onboarding" class="cta-button-primary">
+        <a href="${this.baseUrl}/register?utm_source=email&utm_medium=welcome&utm_campaign=onboarding" class="cta-button-primary">
           Complete Registration
         </a>
       </div>

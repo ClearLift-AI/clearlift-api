@@ -26,6 +26,9 @@ declare namespace Cloudflare {
 		GEMINI_API_KEY: string;
 		OAUTH_CALLBACK_BASE: string;
 		APP_BASE_URL: string;
+		CDN_BASE_URL?: string;
+		IRIS_BASE_URL?: string;
+		EMAIL_DRY_RUN?: string;
 		DB: D1Database;
 		AI_DB: D1Database;
 		ANALYTICS_DB: D1Database;

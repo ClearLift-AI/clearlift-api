@@ -471,182 +471,62 @@
     },
 
     // ========================================================================
-    // DEV ENVIRONMENT
+    // STAGING ENVIRONMENT — Fully Isolated from Production
     // ========================================================================
-    // Deploy with: npx wrangler deploy --env dev
-    // Accessible at: dev.clearlift.ai (via api-dev.clearlift.ai)
-    // Uses D1 ANALYTICS_DB for events/touchpoints/metrics
-    "dev": {
-      "name": "clearlift-api-dev",
+    // Deploy with: npx wrangler deploy --env staging
+    // Accessible at: api-dev.clearlift.ai
+    // Every D1/R2/KV/AE resource has a unique staging ID — zero cross-wire risk
+    "staging": {
+      "name": "clearlift-api-staging",
+      "routes": [{ "pattern": "api-dev.clearlift.ai/*", "zone_name": "clearlift.ai" }],
       "vars": {
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
-        "R2_BUCKET_NAME": "clearlift-db",
-        "R2_SQL_TABLE": "clearlift.event_data_v4_1",
-        "USE_D1_ANALYTICS": "true"
+        "R2_BUCKET_NAME": "clearlift-db-staging",
+        "R2_SQL_TABLE": "clearlift.event_data_v5_staging",
+        "USE_D1_ANALYTICS": "true",
+        "OAUTH_CALLBACK_BASE": "https://api-dev.clearlift.ai",
+        "APP_BASE_URL": "https://dev.clearlift.ai",
+        "CDN_BASE_URL": "https://cdn.clearlift.ai",
+        "IRIS_BASE_URL": "https://iris-dev.clearlift.ai",
+        "EMAIL_DRY_RUN": "true"
       },
       "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "clearlift-db-prod",
-          "database_id": "8e55bba7-4b54-4992-b5e5-050611499c18",
-          "migrations_dir": "migrations"
-        },
-        {
-          "binding": "AI_DB",
-          "database_name": "clearlift-ai-prod",
-          "database_id": "3fb300f4-4523-4a29-9efc-955d1684f392",
-          "migrations_dir": "migrations-ai"
-        },
-        {
-          "binding": "ANALYTICS_DB",
-          "database_name": "clearlift-analytics-dev",
-          "database_id": "57a7e42f-3a52-4b15-b237-bc1338e5fb61",
-          "migrations_dir": "migrations-analytics"
-        },
-        // Platform data shards (for campaign/metrics storage + pre-aggregation)
-        {
-          "binding": "SHARD_0",
-          "database_name": "clearlift-shard-0",
-          "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0",
-          "migrations_dir": "shard-migrations"
-        },
-        {
-          "binding": "SHARD_1",
-          "database_name": "clearlift-shard-1",
-          "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6",
-          "migrations_dir": "shard-migrations"
-        },
-        {
-          "binding": "SHARD_2",
-          "database_name": "clearlift-shard-2",
-          "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8",
-          "migrations_dir": "shard-migrations"
-        },
-        {
-          "binding": "SHARD_3",
-          "database_name": "clearlift-shard-3",
-          "database_id": "ff763599-df7b-4041-b766-b574e7b3415b",
-          "migrations_dir": "shard-migrations"
-        }
+        { "binding": "DB",           "database_name": "clearlift-db-staging",        "database_id": "81898952-040a-461b-8fa5-e3e9bb2ab5a5",           "migrations_dir": "migrations" },
+        { "binding": "AI_DB",        "database_name": "clearlift-ai-staging",        "database_id": "83f3f38e-07d9-4ef1-ba39-e669d1992b0b",        "migrations_dir": "migrations-ai" },
+        { "binding": "ANALYTICS_DB", "database_name": "clearlift-analytics-staging", "database_id": "85ae3b43-dba7-4f76-a146-eca66fe5be67", "migrations_dir": "migrations-analytics" },
+        { "binding": "SHARD_0",      "database_name": "clearlift-shard-0-staging",   "database_id": "e8880554-29da-4d42-adec-cea3b4d97f8a",      "migrations_dir": "shard-migrations" },
+        { "binding": "SHARD_1",      "database_name": "clearlift-shard-1-staging",   "database_id": "940dc839-c00f-4720-9224-54f756a929cd",      "migrations_dir": "shard-migrations" },
+        { "binding": "SHARD_2",      "database_name": "clearlift-shard-2-staging",   "database_id": "fa657800-6bca-4613-8782-a6b5319bb51f",      "migrations_dir": "shard-migrations" },
+        { "binding": "SHARD_3",      "database_name": "clearlift-shard-3-staging",   "database_id": "3b80668f-3789-462a-9f1c-c2bf1afca6c8",      "migrations_dir": "shard-migrations" }
       ],
-      "queues": {
-        "producers": [
-          {
-            "binding": "SYNC_QUEUE",
-            "queue": "sync-jobs-dev"
-          }
-        ]
-      },
+      "kv_namespaces": [{ "binding": "CACHE", "id": "4ac9423601984ea1a03f382eba42af93" }],
+      "queues": { "producers": [{ "binding": "SYNC_QUEUE", "queue": "sync-jobs-staging" }] },
+      "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "clearlift_events_staging" }],
       "workflows": [
-        {
-          "name": "analysis-workflow-dev",
-          "binding": "ANALYSIS_WORKFLOW",
-          "class_name": "AnalysisWorkflow"
-        },
-        {
-          "name": "attribution-workflow-dev",
-          "binding": "ATTRIBUTION_WORKFLOW",
-          "class_name": "AttributionWorkflow"
-        }
+        { "name": "analysis-workflow-staging",    "binding": "ANALYSIS_WORKFLOW",    "class_name": "AnalysisWorkflow" },
+        { "name": "attribution-workflow-staging", "binding": "ATTRIBUTION_WORKFLOW", "class_name": "AttributionWorkflow" }
       ],
-      "services": [
-        {
-          "binding": "CLEARLIFT_CRON",
-          "service": "clearlift-queue-consumer-dev"
-        }
-      ],
+      "services": [{ "binding": "CLEARLIFT_CRON", "service": "clearlift-queue-consumer-staging" }],
+      "triggers": { "crons": [] },
       "secrets_store_secrets": [
-        {
-          "binding": "ENCRYPTION_KEY",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "ENCRYPTION_KEY"
-        },
-        {
-          "binding": "R2_SQL_TOKEN",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "R2_ADMIN_TOKEN"
-        },
-        {
-          "binding": "GOOGLE_CLIENT_ID",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "GOOGLE_CLIENT_ID"
-        },
-        {
-          "binding": "GOOGLE_CLIENT_SECRET",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "GOOGLE_CLIENT_SECRET"
-        },
-        {
-          "binding": "GOOGLE_ADS_DEVELOPER_TOKEN",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "GOOGLE_ADS_DEVELOPER_TOKEN"
-        },
-        {
-          "binding": "FACEBOOK_APP_ID",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "FB_APP_ID"
-        },
-        {
-          "binding": "FACEBOOK_APP_SECRET",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "FB_APP_SECRET"
-        },
-        {
-          "binding": "SENDGRID_API_KEY",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "SENDGRID_API_KEY"
-        },
-        {
-          "binding": "ANTHROPIC_API_KEY",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "ANTHROPIC_API_KEY"
-        },
-        {
-          "binding": "GEMINI_API_KEY",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "GEMINI_API_KEY"
-        },
-        {
-          "binding": "TIKTOK_APP_ID",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "TIKTOK_APP_ID"
-        },
-        {
-          "binding": "TIKTOK_APP_SECRET",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "TIKTOK_APP_SECRET"
-        },
-        {
-          "binding": "SHOPIFY_CLIENT_ID",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "SHOPIFY_CLIENT_ID"
-        },
-        {
-          "binding": "SHOPIFY_CLIENT_SECRET",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "SHOPIFY_CLIENT_SECRET"
-        },
-        {
-          "binding": "JOBBER_CLIENT_ID",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "JOBBER_CLIENT_ID"
-        },
-        {
-          "binding": "JOBBER_CLIENT_SECRET",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "JOBBER_CLIENT_SECRET"
-        },
-        {
-          "binding": "HUBSPOT_CLIENT_ID",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "HUBSPOT_CLIENT_ID"
-        },
-        {
-          "binding": "HUBSPOT_CLIENT_SECRET",
-          "store_id": "b97bbcc69dce4f59b1043024f8a68f19",
-          "secret_name": "HUBSPOT_CLIENT_SECRET"
-        }
-        // SALESFORCE secrets removed - connector not implemented yet
+        { "binding": "ENCRYPTION_KEY",            "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "ENCRYPTION_KEY_STAGING" },
+        { "binding": "R2_SQL_TOKEN",              "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "R2_ADMIN_TOKEN" },
+        { "binding": "GOOGLE_CLIENT_ID",          "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "GOOGLE_CLIENT_ID" },
+        { "binding": "GOOGLE_CLIENT_SECRET",      "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "GOOGLE_CLIENT_SECRET" },
+        { "binding": "GOOGLE_ADS_DEVELOPER_TOKEN","store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "GOOGLE_ADS_DEVELOPER_TOKEN" },
+        { "binding": "FACEBOOK_APP_ID",           "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "FB_APP_ID" },
+        { "binding": "FACEBOOK_APP_SECRET",       "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "FB_APP_SECRET" },
+        { "binding": "SENDGRID_API_KEY",          "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "SENDGRID_API_KEY" },
+        { "binding": "ANTHROPIC_API_KEY",         "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "ANTHROPIC_API_KEY" },
+        { "binding": "GEMINI_API_KEY",            "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "GEMINI_API_KEY" },
+        { "binding": "TIKTOK_APP_ID",             "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "TIKTOK_APP_ID" },
+        { "binding": "TIKTOK_APP_SECRET",         "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "TIKTOK_APP_SECRET" },
+        { "binding": "SHOPIFY_CLIENT_ID",         "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "SHOPIFY_CLIENT_ID" },
+        { "binding": "SHOPIFY_CLIENT_SECRET",     "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "SHOPIFY_CLIENT_SECRET" },
+        { "binding": "JOBBER_CLIENT_ID",          "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "JOBBER_CLIENT_ID" },
+        { "binding": "JOBBER_CLIENT_SECRET",      "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "JOBBER_CLIENT_SECRET" },
+        { "binding": "HUBSPOT_CLIENT_ID",         "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "HUBSPOT_CLIENT_ID" },
+        { "binding": "HUBSPOT_CLIENT_SECRET",     "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "HUBSPOT_CLIENT_SECRET" }
       ]
     }
   }
