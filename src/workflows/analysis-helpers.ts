@@ -220,6 +220,74 @@ export function buildHierarchySkipSet(tree: SerializedEntityTree): Set<string> {
 
 
 /**
+ * Maximum entities to process per workflow to avoid hitting subrequest limits.
+ * With ~3 subrequests per entity (metrics + template + LLM), 500 entities = ~1500 internal subrequests
+ * plus step overhead. This keeps us safely under the Cloudflare Workflow limits.
+ */
+export const MAX_ENTITIES_PER_WORKFLOW = 500;
+
+/**
+ * Prune entity tree to only include entities with IDs in the activeSet.
+ * Ancestors are kept if any descendant is active (so the hierarchy stays intact).
+ * Returns a new serialized tree with updated totalEntities count.
+ */
+export function pruneEntityTree(
+  tree: SerializedEntityTree,
+  activeEntityIds: Set<string>
+): SerializedEntityTree {
+  const prunedAccounts: Array<[string, SerializedEntity]> = [];
+  let totalEntities = 0;
+
+  for (const [key, account] of tree.accounts) {
+    const prunedCampaigns: SerializedEntity[] = [];
+
+    for (const campaign of account.children) {
+      const prunedAdsets: SerializedEntity[] = [];
+
+      for (const adset of campaign.children) {
+        // Keep ads that have activity
+        const prunedAds = adset.children.filter(ad => activeEntityIds.has(ad.id));
+
+        // Keep adset if it has active children or itself has activity
+        if (prunedAds.length > 0 || activeEntityIds.has(adset.id)) {
+          prunedAdsets.push({ ...adset, children: prunedAds });
+        }
+      }
+
+      // Keep campaign if it has active children or itself has activity
+      if (prunedAdsets.length > 0 || activeEntityIds.has(campaign.id)) {
+        prunedCampaigns.push({ ...campaign, children: prunedAdsets });
+      }
+    }
+
+    // Keep account if it has active children
+    if (prunedCampaigns.length > 0) {
+      const prunedAccount = { ...account, children: prunedCampaigns };
+      prunedAccounts.push([key, prunedAccount]);
+    }
+  }
+
+  // Count entities in pruned tree
+  const countNode = (entity: SerializedEntity): number => {
+    let count = 1;
+    for (const child of entity.children) {
+      count += countNode(child);
+    }
+    return count;
+  };
+  for (const [, account] of prunedAccounts) {
+    totalEntities += countNode(account);
+  }
+
+  return {
+    organizationId: tree.organizationId,
+    accounts: prunedAccounts,
+    totalEntities,
+    platforms: tree.platforms
+  };
+}
+
+/**
  * Parameters for the analysis workflow
  */
 export interface AnalysisWorkflowParams {
