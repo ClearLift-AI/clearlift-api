@@ -28,7 +28,9 @@ import {
   deserializeEntityTree,
   getEntitiesAtLevel,
   createLimiter,
-  isActiveStatus
+  isActiveStatus,
+  pruneEntityTree,
+  MAX_ENTITIES_PER_WORKFLOW
 } from './analysis-helpers';
 import { EntityTreeBuilder, Entity, EntityLevel, Platform } from '../services/analysis/entity-tree';
 import { MetricsFetcher, TimeseriesMetric, DateRange } from '../services/analysis/metrics-fetcher';
@@ -86,21 +88,21 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     const { orgId, days, jobId, customInstructions, config } = event.payload;
     const runId = crypto.randomUUID().replace(/-/g, '');
 
-    // Step 0: Cleanup old pending recommendations to prevent duplicates
-    // This ensures each analysis run starts fresh, avoiding UI duplication
-    await step.do('cleanup_old_pending', {
+    // Step 0: Cleanup expired recommendations only — keep recent pending ones
+    // Previous behavior deleted ALL pending on re-run, giving users no time to act
+    await step.do('cleanup_expired', {
       retries: { limit: 2, delay: '1 second' },
       timeout: '30 seconds'
     }, async () => {
-      // Delete all pending recommendations for this org
-      // This prevents duplicate insights/recommendations from multiple runs
-      await this.env.AI_DB.prepare(`
+      // Only delete recommendations past their expiration date
+      const result = await this.env.AI_DB.prepare(`
         DELETE FROM ai_decisions
         WHERE organization_id = ?
         AND status = 'pending'
+        AND expires_at < datetime('now')
       `).bind(orgId).run();
 
-      console.log(`[Analysis] Cleaned up old pending recommendations for org ${orgId}`);
+      console.log(`[Analysis] Cleaned up ${result.meta?.changes ?? 0} expired recommendations for org ${orgId}`);
     });
 
     // Calculate date range
@@ -127,20 +129,60 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       return serializeEntityTree(tree);
     });
 
+    // Step 1.5: Pre-filter entities with activity in the analysis window
+    // This dramatically reduces entity count for large accounts (e.g. 1692 → ~200)
+    // by skipping entities with zero spend/impressions upfront, avoiding per-entity D1 queries
+    const filteredTree = await step.do('filter_active_entities', {
+      retries: { limit: 2, delay: '5 seconds' },
+      timeout: '1 minute'
+    }, async () => {
+      // Single batch query to find all entity IDs with any activity
+      const activeResult = await this.env.ANALYTICS_DB.prepare(`
+        SELECT entity_ref, SUM(spend_cents) as total_spend
+        FROM ad_metrics
+        WHERE organization_id = ?
+          AND metric_date >= ?
+          AND metric_date <= ?
+          AND (spend_cents > 0 OR impressions > 0)
+        GROUP BY entity_ref
+        ORDER BY total_spend DESC
+        LIMIT ?
+      `).bind(orgId, dateRange.start, dateRange.end, MAX_ENTITIES_PER_WORKFLOW).all<{
+        entity_ref: string;
+        total_spend: number;
+      }>();
+
+      const activeEntityIds = new Set((activeResult.results || []).map(r => r.entity_ref));
+
+      if (activeEntityIds.size === 0) {
+        console.log(`[Analysis] No entities with activity in ${days}-day window, processing full tree`);
+        return entityTree;
+      }
+
+      const pruned = pruneEntityTree(entityTree, activeEntityIds);
+      console.log(`[Analysis] Pre-filtered: ${entityTree.totalEntities} → ${pruned.totalEntities} entities (${activeEntityIds.size} with activity)`);
+
+      // Update job total to reflect pruned count
+      const jobs = new JobManager(this.env.AI_DB);
+      await jobs.startJob(jobId, pruned.totalEntities + 2);
+
+      return pruned;
+    });
+
+    // Use filtered tree for all subsequent processing
+    const activeTree = filteredTree;
+
     // Storage for summaries - passed between steps as JSON
     let summariesByEntity: Record<string, string> = {};
     let processedCount = 0;
 
-
-    // Steps 2-5: Process each level in batches to avoid 1000 subrequest limit per WORKFLOW INSTANCE
-    // With skipLogging optimization: 1 LLM call + 2 D1 queries per entity = ~3 subrequests
-    // Plus 1 job update per batch. Target ~300 entities total per workflow instance.
-    // Use batch size 15 = ~45 subrequests per batch + overhead
+    // Steps 2-5: Process each level in batches
+    // With pre-filtering, most inactive entities are already removed
     const BATCH_SIZE = 15;
     const levels: AnalysisLevel[] = ['ad', 'adset', 'campaign', 'account'];
 
     for (const level of levels) {
-      const entities = getEntitiesAtLevel(entityTree, level as EntityLevel);
+      const entities = getEntitiesAtLevel(activeTree, level as EntityLevel);
       const totalBatches = Math.ceil(entities.length / BATCH_SIZE);
 
       // Process entities in batches
@@ -164,7 +206,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
             jobId,
             processedCount,
             config?.llm,
-            entityTree
+            activeTree
           );
         });
 
@@ -181,7 +223,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     }, async () => {
       return await this.generateCrossPlatformSummary(
         orgId,
-        entityTree,
+        activeTree,
         summariesByEntity,
         dateRange,
         runId,
@@ -427,7 +469,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       runId,
       crossPlatformSummary: finalSummary,
       platformSummaries,
-      entityCount: entityTree.totalEntities,
+      entityCount: activeTree.totalEntities,
       recommendations,
       agenticIterations: iterations,
       stoppedReason,
