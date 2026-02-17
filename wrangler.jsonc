@@ -8,11 +8,18 @@
     "enabled": true
   },
 
+  // Production routes for adbliss.io
+  "routes": [{ "pattern": "api.adbliss.io/*", "zone_name": "adbliss.io" }],
+
   "vars": {
     "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
     "R2_BUCKET_NAME": "clearlift-db",
     "R2_SQL_TABLE": "clearlift.event_data_v4_1",
-    "USE_D1_ANALYTICS": "true"
+    "USE_D1_ANALYTICS": "true",
+    "OAUTH_CALLBACK_BASE": "https://api.adbliss.io",
+    "APP_BASE_URL": "https://app.adbliss.io",
+    "CDN_BASE_URL": "https://cdn.adbliss.io",
+    "IRIS_BASE_URL": "https://iris.adbliss.io"
   },
 
   // Secrets Store bindings - required for OAuth and encryption

@@ -117,10 +117,10 @@ describe('EmailService — env-aware baseUrl', () => {
     const htmlContent = body.content.find((c: any) => c.type === 'text/html')?.value;
 
     expect(htmlContent).toContain(`${customUrl}/verify-email?token=tok-123`);
-    expect(htmlContent).not.toContain('https://app.clearlift.ai');
+    expect(htmlContent).not.toContain('https://app.adbliss.io');
   });
 
-  it('should default to https://app.clearlift.ai when APP_BASE_URL is not set', async () => {
+  it('should default to https://app.adbliss.io when APP_BASE_URL is not set', async () => {
     const service = new EmailService({
       SENDGRID_API_KEY: 'SG.test-key',
     });
@@ -131,7 +131,7 @@ describe('EmailService — env-aware baseUrl', () => {
     const body = JSON.parse((init as RequestInit).body as string);
     const htmlContent = body.content.find((c: any) => c.type === 'text/html')?.value;
 
-    expect(htmlContent).toContain('https://app.clearlift.ai/verify-email?token=tok-456');
+    expect(htmlContent).toContain('https://app.adbliss.io/verify-email?token=tok-456');
   });
 
   it('should use custom baseUrl in password reset emails', async () => {

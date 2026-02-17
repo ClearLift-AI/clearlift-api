@@ -3,26 +3,32 @@ import { cors as honoCors } from "hono/cors";
 
 /**
  * CORS configuration for the API
- * Allows requests from app.clearlift.ai, dashboard.clearlift.ai, clearlift.ai and localhost for development
+ * Allows requests from adbliss.io (production), clearlift.ai (staging/local), and localhost for development
  */
 export const corsMiddleware = honoCors({
   origin: (origin) => {
     // Allow specific origins
     const allowedOrigins = [
+      // Production (adbliss.io)
+      "https://app.adbliss.io",
+      "https://adbliss.io",
+      "https://www.adbliss.io",
+      // Staging (clearlift.ai)
       "https://app.clearlift.ai",
       "https://dashboard.clearlift.ai",
       "https://clearlift.ai",
       "https://www.clearlift.ai",
+      "https://app-dev.clearlift.ai",
+      "https://dev.clearlift.ai",
+      // Local dev
       "http://localhost:3000",
-      "http://localhost:3001",  // Dashboard local dev
+      "http://localhost:3001",
       "http://localhost:5173",
       "http://127.0.0.1:3000",
-      "http://127.0.0.1:3001",  // Dashboard local dev
+      "http://127.0.0.1:3001",
       "http://127.0.0.1:5173",
-      "https://app-dev.clearlift.ai",      // Staging dashboard (alt)
-      "https://dev.clearlift.ai",          // Staging dashboard
-      "https://local.clearlift.ai",        // Local tunnel API
-      "https://app-local.clearlift.ai"     // Local tunnel dashboard
+      "https://local.clearlift.ai",
+      "https://app-local.clearlift.ai"
     ];
 
     // Allow if origin is in the list or if no origin (same-origin requests)

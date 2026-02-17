@@ -33,7 +33,7 @@ export interface SecurityHeadersConfig {
  * Default security headers configuration
  */
 const defaultConfig: SecurityHeadersConfig = {
-  contentSecurityPolicy: "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.clearlift.ai https://*.clearlift.ai",
+  contentSecurityPolicy: "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.adbliss.io https://*.adbliss.io https://api.clearlift.ai https://*.clearlift.ai",
   crossOriginEmbedderPolicy: false, // Disabled to allow Swagger UI CDN resources
   crossOriginOpenerPolicy: "same-origin",
   crossOriginResourcePolicy: "same-origin",
@@ -205,7 +205,7 @@ function addSecurityContext(c: Context) {
   c.header("X-Response-Time", new Date().toISOString());
 
   // Add service identifier (but not revealing technology stack)
-  c.header("X-Service", "ClearLift-API");
+  c.header("X-Service", "AdBliss-API");
 }
 
 /**
