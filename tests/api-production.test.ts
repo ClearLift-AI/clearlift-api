@@ -158,7 +158,7 @@ describe('Production CORS', () => {
   it('should include CORS headers for app origin', async () => {
     const response = await fetch(`${PROD_URL}/v1/health`, {
       headers: {
-        'Origin': 'https://app.clearlift.ai'
+        'Origin': 'https://app.adbliss.io'
       }
     });
 
@@ -169,13 +169,23 @@ describe('Production CORS', () => {
     const response = await fetch(`${PROD_URL}/v1/health`, {
       method: 'OPTIONS',
       headers: {
-        'Origin': 'https://app.clearlift.ai',
+        'Origin': 'https://app.adbliss.io',
         'Access-Control-Request-Method': 'GET'
       }
     });
 
     expect(response.status).toBeLessThan(400);
     expect(response.headers.get('access-control-allow-methods')).toBeDefined();
+  });
+
+  it('should include CORS headers for legacy clearlift origin', async () => {
+    const response = await fetch(`${PROD_URL}/v1/health`, {
+      headers: {
+        'Origin': 'https://app.clearlift.ai'
+      }
+    });
+
+    expect(response.headers.get('access-control-allow-origin')).toBeDefined();
   });
 });
 

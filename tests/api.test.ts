@@ -255,6 +255,27 @@ describe('CORS Headers', () => {
     });
     expect(response.headers.get('access-control-allow-origin')).toBe('https://app-local.clearlift.ai');
   });
+
+  it('should accept production adbliss.io origin', async () => {
+    const response = await SELF.fetch('http://localhost/v1/health', {
+      headers: { 'Origin': 'https://app.adbliss.io' }
+    });
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://app.adbliss.io');
+  });
+
+  it('should accept adbliss.io root origin', async () => {
+    const response = await SELF.fetch('http://localhost/v1/health', {
+      headers: { 'Origin': 'https://adbliss.io' }
+    });
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://adbliss.io');
+  });
+
+  it('should accept www.adbliss.io origin', async () => {
+    const response = await SELF.fetch('http://localhost/v1/health', {
+      headers: { 'Origin': 'https://www.adbliss.io' }
+    });
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://www.adbliss.io');
+  });
 });
 
 describe('Security Headers', () => {
@@ -266,12 +287,13 @@ describe('Security Headers', () => {
     expect(headers.get('x-content-type-options')).toBe('nosniff');
   });
 
-  it('should include CSP with wildcard for clearlift subdomains', async () => {
+  it('should include CSP with wildcard for clearlift and adbliss subdomains', async () => {
     const response = await SELF.fetch('http://localhost/v1/health');
     const csp = response.headers.get('content-security-policy');
     expect(csp).toBeDefined();
     if (csp) {
       expect(csp).toContain('*.clearlift.ai');
+      expect(csp).toContain('*.adbliss.io');
     }
   });
 });
