@@ -145,11 +145,13 @@ export class RunAnalysis extends OpenAPIRoute {
       });
     }
 
-    // Expire any pending recommendations from previous analysis runs
+    // Expire old pending recommendations (>7 days) — keep recent ones so users can review
+    // Previous behavior nuked ALL pending on re-run, giving users no time to act
     await c.env.AI_DB.prepare(`
       UPDATE ai_decisions
       SET status = 'expired'
       WHERE organization_id = ? AND status = 'pending'
+        AND expires_at < datetime('now')
     `).bind(orgId).run();
 
     // Create job in D1 (for status polling)
