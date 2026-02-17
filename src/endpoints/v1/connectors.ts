@@ -200,7 +200,7 @@ export class ShopifyInstall extends OpenAPIRoute {
 
     // Validate shop domain
     if (!shop || !ShopifyOAuthProvider.isValidShopDomain(shop)) {
-      const appBaseUrl = c.env.APP_BASE_URL || 'https://app.clearlift.ai';
+      const appBaseUrl = c.env.APP_BASE_URL || 'https://app.adbliss.io';
       return c.redirect(`${appBaseUrl}/connectors?error=invalid_shop`);
     }
 
@@ -211,13 +211,13 @@ export class ShopifyInstall extends OpenAPIRoute {
       const hmacSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
       if (hmacSecret) {
         const queryParams = new URL(c.req.url).searchParams;
-        const hmacCallbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+        const hmacCallbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.adbliss.io';
         const hmacRedirectUri = `${hmacCallbackBase}/v1/connectors/shopify/callback`;
         const hmacProvider = new ShopifyOAuthProvider('temp', hmacSecret, hmacRedirectUri, normalizedShop);
         const isValidHmac = await hmacProvider.validateHmac(queryParams);
         if (!isValidHmac) {
           structuredLog('ERROR', 'Shopify install HMAC validation failed', { endpoint: 'connectors', step: 'shopify_install', shop: normalizedShop });
-          const appBaseUrl = c.env.APP_BASE_URL || 'https://app.clearlift.ai';
+          const appBaseUrl = c.env.APP_BASE_URL || 'https://app.adbliss.io';
           return c.redirect(`${appBaseUrl}/connectors?error=invalid_hmac`);
         }
         console.log('[ShopifyInstall] HMAC validation passed');
@@ -231,7 +231,7 @@ export class ShopifyInstall extends OpenAPIRoute {
       return error(c, "CONFIG_ERROR", "Shopify OAuth credentials not configured", 500);
     }
 
-    const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+    const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.adbliss.io';
     const redirectUri = `${callbackBase}/v1/connectors/shopify/callback`;
 
     // Generate HMAC-signed state token (no database row needed)
@@ -378,7 +378,7 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
 
   private async getOAuthProvider(provider: string, c: AppContext, shopDomain?: string) {
     // Use OAUTH_CALLBACK_BASE env var for local tunnel testing, otherwise production URL
-    const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+    const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.adbliss.io';
     const redirectUri = `${callbackBase}/v1/connectors/${provider}/callback`;
 
     switch (provider) {
@@ -514,7 +514,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
     }
 
     // Get app base URL for redirects (configurable for local testing)
-    const appBaseUrl = c.env.APP_BASE_URL || 'https://app.clearlift.ai';
+    const appBaseUrl = c.env.APP_BASE_URL || 'https://app.adbliss.io';
 
     // Handle OAuth error
     if (oauthError) {
@@ -569,7 +569,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
         if (hmac) {
           const clientSecret = await getSecret(c.env.SHOPIFY_CLIENT_SECRET);
           if (clientSecret) {
-            const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+            const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.adbliss.io';
             const redirectUri = `${callbackBase}/v1/connectors/shopify/callback`;
             const shopifyProvider = new ShopifyOAuthProvider('', clientSecret, redirectUri, shopDomain);
             const queryParams = new URL(c.req.url).searchParams;
@@ -720,7 +720,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
         return c.redirect(`${appBaseUrl}/oauth/callback?error=config_error`);
       }
 
-      const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+      const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.adbliss.io';
       const redirectUri = `${callbackBase}/v1/connectors/shopify/callback`;
       const shopifyProvider = new ShopifyOAuthProvider(clientId, clientSecret, redirectUri, shopDomain);
       const tokens = await shopifyProvider.exchangeCodeForToken(code);
@@ -754,7 +754,7 @@ export class HandleOAuthCallback extends OpenAPIRoute {
 
   private async getOAuthProvider(provider: string, c: AppContext, shopDomain?: string) {
     // Use OAUTH_CALLBACK_BASE env var for local tunnel testing, otherwise production URL
-    const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+    const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.adbliss.io';
     const redirectUri = `${callbackBase}/v1/connectors/${provider}/callback`;
 
     switch (provider) {
@@ -1094,7 +1094,7 @@ export class GetOAuthAccounts extends OpenAPIRoute {
         case 'google': {
           const clientId = await getSecret(c.env.GOOGLE_CLIENT_ID);
           const clientSecret = await getSecret(c.env.GOOGLE_CLIENT_SECRET);
-          const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+          const callbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.adbliss.io';
           const redirectUri = `${callbackBase}/v1/connectors/google/callback`;
 
           if (!clientId || !clientSecret) {
@@ -1124,7 +1124,7 @@ export class GetOAuthAccounts extends OpenAPIRoute {
         case 'facebook': {
           const appId = await getSecret(c.env.FACEBOOK_APP_ID);
           const appSecret = await getSecret(c.env.FACEBOOK_APP_SECRET);
-          const fbCallbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+          const fbCallbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.adbliss.io';
           const redirectUri = `${fbCallbackBase}/v1/connectors/facebook/callback`;
 
           if (!appId || !appSecret) {
@@ -1144,7 +1144,7 @@ export class GetOAuthAccounts extends OpenAPIRoute {
           const { TikTokAdsOAuthProvider } = await import("../../services/oauth/tiktok");
           const appId = await getSecret(c.env.TIKTOK_APP_ID);
           const appSecret = await getSecret(c.env.TIKTOK_APP_SECRET);
-          const ttCallbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.clearlift.ai';
+          const ttCallbackBase = c.env.OAUTH_CALLBACK_BASE || 'https://api.adbliss.io';
           const redirectUri = `${ttCallbackBase}/v1/connectors/tiktok/callback`;
 
           if (!appId || !appSecret) {
@@ -1492,7 +1492,7 @@ async function registerShopifyWebhooks(
 ): Promise<void> {
   const apiVersion = '2026-01';
   const graphqlUrl = `https://${shopDomain}/admin/api/${apiVersion}/graphql.json`;
-  const callbackBase = callbackBaseUrl || 'https://api.clearlift.ai';
+  const callbackBase = callbackBaseUrl || 'https://api.adbliss.io';
 
   // The webhook URL — Shopify will send X-Shopify-Shop-Domain header
   // which the receiver uses to look up the org (no org_id needed in URL)
