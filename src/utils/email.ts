@@ -24,13 +24,13 @@ export interface SendGridResponse {
 
 export class EmailService {
   private apiKey: string | null = null;
-  private readonly fromEmail = 'noreply@clearlift.ai';
-  private readonly fromName = 'ClearLift';
+  private readonly fromEmail = 'noreply@adbliss.io';
+  private readonly fromName = 'AdBliss';
   private readonly baseUrl: string;
   private readonly dryRun: boolean;
 
   constructor(private env: any) {
-    this.baseUrl = env.APP_BASE_URL || 'https://app.clearlift.ai';
+    this.baseUrl = env.APP_BASE_URL || 'https://app.adbliss.io';
     this.dryRun = env.EMAIL_DRY_RUN === 'true';
   }
 
@@ -139,21 +139,21 @@ export class EmailService {
       <body>
         <div class="container">
           <div class="header">
-            <h1 style="margin: 0;">Welcome to ClearLift!</h1>
+            <h1 style="margin: 0;">Welcome to AdBliss!</h1>
           </div>
           <div class="content">
             <p>Hi ${name},</p>
-            <p>Thanks for signing up for ClearLift! Please verify your email address to complete your registration and access all features.</p>
+            <p>Thanks for signing up for AdBliss! Please verify your email address to complete your registration and access all features.</p>
             <center>
               <a href="${verificationUrl}" class="button">Verify Email Address</a>
             </center>
             <p>Or copy and paste this link into your browser:</p>
             <p style="word-break: break-all; color: #667eea;">${verificationUrl}</p>
-            <p>This link will expire in 24 hours. If you didn't create a ClearLift account, you can safely ignore this email.</p>
+            <p>This link will expire in 24 hours. If you didn't create a AdBliss account, you can safely ignore this email.</p>
           </div>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} ClearLift. All rights reserved.</p>
-            <p>Questions? Contact us at support@clearlift.ai</p>
+            <p>© ${new Date().getFullYear()} AdBliss. All rights reserved.</p>
+            <p>Questions? Contact us at support@adbliss.io</p>
           </div>
         </div>
       </body>
@@ -162,7 +162,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: email,
-      subject: 'Verify your ClearLift email address',
+      subject: 'Verify your AdBliss email address',
       html
     });
   }
@@ -199,7 +199,7 @@ export class EmailService {
           </div>
           <div class="content">
             <p>Hi ${name},</p>
-            <p>We received a request to reset your ClearLift account password. Click the button below to create a new password:</p>
+            <p>We received a request to reset your AdBliss account password. Click the button below to create a new password:</p>
             <center>
               <a href="${resetUrl}" class="button">Reset Password</a>
             </center>
@@ -211,8 +211,8 @@ export class EmailService {
             <p>For security reasons, all your active sessions will be logged out after resetting your password.</p>
           </div>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} ClearLift. All rights reserved.</p>
-            <p>Questions? Contact us at support@clearlift.ai</p>
+            <p>© ${new Date().getFullYear()} AdBliss. All rights reserved.</p>
+            <p>Questions? Contact us at support@adbliss.io</p>
           </div>
         </div>
       </body>
@@ -221,7 +221,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: email,
-      subject: 'Reset your ClearLift password',
+      subject: 'Reset your AdBliss password',
       html
     });
   }
@@ -255,12 +255,12 @@ export class EmailService {
           <div class="content">
             <p>Hi ${name},</p>
             <p class="success">✓ Your password has been successfully reset!</p>
-            <p>You can now log in to your ClearLift account with your new password.</p>
+            <p>You can now log in to your AdBliss account with your new password.</p>
             <p>For your security, all previous sessions have been logged out. You'll need to log in again on any devices where you were previously signed in.</p>
-            <p>If you didn't make this change, please contact our support team immediately at support@clearlift.ai</p>
+            <p>If you didn't make this change, please contact our support team immediately at support@adbliss.io</p>
           </div>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} ClearLift. All rights reserved.</p>
+            <p>© ${new Date().getFullYear()} AdBliss. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -269,7 +269,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: email,
-      subject: 'Your ClearLift password has been reset',
+      subject: 'Your AdBliss password has been reset',
       html
     });
   }
@@ -310,11 +310,11 @@ export class EmailService {
       <body>
         <div class="container">
           <div class="header">
-            <h1 style="margin: 0;">You're Invited to ClearLift!</h1>
+            <h1 style="margin: 0;">You're Invited to AdBliss!</h1>
           </div>
           <div class="content">
             <p>Hi there,</p>
-            <p><strong>${inviterName}</strong> has invited you to join <strong>${organizationName}</strong> on ClearLift.</p>
+            <p><strong>${inviterName}</strong> has invited you to join <strong>${organizationName}</strong> on AdBliss.</p>
 
             <div class="invite-box">
               <p><strong>Organization:</strong> ${organizationName}</p>
@@ -322,7 +322,7 @@ export class EmailService {
               <p><strong>Permissions:</strong> You'll be able to ${roleDescription}</p>
             </div>
 
-            <p>ClearLift helps teams track and analyze their marketing data across multiple advertising platforms in one unified dashboard.</p>
+            <p>AdBliss helps teams track and analyze their marketing data across multiple advertising platforms in one unified dashboard.</p>
 
             <center>
               <a href="${joinUrl}" class="button">Accept Invitation</a>
@@ -331,11 +331,11 @@ export class EmailService {
             <p>Or use this invitation code: <strong>${inviteCode}</strong></p>
             <p style="color: #718096; font-size: 14px;">This invitation will expire in 7 days.</p>
 
-            <p>If you don't have a ClearLift account yet, you'll be prompted to create one when accepting this invitation.</p>
+            <p>If you don't have a AdBliss account yet, you'll be prompted to create one when accepting this invitation.</p>
           </div>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} ClearLift. All rights reserved.</p>
-            <p>Questions? Contact us at support@clearlift.ai</p>
+            <p>© ${new Date().getFullYear()} AdBliss. All rights reserved.</p>
+            <p>Questions? Contact us at support@adbliss.io</p>
           </div>
         </div>
       </body>
@@ -344,7 +344,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: email,
-      subject: `${inviterName} invited you to join ${organizationName} on ClearLift`,
+      subject: `${inviterName} invited you to join ${organizationName} on AdBliss`,
       html
     });
   }
@@ -376,11 +376,11 @@ export class EmailService {
       <body>
         <div class="container">
           <div class="header">
-            <h1 style="margin: 0;">Welcome to ClearLift! <span class="emoji">🚀</span></h1>
+            <h1 style="margin: 0;">Welcome to AdBliss! <span class="emoji">🚀</span></h1>
           </div>
           <div class="content">
             <p>${greeting},</p>
-            <p><strong>Thank you for joining the ClearLift waitlist!</strong> You're now part of an exclusive group who will be the first to experience the future of AI-powered ad performance tracking.</p>
+            <p><strong>Thank you for joining the AdBliss waitlist!</strong> You're now part of an exclusive group who will be the first to experience the future of AI-powered ad performance tracking.</p>
 
             <div class="highlight">
               <p style="margin: 0;"><strong>What's Next?</strong></p>
@@ -391,7 +391,7 @@ export class EmailService {
               </ul>
             </div>
 
-            <p><strong>Why ClearLift?</strong></p>
+            <p><strong>Why AdBliss?</strong></p>
             <ul>
               <li><strong>Unified CAC Tracking:</strong> See the true cost of customer acquisition across all your ad platforms</li>
               <li><strong>LUNA™ Attribution:</strong> Our AI-powered attribution engine reveals what's really driving conversions</li>
@@ -401,11 +401,11 @@ export class EmailService {
             <p>Get ready to transform your advertising with analytics that actually work.</p>
 
             <p style="margin-top: 30px;">Best regards,<br>
-            <strong>The ClearLift Team</strong></p>
+            <strong>The AdBliss Team</strong></p>
           </div>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} ClearLift. All rights reserved.</p>
-            <p>Questions? Contact us at support@clearlift.ai</p>
+            <p>© ${new Date().getFullYear()} AdBliss. All rights reserved.</p>
+            <p>Questions? Contact us at support@adbliss.io</p>
           </div>
         </div>
       </body>
@@ -414,7 +414,7 @@ export class EmailService {
 
     return this.sendEmail({
       to: email,
-      subject: 'Welcome to the ClearLift Waitlist! 🚀',
+      subject: 'Welcome to the AdBliss Waitlist! 🚀',
       html
     });
   }
@@ -432,7 +432,7 @@ export class EmailService {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Welcome to ClearLift</title>
+  <title>Welcome to AdBliss</title>
   <style>
     * {
       margin: 0;
@@ -542,15 +542,15 @@ export class EmailService {
         <svg class="logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M16 4L28 28H4L16 4Z" stroke="#111" stroke-width="2.5" fill="none"/>
         </svg>
-        <span class="logo-text">ClearLift</span>
+        <span class="logo-text">AdBliss</span>
       </div>
     </div>
 
     <div class="content">
-      <h1 class="headline">Welcome to ClearLift!</h1>
+      <h1 class="headline">Welcome to AdBliss!</h1>
 
       <p class="subheadline">
-        You've been invited to join ClearLift. Your dashboard is ready — just complete your registration to start seeing your ad performance across all your channels in one place.
+        You've been invited to join AdBliss. Your dashboard is ready — just complete your registration to start seeing your ad performance across all your channels in one place.
       </p>
 
       <div class="cta-section">
@@ -561,7 +561,7 @@ export class EmailService {
     </div>
 
     <div class="footer">
-      <p class="footer-text">&copy; 2025 ClearLift</p>
+      <p class="footer-text">&copy; 2025 AdBliss</p>
     </div>
   </div>
 </body>
@@ -571,7 +571,7 @@ export class EmailService {
       to,
       cc,
       bcc,
-      subject: 'Welcome to ClearLift',
+      subject: 'Welcome to AdBliss',
       html
     });
   }

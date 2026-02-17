@@ -399,13 +399,13 @@ const openapi = fromHono(app, {
   raiseUnknownParameters: false,
   schema: {
     info: {
-      title: "ClearLift API",
+      title: "AdBliss API",
       version: "1.0.0",
-      description: "Production API for ClearLift analytics platform",
+      description: "Production API for AdBliss analytics platform",
     },
     servers: [
       {
-        url: "https://api.clearlift.ai",
+        url: "https://api.adbliss.io",
         description: "Production"
       },
       {

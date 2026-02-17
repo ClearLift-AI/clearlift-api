@@ -102,7 +102,7 @@ export class ListTrackingLinks extends OpenAPIRoute {
     `).bind(orgTag).all();
 
     // Add tracking URL to each link
-    const irisBase = c.env.IRIS_BASE_URL || 'https://iris.clearlift.ai';
+    const irisBase = c.env.IRIS_BASE_URL || 'https://iris.adbliss.io';
     const linksWithUrl = (links.results || []).map(link => ({
       ...link,
       is_active: Boolean(link.is_active),
@@ -209,7 +209,7 @@ export class CreateTrackingLink extends OpenAPIRoute {
       utm_medium: body.utm_medium || 'email',
       utm_campaign: body.utm_campaign || null,
       utm_content: body.utm_content || null,
-      tracking_url: `${c.env.IRIS_BASE_URL || 'https://iris.clearlift.ai'}/r/${id}`,
+      tracking_url: `${c.env.IRIS_BASE_URL || 'https://iris.adbliss.io'}/r/${id}`,
       created_at: now,
       created_by: session.user_id,
       is_active: true,
@@ -346,7 +346,7 @@ export class GetTrackingLink extends OpenAPIRoute {
     return success(c, {
       ...link,
       is_active: Boolean(link.is_active),
-      tracking_url: `${c.env.IRIS_BASE_URL || 'https://iris.clearlift.ai'}/r/${link.id}`,
+      tracking_url: `${c.env.IRIS_BASE_URL || 'https://iris.adbliss.io'}/r/${link.id}`,
     });
   }
 }

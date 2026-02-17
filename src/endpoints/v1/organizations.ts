@@ -958,7 +958,7 @@ export class CreateShareableInviteLink extends OpenAPIRoute {
       max_uses || null
     ).run();
 
-    const appBase = c.env.APP_BASE_URL || 'https://app.clearlift.ai';
+    const appBase = c.env.APP_BASE_URL || 'https://app.adbliss.io';
     const joinUrl = `${appBase}/join?code=${inviteCode}`;
 
     return c.json({
@@ -1048,7 +1048,7 @@ export class GetShareableInviteLink extends OpenAPIRoute {
     return success(c, {
       invite_link: {
         ...inviteLink,
-        join_url: `${c.env.APP_BASE_URL || 'https://app.clearlift.ai'}/join?code=${inviteLink.invite_code}`
+        join_url: `${c.env.APP_BASE_URL || 'https://app.adbliss.io'}/join?code=${inviteLink.invite_code}`
       }
     });
   }
@@ -1527,7 +1527,7 @@ export class ResyncTrackingDomain extends OpenAPIRoute {
 /**
  * GET /v1/organizations/:org_id/script-hash - Get the unique script URL hash for an organization
  *
- * Returns the hash that can be used to load the tracking script at cdn.clearlift.ai/<hash>.js
+ * Returns the hash that can be used to load the tracking script at cdn.adbliss.io/<hash>.js
  * This is the NEW recommended installation method - the URL itself identifies the organization.
  */
 export class GetScriptHash extends OpenAPIRoute {
@@ -1600,7 +1600,7 @@ export class GetScriptHash extends OpenAPIRoute {
       scriptHash = { hash: newHash, org_tag: tagMapping.short_tag };
     }
 
-    const cdnBase = c.env.CDN_BASE_URL || 'https://cdn.clearlift.ai';
+    const cdnBase = c.env.CDN_BASE_URL || 'https://cdn.adbliss.io';
     const scriptUrl = `${cdnBase}/${scriptHash.hash}.js`;
     const installationSnippet = `<!-- ClearLift Pixel -->
 <script src="${scriptUrl}" async></script>`;
