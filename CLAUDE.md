@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Git Rules
+
+- **NEVER push directly to `main` or `master`.** Always create a feature branch and open a PR to `staging`.
+- Branch model: `feature/* → staging → main`. Production deploys happen via PR merge to main.
+- If asked to push, push to a feature branch with `git push -u origin feature/<name>`, never to main.
+
 ## Project Overview
 
 ClearLift API Worker - A Cloudflare Workers-based API that serves as the authentication and data access layer for the ClearLift platform. This worker acts as a reverse proxy at api.clearlift.ai, handling authentication, session management, and routing requests to multiple data sources.
