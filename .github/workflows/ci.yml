@@ -112,6 +112,10 @@ jobs:
           npx wrangler d1 migrations apply DB --env "" --remote
           npx wrangler d1 migrations apply AI_DB --env "" --remote
           npx wrangler d1 migrations apply ANALYTICS_DB --env "" --remote
+          npx wrangler d1 migrations apply SHARD_0 --env "" --remote
+          npx wrangler d1 migrations apply SHARD_1 --env "" --remote
+          npx wrangler d1 migrations apply SHARD_2 --env "" --remote
+          npx wrangler d1 migrations apply SHARD_3 --env "" --remote
 
       - name: Deploy to Cloudflare
         env:

@@ -1580,6 +1580,9 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       params: z.object({
         provider: z.enum(['google', 'facebook', 'tiktok', 'shopify', 'jobber', 'hubspot', 'salesforce'])
       }),
+      query: z.object({
+        org_id: z.string().optional()
+      }),
       body: contentJson(
         z.object({
           state: z.string(),
