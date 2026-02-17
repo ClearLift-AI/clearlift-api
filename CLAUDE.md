@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Git Rules
+
+- **NEVER push directly to `main` or `master`.** Always create a feature branch and open a PR to `staging`.
+- Branch model: `feature/* → staging → main`. Production deploys happen via PR merge to main.
+- If asked to push, push to a feature branch with `git push -u origin feature/<name>`, never to main.
+
 ## Project Overview
 
 ClearLift API Worker - A Cloudflare Workers-based API that serves as the authentication and data access layer for the ClearLift platform. This worker acts as a reverse proxy at api.clearlift.ai, handling authentication, session management, and routing requests to multiple data sources.
@@ -36,7 +42,7 @@ A third D1 database for pre-aggregated analytics (sub-millisecond queries):
 
 | Binding | Database Name | Migrations Dir | Purpose |
 |---------|--------------|----------------|---------|
-| `ANALYTICS_DB` | clearlift-analytics-dev | `migrations-analytics/` | Aggregated metrics, attribution, journeys |
+| `ANALYTICS_DB` | clearlift-analytics-prod | `migrations-analytics/` | Aggregated metrics, attribution, journeys |
 
 **Legacy Tables (per-platform):**
 - `hourly_metrics`, `daily_metrics` - Pre-aggregated event metrics
@@ -130,10 +136,10 @@ npx wrangler d1 execute clearlift-shard-0 --local --env local \
 **Production - Shard Migrations:**
 ```bash
 # Apply shard migrations to production shards (CAUTION: affects live data)
-npx wrangler d1 migrations apply SHARD_0 --remote
-npx wrangler d1 migrations apply SHARD_1 --remote
-npx wrangler d1 migrations apply SHARD_2 --remote
-npx wrangler d1 migrations apply SHARD_3 --remote
+npx wrangler d1 migrations apply SHARD_0 --env "" --remote
+npx wrangler d1 migrations apply SHARD_1 --env "" --remote
+npx wrangler d1 migrations apply SHARD_2 --env "" --remote
+npx wrangler d1 migrations apply SHARD_3 --env "" --remote
 ```
 
 **Current Status (Feb 2026):**
@@ -167,7 +173,7 @@ Summary endpoints can continue reading from ANALYTICS_DB (pre-aggregated by Aggr
 
 #### Other Data Sources
 1. **Analytics Engine** - Real-time event analytics with < 100ms latency (90-day retention). Layout: 1 index (org_tag) + 19 blobs + 11 doubles.
-2. **R2 SQL** - Historical event archive (Iceberg tables). Primary: `clearlift.event_data_v5` (96 fields, v3.1.0). Legacy: `clearlift.event_data` (backward compat).
+2. **R2 SQL** - Historical event archive (Iceberg tables). Primary: `clearlift.event_data_v4_1` (96 fields, v3.1.0). Legacy: `clearlift.event_data` (backward compat).
 
 ### Key Architectural Points
 - This API worker does NOT use containers
@@ -304,8 +310,8 @@ npx wrangler d1 migrations apply DB --local --env local      # Main database
 npx wrangler d1 migrations apply AI_DB --local --env local   # AI database
 
 # Apply D1 migrations to production (BOTH databases)
-npx wrangler d1 migrations apply DB --remote      # Main database
-npx wrangler d1 migrations apply AI_DB --remote   # AI database
+npx wrangler d1 migrations apply DB --env "" --remote      # Main database
+npx wrangler d1 migrations apply AI_DB --env "" --remote   # AI database
 
 # Check migration status
 npx wrangler d1 migrations list DB --local --env local
@@ -364,15 +370,43 @@ GOOGLE_ADS_DEVELOPER_TOKEN=xxx
 FACEBOOK_APP_ID=xxx
 FACEBOOK_APP_SECRET=xxx
 
-# OAuth Tunnel - use dev.clearlift.ai for HTTPS callbacks
-OAUTH_CALLBACK_BASE=https://dev.clearlift.ai
-APP_BASE_URL=http://localhost:3001
+# OAuth Tunnel - use local.clearlift.ai for HTTPS callbacks
+OAUTH_CALLBACK_BASE=https://local.clearlift.ai
+APP_BASE_URL=https://app-local.clearlift.ai
 ```
 
-### Test Data Isolation
+### D1 Local vs Production Isolation
 
-- **D1 Database**: Completely isolated - local uses `.wrangler/state/` SQLite, production uses Cloudflare D1
-- **Test Org IDs**: Use `test-org-001` pattern locally; production has real UUIDs
+**Local dev (`wrangler dev`) ALWAYS uses local SQLite emulation — it NEVER hits production D1**, even though `database_id` values in `wrangler.jsonc` match production. Miniflare creates SQLite files in `.wrangler/state/v3/d1/miniflare-D1DatabaseObject/`.
+
+| Database | Local State | Production State | Notes |
+|----------|-------------|------------------|-------|
+| `DB` | `.wrangler/state/` SQLite (75 migrations) | Cloudflare D1 `8e55bba7-...` | ✅ Both up to date |
+| `AI_DB` | `.wrangler/state/` SQLite (8 migrations) | Cloudflare D1 `3fb300f4-...` | ⚠️ Prod pending: `0008_drop_dead_cac_history.sql` |
+| `ANALYTICS_DB` | `.wrangler/state/` SQLite (47 migrations) | Cloudflare D1 `a69beb57-...` | ⚠️ Prod pending: `0046`, `0047` |
+| `SHARD_0-3` | No local SQLite files (shards unused locally) | Cloudflare D1 (3 migrations each) | Shards only in production |
+
+**Migration commands:**
+```bash
+# Local (applies to SQLite files in .wrangler/state/)
+npx wrangler d1 migrations apply DB --local --env local
+npx wrangler d1 migrations apply ANALYTICS_DB --local --env local
+
+# Production (applies to remote Cloudflare D1)
+npx wrangler d1 migrations apply DB --env "" --remote
+npx wrangler d1 migrations apply ANALYTICS_DB --env "" --remote
+
+# Check status
+npx wrangler d1 migrations list ANALYTICS_DB --remote
+npx wrangler d1 migrations list ANALYTICS_DB --local --env local
+```
+
+**Key facts:**
+- `--local` flag → writes to `.wrangler/state/` SQLite (default for `wrangler dev`)
+- `--remote --env staging` → writes to staging Cloudflare D1 (fully isolated from prod)
+- `--remote --env ""` → writes to production Cloudflare D1
+- The Queue Consumer (`clearlift-cron`) must use `--persist-to` to share this repo's local D1 state
+- Test org IDs: Use `test-org-001` pattern locally; production has real UUIDs
 
 ## Full Stack Local Testing
 
@@ -391,8 +425,8 @@ cd ../clearlift-cron && npx wrangler dev \
 # Terminal 3: Dashboard
 cd ../clearlift-page-router/apps/dashboard && npm run dev
 
-# Terminal 4: Cloudflare Tunnel (for OAuth - routes dev.clearlift.ai → localhost)
-cloudflared tunnel run dev-api
+# Terminal 4: Cloudflare Tunnel (routes local.clearlift.ai → localhost:8787, app-local → localhost:3001)
+cloudflared tunnel --config ~/.cloudflared/config-clearlift-dev.yml run
 ```
 
 ### How Local Sync Works
@@ -426,26 +460,40 @@ The Queue Consumer must access the same D1 database as the API:
 
 **Without it:** Queue Consumer gets `"no such table: sync_jobs"` errors.
 
-### OAuth Testing with dev.clearlift.ai
+### OAuth Testing with local.clearlift.ai
 
-OAuth providers require HTTPS callback URLs. We use `dev.clearlift.ai` as a permanent Cloudflare tunnel to your local API.
+OAuth providers require HTTPS callback URLs. We use `local.clearlift.ai` as a permanent Cloudflare tunnel to your local API.
 
 **Setup:**
-1. Start the tunnel: `cloudflared tunnel run dev-api`
-2. Ensure `.dev.vars` has: `OAUTH_CALLBACK_BASE=https://dev.clearlift.ai`
+1. Start the tunnel: `cloudflared tunnel --config ~/.cloudflared/config-clearlift-dev.yml run`
+2. Ensure `.dev.vars` has: `OAUTH_CALLBACK_BASE=https://local.clearlift.ai`
 3. Start the API worker (it picks up the env var)
 
-**Why dev.clearlift.ai:**
-- Permanent redirect URIs already registered with OAuth providers (Google, Meta, HubSpot, TikTok)
-- No need to update OAuth app settings for each dev session
-- Enables remote team collaboration on local builds
-- HTTPS endpoints required for OAuth callbacks
+**Domain mapping (local → staging → production):**
+
+| Purpose | Local (tunnel) | Staging | Production |
+|---------|---------------|---------|------------|
+| Dashboard | `app-local.clearlift.ai` | `dev.clearlift.ai` | `app.clearlift.ai` |
+| API | `local.clearlift.ai` | `api-dev.clearlift.ai` | `api.clearlift.ai` |
+| Events | `events-local.clearlift.ai` | `iris-dev.clearlift.ai` | `iris.clearlift.ai` |
 
 **Registered redirect URIs** (already configured in provider consoles):
-- `https://dev.clearlift.ai/v1/connectors/google/callback`
-- `https://dev.clearlift.ai/v1/connectors/facebook/callback`
-- `https://dev.clearlift.ai/v1/connectors/hubspot/callback`
-- `https://dev.clearlift.ai/v1/connectors/tiktok/callback`
+- `https://local.clearlift.ai/v1/connectors/google/callback`
+- `https://local.clearlift.ai/v1/connectors/facebook/callback`
+- `https://local.clearlift.ai/v1/connectors/hubspot/callback`
+- `https://local.clearlift.ai/v1/connectors/tiktok/callback`
+- `https://local.clearlift.ai/v1/connectors/shopify/callback`
+
+### Branch Model & CI/CD
+
+```
+feature/* ──PR──→ staging ──PR──→ main
+                    │                │
+                    ▼                ▼
+              deploy staging    deploy production
+```
+
+GitHub Actions CI/CD deploys automatically on push to `staging` or `main`. See `.github/workflows/ci.yml`.
 
 ### Verify Local Sync
 
@@ -529,8 +577,8 @@ Tests use Vitest with Cloudflare Workers pool:
 
 - **Auto-deployment**: Pushes to GitHub main branch trigger deployment
 - **Databases**:
-  - Main DB (DB): `89bd84be-b517-4c72-ab61-422384319361`
-  - AI DB (AI_DB): `0a8898ef-9ce9-458f-90b9-a89db12c1078`
+  - Main DB (DB): `8e55bba7-4b54-4992-b5e5-050611499c18`
+  - AI DB (AI_DB): `3fb300f4-4523-4a29-9efc-955d1684f392`
 - **Domain**: api.clearlift.ai (configured in Cloudflare)
 - **Important**: After adding new migrations, apply to BOTH databases in production
 
