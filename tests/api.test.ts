@@ -69,7 +69,7 @@ describe('OpenAPI/Swagger', () => {
     expect(data.openapi).toBeDefined();
     expect(data.openapi).toMatch(/^3\./); // OpenAPI 3.x
     expect(data.info).toBeDefined();
-    expect(data.info.title).toBe('ClearLift API');
+    expect(data.info.title).toBe('AdBliss API');
     expect(data.paths).toBeDefined();
   });
 
