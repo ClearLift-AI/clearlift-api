@@ -14,7 +14,6 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { structuredLog } from "../../../utils/structured-logger";
-import { getShardDbForOrg } from "../../../services/shard-router";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GET /v1/analytics/cac/timeline
@@ -105,11 +104,9 @@ export class GetCACTimeline extends OpenAPIRoute {
 
       if (!hasTodayInHistory && todayStr >= startDateStr && todayStr <= endDateStr) {
         try {
-          const shardDb = await getShardDbForOrg(c.env, org_id);
-
-          // Step 1: Fetch macro goal IDs from DB + today's ad spend from shard (parallel)
+          // Step 1: Fetch macro goal IDs from DB + today's ad spend (parallel)
           const [todayMetrics, macroGoalsResult] = await Promise.all([
-            shardDb.prepare(`
+            c.env.ANALYTICS_DB.prepare(`
               SELECT SUM(spend_cents) as spend_cents, SUM(conversions) as conversions
               FROM ad_metrics
               WHERE organization_id = ? AND entity_type = 'campaign' AND metric_date = ?
@@ -170,7 +167,7 @@ export class GetCACTimeline extends OpenAPIRoute {
       }
 
       // Fetch predictions (for forecast period)
-      const predictionsResult = await c.env.AI_DB.prepare(`
+      const predictionsResult = await c.env.DB.prepare(`
         SELECT prediction_date as date, predicted_cac_cents
         FROM cac_predictions
         WHERE organization_id = ?
@@ -183,7 +180,7 @@ export class GetCACTimeline extends OpenAPIRoute {
       }>();
 
       // Fetch baselines (for historical period)
-      const baselinesResult = await c.env.AI_DB.prepare(`
+      const baselinesResult = await c.env.DB.prepare(`
         SELECT baseline_date as date, baseline_cac_cents
         FROM cac_baselines
         WHERE organization_id = ?
@@ -313,7 +310,7 @@ export class GenerateCACPredictions extends OpenAPIRoute {
 
     try {
       // Get pending recommendations with simulation data
-      const recsResult = await c.env.AI_DB.prepare(`
+      const recsResult = await c.env.DB.prepare(`
         SELECT
           id,
           simulation_data,
@@ -382,7 +379,7 @@ export class GenerateCACPredictions extends OpenAPIRoute {
 
       // Upsert predictions
       for (const pred of predictions) {
-        await c.env.AI_DB.prepare(`
+        await c.env.DB.prepare(`
           INSERT INTO cac_predictions (
             organization_id, prediction_date, predicted_cac_cents,
             recommendation_ids, analysis_run_id, assumptions
@@ -462,7 +459,7 @@ export class ComputeCACBaselines extends OpenAPIRoute {
 
     try {
       // 1. Find when AI recommendations were first accepted
-      const firstDecisionResult = await c.env.AI_DB.prepare(`
+      const firstDecisionResult = await c.env.DB.prepare(`
         SELECT MIN(applied_at) as first_ai_date
         FROM ai_decisions
         WHERE organization_id = ?
@@ -515,7 +512,7 @@ export class ComputeCACBaselines extends OpenAPIRoute {
 
         let baselinesCreated = 0;
         for (const day of allData.slice(-days)) {
-          await this.upsertBaseline(c.env.AI_DB, org_id, day.date, day.cac_cents, Math.round(avgCAC), 'average', {
+          await this.upsertBaseline(c.env.DB, org_id, day.date, day.cac_cents, Math.round(avgCAC), 'average', {
             method: 'insufficient_pre_ai_data',
             average_cac_cents: avgCAC
           });
@@ -562,7 +559,7 @@ export class ComputeCACBaselines extends OpenAPIRoute {
         baselineCAC = Math.max(baselineCAC, day.cac_cents * 0.5);
         baselineCAC = Math.min(baselineCAC, day.cac_cents * 3);
 
-        await this.upsertBaseline(c.env.AI_DB, org_id, day.date, day.cac_cents, Math.round(baselineCAC), 'trend_extrapolation', {
+        await this.upsertBaseline(c.env.DB, org_id, day.date, day.cac_cents, Math.round(baselineCAC), 'trend_extrapolation', {
           slope,
           intercept,
           r_squared,
@@ -573,7 +570,7 @@ export class ComputeCACBaselines extends OpenAPIRoute {
       }
 
       // 6. Get accepted decisions to show impact
-      const decisionsResult = await c.env.AI_DB.prepare(`
+      const decisionsResult = await c.env.DB.prepare(`
         SELECT id, recommended_action, impact
         FROM ai_decisions
         WHERE organization_id = ?
@@ -729,9 +726,8 @@ export class BackfillCACHistory extends OpenAPIRoute {
       const macroGoals = goalsResult.results || [];
       const hasGoals = macroGoals.length > 0;
 
-      // Query daily spend and conversions from unified ad_metrics table (shard table)
-      const shardDb = await getShardDbForOrg(c.env, org_id);
-      const metricsResult = await shardDb.prepare(`
+      // Query daily spend and conversions from unified ad_metrics table
+      const metricsResult = await c.env.ANALYTICS_DB.prepare(`
         SELECT
           metric_date as date,
           SUM(spend_cents) as spend_cents,

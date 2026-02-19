@@ -825,42 +825,7 @@ export class GetD1Stats extends OpenAPIRoute {
       });
     }
 
-    // Query AI DB (AI_DB)
-    if (c.env.AI_DB) {
-      try {
-        const start = Date.now();
-        const result = await c.env.AI_DB.prepare(`
-          SELECT
-            (SELECT COUNT(*) FROM sqlite_master WHERE type='table') as table_count
-        `).first<{ table_count: number }>();
-        const queryMs = Date.now() - start;
-
-        let sizeBytes = 0;
-        try {
-          const pageCount = await c.env.AI_DB.prepare(`PRAGMA page_count`).first<{ page_count: number }>();
-          const pageSize = await c.env.AI_DB.prepare(`PRAGMA page_size`).first<{ page_size: number }>();
-          if (pageCount?.page_count && pageSize?.page_size) {
-            sizeBytes = pageCount.page_count * pageSize.page_size;
-          }
-        } catch (pragmaErr) {
-          sizeBytes = (result?.table_count || 0) * 1024 * 1024;
-        }
-        totalSizeBytes += sizeBytes;
-
-        databases.push({
-          name: 'AI DB (clearlift-ai-prod)',
-          size_bytes: sizeBytes,
-          size_formatted: formatBytes(sizeBytes),
-          tables: result?.table_count || 0,
-          storage_limit_gb: STORAGE_LIMIT_GB,
-          storage_used_percent: (sizeBytes / STORAGE_LIMIT_BYTES) * 100,
-          last_query_ms: queryMs,
-          status: getStatus((sizeBytes / STORAGE_LIMIT_BYTES) * 100)
-        });
-      } catch (err) {
-        structuredLog('ERROR', 'AI_DB stats error', { endpoint: 'workers', step: 'd1_stats', database: 'AI_DB', error: err instanceof Error ? err.message : String(err) });
-      }
-    }
+    // AI_DB merged into DB — removed duplicate stats block
 
     // Query Analytics DB (ANALYTICS_DB)
     if (c.env.ANALYTICS_DB) {

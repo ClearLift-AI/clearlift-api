@@ -812,15 +812,14 @@ export default {
     if (event.cron === '0 5 * * *') {
       console.log('[Cron] Running daily aggregation...');
 
-      // Build array of shard databases
-      const shards = [env.SHARD_0, env.SHARD_1, env.SHARD_2, env.SHARD_3].filter(Boolean);
+      // All data now lives in ANALYTICS_DB
+      const shards = [env.ANALYTICS_DB];
 
       if (shards.length === 0) {
-        structuredLog('ERROR', 'No shard databases configured', { endpoint: 'cron', step: 'daily_aggregation' });
+        structuredLog('ERROR', 'ANALYTICS_DB not configured', { endpoint: 'cron', step: 'daily_aggregation' });
         return;
       }
 
-      // Pass ANALYTICS_DB for Stripe aggregation (Stripe data lives in ANALYTICS_DB, not shards)
       const aggregator = new AggregationService(shards, env.ANALYTICS_DB);
       const result = await aggregator.runFullAggregation();
 
@@ -1170,8 +1169,8 @@ export default {
     const MAX_AGE_HOURS = 24;
 
     try {
-      // Find queue_failed webhook events that are less than 24 hours old
-      const failedEvents = await env.DB.prepare(`
+      // Find queue_failed webhook events that are less than 24 hours old (webhook_events in ANALYTICS_DB)
+      const failedEvents = await env.ANALYTICS_DB.prepare(`
         SELECT id, organization_id, connector, event_type, unified_event_type, event_id, attempts
         FROM webhook_events
         WHERE status = 'queue_failed'
@@ -1196,7 +1195,7 @@ export default {
       for (const evt of events) {
         if (evt.attempts >= MAX_WEBHOOK_RETRIES) {
           // Exceeded retries — mark as permanently failed
-          await env.DB.prepare(`
+          await env.ANALYTICS_DB.prepare(`
             UPDATE webhook_events
             SET status = 'failed', error_message = 'Queue send failed after ${MAX_WEBHOOK_RETRIES} retry attempts', processed_at = datetime('now')
             WHERE id = ?
@@ -1216,14 +1215,14 @@ export default {
           });
 
           // Success — reset to pending so the consumer processes it
-          await env.DB.prepare(`
+          await env.ANALYTICS_DB.prepare(`
             UPDATE webhook_events SET status = 'pending', attempts = attempts + 1, error_message = NULL WHERE id = ?
           `).bind(evt.id).run();
           console.log(`[Cron] Re-queued webhook event ${evt.id} (attempt ${evt.attempts + 1})`);
         } catch (queueErr) {
           // Still failing — increment attempts and leave as queue_failed
           const errMsg = queueErr instanceof Error ? queueErr.message : String(queueErr);
-          await env.DB.prepare(`
+          await env.ANALYTICS_DB.prepare(`
             UPDATE webhook_events SET attempts = attempts + 1, error_message = ? WHERE id = ?
           `).bind(`Queue retry failed: ${errMsg}`, evt.id).run();
           structuredLog('ERROR', `Webhook event ${evt.id} retry failed`, { endpoint: 'cron', step: 'webhook_retry', event_id: evt.id, attempt: evt.attempts + 1, error: errMsg });

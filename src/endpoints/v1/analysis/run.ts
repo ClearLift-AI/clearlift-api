@@ -119,10 +119,10 @@ export class RunAnalysis extends OpenAPIRoute {
       }
     };
 
-    const jobs = new JobManager(c.env.AI_DB);
+    const jobs = new JobManager(c.env.DB);
 
     // Mark stuck jobs as failed (>30 min without completing)
-    await c.env.AI_DB.prepare(`
+    await c.env.DB.prepare(`
       UPDATE analysis_jobs
       SET status = 'failed', error_message = 'Timed out after 30 minutes'
       WHERE organization_id = ? AND status IN ('pending', 'in_progress', 'running')
@@ -130,7 +130,7 @@ export class RunAnalysis extends OpenAPIRoute {
     `).bind(orgId).run();
 
     // Dedup: return existing job if one is already running (<30 min old)
-    const existingJob = await c.env.AI_DB.prepare(`
+    const existingJob = await c.env.DB.prepare(`
       SELECT id, status FROM analysis_jobs
       WHERE organization_id = ? AND status IN ('pending', 'in_progress', 'running')
         AND created_at > datetime('now', '-30 minutes')
@@ -147,7 +147,7 @@ export class RunAnalysis extends OpenAPIRoute {
 
     // Expire old pending recommendations (>7 days) — keep recent ones so users can review
     // Previous behavior nuked ALL pending on re-run, giving users no time to act
-    await c.env.AI_DB.prepare(`
+    await c.env.DB.prepare(`
       UPDATE ai_decisions
       SET status = 'expired'
       WHERE organization_id = ? AND status = 'pending'

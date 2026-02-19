@@ -92,7 +92,7 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
         retries: { limit: 2, delay: '1 second' },
         timeout: '30 seconds'
       }, async () => {
-        await this.env.AI_DB.prepare(`
+        await this.env.DB.prepare(`
           UPDATE analysis_jobs
           SET status = 'completed', completed_at = datetime('now'),
               result = ?
@@ -159,7 +159,7 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
       retries: { limit: 2, delay: '1 second' },
       timeout: '30 seconds'
     }, async () => {
-      await this.env.AI_DB.prepare(`
+      await this.env.DB.prepare(`
         UPDATE analysis_jobs
         SET status = 'completed', completed_at = datetime('now'),
             result = ?
@@ -439,14 +439,14 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
     const pathCount = paths.conversionPaths.length + paths.nonConversionPaths.length;
 
     // Delete old results for this org/date
-    await this.env.AI_DB.prepare(`
+    await this.env.DB.prepare(`
       DELETE FROM attribution_model_results
       WHERE organization_id = ? AND computation_date = ?
     `).bind(orgId, today).run();
 
     // Insert Markov Chain results
     for (const result of markovResults) {
-      await this.env.AI_DB.prepare(`
+      await this.env.DB.prepare(`
         INSERT INTO attribution_model_results
         (id, organization_id, model, channel, attributed_credit, removal_effect,
          computation_date, conversion_count, path_count, expires_at)
@@ -466,7 +466,7 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
 
     // Insert Shapley Value results
     for (const result of shapleyResults) {
-      await this.env.AI_DB.prepare(`
+      await this.env.DB.prepare(`
         INSERT INTO attribution_model_results
         (id, organization_id, model, channel, attributed_credit, shapley_value,
          computation_date, conversion_count, path_count, expires_at)
