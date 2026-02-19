@@ -1,8 +1,8 @@
 /**
  * Shopify Revenue Source Provider
  *
- * Queries shopify_orders table for conversion and revenue data.
- * A conversion is a paid order (financial_status = 'paid').
+ * Queries connector_events table for Shopify conversion and revenue data.
+ * A conversion is an event with source_platform='shopify' and a completed status.
  */
 
 // D1Database is globally available in the Workers environment
@@ -27,8 +27,8 @@ const shopifyProvider: RevenueSourceProvider = {
 
   async hasData(db: D1Database, orgId: string): Promise<boolean> {
     const result = await db.prepare(`
-      SELECT 1 FROM shopify_orders
-      WHERE organization_id = ?
+      SELECT 1 FROM connector_events
+      WHERE organization_id = ? AND source_platform = 'shopify'
       LIMIT 1
     `).bind(orgId).first();
     return !!result;
@@ -38,12 +38,13 @@ const shopifyProvider: RevenueSourceProvider = {
     const result = await db.prepare(`
       SELECT
         COUNT(*) as total_orders,
-        SUM(CASE WHEN financial_status = 'paid' THEN 1 ELSE 0 END) as paid_orders,
-        SUM(CASE WHEN financial_status = 'paid' THEN total_price_cents - COALESCE(refund_cents, 0) ELSE 0 END) as net_revenue_cents,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM shopify_orders
+        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as paid_orders,
+        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents,
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND shopify_created_at >= datetime('now', '-' || ? || ' hours')
+        AND source_platform = 'shopify'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
     `).bind(orgId, hours).first<{
       total_orders: number;
       paid_orders: number;
@@ -61,13 +62,14 @@ const shopifyProvider: RevenueSourceProvider = {
   async getTimeSeries(db: D1Database, orgId: string, hours: number): Promise<RevenueSourceTimeSeries[]> {
     const result = await db.prepare(`
       SELECT
-        strftime('%Y-%m-%d %H:00:00', shopify_created_at) as bucket,
-        SUM(CASE WHEN financial_status = 'paid' THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN financial_status = 'paid' THEN total_price_cents - COALESCE(refund_cents, 0) ELSE 0 END) as net_revenue_cents
-      FROM shopify_orders
+        strftime('%Y-%m-%d %H:00:00', transacted_at) as bucket,
+        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as conversions,
+        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND shopify_created_at >= datetime('now', '-' || ? || ' hours')
-      GROUP BY strftime('%Y-%m-%d %H:00:00', shopify_created_at)
+        AND source_platform = 'shopify'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
+      GROUP BY strftime('%Y-%m-%d %H:00:00', transacted_at)
       ORDER BY bucket ASC
     `).bind(orgId, hours).all<{
       bucket: string;
@@ -86,13 +88,14 @@ const shopifyProvider: RevenueSourceProvider = {
     const result = await db.prepare(`
       SELECT
         COUNT(*) as total_orders,
-        SUM(CASE WHEN financial_status = 'paid' THEN 1 ELSE 0 END) as paid_orders,
-        SUM(CASE WHEN financial_status = 'paid' THEN total_price_cents - COALESCE(refund_cents, 0) ELSE 0 END) as net_revenue_cents,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM shopify_orders
+        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as paid_orders,
+        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents,
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND date(shopify_created_at) >= ?
-        AND date(shopify_created_at) <= ?
+        AND source_platform = 'shopify'
+        AND DATE(transacted_at) >= ?
+        AND DATE(transacted_at) <= ?
     `).bind(orgId, dateRange.start, dateRange.end).first<{
       total_orders: number;
       paid_orders: number;
@@ -110,14 +113,15 @@ const shopifyProvider: RevenueSourceProvider = {
   async getTimeSeriesByDateRange(db: D1Database, orgId: string, dateRange: DateRange): Promise<RevenueSourceTimeSeries[]> {
     const result = await db.prepare(`
       SELECT
-        date(shopify_created_at) as bucket,
-        SUM(CASE WHEN financial_status = 'paid' THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN financial_status = 'paid' THEN total_price_cents - COALESCE(refund_cents, 0) ELSE 0 END) as net_revenue_cents
-      FROM shopify_orders
+        DATE(transacted_at) as bucket,
+        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as conversions,
+        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND date(shopify_created_at) >= ?
-        AND date(shopify_created_at) <= ?
-      GROUP BY date(shopify_created_at)
+        AND source_platform = 'shopify'
+        AND DATE(transacted_at) >= ?
+        AND DATE(transacted_at) <= ?
+      GROUP BY DATE(transacted_at)
       ORDER BY bucket ASC
     `).bind(orgId, dateRange.start, dateRange.end).all<{
       bucket: string;

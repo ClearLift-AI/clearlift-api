@@ -1832,14 +1832,6 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementServicesConnected(oauthState.user_id);
 
-      // Auto-register default conversion goal for revenue-capable connectors
-      try {
-        const { GoalService } = await import('../../services/goals/index');
-        const goalService = new GoalService(c.env.DB, c.env.ANALYTICS_DB);
-        await goalService.ensureDefaultGoalForPlatform(oauthState.organization_id, provider);
-      } catch (goalErr) {
-        structuredLog('WARN', `Failed to auto-register goal for ${provider}`, { endpoint: 'connectors', step: 'finalize_oauth', provider, error: goalErr instanceof Error ? goalErr.message : String(goalErr) });
-      }
 
       // Create default filter rules for known platforms
       const platformDefaults: Record<string, { name: string; description: string; rule_type: string; conditions: Array<{ type: string; field: string; operator: string; value: string | string[] }> }> = {

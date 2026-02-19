@@ -206,8 +206,6 @@ export class GetOnboardingStatus extends OpenAPIRoute {
     }
 
     // 7. Sync goals_count with platform_connections that have conversion_events configured
-    // (conversion_goals table removed in D1 consolidation — conversion criteria now live in
-    //  platform_connections.settings.conversion_events JSON)
     const goalsCount = await c.env.DB.prepare(`
       SELECT COUNT(*) as count FROM platform_connections
       WHERE organization_id = ? AND is_active = 1

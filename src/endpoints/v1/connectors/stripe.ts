@@ -244,14 +244,6 @@ export class ConnectStripe extends OpenAPIRoute {
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementServicesConnected(session.user_id);
 
-      // Auto-register default conversion goal for Stripe
-      try {
-        const { GoalService } = await import('../../../services/goals/index');
-        const goalService = new GoalService(c.env.DB, c.env.ANALYTICS_DB);
-        await goalService.ensureDefaultGoalForPlatform(organization_id, 'stripe');
-      } catch (goalErr) {
-        structuredLog('WARN', 'Failed to auto-register goal', { endpoint: 'POST /v1/connectors/stripe/connect', error: goalErr instanceof Error ? goalErr.message : String(goalErr) });
-      }
 
       // Auto-trigger initial sync
       const jobId = crypto.randomUUID();

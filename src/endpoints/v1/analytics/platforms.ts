@@ -146,9 +146,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
 
       let totalConversions = summary.total_conversions;
 
-      // If using connectors (Stripe, etc.) for conversions, fetch from D1 stripe_charges
+      // If using connectors for conversions, fetch from D1 connector_events
       if (conversionSource === 'connectors') {
-        const stripeConversions = await this.fetchStripeConversionsD1(
+        const stripeConversions = await this.fetchConnectorConversionsD1(
           c.env.ANALYTICS_DB,
           orgId,
           effectiveDateRange.start,
@@ -195,9 +195,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
   }
 
   /**
-   * Fetch conversions from D1 stripe_charges table
+   * Fetch conversions from D1 connector_events table.
    */
-  private async fetchStripeConversionsD1(
+  private async fetchConnectorConversionsD1(
     db: any,
     orgId: string,
     startDate: string,
@@ -206,14 +206,15 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     try {
       const result = await db.prepare(`
         SELECT
-          DATE(created_at) as date,
+          DATE(transacted_at) as date,
           COUNT(*) as conversions
-        FROM stripe_charges
+        FROM connector_events
         WHERE organization_id = ?
-        AND status = 'succeeded'
-        AND DATE(created_at) >= ?
-        AND DATE(created_at) <= ?
-        GROUP BY DATE(created_at)
+        AND source_platform = 'stripe'
+        AND platform_status IN ('succeeded', 'paid', 'active')
+        AND DATE(transacted_at) >= ?
+        AND DATE(transacted_at) <= ?
+        GROUP BY DATE(transacted_at)
         ORDER BY date ASC
       `).bind(orgId, startDate, endDate).all();
 
@@ -225,7 +226,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         by_date: byDate
       };
     } catch (err) {
-      structuredLog('ERROR', 'Failed to fetch Stripe conversions from D1', { endpoint: 'platforms', step: 'stripe_conversions', error: err instanceof Error ? err.message : String(err) });
+      structuredLog('ERROR', 'Failed to fetch connector conversions from D1', { endpoint: 'platforms', step: 'stripe_conversions', error: err instanceof Error ? err.message : String(err) });
       return null;
     }
   }

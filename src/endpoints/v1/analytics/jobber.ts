@@ -1,8 +1,7 @@
 /**
  * Jobber Analytics Endpoint
  *
- * Retrieve and analyze Jobber revenue data (completed jobs as conversions)
- * NOTE: Requires jobber tables to be populated in D1 ANALYTICS_DB
+ * Retrieve and analyze Jobber revenue data from connector_events table.
  */
 
 import { OpenAPIRoute } from "chanfana";
@@ -97,19 +96,19 @@ export class GetJobberRevenue extends OpenAPIRoute {
     const dateTo = query.query.date_to;
     const groupBy = query.query.group_by || 'day';
 
-    // Query completed jobs summary from ANALYTICS_DB
+    // Query completed jobs summary from connector_events
     const summaryResult = await c.env.ANALYTICS_DB.prepare(`
       SELECT
         COUNT(*) as job_count,
-        COALESCE(SUM(total_amount_cents), 0) as total_revenue_cents,
-        COUNT(DISTINCT client_id) as unique_clients
-      FROM jobber_jobs
+        COALESCE(SUM(value_cents), 0) as total_revenue_cents,
+        COUNT(DISTINCT customer_external_id) as unique_clients
+      FROM connector_events
       WHERE organization_id = ?
-        AND connection_id = ?
-        AND is_completed = 1
-        AND completed_at >= ?
-        AND completed_at <= ?
-    `).bind(orgId, connection.id, dateFrom, dateTo + 'T23:59:59Z').first<{
+        AND source_platform = 'jobber'
+        AND platform_status IN ('completed', 'paid', 'succeeded')
+        AND transacted_at >= ?
+        AND transacted_at <= ?
+    `).bind(orgId, dateFrom, dateTo + 'T23:59:59Z').first<{
       job_count: number;
       total_revenue_cents: number;
       unique_clients: number;
@@ -123,29 +122,29 @@ export class GetJobberRevenue extends OpenAPIRoute {
     let dateFormat: string;
     switch (groupBy) {
       case 'week':
-        dateFormat = "strftime('%Y-W%W', completed_at)";
+        dateFormat = "strftime('%Y-W%W', transacted_at)";
         break;
       case 'month':
-        dateFormat = "strftime('%Y-%m', completed_at)";
+        dateFormat = "strftime('%Y-%m', transacted_at)";
         break;
       default:
-        dateFormat = "date(completed_at)";
+        dateFormat = "DATE(transacted_at)";
     }
 
     const timeSeriesResult = await c.env.ANALYTICS_DB.prepare(`
       SELECT
         ${dateFormat} as date,
         COUNT(*) as jobs,
-        COALESCE(SUM(total_amount_cents), 0) as revenue_cents
-      FROM jobber_jobs
+        COALESCE(SUM(value_cents), 0) as revenue_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND connection_id = ?
-        AND is_completed = 1
-        AND completed_at >= ?
-        AND completed_at <= ?
+        AND source_platform = 'jobber'
+        AND platform_status IN ('completed', 'paid', 'succeeded')
+        AND transacted_at >= ?
+        AND transacted_at <= ?
       GROUP BY ${dateFormat}
       ORDER BY date ASC
-    `).bind(orgId, connection.id, dateFrom, dateTo + 'T23:59:59Z').all<{
+    `).bind(orgId, dateFrom, dateTo + 'T23:59:59Z').all<{
       date: string;
       jobs: number;
       revenue_cents: number;
@@ -156,8 +155,6 @@ export class GetJobberRevenue extends OpenAPIRoute {
       revenue: row.revenue_cents / 100,
       jobs: row.jobs,
     }));
-
-    console.log(`[Jobber] Query for org ${orgId} returned ${jobCount} completed jobs`);
 
     return success(c, {
       summary: {
@@ -173,8 +170,7 @@ export class GetJobberRevenue extends OpenAPIRoute {
 
 /**
  * GET /v1/analytics/jobber/invoices
- * Get Jobber invoice details
- * NOTE: Requires jobber_invoices table in D1 ANALYTICS_DB
+ * Get Jobber invoice details from connector_events
  */
 export class GetJobberInvoices extends OpenAPIRoute {
   schema = {
@@ -266,44 +262,43 @@ export class GetJobberInvoices extends OpenAPIRoute {
     const statusFilter = query.query.status || 'all';
     const limit = query.query.limit || 50;
 
-    // Build status filter
+    // Build status filter for connector_events
     let statusClause = '';
     if (statusFilter === 'paid') {
-      statusClause = 'AND is_paid = 1';
+      statusClause = "AND platform_status IN ('paid', 'completed', 'succeeded')";
     } else if (statusFilter === 'unpaid') {
-      statusClause = "AND is_paid = 0 AND status != 'overdue'";
+      statusClause = "AND platform_status NOT IN ('paid', 'completed', 'succeeded', 'overdue')";
     } else if (statusFilter === 'overdue') {
-      statusClause = "AND status = 'overdue'";
+      statusClause = "AND platform_status = 'overdue'";
     }
 
-    // Query invoices from ANALYTICS_DB
+    // Query invoice events from connector_events
     const invoicesResult = await c.env.ANALYTICS_DB.prepare(`
       SELECT
         id,
-        invoice_number,
-        client_name,
-        total_cents as amount_cents,
-        status,
-        due_date,
-        paid_at,
-        jobber_created_at as created_at
-      FROM jobber_invoices
+        platform_external_id as invoice_number,
+        customer_external_id as client_name,
+        value_cents as amount_cents,
+        platform_status as status,
+        transacted_at as created_at,
+        raw_metadata
+      FROM connector_events
       WHERE organization_id = ?
-        AND connection_id = ?
-        AND jobber_created_at >= ?
-        AND jobber_created_at <= ?
+        AND source_platform = 'jobber'
+        AND event_type LIKE '%invoice%'
+        AND transacted_at >= ?
+        AND transacted_at <= ?
         ${statusClause}
-      ORDER BY jobber_created_at DESC
+      ORDER BY transacted_at DESC
       LIMIT ?
-    `).bind(orgId, connection.id, dateFrom, dateTo + 'T23:59:59Z', limit).all<{
+    `).bind(orgId, dateFrom, dateTo + 'T23:59:59Z', limit).all<{
       id: string;
-      invoice_number: string;
-      client_name: string;
+      invoice_number: string | null;
+      client_name: string | null;
       amount_cents: number;
       status: string;
-      due_date: string | null;
-      paid_at: string | null;
       created_at: string;
+      raw_metadata: string | null;
     }>();
 
     const invoices = (invoicesResult.results || []).map(row => ({
@@ -312,8 +307,8 @@ export class GetJobberInvoices extends OpenAPIRoute {
       client_name: row.client_name || 'Unknown',
       amount_cents: row.amount_cents || 0,
       status: row.status || 'unknown',
-      due_date: row.due_date,
-      paid_at: row.paid_at,
+      due_date: null as string | null,
+      paid_at: row.status === 'paid' ? row.created_at : null as string | null,
       created_at: row.created_at,
     }));
 
@@ -321,22 +316,21 @@ export class GetJobberInvoices extends OpenAPIRoute {
     const summaryResult = await c.env.ANALYTICS_DB.prepare(`
       SELECT
         COUNT(*) as total_invoices,
-        COALESCE(SUM(total_cents), 0) as total_amount_cents,
-        COALESCE(SUM(CASE WHEN is_paid = 1 THEN total_cents ELSE 0 END), 0) as paid_amount_cents,
-        COALESCE(SUM(CASE WHEN is_paid = 0 THEN balance_due_cents ELSE 0 END), 0) as unpaid_amount_cents
-      FROM jobber_invoices
+        COALESCE(SUM(value_cents), 0) as total_amount_cents,
+        COALESCE(SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN value_cents ELSE 0 END), 0) as paid_amount_cents,
+        COALESCE(SUM(CASE WHEN platform_status NOT IN ('paid', 'completed', 'succeeded') THEN value_cents ELSE 0 END), 0) as unpaid_amount_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND connection_id = ?
-        AND jobber_created_at >= ?
-        AND jobber_created_at <= ?
-    `).bind(orgId, connection.id, dateFrom, dateTo + 'T23:59:59Z').first<{
+        AND source_platform = 'jobber'
+        AND event_type LIKE '%invoice%'
+        AND transacted_at >= ?
+        AND transacted_at <= ?
+    `).bind(orgId, dateFrom, dateTo + 'T23:59:59Z').first<{
       total_invoices: number;
       total_amount_cents: number;
       paid_amount_cents: number;
       unpaid_amount_cents: number;
     }>();
-
-    console.log(`[Jobber] Invoices query for org ${orgId} returned ${invoices.length} invoices`);
 
     return success(c, {
       invoices,

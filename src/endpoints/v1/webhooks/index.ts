@@ -916,11 +916,11 @@ export class ShopifyCustomerRedact extends OpenAPIRoute {
       // Redact customer PII from all tables
       const statements = [];
 
-      // 1. Null out email hashes in shopify_orders (ANALYTICS_DB)
+      // 1. Null out customer data in connector_events (ANALYTICS_DB)
       statements.push(
         c.env.ANALYTICS_DB.prepare(
-          `UPDATE shopify_orders SET customer_email_hash = NULL
-           WHERE organization_id = ? AND customer_id = ?`
+          `UPDATE connector_events SET customer_external_id = NULL
+           WHERE organization_id = ? AND source_platform = 'shopify' AND customer_external_id = ?`
         ).bind(org.organization_id, shopifyCustomerId)
       );
 
@@ -1042,10 +1042,7 @@ export class ShopifyShopRedact extends OpenAPIRoute {
         // Delete all Shopify data for this organization
         const analyticsStatements = [
           c.env.ANALYTICS_DB.prepare(
-            `DELETE FROM shopify_orders WHERE organization_id = ?`
-          ).bind(org.organization_id),
-          c.env.ANALYTICS_DB.prepare(
-            `DELETE FROM shopify_refunds WHERE organization_id = ?`
+            `DELETE FROM connector_events WHERE organization_id = ? AND source_platform = 'shopify'`
           ).bind(org.organization_id),
           c.env.ANALYTICS_DB.prepare(
             `DELETE FROM ecommerce_orders WHERE organization_id = ? AND platform = 'shopify'`

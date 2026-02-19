@@ -943,17 +943,19 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         }
       } catch { /* cac_history may not exist */ }
 
-      // Shopify revenue
+      // Shopify revenue (from connector_events)
       try {
         const shopify = await this.env.ANALYTICS_DB.prepare(`
-          SELECT COUNT(*) as orders, SUM(total_price_cents) as revenue_cents,
-                 AVG(total_price_cents) as aov_cents,
-                 COUNT(CASE WHEN customer_orders_count <= 1 THEN 1 END) as new_customers
-          FROM shopify_orders
+          SELECT COUNT(*) as orders, COALESCE(SUM(value_cents), 0) as revenue_cents,
+                 AVG(value_cents) as aov_cents,
+                 COUNT(DISTINCT customer_external_id) as unique_customers
+          FROM connector_events
           WHERE organization_id = ?
-            AND shopify_created_at >= date('now', '-${days} days')
+            AND source_platform = 'shopify'
+            AND transacted_at >= date('now', '-${days} days')
+            AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
         `).bind(orgId).first<{
-          orders: number; revenue_cents: number | null; aov_cents: number | null; new_customers: number;
+          orders: number; revenue_cents: number | null; aov_cents: number | null; unique_customers: number;
         }>();
 
         if (shopify && (shopify.orders || 0) > 0) {
@@ -961,13 +963,13 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           additionalContext += `- Orders: ${shopify.orders.toLocaleString()}\n`;
           additionalContext += `- Revenue: ${fmt(shopify.revenue_cents || 0)}\n`;
           additionalContext += `- AOV: ${fmt(Math.round(shopify.aov_cents || 0))}\n`;
-          additionalContext += `- New customers: ${shopify.new_customers} (${shopify.orders > 0 ? Math.round(shopify.new_customers / shopify.orders * 100) : 0}%)\n`;
+          additionalContext += `- Unique customers: ${shopify.unique_customers}\n`;
           if (totalSpendCents > 0 && shopify.revenue_cents) {
             additionalContext += `- Shopify ROAS (vs ad spend): ${(shopify.revenue_cents / totalSpendCents).toFixed(2)}x\n`;
           }
           additionalContext += '\n';
         }
-      } catch { /* shopify_orders may not exist */ }
+      } catch { /* connector_events query failed */ }
 
       // CRM pipeline
       try {
@@ -1000,15 +1002,17 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         }
       } catch { /* crm_deals may not exist */ }
 
-      // Subscription MRR
+      // Subscription activity (from connector_events — Stripe subscription events)
       try {
         const subs = await this.env.ANALYTICS_DB.prepare(`
           SELECT COUNT(*) as total,
-                 COUNT(CASE WHEN status IN ('active', 'trialing') THEN 1 END) as active,
-                 COUNT(CASE WHEN status = 'canceled' THEN 1 END) as canceled,
-                 SUM(CASE WHEN status IN ('active', 'trialing') THEN amount_cents ELSE 0 END) as mrr_cents
-          FROM stripe_subscriptions
+                 COUNT(CASE WHEN platform_status IN ('active', 'trialing') THEN 1 END) as active,
+                 COUNT(CASE WHEN platform_status IN ('canceled', 'cancelled') THEN 1 END) as canceled,
+                 COALESCE(SUM(CASE WHEN platform_status IN ('active', 'trialing') THEN value_cents ELSE 0 END), 0) as mrr_cents
+          FROM connector_events
           WHERE organization_id = ?
+            AND source_platform = 'stripe'
+            AND event_type LIKE '%subscription%'
         `).bind(orgId).first<{
           total: number; active: number; canceled: number; mrr_cents: number | null;
         }>();
@@ -1021,7 +1025,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           const churnRate = subs.total > 0 ? Math.round(subs.canceled / subs.total * 100) : 0;
           additionalContext += `- Churn rate: ${churnRate}%\n\n`;
         }
-      } catch { /* stripe_subscriptions may not exist */ }
+      } catch { /* connector_events subscription query failed */ }
 
       // Email/SMS engagement
       try {

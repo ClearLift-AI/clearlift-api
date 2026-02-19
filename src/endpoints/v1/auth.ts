@@ -736,7 +736,6 @@ export class DeleteAccount extends OpenAPIRoute {
           'org_tracking_configs',
           'consent_configurations',
           'ai_optimization_settings',
-          'conversion_goals',
           'tracking_domains',
           'onboarding_progress',
           // Note: onboarding_steps is a global reference table with no organization_id
