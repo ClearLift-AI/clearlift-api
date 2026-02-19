@@ -46,12 +46,17 @@ export type ConnectorCategory =
 export type AuthType = 'oauth2' | 'oauth' | 'api_key' | 'basic' | 'internal';
 
 /**
- * Event definition for Flow Builder
+ * Event definition for connector registry.
+ * The `id` MUST match the `event_type` written by the sync workflow to `connector_events`.
+ * `statuses` and `default_status` drive the ConversionEventPicker UI.
  */
 export interface ConnectorEvent {
   id: string;
   name: string;
+  description?: string;
   fields: string[];
+  statuses?: string[];
+  default_status?: string[];
 }
 
 /**
