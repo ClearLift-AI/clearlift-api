@@ -104,38 +104,21 @@ export class GetCACTimeline extends OpenAPIRoute {
 
       if (!hasTodayInHistory && todayStr >= startDateStr && todayStr <= endDateStr) {
         try {
-          // Step 1: Fetch macro goal IDs from DB + today's ad spend (parallel)
-          const [todayMetrics, macroGoalsResult] = await Promise.all([
+          // Step 1: Fetch today's ad spend + today's unified conversions (parallel)
+          const [todayMetrics, todayGoals] = await Promise.all([
             c.env.ANALYTICS_DB.prepare(`
               SELECT SUM(spend_cents) as spend_cents, SUM(conversions) as conversions
               FROM ad_metrics
               WHERE organization_id = ? AND entity_type = 'campaign' AND metric_date = ?
             `).bind(org_id, todayStr).first<{ spend_cents: number | null; conversions: number | null }>(),
 
-            c.env.DB.prepare(`
-              SELECT id FROM conversion_goals
-              WHERE organization_id = ? AND is_conversion = 1 AND category = 'macro_conversion'
-            `).bind(org_id).all<{ id: string }>(),
+            c.env.ANALYTICS_DB.prepare(`
+              SELECT COUNT(*) as conversions, COALESCE(SUM(value_cents), 0) as revenue_cents
+              FROM conversions
+              WHERE organization_id = ?
+                AND DATE(conversion_timestamp) = ?
+            `).bind(org_id, todayStr).first<{ conversions: number | null; revenue_cents: number | null }>(),
           ]);
-
-          // Step 2: If macro goals exist, fetch today's goal conversions from ANALYTICS_DB
-          const macroGoalIds = (macroGoalsResult.results || []).map(g => g.id);
-          let todayGoals: { conversions: number | null; revenue_cents: number | null } | null = null;
-
-          if (macroGoalIds.length > 0 && c.env.ANALYTICS_DB) {
-            const placeholders = macroGoalIds.map(() => '?').join(',');
-            todayGoals = await c.env.ANALYTICS_DB.prepare(`
-              WITH unique_conversions AS (
-                SELECT DISTINCT COALESCE(conversion_id, id) as unique_id, value_cents
-                FROM goal_conversions
-                WHERE organization_id = ?
-                  AND goal_id IN (${placeholders})
-                  AND DATE(conversion_timestamp) = ?
-              )
-              SELECT COUNT(*) as conversions, SUM(value_cents) as revenue_cents
-              FROM unique_conversions
-            `).bind(org_id, ...macroGoalIds, todayStr).first<{ conversions: number | null; revenue_cents: number | null }>();
-          }
 
           const todaySpend = todayMetrics?.spend_cents || 0;
           const todayPlatformConv = todayMetrics?.conversions || 0;
@@ -718,13 +701,14 @@ export class BackfillCACHistory extends OpenAPIRoute {
     const { org_id, days } = data.body;
 
     try {
-      // Check for macro conversion goals
-      const goalsResult = await c.env.DB.prepare(`
-        SELECT id, name FROM conversion_goals
-        WHERE organization_id = ? AND is_conversion = 1 AND category = 'macro_conversion'
-      `).bind(org_id).all<{ id: string; name: string }>();
-      const macroGoals = goalsResult.results || [];
-      const hasGoals = macroGoals.length > 0;
+      // Check for connections with conversion_events configured
+      const connectorsResult = await c.env.DB.prepare(`
+        SELECT id, platform FROM platform_connections
+        WHERE organization_id = ? AND is_active = 1
+          AND json_extract(settings, '$.conversion_events') IS NOT NULL
+      `).bind(org_id).all<{ id: string; platform: string }>();
+      const connectorIds = (connectorsResult.results || []).map(c => c.id);
+      const hasGoals = connectorIds.length > 0;
 
       // Query daily spend and conversions from unified ad_metrics table
       const metricsResult = await c.env.ANALYTICS_DB.prepare(`
@@ -750,27 +734,19 @@ export class BackfillCACHistory extends OpenAPIRoute {
         platformMap.set(row.date, { spend_cents: row.spend_cents, conversions: row.conversions });
       }
 
-      // Fetch goal-linked conversions if goals exist
+      // Fetch unified conversions if connectors with conversion config exist
       let goalMap = new Map<string, { conversions: number; revenue_cents: number }>();
       if (hasGoals) {
-        const goalIds = macroGoals.map(g => g.id);
-        const placeholders = goalIds.map(() => '?').join(',');
-
         const goalResult = await c.env.ANALYTICS_DB.prepare(`
-          WITH unique_conversions AS (
-            SELECT DISTINCT
-              COALESCE(conversion_id, id) as unique_id,
-              DATE(conversion_timestamp) as date,
-              value_cents
-            FROM goal_conversions
-            WHERE organization_id = ?
-              AND goal_id IN (${placeholders})
-              AND DATE(conversion_timestamp) >= date('now', '-' || ? || ' days')
-          )
-          SELECT date, COUNT(*) as conversions, SUM(value_cents) as revenue_cents
-          FROM unique_conversions
-          GROUP BY date
-        `).bind(org_id, ...goalIds, days).all<{
+          SELECT
+            DATE(conversion_timestamp) as date,
+            COUNT(*) as conversions,
+            COALESCE(SUM(value_cents), 0) as revenue_cents
+          FROM conversions
+          WHERE organization_id = ?
+            AND DATE(conversion_timestamp) >= date('now', '-' || ? || ' days')
+          GROUP BY DATE(conversion_timestamp)
+        `).bind(org_id, days).all<{
           date: string;
           conversions: number;
           revenue_cents: number;
@@ -783,7 +759,7 @@ export class BackfillCACHistory extends OpenAPIRoute {
 
       // Merge dates from both sources
       const allDates = new Set([...platformMap.keys(), ...goalMap.keys()]);
-      const goalIdsJson = hasGoals ? JSON.stringify(macroGoals.map(g => g.id)) : null;
+      const goalIdsJson = hasGoals ? JSON.stringify(connectorIds) : null;
 
       if (allDates.size === 0) {
         return success(c, {
@@ -840,7 +816,7 @@ export class BackfillCACHistory extends OpenAPIRoute {
         success: true,
         rows_inserted: rowsInserted,
         conversion_source: hasGoals ? 'goal' : 'platform',
-        goal_count: macroGoals.length,
+        goal_count: connectorIds.length,
         date_range: {
           start: sortedDates[0],
           end: sortedDates[sortedDates.length - 1]
@@ -930,15 +906,28 @@ export class GetCACSummary extends OpenAPIRoute {
       const conversionSource = conversionsGoal > 0 ? 'goal' : 'platform';
       const cacCents = conversions > 0 ? Math.round(spendCents / conversions) : 0;
 
-      // Get goal names if using goals
+      // Get connector names if using goal-linked conversions
       let goalCount = 0;
       let goalNames: string[] = [];
       if (conversionsGoal > 0) {
-        const goalsResult = await c.env.DB.prepare(`
-          SELECT name FROM conversion_goals
-          WHERE organization_id = ? AND is_conversion = 1 AND category = 'macro_conversion'
-        `).bind(org_id).all<{ name: string }>();
-        goalNames = (goalsResult.results || []).map(g => g.name);
+        const connectorsResult = await c.env.DB.prepare(`
+          SELECT platform, json_extract(settings, '$.conversion_events') as events
+          FROM platform_connections
+          WHERE organization_id = ? AND is_active = 1
+            AND json_extract(settings, '$.conversion_events') IS NOT NULL
+        `).bind(org_id).all<{ platform: string; events: string }>();
+
+        const platformDisplayNames: Record<string, string> = {
+          stripe: 'Stripe Payment',
+          shopify: 'Shopify Order',
+          jobber: 'Jobber Invoice',
+          hubspot: 'HubSpot Deal',
+          adbliss_tag: 'Tag Conversion',
+        };
+
+        goalNames = (connectorsResult.results || []).map(
+          c => platformDisplayNames[c.platform] || `${c.platform} Conversion`
+        );
         goalCount = goalNames.length;
       }
 

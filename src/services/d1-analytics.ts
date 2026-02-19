@@ -952,6 +952,8 @@ export class D1AnalyticsService {
 
   /**
    * Get Stripe charges for an organization
+   * Reads from connector_events WHERE source_platform = 'stripe'
+   * Maps connector_events columns to the StripeChargeRow interface
    */
   async getStripeCharges(
     orgId: string,
@@ -961,14 +963,28 @@ export class D1AnalyticsService {
     options: { status?: string; currency?: string; minAmount?: number; maxAmount?: number; limit?: number; offset?: number } = {}
   ): Promise<StripeChargeRow[]> {
     let query = `
-      SELECT *
-      FROM stripe_charges
+      SELECT
+        id,
+        organization_id,
+        external_id as charge_id,
+        customer_external_id as customer_id,
+        customer_email_hash,
+        value_cents as amount_cents,
+        currency,
+        status,
+        transacted_at as stripe_created_at,
+        metadata,
+        created_at,
+        json_extract(metadata, '$.billing_reason') as billing_reason,
+        json_extract(metadata, '$.has_invoice') as has_invoice,
+        json_extract(metadata, '$.payment_method_type') as payment_method_type
+      FROM connector_events
       WHERE organization_id = ?
-        AND connection_id = ?
-        AND stripe_created_at >= ?
-        AND stripe_created_at <= ?
+        AND source_platform = 'stripe'
+        AND transacted_at >= ?
+        AND transacted_at <= ?
     `;
-    const params: unknown[] = [orgId, connectionId, startDate, endDate + 'T23:59:59Z'];
+    const params: unknown[] = [orgId, startDate, endDate + 'T23:59:59Z'];
 
     if (options.status) {
       query += ` AND status = ?`;
@@ -979,15 +995,15 @@ export class D1AnalyticsService {
       params.push(options.currency);
     }
     if (options.minAmount !== undefined) {
-      query += ` AND amount_cents >= ?`;
+      query += ` AND value_cents >= ?`;
       params.push(options.minAmount * 100);
     }
     if (options.maxAmount !== undefined) {
-      query += ` AND amount_cents <= ?`;
+      query += ` AND value_cents <= ?`;
       params.push(options.maxAmount * 100);
     }
 
-    query += ` ORDER BY stripe_created_at DESC LIMIT ? OFFSET ?`;
+    query += ` ORDER BY transacted_at DESC LIMIT ? OFFSET ?`;
     params.push(options.limit || 100, options.offset || 0);
 
     const result = await this.session.prepare(query).bind(...params).all<StripeChargeRow>();
@@ -996,6 +1012,7 @@ export class D1AnalyticsService {
 
   /**
    * Get Stripe daily summary for an organization
+   * Aggregated from connector_events WHERE source_platform = 'stripe'
    */
   async getStripeDailySummary(
     orgId: string,
@@ -1003,19 +1020,32 @@ export class D1AnalyticsService {
     endDate: string
   ): Promise<StripeDailySummaryRow[]> {
     const result = await this.session.prepare(`
-      SELECT *
-      FROM stripe_daily_summary
+      SELECT
+        0 as id,
+        organization_id,
+        DATE(transacted_at) as summary_date,
+        COUNT(*) as total_charges,
+        COALESCE(SUM(value_cents), 0) as total_amount_cents,
+        COUNT(*) as successful_charges,
+        0 as failed_charges,
+        0 as refunded_amount_cents,
+        COUNT(DISTINCT customer_external_id) as unique_customers,
+        MIN(created_at) as created_at
+      FROM connector_events
       WHERE organization_id = ?
-        AND summary_date >= ?
-        AND summary_date <= ?
+        AND source_platform = 'stripe'
+        AND transacted_at >= ?
+        AND transacted_at <= ?
+      GROUP BY DATE(transacted_at)
       ORDER BY summary_date DESC
-    `).bind(orgId, startDate, endDate).all<StripeDailySummaryRow>();
+    `).bind(orgId, startDate, endDate + 'T23:59:59Z').all<StripeDailySummaryRow>();
 
     return result.results;
   }
 
   /**
-   * Get Stripe revenue summary for an organization (computed from charges if daily summary missing)
+   * Get Stripe revenue summary for an organization
+   * Reads from connector_events WHERE source_platform = 'stripe'
    */
   async getStripeSummary(
     orgId: string,
@@ -1026,15 +1056,15 @@ export class D1AnalyticsService {
     const result = await this.session.prepare(`
       SELECT
         COUNT(*) as total_transactions,
-        COALESCE(SUM(amount_cents), 0) as total_revenue_cents,
+        COALESCE(SUM(value_cents), 0) as total_revenue_cents,
         COUNT(*) as successful_count,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM stripe_charges
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND connection_id = ?
-        AND stripe_created_at >= ?
-        AND stripe_created_at <= ?
-    `).bind(orgId, connectionId, startDate, endDate + 'T23:59:59Z').first<{
+        AND source_platform = 'stripe'
+        AND transacted_at >= ?
+        AND transacted_at <= ?
+    `).bind(orgId, startDate, endDate + 'T23:59:59Z').first<{
       total_transactions: number;
       total_revenue_cents: number;
       successful_count: number;
@@ -1053,7 +1083,8 @@ export class D1AnalyticsService {
   }
 
   /**
-   * Get Stripe charges with time series aggregation
+   * Get Stripe events with time series aggregation
+   * Reads from connector_events WHERE source_platform = 'stripe'
    */
   async getStripeTimeSeries(
     orgId: string,
@@ -1065,29 +1096,29 @@ export class D1AnalyticsService {
     let dateFormat: string;
     switch (groupBy) {
       case 'week':
-        dateFormat = "strftime('%Y-W%W', stripe_created_at)";
+        dateFormat = "strftime('%Y-W%W', transacted_at)";
         break;
       case 'month':
-        dateFormat = "strftime('%Y-%m', stripe_created_at)";
+        dateFormat = "strftime('%Y-%m', transacted_at)";
         break;
       default:
-        dateFormat = "date(stripe_created_at)";
+        dateFormat = "date(transacted_at)";
     }
 
     const result = await this.session.prepare(`
       SELECT
         ${dateFormat} as date,
-        SUM(amount_cents) as revenue_cents,
+        SUM(value_cents) as revenue_cents,
         COUNT(*) as transactions,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM stripe_charges
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND connection_id = ?
-        AND stripe_created_at >= ?
-        AND stripe_created_at <= ?
+        AND source_platform = 'stripe'
+        AND transacted_at >= ?
+        AND transacted_at <= ?
       GROUP BY ${dateFormat}
       ORDER BY date ASC
-    `).bind(orgId, connectionId, startDate, endDate + 'T23:59:59Z').all<{
+    `).bind(orgId, startDate, endDate + 'T23:59:59Z').all<{
       date: string;
       revenue_cents: number;
       transactions: number;
@@ -1104,7 +1135,7 @@ export class D1AnalyticsService {
 
   /**
    * Get real-time Stripe summary for the last N hours
-   * Used by Real-Time analytics when business_type is 'ecommerce' or 'saas'
+   * Reads from connector_events WHERE source_platform = 'stripe'
    */
   async getStripeRealtimeSummary(
     orgId: string,
@@ -1114,11 +1145,12 @@ export class D1AnalyticsService {
       SELECT
         COUNT(*) as total_charges,
         COUNT(*) as successful_charges,
-        SUM(amount_cents) as total_revenue_cents,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM stripe_charges
+        COALESCE(SUM(value_cents), 0) as total_revenue_cents,
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
+        AND source_platform = 'stripe'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
     `).bind(orgId, hours).first<{
       total_charges: number;
       successful_charges: number;
@@ -1136,6 +1168,7 @@ export class D1AnalyticsService {
 
   /**
    * Get real-time Stripe time series for charts
+   * Reads from connector_events WHERE source_platform = 'stripe'
    */
   async getStripeRealtimeTimeSeries(
     orgId: string,
@@ -1143,13 +1176,14 @@ export class D1AnalyticsService {
   ): Promise<StripeRealtimeTimeSeriesRow[]> {
     const result = await this.session.prepare(`
       SELECT
-        strftime('%Y-%m-%d %H:00:00', stripe_created_at) as bucket,
+        strftime('%Y-%m-%d %H:00:00', transacted_at) as bucket,
         COUNT(*) as conversions,
-        SUM(amount_cents) as revenue_cents
-      FROM stripe_charges
+        COALESCE(SUM(value_cents), 0) as revenue_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
-      GROUP BY strftime('%Y-%m-%d %H:00:00', stripe_created_at)
+        AND source_platform = 'stripe'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
+      GROUP BY strftime('%Y-%m-%d %H:00:00', transacted_at)
       ORDER BY bucket ASC
     `).bind(orgId, hours).all<{
       bucket: string;
@@ -1166,7 +1200,7 @@ export class D1AnalyticsService {
 
   /**
    * Get real-time Shopify summary for the last N hours
-   * Used by Real-Time analytics when business_type is 'ecommerce'
+   * Reads from connector_events WHERE source_platform = 'shopify'
    */
   async getShopifyRealtimeSummary(
     orgId: string,
@@ -1175,12 +1209,13 @@ export class D1AnalyticsService {
     const result = await this.session.prepare(`
       SELECT
         COUNT(*) as total_orders,
-        SUM(CASE WHEN financial_status = 'paid' THEN 1 ELSE 0 END) as paid_orders,
-        SUM(CASE WHEN financial_status = 'paid' THEN total_price_cents ELSE 0 END) as total_revenue_cents,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM shopify_orders
+        COUNT(*) as paid_orders,
+        COALESCE(SUM(value_cents), 0) as total_revenue_cents,
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND shopify_created_at >= datetime('now', '-' || ? || ' hours')
+        AND source_platform = 'shopify'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
     `).bind(orgId, hours).first<{
       total_orders: number;
       paid_orders: number;
@@ -1198,6 +1233,7 @@ export class D1AnalyticsService {
 
   /**
    * Get real-time Shopify time series for charts
+   * Reads from connector_events WHERE source_platform = 'shopify'
    */
   async getShopifyRealtimeTimeSeries(
     orgId: string,
@@ -1205,13 +1241,14 @@ export class D1AnalyticsService {
   ): Promise<ShopifyRealtimeTimeSeriesRow[]> {
     const result = await this.session.prepare(`
       SELECT
-        strftime('%Y-%m-%d %H:00:00', shopify_created_at) as bucket,
-        SUM(CASE WHEN financial_status = 'paid' THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN financial_status = 'paid' THEN total_price_cents ELSE 0 END) as revenue_cents
-      FROM shopify_orders
+        strftime('%Y-%m-%d %H:00:00', transacted_at) as bucket,
+        COUNT(*) as conversions,
+        COALESCE(SUM(value_cents), 0) as revenue_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND shopify_created_at >= datetime('now', '-' || ? || ' hours')
-      GROUP BY strftime('%Y-%m-%d %H:00:00', shopify_created_at)
+        AND source_platform = 'shopify'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
+      GROUP BY strftime('%Y-%m-%d %H:00:00', transacted_at)
       ORDER BY bucket ASC
     `).bind(orgId, hours).all<{
       bucket: string;
