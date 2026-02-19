@@ -1,7 +1,7 @@
 /**
  * Analysis Logger
  *
- * Logs all LLM calls to AI_DB for audit trail and cost tracking
+ * Logs all LLM calls to DB for audit trail and cost tracking
  */
 
 import { AnalysisLevel, LLMProvider } from './llm-provider';

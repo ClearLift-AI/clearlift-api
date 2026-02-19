@@ -452,6 +452,15 @@ export function getAnthropicTools(): any[] {
   }));
 }
 
+// Generic tool definitions (provider-agnostic canonical format)
+export function getToolDefinitions(): Array<{ name: string; description: string; input_schema: any }> {
+  return RECOMMENDATION_TOOLS.map(tool => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.input_schema
+  }));
+}
+
 // Interface for a recommendation that will be logged
 export interface Recommendation {
   tool: string;

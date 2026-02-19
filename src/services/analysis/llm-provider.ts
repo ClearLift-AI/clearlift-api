@@ -63,8 +63,8 @@ export const DEFAULT_MODEL_BY_LEVEL: Record<AnalysisLevel, { provider: LLMProvid
   account: { provider: 'gemini', model: GEMINI_MODELS.FLASH },
   // Gemini 3 Pro for executive summary (25 RPM, single call)
   cross_platform: { provider: 'gemini', model: GEMINI_MODELS.PRO },
-  // Claude Opus for recommendations: agentic loop with tool calling
-  recommendations: { provider: 'claude', model: CLAUDE_MODELS.OPUS }
+  // Gemini 3 Flash for recommendations: agentic loop with tool calling (cost-optimized)
+  recommendations: { provider: 'gemini', model: GEMINI_MODELS.FLASH }
 };
 
 // Token limits by level (10x for comprehensive analysis)

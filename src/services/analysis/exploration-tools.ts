@@ -636,6 +636,15 @@ export function getExplorationTools(): Array<{
   return Object.values(EXPLORATION_TOOLS);
 }
 
+// Generic exploration tool definitions (provider-agnostic canonical format)
+export function getExplorationToolDefinitions(): Array<{
+  name: string;
+  description: string;
+  input_schema: object;
+}> {
+  return Object.values(EXPLORATION_TOOLS);
+}
+
 /**
  * Check if a tool name is an exploration tool
  */
