@@ -69,7 +69,7 @@ interface ConnectorConversion {
 
 /**
  * Query connector conversions for a user from D1 ANALYTICS_DB
- * Currently supports Stripe charges from stripe_charges table
+ * Queries connector_events for revenue data
  */
 async function queryConnectorConversionsD1(
   analyticsDb: D1Database,
@@ -81,190 +81,83 @@ async function queryConnectorConversionsD1(
 ): Promise<ConnectorConversion[]> {
   const conversions: ConnectorConversion[] = [];
 
+  // Query all connector conversions from unified connector_events table
   try {
-    // Query Stripe charges from D1 ANALYTICS_DB
-    // Note: stripe_charges may have customer_email that we can match against userId
-    let stripeQuery = `
+    let connectorQuery = `
       SELECT
         id,
-        stripe_charge_id,
-        amount_cents,
+        platform_external_id,
+        source_platform,
+        value_cents,
         currency,
-        status,
-        stripe_created_at,
-        customer_email,
-        product_metadata
-      FROM stripe_charges
-      WHERE org_id = ?
-        AND status = 'succeeded'
+        platform_status,
+        transacted_at,
+        customer_external_id,
+        event_type,
+        raw_metadata
+      FROM connector_events
+      WHERE organization_id = ?
+        AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
     `;
 
     const queryParams: any[] = [orgId];
 
     if (dateFrom) {
-      stripeQuery += ` AND stripe_created_at >= ?`;
+      connectorQuery += ` AND transacted_at >= ?`;
       queryParams.push(`${dateFrom}T00:00:00Z`);
     }
     if (dateTo) {
-      stripeQuery += ` AND stripe_created_at <= ?`;
+      connectorQuery += ` AND transacted_at <= ?`;
       queryParams.push(`${dateTo}T23:59:59Z`);
     }
 
-    stripeQuery += ` ORDER BY stripe_created_at DESC LIMIT 500`;
+    connectorQuery += ` ORDER BY transacted_at DESC LIMIT 500`;
 
-    const stripeResult = await analyticsDb.prepare(stripeQuery)
+    const connectorResult = await analyticsDb.prepare(connectorQuery)
       .bind(...queryParams)
       .all<{
         id: string;
-        stripe_charge_id: string;
-        amount_cents: number;
-        currency: string;
-        status: string;
-        stripe_created_at: string;
-        customer_email: string | null;
-        product_metadata: string | null;
+        platform_external_id: string | null;
+        source_platform: string;
+        value_cents: number;
+        currency: string | null;
+        platform_status: string;
+        transacted_at: string;
+        customer_external_id: string | null;
+        event_type: string | null;
+        raw_metadata: string | null;
       }>();
 
-    for (const row of stripeResult.results || []) {
-      // Match by email if available
-      const matches = row.customer_email?.toLowerCase() === userId.toLowerCase();
+    for (const row of connectorResult.results || []) {
+      // Map source_platform to the ConnectorConversion source type
+      const sourceMap: Record<string, string> = {
+        stripe: 'stripe',
+        shopify: 'shopify',
+        jobber: 'other',
+        hubspot: 'other',
+      };
+      const source = sourceMap[row.source_platform] || 'other';
+
+      // Match by customer_external_id if available
+      const matches = !userId ||
+        row.customer_external_id?.toLowerCase() === userId.toLowerCase();
+
       if (matches) {
         conversions.push({
-          source: 'stripe',
-          transaction_id: row.stripe_charge_id,
-          timestamp: row.stripe_created_at,
-          amount: (row.amount_cents || 0) / 100,
+          source: source as any,
+          transaction_id: row.platform_external_id || row.id,
+          timestamp: row.transacted_at,
+          amount: (row.value_cents || 0) / 100,
           currency: row.currency || 'usd',
-          status: row.status,
+          status: row.platform_status,
           product_id: null,
-          customer_id: row.customer_email || null,
-          metadata: row.product_metadata ? JSON.parse(row.product_metadata) : {}
+          customer_id: row.customer_external_id || null,
+          metadata: row.raw_metadata ? (() => { try { return JSON.parse(row.raw_metadata); } catch { return { source_platform: row.source_platform }; } })() : { source_platform: row.source_platform }
         });
       }
     }
   } catch (err) {
-    // Table may not exist yet
-    structuredLog('WARN', 'Failed to query stripe_charges from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
-  }
-
-  // Query Shopify orders
-  try {
-    let shopifyQuery = `
-      SELECT
-        id,
-        shopify_order_id,
-        total_price_cents,
-        currency,
-        financial_status,
-        shopify_created_at,
-        customer_email_hash,
-        customer_first_name
-      FROM shopify_orders
-      WHERE organization_id = ?
-        AND financial_status = 'paid'
-    `;
-    const shopifyParams: any[] = [orgId];
-
-    if (dateFrom) {
-      shopifyQuery += ` AND shopify_created_at >= ?`;
-      shopifyParams.push(`${dateFrom}T00:00:00Z`);
-    }
-    if (dateTo) {
-      shopifyQuery += ` AND shopify_created_at <= ?`;
-      shopifyParams.push(`${dateTo}T23:59:59Z`);
-    }
-
-    shopifyQuery += ` ORDER BY shopify_created_at DESC LIMIT 500`;
-
-    const shopifyResult = await analyticsDb.prepare(shopifyQuery)
-      .bind(...shopifyParams)
-      .all<{
-        id: string;
-        shopify_order_id: string;
-        total_price_cents: number;
-        currency: string;
-        financial_status: string;
-        shopify_created_at: string;
-        customer_email_hash: string | null;
-        customer_first_name: string | null;
-      }>();
-
-    for (const row of shopifyResult.results || []) {
-      // Note: Shopify stores customer_email_hash, not plain email
-      // We can match by hash if userId was hashed, or skip if not
-      conversions.push({
-        source: 'shopify',
-        transaction_id: row.shopify_order_id,
-        timestamp: row.shopify_created_at,
-        amount: (row.total_price_cents || 0) / 100,
-        currency: row.currency || 'usd',
-        status: row.financial_status,
-        product_id: null,
-        customer_id: row.customer_first_name || null,
-        metadata: {}
-      });
-    }
-  } catch (err) {
-    structuredLog('WARN', 'Failed to query shopify_orders from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
-  }
-
-  // Query Jobber completed jobs
-  try {
-    let jobberQuery = `
-      SELECT
-        id,
-        jobber_job_id,
-        total_amount_cents,
-        currency,
-        job_status,
-        completed_at,
-        client_email_hash,
-        client_name
-      FROM jobber_jobs
-      WHERE organization_id = ?
-        AND is_completed = 1
-    `;
-    const jobberParams: any[] = [orgId];
-
-    if (dateFrom) {
-      jobberQuery += ` AND completed_at >= ?`;
-      jobberParams.push(`${dateFrom}T00:00:00Z`);
-    }
-    if (dateTo) {
-      jobberQuery += ` AND completed_at <= ?`;
-      jobberParams.push(`${dateTo}T23:59:59Z`);
-    }
-
-    jobberQuery += ` ORDER BY completed_at DESC LIMIT 500`;
-
-    const jobberResult = await analyticsDb.prepare(jobberQuery)
-      .bind(...jobberParams)
-      .all<{
-        id: string;
-        jobber_job_id: string;
-        total_amount_cents: number;
-        currency: string;
-        job_status: string;
-        completed_at: string;
-        client_email_hash: string | null;
-        client_name: string | null;
-      }>();
-
-    for (const row of jobberResult.results || []) {
-      conversions.push({
-        source: 'other', // Jobber maps to 'other' in the union type
-        transaction_id: row.jobber_job_id,
-        timestamp: row.completed_at,
-        amount: (row.total_amount_cents || 0) / 100,
-        currency: row.currency || 'usd',
-        status: row.job_status,
-        product_id: null,
-        customer_id: row.client_name || null,
-        metadata: { source_type: 'jobber' }
-      });
-    }
-  } catch (err) {
-    structuredLog('WARN', 'Failed to query jobber_jobs from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
+    structuredLog('WARN', 'Failed to query connector_events from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
   }
 
   return conversions.sort((a, b) =>
@@ -539,18 +432,18 @@ Returns the complete journey for an identified user, including:
         }>;
       }
 
-      // Query tag conversions (goal_conversions) for this user
+      // Query tag conversions from unified conversions table for this user
       if (anonymousIds.length > 0) {
         const placeholders = anonymousIds.map(() => '?').join(',');
         const tagConvQuery = `
-          SELECT gc.id as event_id, gc.conversion_timestamp as timestamp,
-                 'goal_conversion' as type,
-                 COALESCE(gc.value_cents, 0) / 100.0 as revenue,
+          SELECT c.id as event_id, c.converted_at as timestamp,
+                 'conversion' as type,
+                 COALESCE(c.value_cents, 0) / 100.0 as revenue,
                  NULL as session_id
-          FROM goal_conversions gc
-          JOIN journeys j ON gc.conversion_id = j.conversion_id
+          FROM conversions c
+          JOIN journeys j ON c.id = j.conversion_id
           WHERE j.org_tag = ? AND j.anonymous_id IN (${placeholders})
-          ORDER BY gc.conversion_timestamp DESC
+          ORDER BY c.converted_at DESC
           LIMIT 50
         `;
         const tagResult = await analyticsDb.prepare(tagConvQuery)

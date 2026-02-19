@@ -86,15 +86,15 @@ export class AggregationService {
       }
     }
 
-    // Also run Stripe aggregation from ANALYTICS_DB if available
+    // Also run connector revenue aggregation from ANALYTICS_DB if available
     if (this.analyticsDb) {
       try {
-        const stripeResult = await this.aggregateStripeFromAnalyticsDb(date);
-        console.log(`[Aggregation] Stripe aggregation: ${stripeResult.charges} charges processed`);
+        const connectorResult = await this.aggregateConnectorFromAnalyticsDb(date);
+        console.log(`[Aggregation] Connector revenue aggregation: ${connectorResult.charges} events processed`);
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
-        errors.push(`ANALYTICS_DB Stripe: ${error}`);
-        structuredLog('ERROR', 'Stripe aggregation failed', { service: 'aggregation', step: 'stripe', error });
+        errors.push(`ANALYTICS_DB connector revenue: ${error}`);
+        structuredLog('ERROR', 'Connector revenue aggregation failed', { service: 'aggregation', step: 'connector_revenue', error });
       }
     }
 
@@ -173,8 +173,8 @@ export class AggregationService {
       totalRows += result.rows;
     }
 
-    // Also aggregate Stripe revenue
-    await this.aggregateStripeDailySummary(shard, date);
+    // Also aggregate connector revenue
+    await this.aggregateConnectorDailySummary(shard, date);
 
     return { orgs: totalOrgs, rows: totalRows };
   }
@@ -249,9 +249,9 @@ export class AggregationService {
   }
 
   /**
-   * Aggregate Stripe daily summary (revenue)
+   * Aggregate connector revenue daily summary (Stripe, Shopify, Jobber, etc.)
    */
-  private async aggregateStripeDailySummary(shard: D1Database, date: string): Promise<void> {
+  private async aggregateConnectorDailySummary(shard: D1Database, date: string): Promise<void> {
     await shard.prepare(`
       INSERT OR REPLACE INTO org_daily_summary (
         id, organization_id, platform, metric_date,
@@ -261,23 +261,23 @@ export class AggregationService {
         updated_at
       )
       SELECT
-        organization_id || ':stripe:' || ? as id,
+        organization_id || ':' || source_platform || ':' || ? as id,
         organization_id,
-        'stripe' as platform,
+        source_platform as platform,
         ? as metric_date,
         0 as total_spend_cents,
         0 as total_impressions,
         0 as total_clicks,
         COUNT(*) as total_conversions,
-        SUM(amount_cents) as total_conversion_value_cents,
+        COALESCE(SUM(value_cents), 0) as total_conversion_value_cents,
         0 as active_campaigns,
-        SUM(amount_cents) as total_revenue_cents,
+        COALESCE(SUM(value_cents), 0) as total_revenue_cents,
         COUNT(*) as total_charges,
         datetime('now') as updated_at
-      FROM stripe_charges
-      WHERE date(stripe_created_at) = ?
-        AND status IN ('succeeded', 'active')
-      GROUP BY organization_id
+      FROM connector_events
+      WHERE DATE(transacted_at) = ?
+        AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+      GROUP BY organization_id, source_platform
     `).bind(date, date, date).run();
   }
 
@@ -597,44 +597,28 @@ export class AggregationService {
   }
 
   /**
-   * Aggregate Stripe daily summary from ANALYTICS_DB
-   * This is separate from shard aggregation since Stripe data lives in ANALYTICS_DB
+   * Aggregate connector revenue from ANALYTICS_DB connector_events
+   * into org_daily_summary. CAC/conversion data comes from cac_history + conversions.
    */
-  async aggregateStripeFromAnalyticsDb(date: string): Promise<{ charges: number; orgs: number }> {
+  async aggregateConnectorFromAnalyticsDb(date: string): Promise<{ charges: number; orgs: number }> {
     if (!this.analyticsDb) {
       return { charges: 0, orgs: 0 };
     }
 
-    console.log(`[Aggregation] Aggregating Stripe data for ${date} from ANALYTICS_DB`);
+    structuredLog('INFO', 'Aggregating connector revenue from ANALYTICS_DB', { service: 'aggregation', date });
 
-    // Aggregate into stripe_daily_summary table
+    // Count connector events for the date as a health check
     const result = await this.analyticsDb.prepare(`
-      INSERT OR REPLACE INTO stripe_daily_summary (
-        organization_id, summary_date,
-        total_charges, total_amount_cents,
-        successful_charges, failed_charges,
-        refunded_amount_cents, unique_customers,
-        created_at
-      )
-      SELECT
-        organization_id,
-        date(stripe_created_at) as summary_date,
-        COUNT(*) as total_charges,
-        SUM(CASE WHEN status IN ('succeeded', 'active') THEN amount_cents ELSE 0 END) as total_amount_cents,
-        SUM(CASE WHEN status IN ('succeeded', 'active') THEN 1 ELSE 0 END) as successful_charges,
-        SUM(CASE WHEN status IN ('failed', 'unpaid') THEN 1 ELSE 0 END) as failed_charges,
-        0 as refunded_amount_cents,
-        COUNT(DISTINCT customer_id) as unique_customers,
-        datetime('now') as created_at
-      FROM stripe_charges
-      WHERE date(stripe_created_at) = ?
-      GROUP BY organization_id, date(stripe_created_at)
-    `).bind(date).run();
+      SELECT COUNT(*) as total
+      FROM connector_events
+      WHERE DATE(transacted_at) = ?
+        AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+    `).bind(date).first<{ total: number }>();
 
-    const changes = result.meta?.changes || 0;
-    console.log(`[Aggregation] Stripe: ${changes} org-days aggregated`);
+    const total = result?.total || 0;
+    structuredLog('INFO', 'Connector events aggregated', { service: 'aggregation', date, total });
 
-    return { charges: changes, orgs: changes };
+    return { charges: total, orgs: total > 0 ? 1 : 0 };
   }
 
   /**

@@ -43,9 +43,6 @@ import { GetSmartAttribution } from "./endpoints/v1/analytics/smart-attribution"
 import { GetTrackingLinkPerformance } from "./endpoints/v1/analytics/tracking-links";
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
-import { GetFlowMetrics, GetStageTransitions } from "./endpoints/v1/analytics/flow-metrics";
-import { GetFlowInsights } from "./endpoints/v1/analytics/flow-insights";
-import { GetPageFlow } from "./endpoints/v1/analytics/page-flow";
 import { GetEventsSyncStatus } from "./endpoints/v1/analytics/events-sync";
 import {
   GetD1MetricsSummary,
@@ -63,8 +60,7 @@ import {
   GetRealtimeEvents,
   GetRealtimeEventTypes,
   GetRealtimeStripe,
-  GetRealtimeGoals,
-  GetRealtimeGoalTimeSeries
+  GetRealtimeGoals
 } from "./endpoints/v1/analytics/realtime";
 import {
   GetCACTimeline,
@@ -269,45 +265,6 @@ import {
   AcceptTerms,
   GetTermsStatus
 } from "./endpoints/v1/terms";
-import {
-  ListConversionGoals,
-  CreateConversionGoal,
-  UpdateConversionGoal,
-  DeleteConversionGoal
-} from "./endpoints/v1/goals";
-import {
-  GetGoalMetrics,
-  GetGoalConversions
-} from "./endpoints/v1/goal-metrics";
-import {
-  GetGoalHierarchy,
-  CreateGoalRelationship,
-  DeleteGoalRelationship,
-  ComputeGoalValue,
-  RecomputeAllGoalValues,
-  GetGoalTemplates,
-  CreateGoalsFromTemplates,
-  GetGoalConversionStats
-} from "./endpoints/v1/goals/hierarchy";
-import {
-  GetGoalConfig,
-  GoalConfigOptions
-} from "./endpoints/v1/goals/config";
-import {
-  GetFunnelGraph,
-  CreateGoalRelationshipV2,
-  CreateGoalBranch,
-  CreateGoalMerge,
-  GetValidPaths
-} from "./endpoints/v1/goals/graph";
-import {
-  ListGoalGroups,
-  CreateGoalGroup,
-  GetGoalGroupMembers,
-  UpdateGoalGroupMembers,
-  SetDefaultAttributionGroup,
-  DeleteGoalGroup
-} from "./endpoints/v1/goals/groups";
 import {
   RunAnalysis,
   GetAnalysisStatus,
@@ -541,12 +498,6 @@ openapi.get("/v1/analytics/identity/:anonymousId", auth, requireOrg, GetIdentity
 openapi.get("/v1/analytics/users/:userId/journey", auth, requireOrg, GetUserJourney);
 openapi.get("/v1/analytics/journeys/overview", auth, requireOrg, GetJourneysOverview);
 
-// Flow Builder analytics endpoints
-openapi.get("/v1/analytics/flow/metrics", auth, requireOrg, GetFlowMetrics);
-openapi.get("/v1/analytics/flow/insights", auth, requireOrg, GetFlowInsights);
-openapi.get("/v1/analytics/flow/stage/:stageId/transitions", auth, requireOrg, GetStageTransitions);
-openapi.get("/v1/analytics/flow/pages", auth, requireOrg, GetPageFlow);
-
 // D1 Analytics endpoints (dev environment - pure Cloudflare)
 openapi.get("/v1/analytics/metrics/summary", auth, requireOrg, GetD1MetricsSummary);
 openapi.get("/v1/analytics/metrics/daily", auth, requireOrg, GetD1DailyMetrics);
@@ -564,7 +515,6 @@ openapi.get("/v1/analytics/realtime/events", auth, requireOrg, GetRealtimeEvents
 openapi.get("/v1/analytics/realtime/event-types", auth, requireOrg, GetRealtimeEventTypes);
 openapi.get("/v1/analytics/realtime/stripe", auth, requireOrg, GetRealtimeStripe);
 openapi.get("/v1/analytics/realtime/goals", auth, requireOrg, GetRealtimeGoals);
-openapi.get("/v1/analytics/realtime/goals/:id/timeseries", auth, requireOrg, GetRealtimeGoalTimeSeries);
 
 // CAC Timeline endpoints (truthful predictions based on simulation data)
 openapi.get("/v1/analytics/cac/timeline", auth, requireOrg, GetCACTimeline);
@@ -738,44 +688,6 @@ openapi.post("/v1/settings/ai-decisions/:decision_id/accept", auth, requireOrg, 
 openapi.post("/v1/settings/ai-decisions/:decision_id/reject", auth, requireOrg, requireOrgAdmin, RejectAIDecision);
 openapi.post("/v1/settings/ai-decisions/:decision_id/rate", auth, requireOrg, RateAIDecision);
 
-// Conversion Goals endpoints
-openapi.get("/v1/goals", auth, requireOrg, ListConversionGoals);
-openapi.post("/v1/goals", auth, requireOrg, requireOrgAdmin, CreateConversionGoal);
-openapi.put("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, UpdateConversionGoal);
-openapi.delete("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, DeleteConversionGoal);
-
-// Goal Config for Tag (public endpoint - no auth required)
-openapi.get("/v1/goals/config", GetGoalConfig);
-openapi.options("/v1/goals/config", GoalConfigOptions);
-
-// Goal Metrics endpoints (D1 data)
-openapi.get("/v1/goals/:id/metrics", auth, requireOrg, GetGoalMetrics);
-openapi.get("/v1/goals/:id/conversions", auth, requireOrg, GetGoalConversions);
-
-// Goal Hierarchy and Value Computation endpoints
-openapi.get("/v1/goals/hierarchy", auth, requireOrg, GetGoalHierarchy);
-openapi.get("/v1/goals/templates", auth, GetGoalTemplates);
-openapi.post("/v1/goals/from-templates", auth, requireOrg, CreateGoalsFromTemplates);
-openapi.post("/v1/goals/relationships", auth, requireOrg, requireOrgAdmin, CreateGoalRelationship);
-openapi.delete("/v1/goals/relationships/:id", auth, requireOrg, requireOrgAdmin, DeleteGoalRelationship);
-openapi.post("/v1/goals/:id/compute-value", auth, requireOrg, ComputeGoalValue);
-openapi.get("/v1/goals/:id/conversion-stats", auth, requireOrg, GetGoalConversionStats);
-openapi.post("/v1/goals/recompute-all", auth, requireOrg, RecomputeAllGoalValues);
-
-// Funnel Graph endpoints (Phase 4: Funnel Branching)
-openapi.get("/v1/goals/graph", auth, requireOrg, GetFunnelGraph);
-openapi.post("/v1/goals/relationships/v2", auth, requireOrg, requireOrgAdmin, CreateGoalRelationshipV2);
-openapi.post("/v1/goals/branch", auth, requireOrg, requireOrgAdmin, CreateGoalBranch);
-openapi.post("/v1/goals/merge", auth, requireOrg, requireOrgAdmin, CreateGoalMerge);
-openapi.get("/v1/goals/paths", auth, requireOrg, GetValidPaths);
-
-// Goal Groups endpoints (Phase 5: Multi-Conversion)
-openapi.get("/v1/goals/groups", auth, requireOrg, ListGoalGroups);
-openapi.post("/v1/goals/groups", auth, requireOrg, requireOrgAdmin, CreateGoalGroup);
-openapi.get("/v1/goals/groups/:id/members", auth, requireOrg, GetGoalGroupMembers);
-openapi.put("/v1/goals/groups/:id/members", auth, requireOrg, requireOrgAdmin, UpdateGoalGroupMembers);
-openapi.post("/v1/goals/groups/:id/default", auth, requireOrg, requireOrgAdmin, SetDefaultAttributionGroup);
-openapi.delete("/v1/goals/groups/:id", auth, requireOrg, requireOrgAdmin, DeleteGoalGroup);
 
 // AI Analysis endpoints (hierarchical insights)
 openapi.post("/v1/analysis/run", auth, requireOrg, RunAnalysis);
@@ -1233,7 +1145,7 @@ export default {
     }
   },
 
-  // Backfill CAC history for all organizations from ad_metrics + goal_conversions
+  // Backfill CAC history for all organizations from ad_metrics + conversions
   async backfillCACHistoryForAllOrgs(env: Env): Promise<void> {
     const DAYS_TO_BACKFILL = 30;
 
@@ -1255,13 +1167,20 @@ export default {
         try {
           const orgId = org.organization_id;
 
-          // Check for macro conversion goals
-          const goalsResult = await env.DB.prepare(`
-            SELECT id, name FROM conversion_goals
-            WHERE organization_id = ? AND is_conversion = 1 AND category = 'macro_conversion'
-          `).bind(orgId).all<{ id: string; name: string }>();
-          const macroGoals = goalsResult.results || [];
-          const hasGoals = macroGoals.length > 0;
+          // Check for connections with conversion_events configured
+          const connectionsResult = await env.DB.prepare(`
+            SELECT id, provider, settings FROM platform_connections
+            WHERE organization_id = ? AND status = 'active'
+              AND json_extract(settings, '$.conversion_events') IS NOT NULL
+          `).bind(orgId).all<{ id: string; provider: string; settings: string }>();
+          const convConnections = (connectionsResult.results || []).filter(c => {
+            try {
+              const s = JSON.parse(c.settings || '{}');
+              return Array.isArray(s.conversion_events) && s.conversion_events.length > 0;
+            } catch { return false; }
+          });
+          const hasGoals = convConnections.length > 0;
+          const macroGoals = convConnections.map(c => ({ id: c.id, name: c.provider }));
 
           // Query daily spend and conversions from unified ad_metrics
           const metricsResult = await env.ANALYTICS_DB.prepare(`
@@ -1287,27 +1206,19 @@ export default {
             platformMap.set(row.date, { spend_cents: row.spend_cents, conversions: row.conversions });
           }
 
-          // If goals exist, fetch goal-linked conversions (deduplicated)
+          // If connections with conversion config exist, fetch unified conversions
           let goalMap = new Map<string, { conversions: number; revenue_cents: number }>();
           if (hasGoals) {
-            const goalIds = macroGoals.map(g => g.id);
-            const placeholders = goalIds.map(() => '?').join(',');
-
             const goalResult = await env.ANALYTICS_DB.prepare(`
-              WITH unique_conversions AS (
-                SELECT DISTINCT
-                  COALESCE(conversion_id, id) as unique_id,
-                  DATE(conversion_timestamp) as date,
-                  value_cents
-                FROM goal_conversions
-                WHERE organization_id = ?
-                  AND goal_id IN (${placeholders})
-                  AND DATE(conversion_timestamp) >= date('now', '-${DAYS_TO_BACKFILL} days')
-              )
-              SELECT date, COUNT(*) as conversions, SUM(value_cents) as revenue_cents
-              FROM unique_conversions
-              GROUP BY date
-            `).bind(orgId, ...goalIds).all<{
+              SELECT
+                DATE(converted_at) as date,
+                COUNT(*) as conversions,
+                SUM(value_cents) as revenue_cents
+              FROM conversions
+              WHERE organization_id = ?
+                AND DATE(converted_at) >= date('now', '-${DAYS_TO_BACKFILL} days')
+              GROUP BY DATE(converted_at)
+            `).bind(orgId).all<{
               date: string;
               conversions: number;
               revenue_cents: number;

@@ -208,9 +208,9 @@ const result = await getCombinedRevenue(
 
 | Source | Table | Conversion Criteria | Revenue Field |
 |--------|-------|---------------------|---------------|
-| Stripe | `stripe_charges` | `status = 'succeeded'` | `amount_cents` |
-| Shopify | `shopify_orders` | `financial_status = 'paid'` | `total_price_cents` |
-| Jobber | `jobber_invoices` | `status = 'paid'` or `is_paid = 1` | `total_cents` |
+| Stripe | `connector_events WHERE source_platform='stripe'` | `platform_status IN ('succeeded','paid')` | `value_cents` |
+| Shopify | `connector_events WHERE source_platform='shopify'` | `platform_status IN ('paid','fulfilled')` | `value_cents` |
+| Jobber | `connector_events WHERE source_platform='jobber'` | `platform_status IN ('completed','paid')` | `value_cents` |
 
 ## Settings Integration
 

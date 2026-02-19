@@ -238,7 +238,7 @@ INSERT OR REPLACE INTO connector_configs (
   theme_bg_color, theme_border_color, theme_text_color,
   has_actual_value, value_field, permissions_description, platform_id
 ) VALUES (
-  'webhook-001', 'webhook', 'Webhook', 'api_key', TRUE, 'webhook', 'finance',
+  'webhook-001', 'webhook', 'Webhook', 'api_key', TRUE, 'events', 'finance',
   'Send conversion events via custom webhooks',
   'Webhook', '#10B981', 90,
   FALSE, TRUE, TRUE, FALSE,

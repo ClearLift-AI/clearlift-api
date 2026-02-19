@@ -195,7 +195,7 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
 
     // Get conversion events with click attribution from D1
     // This uses the conversion_attribution table if populated,
-    // or falls back to joining stripe_charges/shopify_orders with click data
+    // or falls back to joining connector_events with click data
     const conversionsResult = await this.env.ANALYTICS_DB.prepare(`
       SELECT
         ca.id as conversion_id,
@@ -295,23 +295,23 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
   }
 
   /**
-   * Build paths from Stripe charges + platform click data
+   * Build paths from connector events + platform click data
    * Fallback when conversion_attribution table is empty
    */
   private async buildPathsFromStripe(orgId: string, cutoffStr: string): Promise<PathsResult> {
-    // Get Stripe charges
+    // Get revenue connector events (Stripe, Shopify, Jobber, etc.)
     const chargesResult = await this.env.ANALYTICS_DB.prepare(`
       SELECT
         id,
-        customer_id,
-        amount_cents,
-        created_at,
-        metadata
-      FROM stripe_charges
+        customer_external_id as customer_id,
+        value_cents as amount_cents,
+        transacted_at as created_at,
+        raw_metadata as metadata
+      FROM connector_events
       WHERE organization_id = ?
-        AND created_at >= ?
-        AND status = 'succeeded'
-      ORDER BY created_at
+        AND transacted_at >= ?
+        AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+      ORDER BY transacted_at
     `).bind(orgId, cutoffStr).all<{
       id: string;
       customer_id: string | null;

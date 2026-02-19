@@ -294,26 +294,41 @@ interface EventFilter {
   is_active: boolean;
 }
 
-// Helper: Query conversion goals from D1
+// Helper: Query conversion config from platform_connections settings
 async function getConversionGoals(db: D1Database, orgId: string): Promise<ConversionGoal[]> {
   const result = await db.prepare(`
-    SELECT id, name, type, trigger_config, default_value_cents,
-           is_primary, include_in_path, priority
-    FROM conversion_goals
-    WHERE organization_id = ?
-    ORDER BY priority ASC
+    SELECT id, provider, platform, display_name, settings
+    FROM platform_connections
+    WHERE organization_id = ? AND status = 'active'
+      AND json_extract(settings, '$.conversion_events') IS NOT NULL
   `).bind(orgId).all();
 
-  return (result.results || []).map(row => ({
-    id: row.id as string,
-    name: row.name as string,
-    type: row.type as 'conversion' | 'micro_conversion' | 'engagement',
-    trigger_config: JSON.parse(row.trigger_config as string || '{}'),
-    default_value_cents: row.default_value_cents as number,
-    is_primary: Boolean(row.is_primary),
-    include_in_path: Boolean(row.include_in_path),
-    priority: row.priority as number,
-  }));
+  const goals: ConversionGoal[] = [];
+  for (const row of result.results || []) {
+    try {
+      const settings = JSON.parse(row.settings as string || '{}');
+      const conversionEvents = settings.conversion_events || [];
+      for (const evt of conversionEvents) {
+        goals.push({
+          id: `${row.id}_${evt.event_type || 'default'}`,
+          name: (row.display_name as string) || (row.platform as string),
+          type: 'conversion',
+          trigger_config: {
+            event_type: evt.event_type,
+            page_pattern: evt.page_pattern,
+            status_filter: evt.status_filter,
+          },
+          default_value_cents: evt.default_value_cents || 0,
+          is_primary: true,
+          include_in_path: true,
+          priority: 0,
+        });
+      }
+    } catch {
+      // Skip connections with unparseable settings
+    }
+  }
+  return goals;
 }
 
 // Helper: Check if an event matches a conversion goal
@@ -1985,21 +2000,24 @@ Works even without click tracking or event data.
     let minDate: string | null = null;
     let maxDate: string | null = null;
 
-    // Query Stripe charges
+    // Query connector_events for all revenue sources
     try {
-      const stripeResult = await analyticsDb.prepare(`
+      const connectorResult = await analyticsDb.prepare(`
         SELECT
-          SUM(amount_cents) / 100.0 as revenue,
+          source_platform,
+          SUM(value_cents) / 100.0 as revenue,
           COUNT(*) as transactions,
-          COUNT(DISTINCT customer_id) as unique_customers,
-          MIN(DATE(stripe_created_at)) as min_date,
-          MAX(DATE(stripe_created_at)) as max_date
-        FROM stripe_charges
+          COUNT(DISTINCT customer_external_id) as unique_customers,
+          MIN(DATE(transacted_at)) as min_date,
+          MAX(DATE(transacted_at)) as max_date
+        FROM connector_events
         WHERE organization_id = ?
-          AND status = 'succeeded'
-          AND DATE(stripe_created_at) >= ?
-          AND DATE(stripe_created_at) <= ?
-      `).bind(orgId, dateFrom, dateTo).first<{
+          AND transacted_at >= ?
+          AND transacted_at <= ?
+          AND value_cents > 0
+        GROUP BY source_platform
+      `).bind(orgId, dateFrom, dateTo).all<{
+        source_platform: string;
         revenue: number;
         transactions: number;
         unique_customers: number;
@@ -2007,65 +2025,26 @@ Works even without click tracking or event data.
         max_date: string;
       }>();
 
-      if (stripeResult && stripeResult.revenue) {
+      for (const row of connectorResult.results || []) {
         bySource.push({
-          source: 'stripe',
-          revenue: stripeResult.revenue || 0,
-          transactions: stripeResult.transactions || 0
+          source: row.source_platform,
+          revenue: row.revenue || 0,
+          transactions: row.transactions || 0
         });
 
-        totalRevenue += stripeResult.revenue || 0;
-        totalTransactions += stripeResult.transactions || 0;
-        uniqueCustomers += stripeResult.unique_customers || 0;
+        totalRevenue += row.revenue || 0;
+        totalTransactions += row.transactions || 0;
+        uniqueCustomers += row.unique_customers || 0;
 
-        if (stripeResult.min_date) minDate = stripeResult.min_date;
-        if (stripeResult.max_date) maxDate = stripeResult.max_date;
-      }
-    } catch (err) {
-      structuredLog('WARN', 'Failed to query Stripe', { endpoint: 'attribution', step: 'blended_stripe', error: err instanceof Error ? err.message : String(err) });
-    }
-
-    // Query Shopify orders (if table exists)
-    try {
-      const shopifyResult = await analyticsDb.prepare(`
-        SELECT
-          SUM(total_price_cents) / 100.0 as revenue,
-          COUNT(*) as transactions,
-          COUNT(DISTINCT customer_id) as unique_customers,
-          MIN(DATE(shopify_created_at)) as min_date,
-          MAX(DATE(shopify_created_at)) as max_date
-        FROM shopify_orders
-        WHERE organization_id = ?
-          AND DATE(shopify_created_at) >= ?
-          AND DATE(shopify_created_at) <= ?
-      `).bind(orgId, dateFrom, dateTo).first<{
-        revenue: number;
-        transactions: number;
-        unique_customers: number;
-        min_date: string;
-        max_date: string;
-      }>();
-
-      if (shopifyResult && shopifyResult.revenue) {
-        bySource.push({
-          source: 'shopify',
-          revenue: shopifyResult.revenue || 0,
-          transactions: shopifyResult.transactions || 0
-        });
-
-        totalRevenue += shopifyResult.revenue || 0;
-        totalTransactions += shopifyResult.transactions || 0;
-        uniqueCustomers += shopifyResult.unique_customers || 0;
-
-        if (shopifyResult.min_date && (!minDate || shopifyResult.min_date < minDate)) {
-          minDate = shopifyResult.min_date;
+        if (row.min_date && (!minDate || row.min_date < minDate)) {
+          minDate = row.min_date;
         }
-        if (shopifyResult.max_date && (!maxDate || shopifyResult.max_date > maxDate)) {
-          maxDate = shopifyResult.max_date;
+        if (row.max_date && (!maxDate || row.max_date > maxDate)) {
+          maxDate = row.max_date;
         }
       }
     } catch (err) {
-      // Table might not exist
+      structuredLog('WARN', 'Failed to query connector_events', { endpoint: 'attribution', step: 'blended_connectors', error: err instanceof Error ? err.message : String(err) });
     }
 
     return {
@@ -2193,18 +2172,18 @@ Works even without click tracking or event data.
 /**
  * POST /v1/analytics/attribution/probabilistic/run
  *
- * Run probabilistic attribution using Stripe conversions + tag events.
- * This workflow matches Stripe charges to tag events for multi-touch attribution
+ * Run probabilistic attribution using connector conversions + tag events.
+ * This workflow matches connector events to tag sessions for multi-touch attribution
  * WITHOUT requiring ad platform data.
  *
  * Supports multiple conversion sources:
- * - 'stripe': Use Stripe charges as conversions
- * - 'tag': Use tag goal_id events as conversions
+ * - 'stripe': Use Stripe connector events as conversions
+ * - 'tag': Use tag conversion events as conversions
  * - 'all': Use both (default)
  *
  * Matching strategies (in priority order):
  * 1. Direct tag: Tag conversions already know their journey
- * 2. Identity match: Hash of Stripe customer_email matches tag user_id_hash
+ * 2. Identity match: Hash of customer_email matches tag user_id_hash
  * 3. Time proximity: Sessions with engagement within conversion window
  */
 export class RunProbabilisticAttribution extends OpenAPIRoute {
@@ -2217,8 +2196,8 @@ Matches Stripe conversions to tag events for multi-touch attribution.
 Returns a job ID to poll for completion.
 
 **Conversion Sources:**
-- \`stripe\`: Use Stripe charges as ground truth conversions
-- \`tag\`: Use tag events with goal_id as conversions
+- \`stripe\`: Use Stripe connector events as conversions
+- \`tag\`: Use tag conversion events as conversions
 - \`all\`: Use both (default)
 
 **No ad platform data required** - perfect for orgs with Stripe but no ad spend data.
