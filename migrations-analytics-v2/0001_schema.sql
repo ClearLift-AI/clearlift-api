@@ -303,6 +303,7 @@ CREATE INDEX IF NOT EXISTS idx_tp_ttclid ON touchpoints(ttclid) WHERE ttclid IS 
 
 CREATE TABLE IF NOT EXISTS customer_identities (
   id TEXT PRIMARY KEY,
+  organization_id TEXT,
   org_tag TEXT NOT NULL,
   anonymous_id TEXT NOT NULL,
   user_id_hash TEXT,
