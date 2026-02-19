@@ -805,28 +805,99 @@ export class GetRealtimeGoals extends OpenAPIRoute {
     }
 
     try {
-      // Import the goal service
-      const { GoalService } = await import("../../../services/goals");
-      const goalService = new GoalService(c.env.DB, analyticsDb);
+      // Query platform_connections with conversion_events configured (from DB)
+      const connectionsResult = await c.env.DB.prepare(`
+        SELECT id, platform, settings
+        FROM platform_connections
+        WHERE organization_id = ? AND is_active = 1
+          AND json_extract(settings, '$.conversion_events') IS NOT NULL
+      `).bind(orgId).all<{ id: string; platform: string; settings: string }>();
 
-      // Get all goals or specific goal
-      if (goalIdFilter) {
-        const goal = await goalService.getGoal(orgId, goalIdFilter);
-        if (!goal) {
-          return error(c, "NOT_FOUND", "Goal not found", 404);
-        }
-        const metrics = await goalService.getGoalRealtimeMetrics(orgId, goal, hours);
+      const connections = connectionsResult.results || [];
+
+      if (connections.length === 0) {
         return success(c, {
-          goals: [metrics],
-          primary_goal: goal.is_primary ? metrics : undefined,
-          total_conversions: metrics.conversions,
-          total_revenue: metrics.revenue,
+          goals: [],
+          primary_goal: undefined,
+          total_conversions: 0,
+          total_revenue: 0,
         });
       }
 
-      // Get metrics for all active goals
-      const allMetrics = await goalService.getRealtimeMetrics(orgId, hours);
-      return success(c, allMetrics);
+      const platformDisplayNames: Record<string, string> = {
+        stripe: 'Stripe Payment',
+        shopify: 'Shopify Order',
+        jobber: 'Jobber Invoice',
+        hubspot: 'HubSpot Deal',
+        adbliss_tag: 'Tag Conversion',
+      };
+
+      // For each connection with conversion config, query connector_events in the time window
+      const goals: Array<{
+        goal_id: string;
+        goal_name: string;
+        goal_slug: string;
+        goal_type: string;
+        is_primary: boolean;
+        conversions: number;
+        revenue: number;
+        unique_customers?: number;
+      }> = [];
+
+      let totalConversions = 0;
+      let totalRevenue = 0;
+
+      for (const conn of connections) {
+        // If filtering by goal_id, skip non-matching connections
+        if (goalIdFilter && conn.id !== goalIdFilter) continue;
+
+        const metricsResult = await analyticsDb.prepare(`
+          SELECT
+            COUNT(*) as conversions,
+            COALESCE(SUM(value_cents), 0) as revenue_cents,
+            COUNT(DISTINCT customer_external_id) as unique_customers
+          FROM connector_events
+          WHERE organization_id = ?
+            AND source_platform = ?
+            AND transacted_at >= datetime('now', '-' || ? || ' hours')
+        `).bind(orgId, conn.platform, hours).first<{
+          conversions: number;
+          revenue_cents: number;
+          unique_customers: number;
+        }>();
+
+        const conversions = metricsResult?.conversions || 0;
+        const revenue = (metricsResult?.revenue_cents || 0) / 100;
+
+        const goalEntry = {
+          goal_id: conn.id,
+          goal_name: platformDisplayNames[conn.platform] || `${conn.platform} Conversion`,
+          goal_slug: conn.platform,
+          goal_type: conn.platform === 'adbliss_tag' ? 'tag_event' : 'revenue_source' as string,
+          is_primary: goals.length === 0, // First connection is primary
+          conversions,
+          revenue,
+          unique_customers: metricsResult?.unique_customers || 0,
+        };
+
+        goals.push(goalEntry);
+        totalConversions += conversions;
+        totalRevenue += revenue;
+      }
+
+      const primaryGoal = goals.find(g => g.is_primary);
+
+      return success(c, {
+        goals,
+        primary_goal: primaryGoal ? {
+          goal_id: primaryGoal.goal_id,
+          goal_name: primaryGoal.goal_name,
+          conversions: primaryGoal.conversions,
+          revenue: primaryGoal.revenue,
+        } : undefined,
+        total_conversions: totalConversions,
+        total_revenue: totalRevenue,
+      });
     } catch (err) {
       structuredLog('ERROR', 'Goals query failed', { endpoint: 'realtime', step: 'goals', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
