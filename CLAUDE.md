@@ -257,12 +257,11 @@ AI-specific tables (isolated for performance):
 
 9. **cac_history** - Daily CAC records (goal-aware since 0006 migration)
    - `organization_id`, `date`, `spend_cents`, `conversions`, `cac_cents`, `revenue_cents`
-   - `conversions_goal` — deduplicated count from goal_conversions for macro goals
+   - `conversions_goal` — deduplicated count from connector conversions
    - `conversions_platform` — count from ad_metrics (platform-reported)
    - `conversion_source` — `'goal'` | `'platform'` — which source was used for primary `conversions`
-   - `goal_ids` — JSON array of macro goal IDs used
    - `revenue_goal_cents` — actual revenue from Stripe/Shopify/Jobber charges
-   - When macro goals exist, `conversions` = goal count; otherwise fallback to platform count
+   - When connector conversions exist, `conversions` = connector count; otherwise fallback to platform count
 
 10. **cac_predictions** - CAC forecasts
     - `organization_id`, `prediction_date`, `predicted_cac_cents`
@@ -281,7 +280,7 @@ GET  /v1/analytics/cac/summary?org_id=xxx&days=30
     conversions_goal, conversions_platform, revenue_goal_cents, goal_count, goal_names
 
 POST /v1/analytics/cac/backfill
-  → Body: { org_id, days }. Goal-aware: queries macro goals → goal_conversions → cac_history
+  → Body: { org_id, days }. Queries connector conversions → cac_history
 ```
 
 ### Unified Conversions Endpoint
@@ -801,7 +800,7 @@ See **`clearlift-cron/docs/SHARED_CODE.md`** for comprehensive cross-repo code s
 | Markov Chain | `src/services/attribution-models.ts` | §4 Markov Chain |
 | Shapley Value | `src/services/attribution-models.ts` | §1 Attribution Models |
 | Stage Markov | `src/services/stage-markov.ts` | §4 Markov Chain |
-| ConversionGoal Types | `src/services/goals/index.ts` | §6 Conversion Goals |
+| Connection Configs | `src/services/connection-configs.ts` | §6 Connection Configs |
 | OAuth Base Provider | `src/services/oauth/base.ts` | §9 OAuth Base |
 | API Response Types | `src/types/response.ts` | §10 API Response Types |
 | Auth Utilities | `src/utils/auth.ts` | §11 Auth Utilities |
@@ -883,8 +882,8 @@ See `clearlift-cron/docs/SHARED_CODE.md §19` for the comprehensive cross-repo i
 | `0081_drop_dead_tables.sql` | DB | Drops unused tables from infrastructure phase |
 
 **Dropped Tables (migration 0081):**
-- `conversion_configs` — replaced by `conversion_goals` + ConversionEventPicker
-- `interaction_nodes` / `interaction_edges` — replaced by FlowBuilder goal-relationship model
+- `conversion_configs` — replaced by `platform_connections.settings` JSON
+- `interaction_nodes` / `interaction_edges` — replaced by FlowBuilder architecture
 - `funnel_metadata` — replaced by FlowBuilder 3-layer architecture
 - `acquisition_instances` — never populated, replaced by traffic source auto-detection
 
@@ -918,7 +917,7 @@ SELECT COUNT(*) FROM journey_analytics WHERE converting_sessions > 0;
 -- Verify conversion linking working
 SELECT link_method, COUNT(*), AVG(link_confidence)
 FROM conversions
-WHERE linked_goal_id IS NOT NULL
+WHERE link_method IS NOT NULL
 GROUP BY link_method;
 
 -- Verify Shopify orders synced
@@ -998,7 +997,7 @@ All connectors should implement:
 - `fetchData()` for sync
 - `writeToD1()` for storage
 - `extractIdentities()` for attribution linking
-- `matchGoals()` for conversion linking
+- `extractConversions()` for conversion extraction
 
 See `clearlift-cron/docs/SHARED_CODE.md §20` for full roadmap.
 
@@ -1013,8 +1012,6 @@ Five foundational backend improvements enabling the UI overhaul and scaling to 1
 | Service | File | Purpose |
 |---------|------|---------|
 | FunnelGraphService | `src/services/funnel-graph.ts` | OR/AND funnel branching, path validation |
-| ConversionValueService | `src/services/conversion-value.ts` | Multi-goal value allocation |
-| GoalGroupService | `src/services/conversion-value.ts` | Goal group management |
 
 ### New Migrations
 
@@ -1043,47 +1040,19 @@ Five foundational backend improvements enabling the UI overhaul and scaling to 1
 
 ### Funnel Branching (Phase 4)
 
-**New Columns on `goal_relationships`:**
-- `relationship_operator` - 'OR' or 'AND'
-- `flow_tag` - Tags like 'self_serve', 'sales_led'
-- `is_exclusive` - Mutually exclusive paths
-
-**New Tables:**
-- `goal_branches` - Branch points (split/join)
-- ~~`acquisition_instances`~~ - **DROPPED** (migration 0081, Feb 2026 audit) — never populated
-- ~~`conversion_configs`~~ - **DROPPED** (migration 0081, Feb 2026 audit) — replaced by `conversion_goals` + ConversionEventPicker
+**Note (Feb 2026):** `goal_relationships`, `goal_branches`, `conversion_configs`, and `acquisition_instances` have all been **DROPPED**. Conversion criteria now live in `platform_connections.settings` JSON. The funnel branching concept is handled by the FlowBuilder 3-layer architecture.
 
 **Endpoints:**
 - `GET /v1/goals/graph` - Full funnel graph for Flow Builder
-- `POST /v1/goals/relationships/v2` - Create with OR/AND
 - `POST /v1/goals/branch` - Create split point
 - `POST /v1/goals/merge` - Create join point
 - `GET /v1/goals/paths` - Valid paths to a goal
 
 ### Multi-Conversion (Phase 5)
 
-**New Tables:**
-- `goal_groups` - Logical groupings (e.g., "All Revenue Events")
-- `goal_group_members` - Maps goals to groups with weights
-- `conversion_value_allocations` - Tracks value distribution
+**Note (Feb 2026):** `goal_groups`, `goal_group_members`, and `conversion_value_allocations` have been **DROPPED** as part of the goal system removal. Conversion criteria now live in `platform_connections.settings` JSON. The `conversions` table no longer has `goal_ids`, `goal_values`, or `attribution_group_id` columns.
 
-**New Columns on `conversions`:**
-- `goal_ids` - JSON array of matched goals
-- `goal_values` - JSON object: {goal_id: value_cents}
-- `attribution_group_id` - Link to goal group
-
-**Endpoints:**
-- `GET/POST /v1/goals/groups` - List/create groups
-- `GET/PUT /v1/goals/groups/:id/members` - Manage members
-- `POST /v1/goals/groups/:id/default` - Set default attribution
-- `DELETE /v1/goals/groups/:id` - Delete group
-
-**Allocation Methods:**
-- `equal` - Split evenly across matched goals
-- `weighted` - Use weights from goal_group_members
-- `explicit` - Use each goal's fixed_value_cents
-
-See `clearlift-cron/docs/SHARED_CODE.md §24` for complete documentation.
+See `clearlift-cron/docs/SHARED_CODE.md §24` for historical documentation.
 
 ---
 
