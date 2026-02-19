@@ -15,7 +15,6 @@ import { structuredLog } from '../../../utils/structured-logger';
 import { getSecret } from "../../../utils/secrets";
 import { AGE_LIMITS, BUDGET_LIMITS } from "../../../constants/facebook";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
-import { getShardDbForOrg } from "../../../services/shard-router";
 
 /**
  * GET /v1/analytics/facebook/campaigns
@@ -103,9 +102,7 @@ export class GetFacebookCampaigns extends OpenAPIRoute {
     const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     try {
-      const shardDb = await getShardDbForOrg(c.env, orgId);
-      structuredLog('INFO', 'Facebook campaigns query using D1 shard DB', { endpoint: 'analytics/facebook' });
-      const d1Analytics = new D1AnalyticsService(shardDb);
+      const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
       const campaigns = await d1Analytics.getFacebookCampaignsWithMetrics(
         orgId,
         startDate,

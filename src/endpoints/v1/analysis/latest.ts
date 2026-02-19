@@ -70,9 +70,9 @@ export class GetLatestAnalysis extends OpenAPIRoute {
       anthropicApiKey: "dummy",  // Not needed for query
       geminiApiKey: "dummy"
     });
-    const prompts = new PromptManager(c.env.AI_DB);
-    const logger = new AnalysisLogger(c.env.AI_DB);
-    const jobs = new JobManager(c.env.AI_DB);
+    const prompts = new PromptManager(c.env.DB);
+    const logger = new AnalysisLogger(c.env.DB);
+    const jobs = new JobManager(c.env.DB);
 
     const analyzer = new HierarchicalAnalyzer(
       entityTree,
@@ -81,7 +81,7 @@ export class GetLatestAnalysis extends OpenAPIRoute {
       prompts,
       logger,
       jobs,
-      c.env.AI_DB,
+      c.env.DB,
       c.env.ANALYTICS_DB,
       "dummy"  // Not used for read-only operations
     );

@@ -65,7 +65,7 @@ export class GetAnalysisStatus extends OpenAPIRoute {
 
     const { job_id } = c.req.param();
 
-    const jobs = new JobManager(c.env.AI_DB);
+    const jobs = new JobManager(c.env.DB);
     const job = await jobs.getJob(job_id);
 
     if (!job) {

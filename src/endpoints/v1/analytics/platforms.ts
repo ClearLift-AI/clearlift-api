@@ -4,7 +4,6 @@ import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
 import { getDBSession } from "../../../utils/db-session";
-import { getShardDbForOrg } from "../../../services/shard-router";
 import { structuredLog } from "../../../utils/structured-logger";
 
 /**
@@ -112,9 +111,8 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     console.log(`[Unified] Fetching data for org ${orgId}, date range: ${effectiveDateRange.start} to ${effectiveDateRange.end}, platforms: ${JSON.stringify(activePlatforms)}`);
 
     try {
-      const shardDb = await getShardDbForOrg(c.env, orgId);
-      console.log('[Unified] Using D1 shard DB for platform data');
-      const d1Analytics = new D1AnalyticsService(shardDb);
+      const analyticsDb = c.env.ANALYTICS_DB;
+      const d1Analytics = new D1AnalyticsService(analyticsDb);
       const { summary: d1Summary, by_platform } = await d1Analytics.getUnifiedPlatformSummary(
         orgId,
         effectiveDateRange.start,
@@ -162,9 +160,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         }
       }
 
-      // Fetch time series from D1 (ad_metrics is a shard table)
+      // Fetch time series from D1
       const timeSeries = await this.fetchPlatformTimeSeriesD1(
-        shardDb,
+        analyticsDb,
         orgId,
         activePlatforms,
         effectiveDateRange

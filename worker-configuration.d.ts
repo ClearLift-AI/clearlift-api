@@ -30,12 +30,7 @@ declare namespace Cloudflare {
 		IRIS_BASE_URL?: string;
 		EMAIL_DRY_RUN?: string;
 		DB: D1Database;
-		AI_DB: D1Database;
 		ANALYTICS_DB: D1Database;
-		SHARD_0: D1Database;
-		SHARD_1: D1Database;
-		SHARD_2: D1Database;
-		SHARD_3: D1Database;
 		ENCRYPTION_KEY: SecretsStoreSecret;
 		R2_SQL_TOKEN: SecretsStoreSecret;
 		GOOGLE_CLIENT_ID: SecretsStoreSecret;

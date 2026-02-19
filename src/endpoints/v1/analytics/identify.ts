@@ -121,17 +121,18 @@ export class PostIdentify extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>();
     const body = data.body;
 
-    const d1 = new D1Adapter(c.env.DB);
+    const coreDb = new D1Adapter(c.env.DB);
+    const identityDb = new D1Adapter(c.env.ANALYTICS_DB);
 
     try {
-      // Verify org exists
-      const org = await d1.getOrganization(body.org_id);
+      // Verify org exists (core DB)
+      const org = await coreDb.getOrganization(body.org_id);
       if (!org) {
         return error(c, "NOT_FOUND", "Organization not found", 404);
       }
 
-      // Upsert identity mapping
-      const result = await d1.upsertIdentityMapping(
+      // Upsert identity mapping (ANALYTICS_DB - identity tables moved from DB)
+      const result = await identityDb.upsertIdentityMapping(
         body.org_id,
         body.anonymous_id,
         body.user_id,
@@ -144,8 +145,8 @@ export class PostIdentify extends OpenAPIRoute {
         }
       );
 
-      // Get count of linked anonymous_ids
-      const linkedCount = await d1.getLinkedIdentityCount(body.org_id, body.user_id);
+      // Get count of linked anonymous_ids (ANALYTICS_DB)
+      const linkedCount = await identityDb.getLinkedIdentityCount(body.org_id, body.user_id);
 
       return success(c, {
         id: result.id,
@@ -219,10 +220,10 @@ export class PostIdentityMerge extends OpenAPIRoute {
       return error(c, "INVALID_REQUEST", "Cannot merge a user into themselves", 400);
     }
 
-    const d1 = new D1Adapter(c.env.DB);
+    const identityDb = new D1Adapter(c.env.ANALYTICS_DB);
 
     try {
-      await d1.mergeIdentities(
+      await identityDb.mergeIdentities(
         body.org_id,
         body.source_user_id,
         body.target_user_id,
@@ -230,7 +231,7 @@ export class PostIdentityMerge extends OpenAPIRoute {
         body.reason
       );
 
-      const linkedCount = await d1.getLinkedIdentityCount(body.org_id, body.target_user_id);
+      const linkedCount = await identityDb.getLinkedIdentityCount(body.org_id, body.target_user_id);
 
       return success(c, {
         merged: true,
@@ -288,8 +289,8 @@ export class GetIdentityByAnonymousId extends OpenAPIRoute {
     const orgId = c.get("org_id" as any) as string;
     const params = c.req.param();
 
-    const d1 = new D1Adapter(c.env.DB);
-    const userId = await d1.getUserIdByAnonymousId(orgId, params.anonymousId);
+    const identityDb = new D1Adapter(c.env.ANALYTICS_DB);
+    const userId = await identityDb.getUserIdByAnonymousId(orgId, params.anonymousId);
 
     return success(c, {
       anonymous_id: params.anonymousId,

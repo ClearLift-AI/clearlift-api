@@ -234,47 +234,18 @@
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "clearlift-db-prod",
-          "database_id": "8e55bba7-4b54-4992-b5e5-050611499c18",
-          "migrations_dir": "migrations"
-        },
-        {
-          "binding": "AI_DB",
-          "database_name": "clearlift-ai-prod",
-          "database_id": "3fb300f4-4523-4a29-9efc-955d1684f392",
-          "migrations_dir": "migrations-ai"
+          "database_name": "adbliss-core",
+          "database_id": "00000000-0000-0000-0000-000000000001",
+          "migrations_dir": "migrations-core"
         },
         {
           "binding": "ANALYTICS_DB",
-          "database_name": "clearlift-analytics-prod",
-          "database_id": "a69beb57-92c9-489c-8f55-86205b613010",
-          "migrations_dir": "migrations-analytics"
-        },
-        // Platform data shards (for campaign/metrics storage + pre-aggregation)
-        {
-          "binding": "SHARD_0",
-          "database_name": "clearlift-shard-0",
-          "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0",
-          "migrations_dir": "shard-migrations"
-        },
-        {
-          "binding": "SHARD_1",
-          "database_name": "clearlift-shard-1",
-          "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6",
-          "migrations_dir": "shard-migrations"
-        },
-        {
-          "binding": "SHARD_2",
-          "database_name": "clearlift-shard-2",
-          "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8",
-          "migrations_dir": "shard-migrations"
-        },
-        {
-          "binding": "SHARD_3",
-          "database_name": "clearlift-shard-3",
-          "database_id": "ff763599-df7b-4041-b766-b574e7b3415b",
-          "migrations_dir": "shard-migrations"
+          "database_name": "adbliss-analytics-0",
+          "database_id": "00000000-0000-0000-0000-000000000002",
+          "migrations_dir": "migrations-analytics-v2"
         }
+        // AI_DB: REMOVED (merged into DB)
+        // SHARD_0-3: REMOVED (shard system dormant, all queries use ANALYTICS_DB)
       ],
       "queues": {
         "producers": [

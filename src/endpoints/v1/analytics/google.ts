@@ -13,7 +13,6 @@ import { structuredLog } from '../../../utils/structured-logger';
 import { getSecret } from "../../../utils/secrets";
 import { GoogleAdsOAuthProvider } from "../../../services/oauth/google";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
-import { getShardDbForOrg } from "../../../services/shard-router";
 
 /**
  * GET /v1/analytics/google/campaigns
@@ -103,9 +102,7 @@ export class GetGoogleCampaigns extends OpenAPIRoute {
     const startDate = query.query.start_date || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     try {
-      const shardDb = await getShardDbForOrg(c.env, orgId);
-      console.log('[Google Campaigns] Using D1 shard DB');
-      const d1Analytics = new D1AnalyticsService(shardDb);
+      const d1Analytics = new D1AnalyticsService(c.env.ANALYTICS_DB);
       const campaigns = await d1Analytics.getGoogleCampaignsWithMetrics(
         orgId,
         startDate,

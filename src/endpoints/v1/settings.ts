@@ -361,7 +361,7 @@ export class GetAIDecisions extends OpenAPIRoute {
       LIMIT 50
     `;
 
-    const result = await c.env.AI_DB.prepare(query).bind(...bindings).all();
+    const result = await c.env.DB.prepare(query).bind(...bindings).all();
 
     // Parse JSON fields — safe parse prevents one corrupted row from crashing the entire response
     const decisions = (result.results || []).map((row: any) => ({
@@ -411,8 +411,8 @@ export class AcceptAIDecision extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Get decision from AI_DB
-    const decision = await c.env.AI_DB.prepare(`
+    // Get decision from DB
+    const decision = await c.env.DB.prepare(`
       SELECT * FROM ai_decisions WHERE id = ? AND organization_id = ?
     `).bind(data.params.decision_id, orgId).first<any>();
 
@@ -425,7 +425,7 @@ export class AcceptAIDecision extends OpenAPIRoute {
     }
 
     if (new Date(decision.expires_at) < new Date()) {
-      await c.env.AI_DB.prepare(`UPDATE ai_decisions SET status = 'expired' WHERE id = ?`).bind(decision.id).run();
+      await c.env.DB.prepare(`UPDATE ai_decisions SET status = 'expired' WHERE id = ?`).bind(decision.id).run();
       return error(c, "EXPIRED", "Decision has expired", 400);
     }
 
@@ -443,7 +443,7 @@ export class AcceptAIDecision extends OpenAPIRoute {
     }
 
     // Mark as approved
-    await c.env.AI_DB.prepare(`
+    await c.env.DB.prepare(`
       UPDATE ai_decisions
       SET status = 'approved', reviewed_at = datetime('now'), reviewed_by = ?
       WHERE id = ?
@@ -453,7 +453,7 @@ export class AcceptAIDecision extends OpenAPIRoute {
     try {
       const result = await this.executeDecision(c, decision, orgId);
 
-      await c.env.AI_DB.prepare(`
+      await c.env.DB.prepare(`
         UPDATE ai_decisions
         SET status = 'executed', executed_at = datetime('now'), execution_result = ?
         WHERE id = ?
@@ -461,7 +461,7 @@ export class AcceptAIDecision extends OpenAPIRoute {
 
       return success(c, { id: decision.id, status: "executed", result });
     } catch (err: any) {
-      await c.env.AI_DB.prepare(`
+      await c.env.DB.prepare(`
         UPDATE ai_decisions SET status = 'failed', error_message = ? WHERE id = ?
       `).bind(err.message, decision.id).run();
 
@@ -658,7 +658,7 @@ export class RejectAIDecision extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    const decision = await c.env.AI_DB.prepare(`
+    const decision = await c.env.DB.prepare(`
       SELECT status FROM ai_decisions WHERE id = ? AND organization_id = ?
     `).bind(data.params.decision_id, orgId).first();
 
@@ -670,7 +670,7 @@ export class RejectAIDecision extends OpenAPIRoute {
       return error(c, "INVALID_STATUS", "Decision has already been reviewed", 400);
     }
 
-    await c.env.AI_DB.prepare(`
+    await c.env.DB.prepare(`
       UPDATE ai_decisions
       SET status = 'rejected', reviewed_at = datetime('now'), reviewed_by = ?
       WHERE id = ?
@@ -721,8 +721,8 @@ export class RateAIDecision extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization selected", 403);
     }
 
-    // Get decision from AI_DB
-    const decision = await c.env.AI_DB.prepare(`
+    // Get decision from DB
+    const decision = await c.env.DB.prepare(`
       SELECT tool, parameters, status FROM ai_decisions WHERE id = ? AND organization_id = ?
     `).bind(data.params.decision_id, orgId).first<any>();
 
@@ -741,7 +741,7 @@ export class RateAIDecision extends OpenAPIRoute {
     params.feedback_text = data.body.feedback_text || null;
     params.rated_at = new Date().toISOString();
 
-    await c.env.AI_DB.prepare(`
+    await c.env.DB.prepare(`
       UPDATE ai_decisions
       SET parameters = ?,
           status = 'acknowledged',

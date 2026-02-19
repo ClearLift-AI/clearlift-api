@@ -404,7 +404,7 @@ Returns the complete journey for an identified user, including:
     const dateTo = query.date_to;
     const includeEvents = query.include_events !== 'false';
 
-    const d1 = new D1Adapter(c.env.DB);
+    const identityDb = new D1Adapter(c.env.ANALYTICS_DB);
 
     // Get org tag
     const tagMapping = await c.env.DB.prepare(`
@@ -443,11 +443,11 @@ Returns the complete journey for an identified user, including:
       });
     }
 
-    // Get all anonymous_ids linked to this user from identity_mappings
-    const anonymousIds = await d1.getAnonymousIdsByUserId(orgId, userId);
+    // Get all anonymous_ids linked to this user from identity_mappings (ANALYTICS_DB)
+    const anonymousIds = await identityDb.getAnonymousIdsByUserId(orgId, userId);
 
-    // Get identity graph for metadata
-    const identityGraph = await d1.getIdentityGraph(orgId, userId);
+    // Get identity graph for metadata (ANALYTICS_DB)
+    const identityGraph = await identityDb.getIdentityGraph(orgId, userId);
     const firstIdentified = identityGraph.length > 0
       ? identityGraph.reduce((min, ig) =>
           ig.identified_at < min ? ig.identified_at : min, identityGraph[0].identified_at)
@@ -808,8 +808,8 @@ export class GetJourneysOverview extends OpenAPIRoute {
     const orgTag = tagMapping.short_tag;
     const analyticsDb = c.env.ANALYTICS_DB;
 
-    // Get identity mappings count from D1
-    const identityCount = await c.env.DB.prepare(`
+    // Get identity mappings count from ANALYTICS_DB (identity tables moved from DB)
+    const identityCount = await c.env.ANALYTICS_DB.prepare(`
       SELECT COUNT(DISTINCT user_id) as users, COUNT(DISTINCT anonymous_id) as anon_ids
       FROM identity_mappings WHERE organization_id = ?
     `).bind(orgId).first() as { users: number; anon_ids: number } | null;

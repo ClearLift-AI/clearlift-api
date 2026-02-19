@@ -38,9 +38,9 @@ import { LLMRouter, LLMRuntimeConfig } from '../services/analysis/llm-router';
 import { PromptManager } from '../services/analysis/prompt-manager';
 import { AnalysisLogger } from '../services/analysis/analysis-logger';
 import { JobManager } from '../services/analysis/job-manager';
-import { AnalysisLevel, CLAUDE_MODELS } from '../services/analysis/llm-provider';
+import { AnalysisLevel, GEMINI_MODELS } from '../services/analysis/llm-provider';
 import {
-  getAnthropicTools,
+  getToolDefinitions,
   isRecommendationTool,
   isTerminateAnalysisTool,
   isGeneralInsightTool,
@@ -48,7 +48,7 @@ import {
   Recommendation,
 } from '../services/analysis/recommendation-tools';
 import {
-  getExplorationTools,
+  getExplorationToolDefinitions,
   getExplorationToolsForOrg,
   isExplorationTool,
   ExplorationToolExecutor
@@ -57,7 +57,7 @@ import {
   createSimulationCache,
   executeSimulateChange,
   executeRecommendationWithSimulation,
-  getToolsWithSimulation,
+  getToolsWithSimulationGeneric,
   requiresSimulation,
   SimulationCache,
   ToolExecutionContext,
@@ -65,6 +65,12 @@ import {
 } from '../services/analysis/simulation-executor';
 import { SimulationResult } from '../services/analysis/simulation-service';
 import { getSecret } from '../utils/secrets';
+import {
+  createAgenticClient,
+  AgenticClient,
+  AgenticToolDef,
+  AgenticToolResult,
+} from '../services/analysis/agentic-client';
 
 /**
  * Result from the complete workflow
@@ -95,7 +101,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       timeout: '30 seconds'
     }, async () => {
       // Only delete recommendations past their expiration date
-      const result = await this.env.AI_DB.prepare(`
+      const result = await this.env.DB.prepare(`
         DELETE FROM ai_decisions
         WHERE organization_id = ?
         AND status = 'pending'
@@ -123,7 +129,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       const tree = await treeBuilder.buildTree(orgId);
 
       // Update job with total entities (+2 for cross_platform and recommendations)
-      const jobs = new JobManager(this.env.AI_DB);
+      const jobs = new JobManager(this.env.DB);
       await jobs.startJob(jobId, tree.totalEntities + 2);
 
       return serializeEntityTree(tree);
@@ -163,7 +169,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       console.log(`[Analysis] Pre-filtered: ${entityTree.totalEntities} → ${pruned.totalEntities} entities (${activeEntityIds.size} with activity)`);
 
       // Update job total to reflect pruned count
-      const jobs = new JobManager(this.env.AI_DB);
+      const jobs = new JobManager(this.env.DB);
       await jobs.startJob(jobId, pruned.totalEntities + 2);
 
       return pruned;
@@ -267,7 +273,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' },
       timeout: '2 minutes'
     }, async () => {
-      const jobs = new JobManager(this.env.AI_DB);
+      const jobs = new JobManager(this.env.DB);
       await jobs.updateProgress(jobId, processedCount, 'recommendations');
 
       // Fetch recent recommendation history
@@ -283,7 +289,11 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       };
     });
 
-    agenticMessages = [{ role: 'user', content: agenticContext.contextPrompt }];
+    // Create the agentic client (Gemini Flash for cost efficiency)
+    const geminiKey = await getSecret(this.env.GEMINI_API_KEY);
+    const agenticClient = createAgenticClient('gemini', geminiKey!, GEMINI_MODELS.FLASH);
+
+    agenticMessages = [agenticClient.buildUserMessage(agenticContext.contextPrompt)];
 
     // Run agentic iterations as separate steps
     // Loop continues until: we have an insight AND 3 action recs, OR max iterations, OR early termination
@@ -306,7 +316,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           accumulatedInsightId,
           accumulatedInsights,
           hasInsight,
-          simulationCache  // Pass simulation cache for enforced simulation before recommendations
+          simulationCache,  // Pass simulation cache for enforced simulation before recommendations
+          agenticClient
         );
       });
 
@@ -342,7 +353,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           agenticMessages,
           agenticContext.systemPrompt + `\n\nYou have made ${maxActionRecommendations} recommendations which is the maximum. Provide a brief final summary.`,
           enableExploration,
-          orgId
+          orgId,
+          agenticClient
         );
       });
       finalSummary = finalResult || crossPlatformSummary;
@@ -356,7 +368,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       retries: { limit: 3, delay: '1 second' },
       timeout: '30 seconds'
     }, async () => {
-      const jobs = new JobManager(this.env.AI_DB);
+      const jobs = new JobManager(this.env.DB);
       await jobs.updateProgress(jobId, processedCount, 'recommendations');
       await jobs.completeJob(jobId, runId, stoppedReason, terminationReason);
     });
@@ -368,7 +380,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       timeout: '30 seconds'
     }, async () => {
       // Get pending recommendations with simulation data
-      const recsResult = await this.env.AI_DB.prepare(`
+      const recsResult = await this.env.DB.prepare(`
         SELECT id, simulation_data, predicted_impact
         FROM ai_decisions
         WHERE organization_id = ?
@@ -435,7 +447,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         const dayImpact = (totalImpactPercent * i) / 3;
         const predictedCac = Math.round(currentCac * (1 + dayImpact / 100));
 
-        await this.env.AI_DB.prepare(`
+        await this.env.DB.prepare(`
           INSERT INTO cac_predictions (
             organization_id, prediction_date, predicted_cac_cents,
             recommendation_ids, analysis_run_id, assumptions
@@ -506,9 +518,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       anthropicApiKey: anthropicKey!,
       geminiApiKey: geminiKey!
     });
-    const prompts = new PromptManager(this.env.AI_DB);
-    const logger = new AnalysisLogger(this.env.AI_DB);
-    const jobs = new JobManager(this.env.AI_DB);
+    const prompts = new PromptManager(this.env.DB);
+    const logger = new AnalysisLogger(this.env.DB);
+    const jobs = new JobManager(this.env.DB);
 
     const limiter = createLimiter(1); // Max 1 concurrent LLM call to stay under subrequest limit
 
@@ -727,9 +739,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       anthropicApiKey: anthropicKey!,
       geminiApiKey: geminiKey!
     });
-    const prompts = new PromptManager(this.env.AI_DB);
-    const logger = new AnalysisLogger(this.env.AI_DB);
-    const jobs = new JobManager(this.env.AI_DB);
+    const prompts = new PromptManager(this.env.DB);
+    const logger = new AnalysisLogger(this.env.DB);
+    const jobs = new JobManager(this.env.DB);
 
     // Build platform summaries from account summaries
     const platformSummaries: Record<string, string> = {};
@@ -1146,7 +1158,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + 24);
 
-    await this.env.AI_DB.prepare(`
+    await this.env.DB.prepare(`
       INSERT INTO analysis_summaries (
         id, organization_id, level, platform, entity_id, entity_name,
         summary, metrics_snapshot, days, analysis_run_id, expires_at
@@ -1177,7 +1189,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     cutoffDate.setDate(cutoffDate.getDate() - lookbackDays);
 
     try {
-      const result = await this.env.AI_DB.prepare(`
+      const result = await this.env.DB.prepare(`
         SELECT
           tool,
           parameters,
@@ -1347,55 +1359,28 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     existingAccumulatedInsightId: string | null,
     existingAccumulatedInsights: AccumulatedInsightData[],
     existingHasInsight: boolean,
-    simulationCache: SimulationCache  // Shared across iterations for simulation enforcement
+    simulationCache: SimulationCache,  // Shared across iterations for simulation enforcement
+    client: AgenticClient
   ): Promise<AgenticIterationResult> {
     // Clone accumulated insights array to avoid mutation
     let accumulatedInsightId = existingAccumulatedInsightId;
     let accumulatedInsights = [...existingAccumulatedInsights];
     const actionRecommendations = [...existingActionRecommendations];
-    const explorationExecutor = new ExplorationToolExecutor(this.env.ANALYTICS_DB, this.env.AI_DB);
+    const explorationExecutor = new ExplorationToolExecutor(this.env.ANALYTICS_DB, this.env.DB);
 
     // Build tools list with simulate_change at the front
-    // This makes the LLM more likely to use it before making recommendations
     // Dynamic filtering: only include exploration tools relevant to this org's connectors
     const explorationTools = enableExploration
       ? await getExplorationToolsForOrg(this.env.ANALYTICS_DB, orgId)
       : [];
-    const baseTools = [...getAnthropicTools(), ...explorationTools];
-    const tools = getToolsWithSimulation(baseTools);
+    const baseTools = [...getToolDefinitions(), ...explorationTools] as AgenticToolDef[];
+    const tools = getToolsWithSimulationGeneric(baseTools) as AgenticToolDef[];
 
-    // Get API key
-    const anthropicKey = await getSecret(this.env.ANTHROPIC_API_KEY);
+    // Call LLM via provider-agnostic client
+    const callResult = await client.call(messages, systemPrompt, tools);
 
-    // Call Claude API
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': anthropicKey!,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: CLAUDE_MODELS.OPUS,
-        max_tokens: 2048,
-        system: systemPrompt,
-        messages,
-        tools
-      })
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Anthropic API error: ${response.status} - ${error}`);
-    }
-
-    const result = await response.json() as any;
-
-    const toolUses = result.content.filter((b: any) => b.type === 'tool_use');
-    const textBlocks = result.content.filter((b: any) => b.type === 'text');
-
-    // If no tool uses, we're done
-    if (toolUses.length === 0) {
+    // If no tool calls, we're done
+    if (callResult.toolCalls.length === 0) {
       return {
         messages,
         recommendations: existingRecommendations,
@@ -1406,26 +1391,26 @@ If you cannot find any actionable recommendations, you MUST still generate an in
       };
     }
 
-    // Add assistant response
-    const updatedMessages = [...messages, { role: 'assistant', content: result.content }];
+    // Add assistant response (provider-specific format preserved)
+    const updatedMessages = [...messages, client.buildAssistantMessage(callResult.rawAssistantMessage)];
 
-    // Process tool uses
-    const toolResults: any[] = [];
+    // Process tool calls
+    const toolResults: AgenticToolResult[] = [];
     const recommendations = [...existingRecommendations];
     let hitMaxActionRecommendations = false;
 
-    for (const toolUse of toolUses) {
+    for (const toolCall of callResult.toolCalls) {
       // Handle terminate_analysis (control tool - NOT logged to DB)
-      if (isTerminateAnalysisTool(toolUse.name)) {
+      if (isTerminateAnalysisTool(toolCall.name)) {
         toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: JSON.stringify({ status: 'terminating', message: 'Analysis terminated by AI decision' })
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          content: { status: 'terminating', message: 'Analysis terminated by AI decision' }
         });
 
         // Return immediately with early termination
         if (toolResults.length > 0) {
-          updatedMessages.push({ role: 'user', content: toolResults });
+          updatedMessages.push(client.buildToolResultsMessage(toolResults));
         }
 
         return {
@@ -1433,15 +1418,15 @@ If you cannot find any actionable recommendations, you MUST still generate an in
           recommendations,
           shouldStop: true,
           stopReason: 'early_termination',
-          terminationReason: toolUse.input.reason,
+          terminationReason: toolCall.input.reason,
           accumulatedInsightId: accumulatedInsightId || undefined,
           accumulatedInsights
         };
       }
 
       // Handle general_insight (accumulation logic - does NOT count toward action limit)
-      if (isGeneralInsightTool(toolUse.name)) {
-        const input = toolUse.input;
+      if (isGeneralInsightTool(toolCall.name)) {
+        const input = toolCall.input;
 
         // Add to accumulated insights array
         accumulatedInsights.push({
@@ -1457,13 +1442,13 @@ If you cannot find any actionable recommendations, you MUST still generate an in
           // UPDATE existing row - subsequent insights just append (no limit)
           await this.updateAccumulatedInsight(orgId, accumulatedInsightId, accumulatedInsights);
           toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: JSON.stringify({
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            content: {
               status: 'appended',
               message: `Insight appended to accumulated document (${accumulatedInsights.length} total). You can continue adding insights - they don't count toward your action recommendation limit.`,
               total_insights: accumulatedInsights.length
-            })
+            }
           });
         } else {
           // CREATE new row - insight is separate from action recommendations
@@ -1483,86 +1468,86 @@ If you cannot find any actionable recommendations, you MUST still generate an in
           });
 
           toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: JSON.stringify({
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            content: {
               status: 'created',
               message: 'Accumulated insight document created. Additional insights will append to this document. Insights are separate from action recommendations - you can add up to 3 action recommendations (set_budget, set_status, set_audience, reallocate_budget).',
               total_insights: 1,
               action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
-            })
+            }
           });
         }
         continue;
       }
 
       // Handle exploration tools
-      if (isExplorationTool(toolUse.name)) {
-        const exploreResult = await explorationExecutor.execute(toolUse.name, toolUse.input, orgId);
+      if (isExplorationTool(toolCall.name)) {
+        const exploreResult = await explorationExecutor.execute(toolCall.name, toolCall.input, orgId);
         toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: JSON.stringify(exploreResult)
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          content: exploreResult
         });
         continue;
       }
 
       // Handle simulate_change tool - this runs BEFORE recommendations
       // The simulation cache is shared across iterations so LLM must acknowledge results
-      if (toolUse.name === 'simulate_change') {
+      if (toolCall.name === 'simulate_change') {
         const simContext: ToolExecutionContext = {
           orgId,
           analysisRunId: runId,
           analyticsDb: this.env.ANALYTICS_DB,
-          aiDb: this.env.AI_DB,
+          aiDb: this.env.DB,
           simulationCache
         };
 
-        const simResult = await executeSimulateChange(toolUse.input, simContext);
+        const simResult = await executeSimulateChange(toolCall.input as any, simContext);
 
         toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: JSON.stringify({
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          content: {
             success: simResult.success,
             message: simResult.message,
             data: simResult.data
-          })
+          }
         });
         continue;
       }
 
       // Handle action recommendation tools (set_budget, set_status, set_audience, reallocate_budget)
       // These count toward the action limit, separate from insights
-      if (isRecommendationTool(toolUse.name) && !isGeneralInsightTool(toolUse.name) && !isTerminateAnalysisTool(toolUse.name)) {
+      if (isRecommendationTool(toolCall.name) && !isGeneralInsightTool(toolCall.name) && !isTerminateAnalysisTool(toolCall.name)) {
         if (hitMaxActionRecommendations || actionRecommendations.length >= maxActionRecommendations) {
           hitMaxActionRecommendations = true;
           toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: JSON.stringify({
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            content: {
               status: 'skipped',
               message: `Maximum action recommendations (${maxActionRecommendations}) reached. You can still add insights via general_insight.`
-            })
+            }
           });
           continue;
         }
 
         // For set_status and set_budget, use simulation-required enforcement
         // This FORCES the LLM to run simulate_change first, or the recommendation fails
-        if (requiresSimulation(toolUse.name)) {
+        if (requiresSimulation(toolCall.name)) {
           const simContext: ToolExecutionContext = {
             orgId,
             analysisRunId: runId,
             analyticsDb: this.env.ANALYTICS_DB,
-            aiDb: this.env.AI_DB,
+            aiDb: this.env.DB,
             simulationCache,
-            platform: toolUse.input.platform
+            platform: toolCall.input.platform
           };
 
           const simResult = await executeRecommendationWithSimulation(
-            toolUse.name,
-            toolUse.input,
+            toolCall.name,
+            toolCall.input,
             simContext
           );
 
@@ -1570,21 +1555,21 @@ If you cannot find any actionable recommendations, you MUST still generate an in
             // Simulation was required but not done - return error with simulation data
             // The LLM must review the simulation and call the tool again
             toolResults.push({
-              type: 'tool_result',
-              tool_use_id: toolUse.id,
-              content: JSON.stringify({
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+              content: {
                 status: 'simulation_required',
                 error: simResult.error,
                 message: simResult.message,
                 recommendation: simResult.recommendation  // PROCEED, RECONSIDER, or TRADEOFF
-              })
+              }
             });
             continue;
           }
 
           // Simulation was done, recommendation created with CALCULATED impact
-          const rec = parseToolCallToRecommendation(toolUse.name, {
-            ...toolUse.input,
+          const rec = parseToolCallToRecommendation(toolCall.name, {
+            ...toolCall.input,
             // Override with calculated impact from simulation
             predicted_impact: simResult.data?.calculated_impact
           });
@@ -1592,16 +1577,16 @@ If you cannot find any actionable recommendations, you MUST still generate an in
           actionRecommendations.push(rec);
 
           toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: JSON.stringify({
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            content: {
               status: 'logged',
               message: simResult.message,
               recommendation_id: simResult.recommendation_id,
               calculated_impact: simResult.data?.calculated_impact,
               action_recommendation_count: actionRecommendations.length,
               action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
-            })
+            }
           });
 
           if (actionRecommendations.length >= maxActionRecommendations) {
@@ -1611,7 +1596,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
         }
 
         // For other tools (set_audience, reallocate_budget), use direct logging
-        const rec = parseToolCallToRecommendation(toolUse.name, toolUse.input);
+        const rec = parseToolCallToRecommendation(toolCall.name, toolCall.input);
         recommendations.push(rec);
         actionRecommendations.push(rec);  // Track action recs separately
 
@@ -1619,13 +1604,13 @@ If you cannot find any actionable recommendations, you MUST still generate an in
         await this.logRecommendation(orgId, rec, runId);
 
         toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: JSON.stringify({
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          content: {
             status: 'logged',
             action_recommendation_count: actionRecommendations.length,
             action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
-          })
+          }
         });
 
         if (actionRecommendations.length >= maxActionRecommendations) {
@@ -1636,7 +1621,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
 
     // Add tool results to messages
     if (toolResults.length > 0) {
-      updatedMessages.push({ role: 'user', content: toolResults });
+      updatedMessages.push(client.buildToolResultsMessage(toolResults));
     }
 
     return {
@@ -1657,39 +1642,26 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     messages: any[],
     systemPrompt: string,
     enableExploration: boolean,
-    orgId?: string
+    orgId?: string,
+    client?: AgenticClient
   ): Promise<string | null> {
     const explorationTools = enableExploration && orgId
       ? await getExplorationToolsForOrg(this.env.ANALYTICS_DB, orgId)
-      : enableExploration ? getExplorationTools() : [];
-    const tools = [...getAnthropicTools(), ...explorationTools];
+      : enableExploration ? getExplorationToolDefinitions() : [];
+    const tools = [...getToolDefinitions(), ...explorationTools] as AgenticToolDef[];
 
-    // Get API key
-    const anthropicKey = await getSecret(this.env.ANTHROPIC_API_KEY);
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': anthropicKey!,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: CLAUDE_MODELS.OPUS,
-        max_tokens: 2048,
-        system: systemPrompt,
-        messages,
-        tools
-      })
-    });
-
-    if (!response.ok) {
-      return null;
+    if (!client) {
+      // Fallback: create a new client if none provided (shouldn't happen in practice)
+      const geminiKey = await getSecret(this.env.GEMINI_API_KEY);
+      client = createAgenticClient('gemini', geminiKey!, GEMINI_MODELS.FLASH);
     }
 
-    const result = await response.json() as any;
-    const textBlocks = result.content.filter((b: any) => b.type === 'text');
-    return textBlocks.map((b: any) => b.text).join('\n') || null;
+    try {
+      const callResult = await client.call(messages, systemPrompt, tools);
+      return callResult.textBlocks.join('\n') || null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1702,7 +1674,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     simulationResult?: SimulationResult | null
   ): Promise<void> {
     // Dedup: skip if an identical pending decision already exists (workflow retry safety)
-    const existing = await this.env.AI_DB.prepare(`
+    const existing = await this.env.DB.prepare(`
       SELECT id FROM ai_decisions
       WHERE organization_id = ? AND tool = ? AND platform = ? AND entity_type = ? AND entity_id = ?
         AND status = 'pending'
@@ -1731,7 +1703,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     }) : null;
     const simulationConfidence = simulationResult?.confidence ?? null;
 
-    await this.env.AI_DB.prepare(`
+    await this.env.DB.prepare(`
       INSERT INTO ai_decisions (
         id, organization_id, tool, platform, entity_type, entity_id, entity_name,
         parameters, current_state, reason, predicted_impact, confidence, status, expires_at,
@@ -1769,7 +1741,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    await this.env.AI_DB.prepare(`
+    await this.env.DB.prepare(`
       INSERT INTO ai_decisions (
         id, organization_id, tool, platform, entity_type, entity_id, entity_name,
         parameters, reason, predicted_impact, confidence, status, expires_at,
@@ -1796,7 +1768,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     insightId: string,
     insights: AccumulatedInsightData[]
   ): Promise<void> {
-    await this.env.AI_DB.prepare(`
+    await this.env.DB.prepare(`
       UPDATE ai_decisions
       SET parameters = ?,
           reason = ?,
