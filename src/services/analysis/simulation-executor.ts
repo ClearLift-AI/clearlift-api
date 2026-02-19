@@ -558,6 +558,20 @@ export function getToolsWithSimulation(existingTools: any[]): any[] {
   ];
 }
 
+// Generic version (provider-agnostic canonical format)
+export function getToolsWithSimulationGeneric(
+  existingTools: Array<{ name: string; description: string; input_schema: any }>
+): Array<{ name: string; description: string; input_schema: any }> {
+  return [
+    {
+      name: SIMULATE_CHANGE_TOOL.name,
+      description: SIMULATE_CHANGE_TOOL.description,
+      input_schema: SIMULATE_CHANGE_TOOL.input_schema
+    },
+    ...existingTools
+  ];
+}
+
 /**
  * Check if a tool requires simulation
  */
