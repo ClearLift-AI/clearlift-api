@@ -260,10 +260,11 @@ export class OnboardingService {
       WHERE organization_id = ? AND is_verified = 1
     `).bind(orgId).first<{ count: number }>();
 
-    // Sync goals
+    // Sync goals (conversion criteria now in platform_connections.settings.conversion_events)
     const goalsCount = await this.db.prepare(`
-      SELECT COUNT(*) as count FROM conversion_goals
+      SELECT COUNT(*) as count FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
+        AND json_extract(settings, '$.conversion_events') IS NOT NULL
     `).bind(orgId).first<{ count: number }>();
 
     const vCount = verifiedDomains?.count || 0;

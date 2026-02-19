@@ -205,10 +205,13 @@ export class GetOnboardingStatus extends OpenAPIRoute {
       console.log(`[ONBOARDING_HEAL] Synced has_verified_tag for user ${session.user_id}: ${verifiedCount}`);
     }
 
-    // 7. Sync goals_count with conversion_goals
+    // 7. Sync goals_count with platform_connections that have conversion_events configured
+    // (conversion_goals table removed in D1 consolidation — conversion criteria now live in
+    //  platform_connections.settings.conversion_events JSON)
     const goalsCount = await c.env.DB.prepare(`
-      SELECT COUNT(*) as count FROM conversion_goals
+      SELECT COUNT(*) as count FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
+        AND json_extract(settings, '$.conversion_events') IS NOT NULL
     `).bind(orgId).first<{ count: number }>();
 
     const gCount = goalsCount?.count || 0;
@@ -397,10 +400,11 @@ export class ValidateOnboarding extends OpenAPIRoute {
       WHERE organization_id = ? AND is_verified = 1
     `).bind(orgId).first<{ count: number }>();
 
-    // Check goals
+    // Check goals (conversion criteria now in platform_connections.settings.conversion_events)
     const goals = await c.env.DB.prepare(`
-      SELECT COUNT(*) as count FROM conversion_goals
+      SELECT COUNT(*) as count FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
+        AND json_extract(settings, '$.conversion_events') IS NOT NULL
     `).bind(orgId).first<{ count: number }>();
 
     const connectedPlatforms = connections?.count || 0;
