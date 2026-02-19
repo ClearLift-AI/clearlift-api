@@ -32,7 +32,12 @@ export const corsMiddleware = honoCors({
     ];
 
     // Allow if origin is in the list or if no origin (same-origin requests)
-    return allowedOrigins.includes(origin) || !origin ? origin || "*" : null;
+    // Also allow any *.clearlift.ai subdomain for local tunnel flexibility
+    if (!origin) return "*";
+    if (allowedOrigins.includes(origin)) return origin;
+    if (/^https:\/\/[\w-]+\.clearlift\.ai$/.test(origin)) return origin;
+    if (/^https:\/\/[\w-]+\.adbliss\.io$/.test(origin)) return origin;
+    return null;
   },
   allowHeaders: [
     "Content-Type",
