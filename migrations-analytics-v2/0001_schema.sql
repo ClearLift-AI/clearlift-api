@@ -8,98 +8,35 @@
 -- ============================================================================
 
 -- ============================================================================
--- CONNECTORS - LIVE (5 tables)
+-- CONNECTORS - LIVE (4 tables)
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS connector_transactions (
+-- Thin event log: raw platform events from all connectors.
+-- Platform-specific details go in metadata JSON. Status is RAW from platform.
+CREATE TABLE IF NOT EXISTS connector_events (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   organization_id TEXT NOT NULL,
   source_platform TEXT NOT NULL,
-  event_type TEXT NOT NULL DEFAULT 'transaction',
+  event_type TEXT NOT NULL,
   external_id TEXT NOT NULL,
-  customer_ref TEXT,
   customer_external_id TEXT,
   customer_email_hash TEXT,
   value_cents INTEGER DEFAULT 0,
-  refund_cents INTEGER DEFAULT 0,
-  fee_cents INTEGER DEFAULT 0,
-  net_cents INTEGER DEFAULT 0,
-  subtotal_cents INTEGER DEFAULT 0,
-  discount_cents INTEGER DEFAULT 0,
-  shipping_cents INTEGER DEFAULT 0,
-  tax_cents INTEGER DEFAULT 0,
   currency TEXT DEFAULT 'USD',
   status TEXT NOT NULL,
-  financial_status TEXT,
-  fulfillment_status TEXT,
-  payment_status TEXT,
-  stage TEXT,
-  pipeline TEXT,
-  probability INTEGER,
   transacted_at TEXT NOT NULL,
-  completed_at TEXT,
-  cancelled_at TEXT,
-  close_date TEXT,
-  start_time TEXT,
-  end_time TEXT,
-  description TEXT,
-  source_name TEXT,
-  landing_url TEXT,
-  referring_site TEXT,
-  utm_source TEXT,
-  utm_medium TEXT,
-  utm_campaign TEXT,
-  subscription_ref TEXT,
-  service_ref TEXT,
-  company_ref TEXT,
-  item_count INTEGER,
-  duration_minutes INTEGER,
-  metadata TEXT,
-  properties TEXT,
-  raw_data TEXT,
   created_at_platform TEXT,
-  last_synced_at TEXT DEFAULT (datetime('now')),
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(organization_id, source_platform, external_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_ct_pipeline ON connector_transactions(organization_id, source_platform, status, transacted_at);
-CREATE INDEX IF NOT EXISTS idx_ct_display ON connector_transactions(organization_id, transacted_at);
-CREATE INDEX IF NOT EXISTS idx_ct_customer ON connector_transactions(organization_id, customer_external_id);
-CREATE INDEX IF NOT EXISTS idx_ct_email ON connector_transactions(organization_id, customer_email_hash);
-
-CREATE TABLE IF NOT EXISTS connector_subscriptions (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-  organization_id TEXT NOT NULL,
-  source_platform TEXT NOT NULL,
-  external_id TEXT NOT NULL,
-  customer_ref TEXT,
-  customer_external_id TEXT,
-  status TEXT NOT NULL,
-  plan_name TEXT,
-  plan_external_id TEXT,
-  amount_cents INTEGER DEFAULT 0,
-  interval_type TEXT,
-  interval_count INTEGER DEFAULT 1,
-  currency TEXT DEFAULT 'USD',
-  trial_start TEXT,
-  trial_end TEXT,
-  current_period_start TEXT,
-  current_period_end TEXT,
-  cancel_at_period_end INTEGER DEFAULT 0,
-  cancelled_at TEXT,
   metadata TEXT,
-  properties TEXT,
-  raw_data TEXT,
-  started_at TEXT,
   last_synced_at TEXT DEFAULT (datetime('now')),
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
   UNIQUE(organization_id, source_platform, external_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_cs_org ON connector_subscriptions(organization_id, source_platform, status);
+CREATE INDEX IF NOT EXISTS idx_ce_pipeline ON connector_events(organization_id, source_platform, status, transacted_at);
+CREATE INDEX IF NOT EXISTS idx_ce_display ON connector_events(organization_id, transacted_at);
+CREATE INDEX IF NOT EXISTS idx_ce_customer ON connector_events(organization_id, customer_external_id);
+CREATE INDEX IF NOT EXISTS idx_ce_email ON connector_events(organization_id, customer_email_hash);
 
 CREATE TABLE IF NOT EXISTS connector_customers (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -137,30 +74,6 @@ CREATE TABLE IF NOT EXISTS connector_customers (
 
 CREATE INDEX IF NOT EXISTS idx_cc_email ON connector_customers(organization_id, email_hash);
 CREATE INDEX IF NOT EXISTS idx_cc_org ON connector_customers(organization_id, source_platform, entity_type);
-
-CREATE TABLE IF NOT EXISTS connector_items (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-  organization_id TEXT NOT NULL,
-  source_platform TEXT NOT NULL,
-  item_type TEXT NOT NULL,
-  external_id TEXT NOT NULL,
-  name TEXT,
-  status TEXT,
-  price_cents INTEGER DEFAULT 0,
-  currency TEXT DEFAULT 'USD',
-  category TEXT,
-  parent_external_id TEXT,
-  amount_cents INTEGER DEFAULT 0,
-  reason TEXT,
-  properties TEXT,
-  raw_data TEXT,
-  last_synced_at TEXT DEFAULT (datetime('now')),
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(organization_id, source_platform, item_type, external_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_ci_org ON connector_items(organization_id, source_platform, item_type);
 
 CREATE TABLE IF NOT EXISTS connector_activities (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -796,82 +709,6 @@ CREATE TABLE conversion_value_allocations (
 CREATE INDEX idx_cva_conversion ON conversion_value_allocations(conversion_id);
 CREATE INDEX idx_cva_goal ON conversion_value_allocations(goal_id);
 CREATE INDEX idx_cva_org_created ON conversion_value_allocations(organization_id, created_at);
-
--- ============================================================================
--- GOAL CONVERSIONS (3 tables)
--- ============================================================================
-
-CREATE TABLE goal_conversions (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-  organization_id TEXT NOT NULL,
-  goal_id TEXT NOT NULL,
-  conversion_id TEXT,
-  conversion_source TEXT NOT NULL,
-  source_platform TEXT,
-  source_event_id TEXT,
-  value_cents INTEGER DEFAULT 0,
-  currency TEXT DEFAULT 'USD',
-  attribution_model TEXT,
-  attribution_data TEXT,
-  attributed_campaign_id TEXT,
-  attributed_ad_id TEXT,
-  conversion_timestamp TEXT NOT NULL,
-  created_at TEXT DEFAULT (datetime('now')),
-  unified_event_type TEXT,
-  link_method TEXT,
-  link_confidence REAL
-);
-
-CREATE INDEX idx_gc_conv ON goal_conversions(conversion_id);
-CREATE INDEX idx_gc_goal ON goal_conversions(goal_id, conversion_timestamp DESC);
-CREATE INDEX idx_goal_conv_unified_type ON goal_conversions(organization_id, unified_event_type);
-CREATE UNIQUE INDEX idx_goal_conversions_dedup ON goal_conversions(organization_id, goal_id, source_event_id);
-
-CREATE TABLE goal_metrics_daily (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  organization_id TEXT NOT NULL,
-  goal_id TEXT NOT NULL,
-  summary_date TEXT NOT NULL,
-  conversions INTEGER DEFAULT 0,
-  conversion_value_cents INTEGER DEFAULT 0,
-  conversion_rate REAL,
-  conversions_platform INTEGER DEFAULT 0,
-  conversions_tag INTEGER DEFAULT 0,
-  conversions_connector INTEGER DEFAULT 0,
-  value_platform_cents INTEGER DEFAULT 0,
-  value_tag_cents INTEGER DEFAULT 0,
-  value_connector_cents INTEGER DEFAULT 0,
-  created_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(organization_id, goal_id, summary_date)
-);
-
-CREATE INDEX idx_gmd_goal ON goal_metrics_daily(goal_id, summary_date DESC);
-CREATE INDEX idx_gmd_org_date ON goal_metrics_daily(organization_id, summary_date DESC);
-
-CREATE TABLE goal_completion_metrics (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_tag TEXT NOT NULL,
-  goal_id TEXT NOT NULL,
-  date TEXT NOT NULL,
-  goal_name TEXT,
-  goal_type TEXT,
-  funnel_position INTEGER,
-  completions INTEGER NOT NULL DEFAULT 0,
-  unique_visitors INTEGER NOT NULL DEFAULT 0,
-  completion_value_cents INTEGER NOT NULL DEFAULT 0,
-  downstream_conversions INTEGER NOT NULL DEFAULT 0,
-  downstream_conversion_rate REAL NOT NULL DEFAULT 0,
-  downstream_revenue_cents INTEGER NOT NULL DEFAULT 0,
-  by_channel TEXT,
-  by_utm_source TEXT,
-  by_device TEXT,
-  computed_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(org_tag, goal_id, date)
-);
-
-CREATE INDEX idx_gcm_org_date ON goal_completion_metrics(org_tag, date DESC);
-CREATE INDEX idx_gcm_org_goal ON goal_completion_metrics(org_tag, goal_id);
-CREATE INDEX idx_gcm_org_type ON goal_completion_metrics(org_tag, goal_type);
 
 -- ============================================================================
 -- METRICS & AGGREGATIONS (7 tables)
