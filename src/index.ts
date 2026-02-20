@@ -1215,13 +1215,13 @@ export default {
           if (hasGoals) {
             const goalResult = await env.ANALYTICS_DB.prepare(`
               SELECT
-                DATE(converted_at) as date,
+                DATE(conversion_timestamp) as date,
                 COUNT(*) as conversions,
                 SUM(value_cents) as revenue_cents
               FROM conversions
               WHERE organization_id = ?
-                AND DATE(converted_at) >= date('now', '-${DAYS_TO_BACKFILL} days')
-              GROUP BY DATE(converted_at)
+                AND DATE(conversion_timestamp) >= date('now', '-${DAYS_TO_BACKFILL} days')
+              GROUP BY DATE(conversion_timestamp)
             `).bind(orgId).all<{
               date: string;
               conversions: number;

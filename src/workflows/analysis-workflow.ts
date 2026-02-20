@@ -147,6 +147,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     const { orgId, days, jobId, customInstructions, config } = event.payload;
     const runId = crypto.randomUUID().replace(/-/g, '');
 
+    try {
     // Step 0: Cleanup expired recommendations only — keep recent pending ones
     // Previous behavior deleted ALL pending on re-run, giving users no time to act
     await step.do('cleanup_expired', {
@@ -216,17 +217,17 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       if (activeEntityIds.size === 0) {
         console.log(`[Analysis] No entities with activity in ${days}-day window, capping tree by historical spend`);
 
-        // Query total historical spend per campaign to rank them
+        // Query total historical spend per entity to rank them
         const spendResult = await this.env.ANALYTICS_DB.prepare(`
-          SELECT campaign_id, SUM(spend_cents) as total_spend
+          SELECT entity_ref, SUM(spend_cents) as total_spend
           FROM ad_metrics
           WHERE organization_id = ?
-          GROUP BY campaign_id
-        `).bind(orgId).all<{ campaign_id: string; total_spend: number }>();
+          GROUP BY entity_ref
+        `).bind(orgId).all<{ entity_ref: string; total_spend: number }>();
 
         const spendMap = new Map<string, number>();
         for (const r of (spendResult.results || [])) {
-          spendMap.set(r.campaign_id, r.total_spend);
+          spendMap.set(r.entity_ref, r.total_spend);
         }
 
         const { cappedTree, totalCampaigns, wasCapped } = capEntityTree(entityTree, 20, spendMap);
@@ -594,6 +595,19 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       stoppedReason,
       terminationReason
     };
+
+    } catch (err) {
+      // Top-level error handler: mark job as failed so the dashboard stops polling
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error(`[Analysis] Workflow failed for job ${jobId}: ${errorMessage}`);
+      try {
+        const jobs = new JobManager(this.env.DB);
+        await jobs.failJob(jobId, errorMessage);
+      } catch (failErr) {
+        console.error(`[Analysis] Failed to mark job ${jobId} as failed:`, failErr);
+      }
+      throw err; // Re-throw so Cloudflare Workflows marks the instance as failed
+    }
   }
 
 
@@ -953,9 +967,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     try {
       // Resolve org_tag
       const orgTagRow = await this.env.DB.prepare(
-        'SELECT org_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1'
-      ).bind(orgId).first<{ org_tag: string }>();
-      const orgTag = orgTagRow?.org_tag;
+        'SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1'
+      ).bind(orgId).first<{ short_tag: string }>();
+      const orgTag = orgTagRow?.short_tag;
 
       // Journey analytics
       if (orgTag) {
@@ -994,11 +1008,11 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         // Daily traffic summary
         try {
           const traffic = await this.env.ANALYTICS_DB.prepare(`
-            SELECT SUM(sessions) as sessions, SUM(unique_users) as users,
+            SELECT SUM(sessions) as sessions, SUM(users) as users,
                    SUM(conversions) as conversions, SUM(revenue_cents) as revenue_cents
             FROM daily_metrics
             WHERE org_tag = ?
-              AND metric_date >= date('now', '-${days} days')
+              AND date >= date('now', '-${days} days')
           `).bind(orgTag).first<{
             sessions: number | null;
             users: number | null;
@@ -1067,7 +1081,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           WHERE organization_id = ?
             AND source_platform = 'shopify'
             AND transacted_at >= date('now', '-${days} days')
-            AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+            AND status IN ('succeeded', 'paid', 'completed', 'active')
         `).bind(orgId).first<{
           orders: number; revenue_cents: number | null; aov_cents: number | null; unique_customers: number;
         }>();
@@ -1089,11 +1103,11 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       try {
         const crm = await this.env.ANALYTICS_DB.prepare(`
           SELECT COUNT(*) as deals,
-                 COUNT(CASE WHEN platform_status = 'closedwon' THEN 1 END) as won,
-                 COUNT(CASE WHEN platform_status = 'closedlost' THEN 1 END) as lost,
-                 COUNT(CASE WHEN platform_status NOT IN ('closedwon', 'closedlost') THEN 1 END) as open_deals,
+                 COUNT(CASE WHEN status = 'closedwon' THEN 1 END) as won,
+                 COUNT(CASE WHEN status = 'closedlost' THEN 1 END) as lost,
+                 COUNT(CASE WHEN status NOT IN ('closedwon', 'closedlost') THEN 1 END) as open_deals,
                  SUM(value_cents) as pipeline_cents,
-                 SUM(CASE WHEN platform_status = 'closedwon' THEN value_cents ELSE 0 END) as won_cents
+                 SUM(CASE WHEN status = 'closedwon' THEN value_cents ELSE 0 END) as won_cents
           FROM connector_events
           WHERE organization_id = ?
             AND source_platform = 'hubspot' AND event_type = 'deal'
@@ -1121,9 +1135,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       try {
         const subs = await this.env.ANALYTICS_DB.prepare(`
           SELECT COUNT(*) as total,
-                 COUNT(CASE WHEN platform_status IN ('active', 'trialing') THEN 1 END) as active,
-                 COUNT(CASE WHEN platform_status IN ('canceled', 'cancelled') THEN 1 END) as canceled,
-                 COALESCE(SUM(CASE WHEN platform_status IN ('active', 'trialing') THEN value_cents ELSE 0 END), 0) as mrr_cents
+                 COUNT(CASE WHEN status IN ('active', 'trialing') THEN 1 END) as active,
+                 COUNT(CASE WHEN status IN ('canceled', 'cancelled') THEN 1 END) as canceled,
+                 COALESCE(SUM(CASE WHEN status IN ('active', 'trialing') THEN value_cents ELSE 0 END), 0) as mrr_cents
           FROM connector_events
           WHERE organization_id = ?
             AND source_platform = 'stripe'

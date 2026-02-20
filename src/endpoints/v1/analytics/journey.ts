@@ -86,18 +86,18 @@ async function queryConnectorConversionsD1(
     let connectorQuery = `
       SELECT
         id,
-        platform_external_id,
+        external_id,
         source_platform,
         value_cents,
         currency,
-        platform_status,
+        status,
         transacted_at,
         customer_external_id,
         event_type,
-        raw_metadata
+        metadata
       FROM connector_events
       WHERE organization_id = ?
-        AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+        AND status IN ('succeeded', 'paid', 'completed', 'active')
     `;
 
     const queryParams: any[] = [orgId];
@@ -117,15 +117,15 @@ async function queryConnectorConversionsD1(
       .bind(...queryParams)
       .all<{
         id: string;
-        platform_external_id: string | null;
+        external_id: string | null;
         source_platform: string;
         value_cents: number;
         currency: string | null;
-        platform_status: string;
+        status: string;
         transacted_at: string;
         customer_external_id: string | null;
         event_type: string | null;
-        raw_metadata: string | null;
+        metadata: string | null;
       }>();
 
     for (const row of connectorResult.results || []) {
@@ -145,14 +145,14 @@ async function queryConnectorConversionsD1(
       if (matches) {
         conversions.push({
           source: source as any,
-          transaction_id: row.platform_external_id || row.id,
+          transaction_id: row.external_id || row.id,
           timestamp: row.transacted_at,
           amount: (row.value_cents || 0) / 100,
           currency: row.currency || 'usd',
-          status: row.platform_status,
+          status: row.status,
           product_id: null,
           customer_id: row.customer_external_id || null,
-          metadata: row.raw_metadata ? (() => { try { return JSON.parse(row.raw_metadata); } catch { return { source_platform: row.source_platform }; } })() : { source_platform: row.source_platform }
+          metadata: row.metadata ? (() => { try { return JSON.parse(row.metadata); } catch { return { source_platform: row.source_platform }; } })() : { source_platform: row.source_platform }
         });
       }
     }
@@ -436,14 +436,14 @@ Returns the complete journey for an identified user, including:
       if (anonymousIds.length > 0) {
         const placeholders = anonymousIds.map(() => '?').join(',');
         const tagConvQuery = `
-          SELECT c.id as event_id, c.converted_at as timestamp,
+          SELECT c.id as event_id, c.conversion_timestamp as timestamp,
                  'conversion' as type,
                  COALESCE(c.value_cents, 0) / 100.0 as revenue,
                  NULL as session_id
           FROM conversions c
           JOIN journeys j ON c.id = j.conversion_id
           WHERE j.org_tag = ? AND j.anonymous_id IN (${placeholders})
-          ORDER BY c.converted_at DESC
+          ORDER BY c.conversion_timestamp DESC
           LIMIT 50
         `;
         const tagResult = await analyticsDb.prepare(tagConvQuery)

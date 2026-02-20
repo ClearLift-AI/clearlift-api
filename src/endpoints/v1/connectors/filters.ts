@@ -479,14 +479,14 @@ export class TestFilterRule extends OpenAPIRoute {
       const result = await c.env.ANALYTICS_DB.prepare(`
         SELECT
           id,
-          platform_external_id,
+          external_id,
           customer_external_id,
           value_cents,
           currency,
-          platform_status,
+          status,
           event_type,
           transacted_at,
-          raw_metadata
+          metadata
         FROM connector_events
         WHERE connection_id = ?
           AND transacted_at >= ?
@@ -502,13 +502,13 @@ export class TestFilterRule extends OpenAPIRoute {
 
       // Transform D1 results to match expected format
       sampleData = (result.results || []).map((row: any) => {
-        const metadata = row.raw_metadata ? JSON.parse(row.raw_metadata) : {};
+        const metadata = row.metadata ? JSON.parse(row.metadata) : {};
         return {
-          charge_id: row.platform_external_id,
+          charge_id: row.external_id,
           customer_id: row.customer_external_id,
           amount: (row.value_cents || 0) / 100,
           currency: row.currency,
-          status: row.platform_status,
+          status: row.status,
           payment_method_type: metadata.payment_method_type || null,
           date: row.transacted_at,
           charge_metadata: metadata.charge || metadata,
@@ -612,11 +612,11 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
     try {
       // Get recent events with metadata from D1
       const result = await c.env.ANALYTICS_DB.prepare(`
-        SELECT raw_metadata as metadata
+        SELECT metadata
         FROM connector_events
         WHERE connection_id = ?
-          AND raw_metadata IS NOT NULL
-          AND raw_metadata != '{}'
+          AND metadata IS NOT NULL
+          AND metadata != '{}'
         ORDER BY transacted_at DESC
         LIMIT 100
       `).bind(connectionId).all();

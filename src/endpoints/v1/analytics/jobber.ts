@@ -105,7 +105,7 @@ export class GetJobberRevenue extends OpenAPIRoute {
       FROM connector_events
       WHERE organization_id = ?
         AND source_platform = 'jobber'
-        AND platform_status IN ('completed', 'paid', 'succeeded')
+        AND status IN ('completed', 'paid', 'succeeded')
         AND transacted_at >= ?
         AND transacted_at <= ?
     `).bind(orgId, dateFrom, dateTo + 'T23:59:59Z').first<{
@@ -139,7 +139,7 @@ export class GetJobberRevenue extends OpenAPIRoute {
       FROM connector_events
       WHERE organization_id = ?
         AND source_platform = 'jobber'
-        AND platform_status IN ('completed', 'paid', 'succeeded')
+        AND status IN ('completed', 'paid', 'succeeded')
         AND transacted_at >= ?
         AND transacted_at <= ?
       GROUP BY ${dateFormat}
@@ -265,23 +265,23 @@ export class GetJobberInvoices extends OpenAPIRoute {
     // Build status filter for connector_events
     let statusClause = '';
     if (statusFilter === 'paid') {
-      statusClause = "AND platform_status IN ('paid', 'completed', 'succeeded')";
+      statusClause = "AND status IN ('paid', 'completed', 'succeeded')";
     } else if (statusFilter === 'unpaid') {
-      statusClause = "AND platform_status NOT IN ('paid', 'completed', 'succeeded', 'overdue')";
+      statusClause = "AND status NOT IN ('paid', 'completed', 'succeeded', 'overdue')";
     } else if (statusFilter === 'overdue') {
-      statusClause = "AND platform_status = 'overdue'";
+      statusClause = "AND status = 'overdue'";
     }
 
     // Query invoice events from connector_events
     const invoicesResult = await c.env.ANALYTICS_DB.prepare(`
       SELECT
         id,
-        platform_external_id as invoice_number,
+        external_id as invoice_number,
         customer_external_id as client_name,
         value_cents as amount_cents,
-        platform_status as status,
+        status,
         transacted_at as created_at,
-        raw_metadata
+        metadata
       FROM connector_events
       WHERE organization_id = ?
         AND source_platform = 'jobber'
@@ -298,7 +298,7 @@ export class GetJobberInvoices extends OpenAPIRoute {
       amount_cents: number;
       status: string;
       created_at: string;
-      raw_metadata: string | null;
+      metadata: string | null;
     }>();
 
     const invoices = (invoicesResult.results || []).map(row => ({
@@ -317,8 +317,8 @@ export class GetJobberInvoices extends OpenAPIRoute {
       SELECT
         COUNT(*) as total_invoices,
         COALESCE(SUM(value_cents), 0) as total_amount_cents,
-        COALESCE(SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN value_cents ELSE 0 END), 0) as paid_amount_cents,
-        COALESCE(SUM(CASE WHEN platform_status NOT IN ('paid', 'completed', 'succeeded') THEN value_cents ELSE 0 END), 0) as unpaid_amount_cents
+        COALESCE(SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN value_cents ELSE 0 END), 0) as paid_amount_cents,
+        COALESCE(SUM(CASE WHEN status NOT IN ('paid', 'completed', 'succeeded') THEN value_cents ELSE 0 END), 0) as unpaid_amount_cents
       FROM connector_events
       WHERE organization_id = ?
         AND source_platform = 'jobber'

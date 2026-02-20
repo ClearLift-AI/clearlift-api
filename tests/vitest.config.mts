@@ -13,6 +13,13 @@ const analyticsMigrations = await readD1Migrations(analyticsPath);
 const aiPath = path.join(__dirname, "..", "migrations-ai");
 const aiMigrations = await readD1Migrations(aiPath);
 
+// V2 consolidated schema (migrations-core + migrations-analytics-v2)
+const coreV2Path = path.join(__dirname, "..", "migrations-core");
+const coreV2Migrations = await readD1Migrations(coreV2Path);
+
+const analyticsV2Path = path.join(__dirname, "..", "migrations-analytics-v2");
+const analyticsV2Migrations = await readD1Migrations(analyticsV2Path);
+
 export default defineWorkersConfig({
   esbuild: {
     target: "esnext",
@@ -32,6 +39,8 @@ export default defineWorkersConfig({
             MIGRATIONS: migrations,
             ANALYTICS_MIGRATIONS: analyticsMigrations,
             AI_MIGRATIONS: aiMigrations,
+            CORE_V2_MIGRATIONS: coreV2Migrations,
+            ANALYTICS_V2_MIGRATIONS: analyticsV2Migrations,
             SENDGRID_API_KEY: "SG.test-key-for-vitest",
           },
           // Stub the CLEARLIFT_CRON service binding so miniflare can start.

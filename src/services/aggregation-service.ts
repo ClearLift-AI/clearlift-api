@@ -276,7 +276,7 @@ export class AggregationService {
         datetime('now') as updated_at
       FROM connector_events
       WHERE DATE(transacted_at) = ?
-        AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+        AND status IN ('succeeded', 'paid', 'completed', 'active')
       GROUP BY organization_id, source_platform
     `).bind(date, date, date).run();
   }
@@ -612,7 +612,7 @@ export class AggregationService {
       SELECT COUNT(*) as total
       FROM connector_events
       WHERE DATE(transacted_at) = ?
-        AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+        AND status IN ('succeeded', 'paid', 'completed', 'active')
     `).bind(date).first<{ total: number }>();
 
     const total = result?.total || 0;

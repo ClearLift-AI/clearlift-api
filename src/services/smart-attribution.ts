@@ -509,7 +509,7 @@ export class SmartAttributionService {
         WHERE organization_id = ?
           AND DATE(transacted_at) >= ?
           AND DATE(transacted_at) <= ?
-          AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+          AND status IN ('succeeded', 'paid', 'completed', 'active')
         GROUP BY source_platform
       `).bind(orgId, startDate, endDate).all<{
         source_platform: string;
@@ -613,7 +613,7 @@ export class SmartAttributionService {
               SELECT COUNT(*) as conversions FROM connector_events
               WHERE organization_id = ? AND source_platform = ?
                 AND DATE(transacted_at) >= ? AND DATE(transacted_at) <= ?
-                AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+                AND status IN ('succeeded', 'paid', 'completed', 'active')
             `).bind(orgId, platform, startDate, endDate).first<{ conversions: number }>();
             visitors = result?.conversions || 0;
           }
@@ -1560,7 +1560,7 @@ export class SmartAttributionService {
         WHERE organization_id = ?
           AND DATE(transacted_at) >= ?
           AND DATE(transacted_at) <= ?
-          AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+          AND status IN ('succeeded', 'paid', 'completed', 'active')
         GROUP BY DATE(transacted_at), source_platform
         ORDER BY date
       `).bind(orgId, startDate, endDate).all<{

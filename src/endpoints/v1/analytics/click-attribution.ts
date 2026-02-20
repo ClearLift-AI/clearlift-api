@@ -159,7 +159,7 @@ NOTE: Requires conversion_attribution data to be populated in D1.
           COALESCE(SUM(value_cents), 0) as total_revenue_cents
         FROM connector_events
         WHERE organization_id = ?
-          AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+          AND status IN ('succeeded', 'paid', 'completed', 'active')
           AND transacted_at >= ?
           AND transacted_at <= ?
       `).bind(orgId, dateFrom, dateTo + 'T23:59:59Z').first();

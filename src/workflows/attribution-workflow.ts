@@ -207,7 +207,7 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
         ca.utm_medium,
         ca.utm_campaign,
         ca.conversion_value_cents,
-        ca.converted_at,
+        ca.conversion_timestamp,
         COALESCE(ca.utm_source,
           CASE
             WHEN ca.gclid IS NOT NULL THEN 'google'
@@ -218,8 +218,8 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
         ) as derived_source
       FROM conversion_attribution ca
       WHERE ca.organization_id = ?
-        AND ca.converted_at >= ?
-      ORDER BY ca.anonymous_id, ca.converted_at
+        AND ca.conversion_timestamp >= ?
+      ORDER BY ca.anonymous_id, ca.conversion_timestamp
     `).bind(orgId, cutoffStr).all<{
       conversion_id: string;
       anonymous_id: string | null;
@@ -230,7 +230,7 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
       utm_medium: string | null;
       utm_campaign: string | null;
       conversion_value_cents: number;
-      converted_at: string;
+      conversion_timestamp: string;
       derived_source: string;
     }>();
 
@@ -254,7 +254,7 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
         id: conv.conversion_id,
         session_id: conv.conversion_id,
         anonymous_id: conv.anonymous_id || undefined,
-        timestamp: conv.converted_at,
+        timestamp: conv.conversion_timestamp,
         utm_source: source,
         utm_medium: conv.utm_medium,
         utm_campaign: conv.utm_campaign,
@@ -274,7 +274,7 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
           user_id: userId,
           anonymous_ids: conv.anonymous_id ? [conv.anonymous_id] : [],
           touchpoints: [touchpoint],
-          conversion_timestamp: conv.converted_at,
+          conversion_timestamp: conv.conversion_timestamp,
           conversion_value: (conv.conversion_value_cents || 0) / 100,
           conversion_type: 'purchase'
         });
@@ -306,11 +306,11 @@ export class AttributionWorkflow extends WorkflowEntrypoint<Env, AttributionWork
         customer_external_id as customer_id,
         value_cents as amount_cents,
         transacted_at as created_at,
-        raw_metadata as metadata
+        metadata
       FROM connector_events
       WHERE organization_id = ?
         AND transacted_at >= ?
-        AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+        AND status IN ('succeeded', 'paid', 'completed', 'active')
       ORDER BY transacted_at
     `).bind(orgId, cutoffStr).all<{
       id: string;
