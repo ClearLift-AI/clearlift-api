@@ -132,9 +132,9 @@ export class GetOnboardingStatus extends OpenAPIRoute {
     if (!aiSettings) {
       await c.env.DB.prepare(`
         INSERT INTO ai_optimization_settings (
-          org_id, growth_strategy, budget_optimization, ai_control,
+          org_id, run_frequency, budget_optimization, ai_control,
           daily_cap_cents, monthly_cap_cents, created_at, updated_at
-        ) VALUES (?, 'balanced', 'moderate', 'copilot', 100000, 3000000, ?, ?)
+        ) VALUES (?, 'weekly', 'moderate', 'copilot', 100000, 3000000, ?, ?)
       `).bind(orgId, now, now).run();
 
       console.log(`[ONBOARDING_HEAL] Created default ai_optimization_settings for org ${orgId}`);

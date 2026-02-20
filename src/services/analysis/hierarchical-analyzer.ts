@@ -56,6 +56,10 @@ interface D1ExecResult {
 export interface AnalysisConfig {
   llm?: LLMRuntimeConfig;
   agentic?: AgenticLoopConfig;
+  budgetStrategy?: 'conservative' | 'moderate' | 'aggressive';
+  dailyCapCents?: number | null;
+  monthlyCapCents?: number | null;
+  maxCacCents?: number | null;
 }
 
 // Use p-limit pattern for concurrency control

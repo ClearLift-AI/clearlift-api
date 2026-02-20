@@ -208,7 +208,7 @@ export class AdminGetOrganization extends OpenAPIRoute {
       default_attribution_model: org.default_attribution_model,
       attribution_window_days: org.attribution_window_days,
       ai_control: org.ai_control,
-      growth_strategy: org.growth_strategy,
+      run_frequency: org.run_frequency,
       budget_optimization: org.budget_optimization,
       custom_instructions: org.custom_instructions,
     };

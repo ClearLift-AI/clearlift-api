@@ -15,11 +15,12 @@ function safeJsonParse(value: string | null | undefined, fallback: any = {}): an
 }
 
 const MatrixSettingsSchema = z.object({
-  growth_strategy: z.enum(['lean', 'balanced', 'bold']),
+  run_frequency: z.enum(['weekly', 'daily', 'twice_daily']),
   budget_optimization: z.enum(['conservative', 'moderate', 'aggressive']),
   ai_control: z.enum(['copilot', 'autopilot']),
   daily_cap_cents: z.number().int().positive().optional().nullable(),
   monthly_cap_cents: z.number().int().positive().optional().nullable(),
+  max_cac_cents: z.number().int().positive().optional().nullable(),
   pause_threshold_percent: z.number().int().min(0).max(100).optional().nullable(),
   conversion_source: z.enum(['ad_platforms', 'tag', 'connectors']).optional(),
   // Platforms to exclude from conversion display (e.g., ['stripe', 'jobber'])
@@ -85,11 +86,12 @@ export class GetMatrixSettings extends OpenAPIRoute {
     const settingsData = await cache.getOrSet(cacheKey, async () => {
       const settings = await c.env.DB.prepare(`
         SELECT
-          growth_strategy,
+          run_frequency,
           budget_optimization,
           ai_control,
           daily_cap_cents,
           monthly_cap_cents,
+          max_cac_cents,
           pause_threshold_percent,
           conversion_source,
           disabled_conversion_sources,
@@ -107,11 +109,12 @@ export class GetMatrixSettings extends OpenAPIRoute {
       if (!settings) {
         // Return defaults if no settings exist
         return {
-          growth_strategy: 'balanced',
+          run_frequency: 'weekly',
           budget_optimization: 'moderate',
           ai_control: 'copilot',
           daily_cap_cents: null,
           monthly_cap_cents: null,
+          max_cac_cents: null,
           pause_threshold_percent: null,
           conversion_source: 'tag',
           disabled_conversion_sources: [],
@@ -137,11 +140,12 @@ export class GetMatrixSettings extends OpenAPIRoute {
       }
 
       return {
-        growth_strategy: settings.growth_strategy,
+        run_frequency: (settings as any).run_frequency || 'weekly',
         budget_optimization: settings.budget_optimization,
         ai_control: settings.ai_control,
         daily_cap_cents: settings.daily_cap_cents,
         monthly_cap_cents: settings.monthly_cap_cents,
+        max_cac_cents: (settings as any).max_cac_cents || null,
         pause_threshold_percent: settings.pause_threshold_percent,
         conversion_source: settings.conversion_source,
         disabled_conversion_sources: disabledSources,
@@ -212,11 +216,12 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
     await c.env.DB.prepare(`
       INSERT INTO ai_optimization_settings (
         org_id,
-        growth_strategy,
+        run_frequency,
         budget_optimization,
         ai_control,
         daily_cap_cents,
         monthly_cap_cents,
+        max_cac_cents,
         pause_threshold_percent,
         conversion_source,
         disabled_conversion_sources,
@@ -228,13 +233,14 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         llm_max_recommendations,
         llm_enable_exploration,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(org_id) DO UPDATE SET
-        growth_strategy = excluded.growth_strategy,
+        run_frequency = excluded.run_frequency,
         budget_optimization = excluded.budget_optimization,
         ai_control = excluded.ai_control,
         daily_cap_cents = excluded.daily_cap_cents,
         monthly_cap_cents = excluded.monthly_cap_cents,
+        max_cac_cents = excluded.max_cac_cents,
         pause_threshold_percent = excluded.pause_threshold_percent,
         conversion_source = excluded.conversion_source,
         disabled_conversion_sources = excluded.disabled_conversion_sources,
@@ -248,11 +254,12 @@ export class UpdateMatrixSettings extends OpenAPIRoute {
         updated_at = datetime('now')
     `).bind(
       orgId,
-      body.growth_strategy,
+      body.run_frequency,
       body.budget_optimization,
       body.ai_control,
       body.daily_cap_cents || null,
       body.monthly_cap_cents || null,
+      body.max_cac_cents || null,
       body.pause_threshold_percent || null,
       body.conversion_source || 'tag',
       disabledSourcesJson,
