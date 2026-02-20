@@ -1267,10 +1267,11 @@ RESULT:
     const unifiedEntityType = entityTypeMap[entityType] || 'campaign';
 
     // Entity-type-aware JOIN for human-readable names
+    // entity_ref stores the internal UUID (ad_campaigns.id), not the platform ID (campaign_id)
     const nameJoinMap: Record<string, { table: string; joinCol: string; nameCol: string }> = {
-      campaign: { table: 'ad_campaigns', joinCol: 'campaign_id', nameCol: 'campaign_name' },
-      ad_group: { table: 'ad_groups', joinCol: 'ad_group_id', nameCol: 'ad_group_name' },
-      ad: { table: 'ads', joinCol: 'ad_id', nameCol: 'ad_name' },
+      campaign: { table: 'ad_campaigns', joinCol: 'id', nameCol: 'campaign_name' },
+      ad_group: { table: 'ad_groups', joinCol: 'id', nameCol: 'ad_group_name' },
+      ad: { table: 'ads', joinCol: 'id', nameCol: 'ad_name' },
     };
     const nameJoin = nameJoinMap[unifiedEntityType] || nameJoinMap.campaign;
 
