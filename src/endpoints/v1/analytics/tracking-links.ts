@@ -200,6 +200,11 @@ export class GetTrackingLinkPerformance extends OpenAPIRoute {
 
       console.log(`[TrackingLinks] Returning ${links.length} links with metrics from ANALYTICS_DB`);
 
+      // Deprecated: tracking links now flow through unified connector_events pipeline.
+      // This endpoint is kept for backward compatibility. Use /v1/analytics/conversions instead.
+      c.header('X-Deprecated', 'true');
+      c.header('X-Deprecated-Message', 'Use unified connector_events pipeline. See /v1/analytics/conversions.');
+
       return success(
         c,
         {

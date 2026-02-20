@@ -1,0 +1,50 @@
+# Environment
+.env
+.env.local
+.env.debug
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.wrangler/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Loose assets
+shopify-app-icon.png
+
+# IDE
+.vscode/
+.idea/
+
+# Claude AI
+.claude/*
+CLAUDE.md
+
+# Development/POC
+poc/*
+
+# Test coverage
+coverage/
+
+# Temporary files
+*.tmp
+*.temp
+DEPLOYMENT.md
+.gitignore
+API.md
+
+# Local dev
+test-api.sh
+.dev.vars
+
+# Deployment logs (contains timestamps, not secrets)
+deployments.json.seed-tmp/
