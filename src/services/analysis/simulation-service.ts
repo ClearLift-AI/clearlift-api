@@ -64,6 +64,7 @@ export interface SimulateChangeParams {
   entity_type: EntityLevel;
   entity_id: string;
   platform?: string;
+  days?: number;
   budget_change_percent?: number;
   // For reallocation
   target_entity_id?: string;
@@ -163,8 +164,10 @@ export class SimulationService {
    * Main entry point - simulate any campaign change
    */
   async simulateChange(params: SimulateChangeParams): Promise<SimulationResult> {
+    const days = params.days || 30;
+
     // 1. Get current portfolio state
-    const allEntities = await this.getPortfolioMetrics(params.entity_type);
+    const allEntities = await this.getPortfolioMetrics(params.entity_type, days);
 
     if (allEntities.length === 0) {
       return {
@@ -173,20 +176,28 @@ export class SimulationService {
         simulated_state: this.emptySimulatedState(),
         confidence: 'low',
         assumptions: ['No metrics data available'],
-        math_explanation: 'Cannot simulate: no metrics found in the last 7 days for any entity.'
+        math_explanation: `Cannot simulate: no metrics found in the last ${days} days for any entity.`
       };
     }
 
-    // 2. Find target entity
-    const target = allEntities.find(e => e.id === params.entity_id);
+    // 2. Find target entity — cascading match: exact ID → exact name → partial name
+    let target = allEntities.find(e => e.id === params.entity_id);
     if (!target) {
+      const needle = params.entity_id.toLowerCase();
+      target = allEntities.find(e => e.name.toLowerCase() === needle);
+      if (!target) {
+        target = allEntities.find(e => e.name.toLowerCase().includes(needle));
+      }
+    }
+    if (!target) {
+      const availableNames = allEntities.slice(0, 10).map(e => `  • ${e.name} (${e.id})`).join('\n');
       return {
         success: false,
         current_state: this.buildCurrentState(allEntities, null),
         simulated_state: this.emptySimulatedState(),
         confidence: 'low',
         assumptions: ['Target entity not found'],
-        math_explanation: `Cannot simulate: entity ${params.entity_id} not found in recent metrics.`
+        math_explanation: `Cannot simulate: entity "${params.entity_id}" not found in last ${days} days.\n\nAvailable entities:\n${availableNames}`
       };
     }
 
@@ -232,7 +243,14 @@ export class SimulationService {
             math_explanation: 'Cannot simulate reallocation without target entity and amount.'
           };
         }
-        const targetEntity = allEntities.find(e => e.id === params.target_entity_id);
+        let targetEntity = allEntities.find(e => e.id === params.target_entity_id);
+        if (!targetEntity && params.target_entity_id) {
+          const needle = params.target_entity_id.toLowerCase();
+          targetEntity = allEntities.find(e => e.name.toLowerCase() === needle);
+          if (!targetEntity) {
+            targetEntity = allEntities.find(e => e.name.toLowerCase().includes(needle));
+          }
+        }
         if (!targetEntity) {
           return {
             success: false,
@@ -1237,7 +1255,7 @@ RESULT:
   // DATA FETCHING - Platform-Specific Tables
   // ═══════════════════════════════════════════════════════════════════════
 
-  private async getPortfolioMetrics(entityType: EntityLevel): Promise<EntityMetrics[]> {
+  private async getPortfolioMetrics(entityType: EntityLevel, days: number = 30): Promise<EntityMetrics[]> {
     // Map entity level to unified ad_metrics entity_type
     const entityTypeMap: Record<EntityLevel, string> = {
       campaign: 'campaign',
@@ -1248,61 +1266,75 @@ RESULT:
 
     const unifiedEntityType = entityTypeMap[entityType] || 'campaign';
 
-    // Query 1: Active entities with recent spend (last 7 days)
+    // Entity-type-aware JOIN for human-readable names
+    const nameJoinMap: Record<string, { table: string; joinCol: string; nameCol: string }> = {
+      campaign: { table: 'ad_campaigns', joinCol: 'campaign_id', nameCol: 'campaign_name' },
+      ad_group: { table: 'ad_groups', joinCol: 'ad_group_id', nameCol: 'ad_group_name' },
+      ad: { table: 'ads', joinCol: 'ad_id', nameCol: 'ad_name' },
+    };
+    const nameJoin = nameJoinMap[unifiedEntityType] || nameJoinMap.campaign;
+
+    // Query 1: Active entities with recent spend (parameterized days)
     const activeQuery = `
       SELECT
-        entity_ref as id,
-        entity_ref as name,
-        platform,
+        m.entity_ref as id,
+        COALESCE(n.${nameJoin.nameCol}, m.entity_ref) as name,
+        m.platform,
         ? as entity_type,
-        SUM(spend_cents) as spend_cents,
-        SUM(conversions) as conversions,
-        SUM(impressions) as impressions,
-        SUM(clicks) as clicks,
-        CASE WHEN SUM(impressions) > 0 THEN CAST(SUM(clicks) AS REAL) / SUM(impressions) ELSE 0 END as ctr,
-        CASE WHEN SUM(clicks) > 0 THEN SUM(spend_cents) / SUM(clicks) ELSE 0 END as cpc_cents
-      FROM ad_metrics
-      WHERE organization_id = ?
-        AND entity_type = ?
-        AND metric_date >= date('now', '-7 days')
-        AND spend_cents > 0
-      GROUP BY entity_ref, platform
+        SUM(m.spend_cents) as spend_cents,
+        SUM(m.conversions) as conversions,
+        SUM(m.impressions) as impressions,
+        SUM(m.clicks) as clicks,
+        CASE WHEN SUM(m.impressions) > 0 THEN CAST(SUM(m.clicks) AS REAL) / SUM(m.impressions) ELSE 0 END as ctr,
+        CASE WHEN SUM(m.clicks) > 0 THEN SUM(m.spend_cents) / SUM(m.clicks) ELSE 0 END as cpc_cents
+      FROM ad_metrics m
+      LEFT JOIN ${nameJoin.table} n
+        ON n.${nameJoin.joinCol} = m.entity_ref AND n.organization_id = m.organization_id
+      WHERE m.organization_id = ?
+        AND m.entity_type = ?
+        AND m.metric_date >= date('now', '-' || ? || ' days')
+        AND m.spend_cents > 0
+      GROUP BY m.entity_ref, m.platform
     `;
 
-    // Query 2: Paused/inactive entities — had spend in last 90 days but NOT in last 7
+    // Query 2: Paused/inactive entities — had spend in last days*3 but NOT in last `days`
     // These are candidates for enable recommendations
     const pausedQuery = `
       SELECT
-        entity_ref as id,
-        entity_ref as name,
-        platform,
+        m.entity_ref as id,
+        COALESCE(n.${nameJoin.nameCol}, m.entity_ref) as name,
+        m.platform,
         ? as entity_type,
-        SUM(spend_cents) as spend_cents,
-        SUM(conversions) as conversions,
-        SUM(impressions) as impressions,
-        SUM(clicks) as clicks,
-        CASE WHEN SUM(impressions) > 0 THEN CAST(SUM(clicks) AS REAL) / SUM(impressions) ELSE 0 END as ctr,
-        CASE WHEN SUM(clicks) > 0 THEN SUM(spend_cents) / SUM(clicks) ELSE 0 END as cpc_cents
-      FROM ad_metrics
-      WHERE organization_id = ?
-        AND entity_type = ?
-        AND metric_date >= date('now', '-90 days')
-        AND metric_date < date('now', '-7 days')
-        AND spend_cents > 0
-        AND entity_ref NOT IN (
+        SUM(m.spend_cents) as spend_cents,
+        SUM(m.conversions) as conversions,
+        SUM(m.impressions) as impressions,
+        SUM(m.clicks) as clicks,
+        CASE WHEN SUM(m.impressions) > 0 THEN CAST(SUM(m.clicks) AS REAL) / SUM(m.impressions) ELSE 0 END as ctr,
+        CASE WHEN SUM(m.clicks) > 0 THEN SUM(m.spend_cents) / SUM(m.clicks) ELSE 0 END as cpc_cents
+      FROM ad_metrics m
+      LEFT JOIN ${nameJoin.table} n
+        ON n.${nameJoin.joinCol} = m.entity_ref AND n.organization_id = m.organization_id
+      WHERE m.organization_id = ?
+        AND m.entity_type = ?
+        AND m.metric_date >= date('now', '-' || ? || ' days')
+        AND m.metric_date < date('now', '-' || ? || ' days')
+        AND m.spend_cents > 0
+        AND m.entity_ref NOT IN (
           SELECT DISTINCT entity_ref FROM ad_metrics
           WHERE organization_id = ?
             AND entity_type = ?
-            AND metric_date >= date('now', '-7 days')
+            AND metric_date >= date('now', '-' || ? || ' days')
             AND spend_cents > 0
         )
-      GROUP BY entity_ref, platform
+      GROUP BY m.entity_ref, m.platform
     `;
+
+    const pausedLookbackDays = days * 3; // Look back 3x the active window for paused entities
 
     try {
       const [activeResult, pausedResult] = await this.analyticsDb.batch([
-        this.analyticsDb.prepare(activeQuery).bind(entityType, this.orgId, unifiedEntityType),
-        this.analyticsDb.prepare(pausedQuery).bind(entityType, this.orgId, unifiedEntityType, this.orgId, unifiedEntityType)
+        this.analyticsDb.prepare(activeQuery).bind(entityType, this.orgId, unifiedEntityType, days),
+        this.analyticsDb.prepare(pausedQuery).bind(entityType, this.orgId, unifiedEntityType, pausedLookbackDays, days, this.orgId, unifiedEntityType, days)
       ]);
 
       const activeEntities = (activeResult.results || []) as EntityMetrics[];
