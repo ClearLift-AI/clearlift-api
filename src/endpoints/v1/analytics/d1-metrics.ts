@@ -603,6 +603,7 @@ export class GetD1PageFlow extends OpenAPIRoute {
                 transitions: z.array(z.object({
                   from_id: z.string(),
                   from_name: z.string().nullable(),
+                  from_type: z.string().optional(),
                   to_id: z.string(),
                   to_name: z.string().nullable(),
                   visitors_at_from: z.number(),

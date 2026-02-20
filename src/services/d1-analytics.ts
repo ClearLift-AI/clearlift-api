@@ -499,6 +499,7 @@ export class D1AnalyticsService {
   ): Promise<{
     from_id: string;
     from_name: string | null;
+    from_type: string;
     to_id: string;
     to_name: string | null;
     visitors_at_from: number;
@@ -508,12 +509,12 @@ export class D1AnalyticsService {
     revenue_cents: number;
   }[]> {
     let query = `
-      SELECT from_id, from_name, to_id, to_name,
+      SELECT from_id, from_name, from_type, to_id, to_name,
         visitors_at_from, visitors_transitioned, transition_rate,
         conversions, revenue_cents
       FROM funnel_transitions
       WHERE org_tag = ?
-        AND from_type = 'page' AND to_type = 'page'
+        AND ((from_type = 'page' AND to_type = 'page') OR (from_type = 'referrer' AND to_type = 'page'))
     `;
     const params: unknown[] = [orgTag];
 
@@ -536,6 +537,7 @@ export class D1AnalyticsService {
     const result = await stmt.bind(...params).all<{
       from_id: string;
       from_name: string | null;
+      from_type: string;
       to_id: string;
       to_name: string | null;
       visitors_at_from: number;
