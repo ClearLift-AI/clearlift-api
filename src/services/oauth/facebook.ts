@@ -569,4 +569,187 @@ export class FacebookAdsOAuthProvider extends OAuthProvider {
     const data = await response.json() as any;
     return { success: data.success === true };
   }
+
+  /**
+   * Update ad set or campaign bid strategy
+   *
+   * Meta v24.0 bid strategies:
+   *   LOWEST_COST_WITHOUT_CAP  — automatic, no controls
+   *   COST_CAP                 — bid_amount is cost cap (billing_event must be IMPRESSIONS)
+   *   LOWEST_COST_WITH_BID_CAP — bid_amount is max bid per auction
+   *   LOWEST_COST_WITH_MIN_ROAS — bid_constraints.roas_average_floor (scaled 10000x)
+   *
+   * bid_amount is in the ad account's currency minimum denomination (cents for USD).
+   * roas_average_floor: 10000 = 1.0x ROAS (100%). Valid range: [100, 10000000].
+   */
+  async updateBidStrategy(
+    accessToken: string,
+    entityId: string,
+    bidConfig: {
+      bid_strategy: 'LOWEST_COST_WITHOUT_CAP' | 'COST_CAP' | 'LOWEST_COST_WITH_BID_CAP' | 'LOWEST_COST_WITH_MIN_ROAS';
+      bid_amount?: number;        // cents — required for COST_CAP and LOWEST_COST_WITH_BID_CAP
+      roas_average_floor?: number; // scaled 10000x — required for LOWEST_COST_WITH_MIN_ROAS
+    }
+  ): Promise<{ success: boolean }> {
+    const { bid_strategy, bid_amount, roas_average_floor } = bidConfig;
+
+    // Validate required companion fields
+    if ((bid_strategy === 'COST_CAP' || bid_strategy === 'LOWEST_COST_WITH_BID_CAP') && (bid_amount == null || bid_amount <= 0)) {
+      throw new Error(`${bid_strategy} requires a positive bid_amount`);
+    }
+    if (bid_strategy === 'LOWEST_COST_WITH_MIN_ROAS' && !roas_average_floor) {
+      throw new Error('LOWEST_COST_WITH_MIN_ROAS requires roas_average_floor');
+    }
+    if (roas_average_floor !== undefined && (roas_average_floor < 100 || roas_average_floor > 10000000)) {
+      throw new Error('roas_average_floor must be between 100 and 10000000');
+    }
+
+    const url = new URL(`https://graph.facebook.com/v24.0/${entityId}`);
+    url.searchParams.set('access_token', accessToken);
+    url.searchParams.set('bid_strategy', bid_strategy);
+
+    // Build POST body — complex params go in body, not URL (consistent with updateAdSetTargeting)
+    const body: Record<string, any> = {
+      bid_strategy,
+    };
+
+    if (bid_strategy === 'LOWEST_COST_WITH_MIN_ROAS') {
+      // Min ROAS uses bid_constraints, not bid_amount
+      body.bid_constraints = JSON.stringify({ roas_average_floor });
+    } else {
+      if (bid_amount !== undefined) {
+        body.bid_amount = bid_amount;
+      }
+      // Clear stale bid_constraints when switching away from MIN_ROAS
+      body.bid_constraints = null;
+    }
+
+    const response = await this.fetchWithRetry(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      structuredLog('ERROR', 'Facebook updateBidStrategy failed', {
+        service: 'facebook-oauth', method: 'updateBidStrategy',
+        entity_id: entityId, bid_strategy, error: errorText
+      });
+      throw new Error(`Failed to update bid strategy: ${errorText}`);
+    }
+
+    const data = await response.json() as any;
+    return { success: data.success === true };
+  }
+
+  /**
+   * Update ad set schedule (dayparting)
+   *
+   * Meta v24.0 ad scheduling:
+   *   - Requires lifetime_budget (daily_budget does NOT support scheduling)
+   *   - pacing_type must be set to ["day_parting"]
+   *   - adset_schedule is an array of {start_minute, end_minute, days} objects
+   *   - start_minute/end_minute: 0-based minute of day, must be on the hour, ≥1 hour apart
+   *   - days: 0=Sunday, 1=Monday, ..., 6=Saturday
+   *   - Pass empty array + standard pacing to remove scheduling
+   */
+  async updateAdSetSchedule(
+    accessToken: string,
+    adSetId: string,
+    schedule: Array<{
+      start_minute: number;  // 0-1440 in 60-minute increments
+      end_minute: number;    // 0-1440 in 60-minute increments
+      days: number[];        // 0=Sunday .. 6=Saturday
+      timezone_type?: 'user' | 'advertiser';
+    }>
+  ): Promise<{ success: boolean }> {
+    const url = new URL(`https://graph.facebook.com/v24.0/${adSetId}`);
+    url.searchParams.set('access_token', accessToken);
+
+    // Build POST body — complex schedule arrays go in body, not URL params
+    const body: Record<string, any> = {};
+
+    if (schedule.length === 0) {
+      // Remove scheduling — revert to standard pacing
+      body.pacing_type = ['standard'];
+      body.adset_schedule = [];
+    } else {
+      // Validate each schedule entry
+      for (const entry of schedule) {
+        if (entry.start_minute % 60 !== 0 || entry.end_minute % 60 !== 0) {
+          throw new Error('Schedule start_minute and end_minute must be on the hour (multiples of 60)');
+        }
+        // Support wrap-around schedules (e.g. 22:00-06:00 = start_minute 1320, end_minute 360)
+        const duration = entry.end_minute > entry.start_minute
+          ? entry.end_minute - entry.start_minute
+          : (1440 - entry.start_minute) + entry.end_minute;
+        if (duration < 60) {
+          throw new Error('Schedule entries must span at least 1 hour');
+        }
+        if (!entry.days || entry.days.length === 0) {
+          throw new Error('Schedule entries must specify at least one day');
+        }
+        for (const day of entry.days) {
+          if (day < 0 || day > 6) {
+            throw new Error('Schedule days must be 0-6 (0=Sunday, 6=Saturday)');
+          }
+        }
+      }
+
+      body.pacing_type = ['day_parting'];
+      body.adset_schedule = schedule;
+    }
+
+    const response = await this.fetchWithRetry(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      structuredLog('ERROR', 'Facebook updateAdSetSchedule failed', {
+        service: 'facebook-oauth', method: 'updateAdSetSchedule',
+        ad_set_id: adSetId, error: errorText
+      });
+      throw new Error(`Failed to update ad set schedule: ${errorText}`);
+    }
+
+    const data = await response.json() as any;
+    return { success: data.success === true };
+  }
+
+  /**
+   * Read current budget of a campaign or ad set
+   * Used by reallocate_budget to validate before moving money
+   *
+   * Note: daily_budget and lifetime_budget are returned as numeric strings by the Graph API.
+   * A value of "0" is a valid budget, so we use != null checks (not truthiness).
+   */
+  async readEntityBudget(
+    accessToken: string,
+    entityId: string
+  ): Promise<{ daily_budget: number | null; lifetime_budget: number | null }> {
+    const url = new URL(`https://graph.facebook.com/v24.0/${entityId}`);
+    url.searchParams.set('access_token', accessToken);
+    url.searchParams.set('fields', 'daily_budget,lifetime_budget');
+
+    const response = await this.fetchWithRetry(url.toString(), { method: 'GET' });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      structuredLog('ERROR', 'Facebook readEntityBudget failed', {
+        service: 'facebook-oauth', method: 'readEntityBudget',
+        entity_id: entityId, error: errorText
+      });
+      throw new Error(`Failed to read entity budget: ${errorText}`);
+    }
+
+    const data = await response.json() as any;
+    return {
+      daily_budget: data.daily_budget != null ? parseInt(data.daily_budget, 10) : null,
+      lifetime_budget: data.lifetime_budget != null ? parseInt(data.lifetime_budget, 10) : null,
+    };
+  }
 }

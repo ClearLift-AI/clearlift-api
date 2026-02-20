@@ -258,7 +258,7 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
   },
   {
     name: 'set_bid',
-    description: 'Recommend a bid or bidding strategy change for a campaign or ad set. Use when auction performance suggests bid adjustments could improve efficiency or scale.',
+    description: 'Recommend a bid or bidding strategy change for a campaign or ad set. Use when auction performance suggests bid adjustments could improve efficiency or scale. Strategy names are platform-specific — use the correct enum for the target platform.',
     input_schema: {
       type: 'object',
       properties: {
@@ -286,21 +286,27 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
         },
         recommended_bid_cents: {
           type: 'number',
-          description: 'Recommended new bid cap in cents'
+          description: 'Recommended new bid cap in cents. Required for Meta COST_CAP and LOWEST_COST_WITH_BID_CAP strategies, and for TikTok BID_TYPE_CUSTOM.'
         },
         current_strategy: {
           type: 'string',
-          description: 'Current bidding strategy',
-          enum: ['manual_cpc', 'maximize_clicks', 'maximize_conversions', 'target_cpa', 'target_roas']
+          description: 'Current bidding strategy. Facebook: LOWEST_COST_WITHOUT_CAP, COST_CAP, LOWEST_COST_WITH_BID_CAP, LOWEST_COST_WITH_MIN_ROAS. Google: MAXIMIZE_CONVERSIONS, MAXIMIZE_CONVERSION_VALUE, MANUAL_CPC, TARGET_IMPRESSION_SHARE. TikTok: BID_TYPE_NO_BID, BID_TYPE_CUSTOM.'
         },
         recommended_strategy: {
           type: 'string',
-          description: 'Recommended bidding strategy',
-          enum: ['manual_cpc', 'maximize_clicks', 'maximize_conversions', 'target_cpa', 'target_roas']
+          description: 'Recommended bidding strategy. Facebook: LOWEST_COST_WITHOUT_CAP (auto, no cap), COST_CAP (target CPA with cap), LOWEST_COST_WITH_BID_CAP (max bid per auction), LOWEST_COST_WITH_MIN_ROAS (min ROAS floor). Google: MAXIMIZE_CONVERSIONS (with optional target_cpa_cents), MAXIMIZE_CONVERSION_VALUE (with optional target_roas_floor), MANUAL_CPC, TARGET_IMPRESSION_SHARE. TikTok: BID_TYPE_NO_BID (auto), BID_TYPE_CUSTOM (manual bid).'
         },
         target_cpa_cents: {
           type: 'number',
-          description: 'Target CPA in cents (if recommending target_cpa strategy)'
+          description: 'Target CPA in cents. Used with Meta COST_CAP (sets bid_amount) and Google MAXIMIZE_CONVERSIONS (sets target_cpa_micros).'
+        },
+        target_roas_floor: {
+          type: 'number',
+          description: 'Minimum ROAS floor, scaled 10000x. Example: 15000 = 1.5x ROAS (150%). Used with Meta LOWEST_COST_WITH_MIN_ROAS (sets roas_average_floor) and Google MAXIMIZE_CONVERSION_VALUE (sets target_roas, will be divided by 10000). Valid range: 100-10000000.'
+        },
+        optimization_goal: {
+          type: 'string',
+          description: 'TikTok only: optimization goal for the ad group (CLICK, CONVERT, INSTALL, REACH, VIDEO_VIEW, LEAD_GENERATION)'
         },
         reason: {
           type: 'string',
@@ -316,7 +322,7 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
           enum: ['low', 'medium', 'high']
         }
       },
-      required: ['platform', 'entity_type', 'entity_id', 'entity_name', 'reason', 'confidence']
+      required: ['platform', 'entity_type', 'entity_id', 'entity_name', 'recommended_strategy', 'reason', 'confidence']
     }
   },
   {
