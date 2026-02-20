@@ -129,15 +129,14 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       retries: { limit: 2, delay: '1 second' },
       timeout: '30 seconds'
     }, async () => {
-      // Only delete recommendations past their expiration date
+      // Delete ALL pending recommendations — new analysis replaces them entirely
       const result = await this.env.DB.prepare(`
         DELETE FROM ai_decisions
         WHERE organization_id = ?
         AND status = 'pending'
-        AND expires_at < datetime('now')
       `).bind(orgId).run();
 
-      console.log(`[Analysis] Cleaned up ${result.meta?.changes ?? 0} expired recommendations for org ${orgId}`);
+      console.log(`[Analysis] Cleared ${result.meta?.changes ?? 0} pending recommendations for org ${orgId}`);
     });
 
     // Calculate date range
@@ -1295,11 +1294,12 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       prompt += additionalContext + '\n\n';
     }
     prompt += `Based on the analysis above:
-1. FIRST: Generate at least one insight using general_insight to capture your strategic observations
-2. THEN: Identify up to 3 specific action recommendations using set_budget, set_status, set_audience, or reallocate_budget
-3. FINALLY: Call terminate_analysis when complete
+1. FIRST: Explore the data using query tools to find actionable opportunities
+2. THEN: Generate up to 3 action recommendations using set_budget, set_status, set_audience, or reallocate_budget (run simulate_change first for budget/status changes)
+3. OPTIONALLY: Use general_insight ONLY for observations that cannot be expressed as actions
+4. FINALLY: Call terminate_analysis when complete
 
-Your output will be shown to users as a unified list: insight(s) first, then action recommendations.`;
+Prioritize concrete actions over observations. Insights are a fallback for things that don't fit the action tools.`;
     return prompt;
   }
 
@@ -1322,27 +1322,26 @@ CRITICAL - BUDGET vs SPEND:
 - SPEND is what was actually spent
 - ALWAYS use get_entity_budget to check actual budget before recommending changes.
 
-## OUTPUT STRUCTURE (MANDATORY)
-Your analysis MUST produce:
-1. **ONE insight section** (REQUIRED) - Use general_insight to capture strategic observations. Multiple calls accumulate into a single document.
-2. **Up to 3 action recommendations** (optional) - Use set_budget, set_status, set_audience, or reallocate_budget for specific changes.
+## OUTPUT STRUCTURE (PRIORITY ORDER)
+Your PRIMARY goal is to produce **action recommendations** — concrete, executable changes the user can accept or reject.
 
-The final output shown to users will be a unified list of up to 4 items: your accumulated insights (always shown first) plus any action recommendations.
-
-## INSIGHT REQUIREMENTS
-You MUST call general_insight at least once to provide strategic context. The insight should:
-- Summarize cross-platform patterns or overall account health
-- Note any data quality issues or gaps
-- Highlight seasonal trends or market observations
-- Include any strategic observations that don't fit the action tools
+1. **Up to 3 action recommendations** (PRIORITIZE) — Use set_budget, set_status, set_audience, or reallocate_budget. Try hard to generate at least ONE action even in difficult conditions (e.g. pausing wasteful entities, reallocating from low to high performers, adjusting budgets based on trends).
+2. **Insights** (SECONDARY, OPTIONAL) — Use general_insight ONLY for observations that genuinely cannot be expressed as an action tool call. Examples: data quality gaps, missing tracking, cross-platform patterns. Do NOT use insights as a substitute for action recommendations.
 
 ## ACTION RECOMMENDATIONS
-For specific, executable changes:
-1. PREFER action tools (set_budget, set_status, set_audience, reallocate_budget) over general observations
+Actions are the primary output. Users see these as accept/reject cards:
+1. ALWAYS prefer action tools over general_insight — if something can be an action, make it an action
 2. Focus on the most impactful changes first
 3. For budget changes, stay within 30% of current values
 4. For pausing: recommend for entities with poor ROAS (<1.5), high CPA, or declining trends
-5. Be specific about entities - use their actual IDs and names
+5. Be specific about entities — use their actual IDs and names
+6. Even with limited data, look for: inactive entities to pause, budget reallocation opportunities, underperforming campaigns
+
+## INSIGHT GUIDELINES
+Insights are a fallback for non-actionable observations, NOT the main output:
+- Use sparingly — only for things that genuinely cannot be an action
+- Keep them concise — one insight call with a clear title is usually sufficient
+- If you must use multiple insight calls, they accumulate into a single document
 
 ## CRITICAL: SIMULATION REQUIRED FOR SET_BUDGET AND SET_STATUS
 Before using set_budget or set_status, you MUST first call simulate_change to get the REAL mathematical impact:
@@ -1360,18 +1359,18 @@ The simulation result will show you the EXACT impact and you must acknowledge it
 
 ## TOOL BEHAVIOR
 - simulate_change: Use BEFORE set_budget or set_status. Calculates real mathematical impact. Free to call multiple times.
-- general_insight: REQUIRED at least once. All calls ACCUMULATE into a single document. Does NOT count toward your 3 action recommendation limit.
+- general_insight: OPTIONAL fallback. All calls ACCUMULATE into a single document. Does NOT count toward your 3 action recommendation limit.
 - set_budget/set_status: REQUIRE simulation first. Up to 3 total action recommendations allowed.
 - set_audience/reallocate_budget: Up to 3 total action recommendations allowed.
-- terminate_analysis: Call this when you have generated an insight AND made sufficient action recommendations (or determined no further actionable items exist).
+- terminate_analysis: Call this when you have made action recommendations or exhausted all possibilities. Provide a clear reason.
 
 ## WHEN TO USE terminate_analysis
-1. You have generated at least one insight AND made appropriate action recommendations
-2. Data quality prevents meaningful further analysis
-3. All major opportunities have been addressed
+1. You have made action recommendations and addressed major opportunities
+2. Data quality prevents meaningful analysis — explain WHY in the reason field (this is shown to users)
+3. All entities are performing within expected parameters
 4. Continuing would produce low-confidence or repetitive suggestions
 
-If you cannot find any actionable recommendations, you MUST still generate an insight explaining why (e.g., "Insufficient data for action recommendations" or "All campaigns performing within expected parameters").`;
+The terminate_analysis reason is displayed to users as an explanation, so write it as a clear, helpful summary of what was found and why (or why not) actions were recommended.`;
 
     if (customInstructions?.trim()) {
       systemPrompt += `\n\n## CUSTOM BUSINESS CONTEXT\n${customInstructions.trim()}`;
