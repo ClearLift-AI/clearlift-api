@@ -1028,7 +1028,11 @@ export class ExplorationToolExecutor {
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
       switch (toolName) {
-        case 'query_ad_metrics':
+        case 'query_ad_metrics': {
+          // Validate entity_id for scopes that require it
+          if (['performance', 'creatives', 'audiences', 'budgets'].includes(input.scope) && !input.entity_id) {
+            return { success: false, error: `Missing required parameter "entity_id" for scope "${input.scope}". Provide the specific entity ID to query.` };
+          }
           switch (input.scope) {
             case 'performance': return await this.queryMetrics(input as QueryMetricsInput, orgId);
             case 'creatives': return await this.getCreativeDetails(input as GetCreativeDetailsInput, orgId);
@@ -1036,6 +1040,7 @@ export class ExplorationToolExecutor {
             case 'budgets': return await this.getEntityBudget(input as GetEntityBudgetInput, orgId);
             default: return { success: false, error: `Unknown scope for query_ad_metrics: ${input.scope}` };
           }
+        }
         case 'query_revenue':
           switch (input.scope) {
             case 'stripe': return await this.queryStripeRevenue(input as QueryStripeRevenueInput, orgId);
