@@ -4020,7 +4020,7 @@ export class ExplorationToolExecutor {
     try {
       // Query CAC history
       const historyResult = await db.prepare(`
-        SELECT date, cac_cents, spend_cents, conversions, notes
+        SELECT date, cac_cents, spend_cents, conversions
         FROM cac_history
         WHERE organization_id = ?
         ORDER BY date DESC
@@ -4030,7 +4030,6 @@ export class ExplorationToolExecutor {
         cac_cents: number;
         spend_cents: number;
         conversions: number;
-        notes: string | null;
       }>();
 
       const history = (historyResult.results || []).reverse();
@@ -4112,21 +4111,19 @@ export class ExplorationToolExecutor {
           // cac_baselines is in DB (coreDb), not ANALYTICS_DB
           const basDb = this.coreDb || this.db;
           const basResult = await basDb.prepare(`
-            SELECT target_cac_cents, baseline_type, notes
+            SELECT baseline_cac_cents, calculation_method
             FROM cac_baselines
             WHERE organization_id = ?
             ORDER BY created_at DESC
             LIMIT 5
           `).bind(orgId).all<{
-            target_cac_cents: number;
-            baseline_type: string;
-            notes: string | null;
+            baseline_cac_cents: number;
+            calculation_method: string;
           }>();
           result.baselines = (basResult.results || []).map(b => ({
-            target_cac: '$' + (b.target_cac_cents / 100).toFixed(2),
-            target_cac_cents: b.target_cac_cents,
-            type: b.baseline_type,
-            notes: b.notes
+            target_cac: '$' + (b.baseline_cac_cents / 100).toFixed(2),
+            target_cac_cents: b.baseline_cac_cents,
+            type: b.calculation_method
           }));
         } catch {
           result.baselines = [];
