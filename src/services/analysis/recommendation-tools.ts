@@ -424,17 +424,21 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
   },
   {
     name: 'terminate_analysis',
-    description: 'End the analysis loop early when sufficient recommendations have been made or no further actionable insights exist. Call this instead of continuing to iterate when: (1) you have made high-quality actionable recommendations, (2) data quality prevents meaningful further analysis, (3) all major opportunities have been addressed, or (4) continuing would produce low-confidence or repetitive suggestions.',
+    description: 'End the analysis loop ONLY after you have already made actionable recommendations (set_budget, set_status, set_audience, set_bid). Do NOT call this after only producing general_insight or exploration — you MUST attempt concrete recommendations first. The only exception is when data is genuinely insufficient for ANY recommendation (e.g. zero spend, no active entities). If you have insights but have not yet made recommendations, keep going — use simulate_change, explore further, and produce actionable recommendations before terminating.',
     input_schema: {
       type: 'object',
       properties: {
         reason: {
           type: 'string',
-          description: 'Clear explanation of why analysis is being terminated early'
+          description: 'Clear explanation of why analysis is complete. Must reference the recommendations already made, or explain why no recommendations are possible.'
         },
         summary: {
           type: 'string',
           description: 'Brief summary of what was accomplished in this analysis'
+        },
+        recommendation_count: {
+          type: 'number',
+          description: 'Number of actionable recommendations (set_budget, set_status, etc.) made before terminating. Must be > 0 unless data is insufficient.'
         }
       },
       required: ['reason']

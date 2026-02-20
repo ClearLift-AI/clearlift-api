@@ -13,6 +13,8 @@ import {
   RECOMMENDATION_TOOLS,
   getAnthropicTools,
   isRecommendationTool,
+  isTerminateAnalysisTool,
+  isGeneralInsightTool,
   parseToolCallToRecommendation,
   Recommendation
 } from './recommendation-tools';
@@ -180,6 +182,16 @@ IMPORTANT RULES:
 6. Only use general_insight for cross-platform patterns or issues that genuinely cannot be addressed with the other tools
 7. NEVER recommend a budget amount without first using get_entity_budget and calculate_budget_change
 
+CRITICAL - WORKFLOW ORDER:
+1. Explore data first (query_ad_metrics, query_growth, etc.)
+2. Identify opportunities and produce general_insights if useful
+3. Use simulate_change to validate high-impact changes
+4. Make ACTIONABLE RECOMMENDATIONS (set_budget, set_status, set_audience, set_bid) — this is the GOAL
+5. ONLY call terminate_analysis AFTER you have made actionable recommendations
+   - Insights alone are NOT sufficient to terminate. Keep going until you have concrete recommendations.
+   - If data is genuinely insufficient for any recommendation (zero spend, no entities), THEN you may terminate early with an explanation.
+   - Do NOT terminate after only exploration or general_insight calls.
+
 After analyzing the data, use the available tools to make specific recommendations.
 If you see underperforming campaigns or ads, use set_status to recommend pausing them.`;
 
@@ -238,17 +250,52 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
           continue;
         }
 
-        // Handle recommendation tools (capped at maxRecommendations)
+        // Handle terminate_analysis control tool
+        if (isTerminateAnalysisTool(toolUse.name)) {
+          const input = toolUse.input as { reason?: string; summary?: string; recommendation_count?: number };
+
+          // If the agent tries to terminate with zero recommendations, push back
+          if (recommendations.length === 0) {
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({
+                status: 'rejected',
+                message: 'Cannot terminate with zero actionable recommendations. You have only produced insights so far. Continue analysis and make concrete recommendations (set_budget, set_status, set_audience, set_bid) before terminating. If data is truly insufficient, explain specifically what is missing.'
+              })
+            });
+            continue;
+          }
+
+          // Valid termination — agent has made recommendations
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: JSON.stringify({ status: 'accepted', message: 'Analysis terminated.' })
+          });
+
+          return {
+            finalSummary: input.summary || input.reason || executiveSummary,
+            recommendations,
+            iterations,
+            stoppedReason: 'early_termination'
+          };
+        }
+
+        // Handle recommendation tools (actionable ones capped at maxRecommendations)
         if (isRecommendationTool(toolUse.name)) {
-          // Check if we've already hit max - skip logging but still return a result
-          if (hitMaxRecommendations || recommendations.length >= maxRecommendations) {
+          const isInsight = isGeneralInsightTool(toolUse.name);
+          const actionableCount = recommendations.filter(r => r.tool !== 'general_insight').length;
+
+          // Only cap actionable recommendations, not insights
+          if (!isInsight && (hitMaxRecommendations || actionableCount >= maxRecommendations)) {
             hitMaxRecommendations = true;
             toolResults.push({
               type: 'tool_result',
               tool_use_id: toolUse.id,
               content: JSON.stringify({
                 status: 'skipped',
-                message: `Maximum recommendations (${maxRecommendations}) already reached. This recommendation was not logged.`
+                message: `Maximum actionable recommendations (${maxRecommendations}) already reached. This recommendation was not logged.`
               })
             });
             continue;
@@ -267,13 +314,14 @@ If you see underperforming campaigns or ads, use set_status to recommend pausing
             tool_use_id: toolUse.id,
             content: JSON.stringify({
               status: 'logged',
-              message: `Recommendation logged: ${rec.tool} for ${rec.entity_name}`,
-              recommendation_count: recommendations.length
+              message: `${isInsight ? 'Insight' : 'Recommendation'} logged: ${rec.tool} for ${rec.entity_name}`,
+              recommendation_count: actionableCount + (isInsight ? 0 : 1),
+              insight_count: recommendations.filter(r => r.tool === 'general_insight').length
             })
           });
 
-          // Check if we've hit max recommendations
-          if (recommendations.length >= maxRecommendations) {
+          // Check if we've hit max actionable recommendations
+          if (!isInsight && actionableCount + 1 >= maxRecommendations) {
             hitMaxRecommendations = true;
           }
         }
