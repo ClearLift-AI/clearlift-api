@@ -47,4 +47,5 @@ test-api.sh
 .dev.vars
 
 # Deployment logs (contains timestamps, not secrets)
-deployments.json.seed-tmp/
+deployments.json
+.seed-tmp/
