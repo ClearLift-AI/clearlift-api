@@ -318,13 +318,14 @@ export class D1AnalyticsService {
       params.push(model);
     }
 
+    // Use overlap semantics for batch-computed periods
     if (periodStart) {
-      query += ` AND period_start >= ?`;
+      query += ` AND period_end >= ?`;
       params.push(periodStart);
     }
 
     if (periodEnd) {
-      query += ` AND period_end <= ?`;
+      query += ` AND period_start <= ?`;
       params.push(periodEnd);
     }
 
@@ -445,13 +446,14 @@ export class D1AnalyticsService {
     `;
     const params: unknown[] = [orgTag];
 
+    // Use overlap semantics for batch-computed periods
     if (options.periodStart) {
-      query += ` AND period_start >= ?`;
+      query += ` AND period_end >= ?`;
       params.push(options.periodStart);
     }
 
     if (options.periodEnd) {
-      query += ` AND period_end <= ?`;
+      query += ` AND period_start <= ?`;
       params.push(options.periodEnd);
     }
 
@@ -515,13 +517,14 @@ export class D1AnalyticsService {
     `;
     const params: unknown[] = [orgTag];
 
+    // Use overlap semantics: include rows whose period overlaps the requested range
     if (options.periodStart) {
-      query += ` AND period_start >= ?`;
+      query += ` AND period_end >= ?`;
       params.push(options.periodStart);
     }
 
     if (options.periodEnd) {
-      query += ` AND period_end <= ?`;
+      query += ` AND period_start <= ?`;
       params.push(options.periodEnd);
     }
 
