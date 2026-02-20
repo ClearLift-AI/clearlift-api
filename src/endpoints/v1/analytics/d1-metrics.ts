@@ -573,3 +573,78 @@ export class GetD1ChannelTransitions extends OpenAPIRoute {
     return success(c, data);
   }
 }
+
+/**
+ * GET /v1/analytics/metrics/page-flow - Get page-to-page flow transitions for Sankey visualization
+ */
+export class GetD1PageFlow extends OpenAPIRoute {
+  public schema = {
+    tags: ["Analytics"],
+    summary: "Get page flow transitions from D1",
+    description: "Fetches page-to-page navigation transitions from funnel_transitions for Sankey visualization",
+    operationId: "get-d1-page-flow",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        period_start: z.string().optional().describe("Filter by period start date (ISO 8601)"),
+        period_end: z.string().optional().describe("Filter by period end date (ISO 8601)"),
+        limit: z.string().optional().describe("Max transitions to return (default 50)")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Page flow transitions",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                transitions: z.array(z.object({
+                  from_id: z.string(),
+                  from_name: z.string().nullable(),
+                  to_id: z.string(),
+                  to_name: z.string().nullable(),
+                  visitors_at_from: z.number(),
+                  visitors_transitioned: z.number(),
+                  transition_rate: z.number(),
+                  conversions: z.number(),
+                  revenue_cents: z.number()
+                }))
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const periodStart = c.req.query("period_start");
+    const periodEnd = c.req.query("period_end");
+    const limitStr = c.req.query("limit");
+    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
+    }
+
+    const orgTagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
+    `).bind(orgId).first<{ short_tag: string }>();
+
+    if (!orgTagMapping?.short_tag) {
+      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
+    }
+
+    const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
+    const transitions = await analyticsService.getPageFlowTransitions(orgTagMapping.short_tag, {
+      periodStart,
+      periodEnd,
+      limit
+    });
+
+    return success(c, { transitions });
+  }
+}

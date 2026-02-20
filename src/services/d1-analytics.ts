@@ -483,6 +483,68 @@ export class D1AnalyticsService {
     return result.results;
   }
 
+  /**
+   * Get page-to-page flow transitions for Sankey visualization
+   * Queries funnel_transitions filtered to page→page edges
+   */
+  async getPageFlowTransitions(
+    orgTag: string,
+    options: {
+      periodStart?: string;
+      periodEnd?: string;
+      limit?: number;
+    } = {}
+  ): Promise<{
+    from_id: string;
+    from_name: string | null;
+    to_id: string;
+    to_name: string | null;
+    visitors_at_from: number;
+    visitors_transitioned: number;
+    transition_rate: number;
+    conversions: number;
+    revenue_cents: number;
+  }[]> {
+    let query = `
+      SELECT from_id, from_name, to_id, to_name,
+        visitors_at_from, visitors_transitioned, transition_rate,
+        conversions, revenue_cents
+      FROM funnel_transitions
+      WHERE org_tag = ?
+        AND from_type = 'page' AND to_type = 'page'
+    `;
+    const params: unknown[] = [orgTag];
+
+    if (options.periodStart) {
+      query += ` AND period_start >= ?`;
+      params.push(options.periodStart);
+    }
+
+    if (options.periodEnd) {
+      query += ` AND period_end <= ?`;
+      params.push(options.periodEnd);
+    }
+
+    const limit = options.limit || 50;
+    query += ` ORDER BY visitors_transitioned DESC LIMIT ?`;
+    params.push(limit);
+
+    const stmt = this.session.prepare(query);
+    const result = await stmt.bind(...params).all<{
+      from_id: string;
+      from_name: string | null;
+      to_id: string;
+      to_name: string | null;
+      visitors_at_from: number;
+      visitors_transitioned: number;
+      transition_rate: number;
+      conversions: number;
+      revenue_cents: number;
+    }>();
+
+    return result.results;
+  }
+
   // =============================================================================
   // GOOGLE ADS PLATFORM DATA
   // =============================================================================

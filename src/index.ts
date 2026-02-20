@@ -51,7 +51,8 @@ import {
   GetD1UTMPerformance,
   GetD1Attribution,
   GetD1Journeys,
-  GetD1ChannelTransitions
+  GetD1ChannelTransitions,
+  GetD1PageFlow
 } from "./endpoints/v1/analytics/d1-metrics";
 import {
   GetRealtimeSummary,
@@ -506,6 +507,7 @@ openapi.get("/v1/analytics/metrics/utm", auth, requireOrg, GetD1UTMPerformance);
 openapi.get("/v1/analytics/metrics/attribution", auth, requireOrg, GetD1Attribution);
 openapi.get("/v1/analytics/metrics/journeys", auth, requireOrg, GetD1Journeys);
 openapi.get("/v1/analytics/metrics/transitions", auth, requireOrg, GetD1ChannelTransitions);
+openapi.get("/v1/analytics/metrics/page-flow", auth, requireOrg, GetD1PageFlow);
 
 // Real-time Analytics Engine endpoints (sub-second latency)
 openapi.get("/v1/analytics/realtime/summary", auth, requireOrg, GetRealtimeSummary);
