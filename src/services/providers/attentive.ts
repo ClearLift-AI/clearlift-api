@@ -11,6 +11,47 @@ export interface AttentiveConfig {
   apiKey: string;
 }
 
+/**
+ * Raw Attentive webhook payload (as received from Attentive).
+ * @see https://docs.attentive.com/pages/webhooks/webhook-payloads/
+ */
+export interface AttentiveRawWebhookPayload {
+  type: string;               // 'sms.sent' | 'sms.message_link_click' | 'sms.subscribed' | etc.
+  timestamp: number;          // Unix milliseconds
+  company: {
+    display_name: string;
+    company_id: string;
+  };
+  subscriber: {
+    email?: string;
+    phone?: string;
+    external_id?: string;
+  };
+  message?: {
+    id: string;
+    type?: string;
+    name?: string;
+    text?: string;
+    channel?: string;
+    subject?: string;
+  };
+  subscription?: {
+    type: string;  // 'MARKETING' | 'TRANSACTIONAL'
+  };
+  creative?: {
+    name?: string;
+    type?: string;
+  };
+  link?: {
+    url?: string;
+  };
+  user_property?: {
+    id: string;
+    name: string;
+    value: string;
+  };
+}
+
 export interface AttentiveAccountInfo {
   company_id: string;
   company_name: string;
@@ -162,6 +203,107 @@ export class AttentiveAPIProvider {
       return response.subscribers.length > 0 ? 1 : 0;
     } catch {
       return 0;
+    }
+  }
+
+  /**
+   * Verify Attentive webhook signature using HMAC-SHA256.
+   * @see https://docs.attentive.com/pages/webhooks/webhook-authentication/
+   *
+   * @param body - Raw request body as string
+   * @param signature - Value of x-attentive-hmac-sha256 header
+   * @param secret - Webhook signing secret from Attentive dashboard
+   * @returns True if signature is valid
+   */
+  static async verifyWebhookSignature(
+    body: string,
+    signature: string,
+    secret: string
+  ): Promise<boolean> {
+    if (!signature || !secret) return false;
+
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+
+    const signatureBuffer = await crypto.subtle.sign(
+      'HMAC',
+      key,
+      encoder.encode(body)
+    );
+
+    const expectedHex = Array.from(new Uint8Array(signatureBuffer))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    // Constant-time comparison
+    if (signature.length !== expectedHex.length) return false;
+    let result = 0;
+    for (let i = 0; i < signature.length; i++) {
+      result |= signature.charCodeAt(i) ^ expectedHex.charCodeAt(i);
+    }
+    return result === 0;
+  }
+
+  /**
+   * Parse raw Attentive webhook payload into normalized event.
+   */
+  static parseWebhookEvent(payload: AttentiveRawWebhookPayload): {
+    event_type: string;
+    message_id: string;
+    subscriber_id: string;
+    subscriber_email?: string;
+    campaign_id?: string;
+    campaign_name?: string;
+    link_url?: string;
+    timestamp: string;
+    company_id: string;
+    metadata: Record<string, unknown>;
+  } {
+    return {
+      event_type: payload.type,
+      message_id: payload.message?.id || `${payload.type}-${payload.timestamp}`,
+      subscriber_id: payload.subscriber?.external_id || payload.subscriber?.phone || 'unknown',
+      subscriber_email: payload.subscriber?.email || undefined,
+      campaign_id: payload.message?.id,
+      campaign_name: payload.message?.name || payload.creative?.name,
+      link_url: payload.link?.url,
+      timestamp: new Date(payload.timestamp).toISOString(),
+      company_id: payload.company?.company_id,
+      metadata: {
+        channel: payload.message?.channel,
+        message_type: payload.message?.type,
+        subscription_type: payload.subscription?.type,
+        creative_type: payload.creative?.type,
+      },
+    };
+  }
+
+  /**
+   * Attempt to register webhook URL with Attentive.
+   * Uses the webhooks API if available. Non-fatal — if this fails,
+   * the user can configure webhooks manually in the Attentive dashboard.
+   */
+  async registerWebhook(
+    webhookUrl: string,
+    eventTypes: string[]
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      await this.request<any>('/webhooks', {
+        method: 'POST',
+        body: JSON.stringify({
+          url: webhookUrl,
+          events: eventTypes,
+        }),
+      });
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
     }
   }
 }

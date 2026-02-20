@@ -72,10 +72,6 @@ export class ConnectAttentive extends OpenAPIRoute {
   };
 
   async handle(c: AppContext) {
-    // BLOCKED: Attentive integration is not yet ready for production
-    // The queue-consumer does not have sync handlers for Attentive data
-    return error(c, "SERVICE_UNAVAILABLE", "Attentive integration is temporarily unavailable. This feature is coming soon.", 503);
-
     const session = c.get("session");
     const data = await this.getValidatedData<typeof this.schema>();
     const {
@@ -151,6 +147,22 @@ export class ConnectAttentive extends OpenAPIRoute {
       // Auto-advance onboarding when user connects first service
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementServicesConnected(session.user_id);
+
+      // Attempt to auto-register webhook for event data (non-fatal)
+      try {
+        const webhookUrl = c.env.OAUTH_CALLBACK_BASE
+          ? `${c.env.OAUTH_CALLBACK_BASE.replace(/\/+$/, '')}/v1/connectors/attentive/webhook`
+          : 'https://api.adbliss.io/v1/connectors/attentive/webhook';
+        const registerResult = await attentiveProvider.registerWebhook(webhookUrl, [
+          'sms.sent', 'sms.message_link_click', 'sms.subscribed', 'sms.unsubscribed',
+          'email.sent', 'email.message_link_click', 'email.subscribed', 'email.unsubscribed',
+        ]);
+        if (!registerResult.success) {
+          structuredLog('WARN', 'Failed to auto-register Attentive webhook (user can configure manually)', { endpoint: 'POST /v1/connectors/attentive/connect', error: registerResult.error });
+        }
+      } catch (hookErr: any) {
+        structuredLog('WARN', 'Failed to auto-register Attentive webhook', { endpoint: 'POST /v1/connectors/attentive/connect', error: hookErr instanceof Error ? hookErr.message : String(hookErr) });
+      }
 
       return success(c, {
         connection_id: connectionId,
@@ -473,5 +485,106 @@ export class TestAttentiveConnection extends OpenAPIRoute {
         message: "Connection test failed. Please check your API key and try again."
       });
     }
+  }
+}
+
+
+/**
+ * POST /v1/connectors/attentive/webhook
+ * Receive Attentive webhook events (NO bearer auth — HMAC signature validates)
+ *
+ * @see https://docs.attentive.com/pages/webhooks/webhook-authentication/
+ */
+export class AttentiveWebhook extends OpenAPIRoute {
+  schema = {
+    tags: ["Webhooks"],
+    summary: "Receive Attentive webhook",
+    description: "Receives webhook events from Attentive. Validated via HMAC-SHA256 signature.",
+    request: {
+      body: contentJson(z.any())
+    },
+    responses: {
+      "200": {
+        description: "Webhook received"
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const body = await c.req.text();
+    const signature = c.req.header('x-attentive-hmac-sha256');
+
+    // Parse the payload first to identify the company
+    let payload: any;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      structuredLog('WARN', 'Attentive webhook: invalid JSON body', { endpoint: 'POST /v1/connectors/attentive/webhook' });
+      return c.json({ received: true }, 200); // Always 200 to prevent retries
+    }
+
+    const companyId = payload?.company?.company_id;
+    if (!companyId) {
+      structuredLog('WARN', 'Attentive webhook: missing company_id', { endpoint: 'POST /v1/connectors/attentive/webhook' });
+      return c.json({ received: true }, 200);
+    }
+
+    // Look up the connection by company_id to get org context and webhook secret
+    const connection = await c.env.DB.prepare(`
+      SELECT id, organization_id, settings
+      FROM platform_connections
+      WHERE platform = 'attentive' AND account_id = ? AND is_active = 1
+      LIMIT 1
+    `).bind(companyId).first<{ id: string; organization_id: string; settings: string | null }>();
+
+    if (!connection) {
+      structuredLog('WARN', 'Attentive webhook: no active connection for company', { endpoint: 'POST /v1/connectors/attentive/webhook', company_id: companyId });
+      return c.json({ received: true }, 200);
+    }
+
+    // Verify HMAC signature if a webhook secret is configured
+    let settings: Record<string, any> = {};
+    if (connection.settings) {
+      try { settings = JSON.parse(connection.settings); } catch {}
+    }
+    const webhookSecret = settings.webhook_secret;
+    if (webhookSecret && signature) {
+      const valid = await AttentiveAPIProvider.verifyWebhookSignature(body, signature, webhookSecret);
+      if (!valid) {
+        structuredLog('WARN', 'Attentive webhook: invalid HMAC signature', { endpoint: 'POST /v1/connectors/attentive/webhook', company_id: companyId });
+        return c.json({ received: true }, 200); // Still 200 to prevent unnecessary retries
+      }
+    }
+
+    // Parse the webhook event
+    const event = AttentiveAPIProvider.parseWebhookEvent(payload);
+
+    // Enqueue to SYNC_QUEUE for workflow processing
+    if (c.env.SYNC_QUEUE) {
+      try {
+        const now = new Date().toISOString();
+        await c.env.SYNC_QUEUE.send({
+          job_id: crypto.randomUUID(),
+          connection_id: connection.id,
+          organization_id: connection.organization_id,
+          platform: 'attentive',
+          account_id: companyId,
+          job_type: 'webhook',
+          sync_window: {
+            start: event.timestamp,
+            end: now,
+          },
+          metadata: {
+            webhookEvents: [event],
+            created_at: now,
+            priority: 'high',
+          },
+        });
+      } catch (err) {
+        structuredLog('ERROR', 'Attentive webhook: queue send failed', { endpoint: 'POST /v1/connectors/attentive/webhook', error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    return c.json({ received: true }, 200);
   }
 }
