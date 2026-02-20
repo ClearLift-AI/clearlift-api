@@ -37,6 +37,8 @@ export interface PlatformConnection {
   expires_at: string | null;
   scopes: string[];
   settings?: any;
+  needs_reauth?: boolean;
+  reauth_reason?: string | null;
 }
 
 export interface OAuthState {
@@ -400,7 +402,7 @@ export class ConnectorService {
       SELECT
         pc.id, pc.organization_id, pc.platform, pc.account_id, pc.account_name,
         pc.connected_by, pc.connected_at, pc.last_synced_at, pc.sync_status,
-        pc.is_active, pc.expires_at, pc.scopes,
+        pc.is_active, pc.expires_at, pc.scopes, pc.needs_reauth, pc.reauth_reason,
         (SELECT sj.records_synced FROM sync_jobs sj
          WHERE sj.connection_id = pc.id AND sj.status = 'completed'
          ORDER BY sj.completed_at DESC LIMIT 1) as records_synced

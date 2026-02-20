@@ -103,7 +103,7 @@ export class EntityTreeBuilder {
     const campaignsResult = await this.session.prepare(`
       SELECT id, platform, account_id, campaign_id, campaign_name, campaign_status
       FROM ad_campaigns
-      WHERE organization_id = ?
+      WHERE organization_id = ? AND campaign_status != 'REMOVED'
     `).bind(orgId).all<{
       id: string;
       platform: string;
