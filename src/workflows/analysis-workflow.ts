@@ -86,6 +86,35 @@ export interface AnalysisWorkflowResult {
   terminationReason?: string;
 }
 
+/**
+ * Create a short human-readable summary of a tool call's input (no PII, no full JSON)
+ */
+function summarizeToolInput(toolCall: { name: string; input: any }): string {
+  const input = toolCall.input || {};
+  switch (toolCall.name) {
+    case 'set_budget':
+      return `Set ${input.platform || ''} ${input.entity_type || 'campaign'} '${input.entity_name || input.entity_id || ''}' budget to $${input.daily_budget || input.amount || '?'}/day`;
+    case 'set_status':
+      return `Set ${input.platform || ''} ${input.entity_type || 'campaign'} '${input.entity_name || input.entity_id || ''}' to ${input.status || '?'}`;
+    case 'simulate_change':
+      return `Simulate ${input.change_type || 'change'} for ${input.platform || ''} ${input.entity_type || 'campaign'} '${input.entity_name || input.entity_id || ''}'`;
+    case 'general_insight':
+      return input.title || 'General insight';
+    case 'terminate_analysis':
+      return `Analysis complete: ${(input.reason || '').slice(0, 100)}`;
+    case 'set_audience':
+      return `Set audience for ${input.platform || ''} ${input.entity_name || input.entity_id || ''}`;
+    case 'reallocate_budget':
+      return `Reallocate budget: ${input.from_entity_name || ''} → ${input.to_entity_name || ''}`;
+    default:
+      // Exploration tools (query_*)
+      if (toolCall.name.startsWith('query_')) {
+        return `Query ${toolCall.name.replace('query_', '').replace(/_/g, ' ')}`;
+      }
+      return toolCall.name;
+  }
+}
+
 export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowParams> {
   /**
    * Main workflow execution
@@ -191,6 +220,13 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       const entities = getEntitiesAtLevel(activeTree, level as EntityLevel);
       const totalBatches = Math.ceil(entities.length / BATCH_SIZE);
 
+      // Log phase change event
+      try {
+        await this.env.DB.prepare(
+          `INSERT INTO analysis_events (job_id, organization_id, iteration, event_type, tool_name, tool_input_summary, tool_status) VALUES (?, ?, 0, 'phase_change', NULL, ?, NULL)`
+        ).bind(jobId, orgId, `Analyzing ${entities.length} ${level}s`).run();
+      } catch (e) { /* non-critical */ }
+
       // Process entities in batches
       for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
         const batchStart = batchIndex * BATCH_SIZE;
@@ -221,6 +257,13 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         processedCount = result.processedCount;
       }
     }
+
+    // Log phase change for cross-platform summary
+    try {
+      await this.env.DB.prepare(
+        `INSERT INTO analysis_events (job_id, organization_id, iteration, event_type, tool_name, tool_input_summary, tool_status) VALUES (?, ?, 0, 'phase_change', NULL, ?, NULL)`
+      ).bind(jobId, orgId, 'Generating cross-platform summary').run();
+    } catch (e) { /* non-critical */ }
 
     // Step 6: Cross-platform summary
     const crossPlatformResult = await step.do('cross_platform_summary', {
@@ -295,6 +338,13 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
 
     agenticMessages = [agenticClient.buildUserMessage(agenticContext.contextPrompt)];
 
+    // Log phase change for agentic loop
+    try {
+      await this.env.DB.prepare(
+        `INSERT INTO analysis_events (job_id, organization_id, iteration, event_type, tool_name, tool_input_summary, tool_status) VALUES (?, ?, 0, 'phase_change', NULL, ?, NULL)`
+      ).bind(jobId, orgId, 'Starting AI recommendations').run();
+    } catch (e) { /* non-critical */ }
+
     // Run agentic iterations as separate steps
     // Loop continues until: we have an insight AND 3 action recs, OR max iterations, OR early termination
     while (iterations < maxIterations && actionRecommendations.length < maxActionRecommendations) {
@@ -307,6 +357,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         return await this.runAgenticIteration(
           orgId,
           runId,
+          jobId,
+          iterations,
           agenticMessages,
           agenticContext.systemPrompt,
           recommendations,
@@ -1354,6 +1406,8 @@ If you cannot find any actionable recommendations, you MUST still generate an in
   private async runAgenticIteration(
     orgId: string,
     runId: string,
+    jobId: string,
+    iteration: number,
     messages: any[],
     systemPrompt: string,
     existingRecommendations: Recommendation[],
@@ -1403,6 +1457,18 @@ If you cannot find any actionable recommendations, you MUST still generate an in
     const recommendations = [...existingRecommendations];
     let hitMaxActionRecommendations = false;
 
+    // Helper to log tool call events to analysis_events table (fire-and-forget, non-blocking)
+    const logEvent = async (toolName: string, summary: string, status: string) => {
+      try {
+        await this.env.DB.prepare(
+          `INSERT INTO analysis_events (job_id, organization_id, iteration, event_type, tool_name, tool_input_summary, tool_status) VALUES (?, ?, ?, 'tool_call', ?, ?, ?)`
+        ).bind(jobId, orgId, iteration, toolName, summary, status).run();
+      } catch (e) {
+        // Non-critical — don't fail the iteration if event logging fails
+        console.error('[Analysis] Failed to log event:', e);
+      }
+    };
+
     for (const toolCall of callResult.toolCalls) {
       // Handle terminate_analysis (control tool - NOT logged to DB)
       if (isTerminateAnalysisTool(toolCall.name)) {
@@ -1411,6 +1477,8 @@ If you cannot find any actionable recommendations, you MUST still generate an in
           name: toolCall.name,
           content: { status: 'terminating', message: 'Analysis terminated by AI decision' }
         });
+
+        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'terminating');
 
         // Return immediately with early termination
         if (toolResults.length > 0) {
@@ -1454,6 +1522,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
               total_insights: accumulatedInsights.length
             }
           });
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'appended');
         } else {
           // CREATE new row - insight is separate from action recommendations
           accumulatedInsightId = await this.createAccumulatedInsight(orgId, accumulatedInsights, runId);
@@ -1481,6 +1550,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
               action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
             }
           });
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'created');
         }
         continue;
       }
@@ -1493,6 +1563,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
           name: toolCall.name,
           content: exploreResult
         });
+        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged');
         continue;
       }
 
@@ -1518,6 +1589,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
             data: simResult.data
           }
         });
+        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged');
         continue;
       }
 
@@ -1534,6 +1606,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
               message: `Maximum action recommendations (${maxActionRecommendations}) reached. You can still add insights via general_insight.`
             }
           });
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'skipped');
           continue;
         }
 
@@ -1568,6 +1641,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
                 recommendation: simResult.recommendation  // PROCEED, RECONSIDER, or TRADEOFF
               }
             });
+            await logEvent(toolCall.name, summarizeToolInput(toolCall), 'simulation_required');
             continue;
           }
 
@@ -1592,6 +1666,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
               action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
             }
           });
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged');
 
           if (actionRecommendations.length >= maxActionRecommendations) {
             hitMaxActionRecommendations = true;
@@ -1616,6 +1691,7 @@ If you cannot find any actionable recommendations, you MUST still generate an in
             action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
           }
         });
+        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged');
 
         if (actionRecommendations.length >= maxActionRecommendations) {
           hitMaxActionRecommendations = true;

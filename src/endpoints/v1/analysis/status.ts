@@ -3,6 +3,7 @@
  *
  * GET /v1/analysis/status/:job_id
  * Poll for analysis job status and progress
+ * Supports cursor-based event streaming via ?after_event_id=N
  */
 
 import { OpenAPIRoute } from "chanfana";
@@ -20,7 +21,10 @@ export class GetAnalysisStatus extends OpenAPIRoute {
     request: {
       params: z.object({
         job_id: z.string()
-      })
+      }),
+      query: z.object({
+        after_event_id: z.coerce.number().optional()
+      }).optional()
     },
     responses: {
       "200": {
@@ -44,6 +48,16 @@ export class GetAnalysisStatus extends OpenAPIRoute {
                   termination_reason: z.string().optional()
                 }).optional(),
                 error: z.string().optional(),
+                events: z.array(z.object({
+                  id: z.number(),
+                  iteration: z.number(),
+                  event_type: z.string(),
+                  tool_name: z.string().nullable(),
+                  tool_input_summary: z.string().nullable(),
+                  tool_status: z.string().nullable(),
+                  created_at: z.string()
+                })).optional(),
+                latest_event_id: z.number().optional(),
                 created_at: z.string(),
                 completed_at: z.string().nullable()
               })
@@ -64,6 +78,7 @@ export class GetAnalysisStatus extends OpenAPIRoute {
     }
 
     const { job_id } = c.req.param();
+    const afterEventId = Number(c.req.query("after_event_id")) || 0;
 
     const jobs = new JobManager(c.env.DB);
     const job = await jobs.getJob(job_id);
@@ -102,6 +117,33 @@ export class GetAnalysisStatus extends OpenAPIRoute {
 
     if (job.status === "failed" && job.error_message) {
       response.error = job.error_message;
+    }
+
+    // Fetch new events since cursor (piggybacks on existing poll — zero additional requests)
+    try {
+      const eventsResult = await c.env.DB.prepare(
+        `SELECT id, iteration, event_type, tool_name, tool_input_summary, tool_status, created_at
+         FROM analysis_events
+         WHERE job_id = ? AND id > ?
+         ORDER BY id ASC
+         LIMIT 50`
+      ).bind(job_id, afterEventId).all<{
+        id: number;
+        iteration: number;
+        event_type: string;
+        tool_name: string | null;
+        tool_input_summary: string | null;
+        tool_status: string | null;
+        created_at: string;
+      }>();
+
+      const events = eventsResult.results || [];
+      if (events.length > 0) {
+        response.events = events;
+        response.latest_event_id = events[events.length - 1].id;
+      }
+    } catch (e) {
+      // Table may not exist yet (pre-migration) — gracefully omit events
     }
 
     return success(c, response);
