@@ -55,6 +55,8 @@ export class GetAnalysisStatus extends OpenAPIRoute {
                   tool_name: z.string().nullable(),
                   tool_input_summary: z.string().nullable(),
                   tool_status: z.string().nullable(),
+                  tool_input: z.any().nullable(),
+                  tool_output: z.any().nullable(),
                   created_at: z.string()
                 })).optional(),
                 latest_event_id: z.number().optional(),
@@ -122,7 +124,7 @@ export class GetAnalysisStatus extends OpenAPIRoute {
     // Fetch new events since cursor (piggybacks on existing poll — zero additional requests)
     try {
       const eventsResult = await c.env.DB.prepare(
-        `SELECT id, iteration, event_type, tool_name, tool_input_summary, tool_status, created_at
+        `SELECT id, iteration, event_type, tool_name, tool_input_summary, tool_status, tool_input, tool_output, created_at
          FROM analysis_events
          WHERE job_id = ? AND id > ?
          ORDER BY id ASC
@@ -134,10 +136,16 @@ export class GetAnalysisStatus extends OpenAPIRoute {
         tool_name: string | null;
         tool_input_summary: string | null;
         tool_status: string | null;
+        tool_input: string | null;
+        tool_output: string | null;
         created_at: string;
       }>();
 
-      const events = eventsResult.results || [];
+      const events = (eventsResult.results || []).map(e => ({
+        ...e,
+        tool_input: e.tool_input ? (() => { try { return JSON.parse(e.tool_input!); } catch { return e.tool_input; } })() : null,
+        tool_output: e.tool_output ? (() => { try { return JSON.parse(e.tool_output!); } catch { return e.tool_output; } })() : null,
+      }));
       if (events.length > 0) {
         response.events = events;
         response.latest_event_id = events[events.length - 1].id;
