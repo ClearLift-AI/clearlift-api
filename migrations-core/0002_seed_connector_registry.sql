@@ -250,7 +250,7 @@ INSERT OR REPLACE INTO connector_configs (
   'webhook'
 );
 
--- Attentive (communication - coming soon)
+-- Attentive (communication — active, webhook-driven)
 INSERT OR REPLACE INTO connector_configs (
   id, provider, name, auth_type, is_active, connector_type, category,
   description, icon_name, icon_color, sort_order,
@@ -259,14 +259,14 @@ INSERT OR REPLACE INTO connector_configs (
   theme_bg_color, theme_border_color, theme_text_color,
   has_actual_value, value_field, permissions_description, platform_id
 ) VALUES (
-  'attentive-001', 'attentive', 'Attentive', 'api_key', FALSE, 'communication', 'marketing',
+  'attentive-001', 'attentive', 'Attentive', 'api_key', TRUE, 'communication', 'marketing',
   'Track SMS campaigns and subscriber engagement from Attentive',
   'MessageSquare', '#000000', 50,
-  TRUE, FALSE, TRUE, TRUE,
+  TRUE, FALSE, TRUE, FALSE,
   json('[
-    {"id":"sms_sent","name":"SMS Sent","fields":["campaign_id","message_type"]},
-    {"id":"sms_clicked","name":"SMS Clicked","fields":["campaign_id","link_url"]},
-    {"id":"subscriber_opted_in","name":"Subscriber Opted In","fields":["source","keyword"]}
+    {"id":"sms_sent","name":"SMS Sent","fields":["campaign_id","message_type"],"statuses":["delivered","failed","bounced"],"default_status":["delivered"]},
+    {"id":"sms_message_link_click","name":"SMS Clicked","fields":["campaign_id","link_url"],"statuses":["clicked"],"default_status":["clicked"]},
+    {"id":"sms_subscribed","name":"Subscriber Opted In","fields":["source","keyword"],"statuses":["opted_in"],"default_status":["opted_in"]}
   ]'),
   'bg-gray-50', 'border-gray-200', 'text-gray-700',
   FALSE, NULL,
@@ -274,7 +274,7 @@ INSERT OR REPLACE INTO connector_configs (
   'attentive'
 );
 
--- Lemon Squeezy (payments - coming soon)
+-- Lemon Squeezy (payments — active)
 INSERT OR REPLACE INTO connector_configs (
   id, provider, name, auth_type, is_active, connector_type, category,
   description, icon_name, icon_color, sort_order,
@@ -283,13 +283,13 @@ INSERT OR REPLACE INTO connector_configs (
   theme_bg_color, theme_border_color, theme_text_color,
   has_actual_value, value_field, permissions_description, platform_id
 ) VALUES (
-  'lemon-squeezy-001', 'lemon_squeezy', 'Lemon Squeezy', 'api_key', FALSE, 'payments', 'commerce',
+  'lemon-squeezy-001', 'lemon_squeezy', 'Lemon Squeezy', 'api_key', TRUE, 'payments', 'commerce',
   'Track orders and subscriptions from Lemon Squeezy',
   'Lemon', '#FFC233', 44,
-  TRUE, FALSE, TRUE, TRUE,
+  TRUE, FALSE, TRUE, FALSE,
   json('[
-    {"id":"order_created","name":"Order Created","fields":["total","currency","customer_email"]},
-    {"id":"subscription_created","name":"Subscription Created","fields":["amount","interval","plan"]}
+    {"id":"order_created","name":"Order Created","fields":["total","currency","customer_email"],"statuses":["paid","pending","refunded"],"default_status":["paid"]},
+    {"id":"subscription_created","name":"Subscription Created","fields":["amount","interval","plan"],"statuses":["active","past_due","cancelled"],"default_status":["active"]}
   ]'),
   'bg-yellow-50', 'border-yellow-200', 'text-yellow-700',
   TRUE, 'total',
@@ -297,7 +297,7 @@ INSERT OR REPLACE INTO connector_configs (
   'lemon_squeezy'
 );
 
--- Paddle (payments - coming soon)
+-- Paddle (payments — active)
 INSERT OR REPLACE INTO connector_configs (
   id, provider, name, auth_type, is_active, connector_type, category,
   description, icon_name, icon_color, sort_order,
@@ -306,13 +306,13 @@ INSERT OR REPLACE INTO connector_configs (
   theme_bg_color, theme_border_color, theme_text_color,
   has_actual_value, value_field, permissions_description, platform_id
 ) VALUES (
-  'paddle-001', 'paddle', 'Paddle', 'api_key', FALSE, 'payments', 'commerce',
+  'paddle-001', 'paddle', 'Paddle', 'api_key', TRUE, 'payments', 'commerce',
   'Track transactions and subscriptions from Paddle',
   'CreditCard', '#3363E5', 45,
-  TRUE, FALSE, TRUE, TRUE,
+  TRUE, FALSE, TRUE, FALSE,
   json('[
-    {"id":"transaction_completed","name":"Transaction Completed","fields":["total","currency","customer_email"]},
-    {"id":"subscription_created","name":"Subscription Created","fields":["amount","interval","plan"]}
+    {"id":"transaction_completed","name":"Transaction Completed","fields":["total","currency","customer_email"],"statuses":["completed","pending","refunded"],"default_status":["completed"]},
+    {"id":"subscription_created","name":"Subscription Created","fields":["amount","interval","plan"],"statuses":["active","past_due","cancelled"],"default_status":["active"]}
   ]'),
   'bg-blue-50', 'border-blue-200', 'text-blue-700',
   TRUE, 'total',
@@ -320,7 +320,7 @@ INSERT OR REPLACE INTO connector_configs (
   'paddle'
 );
 
--- Chargebee (payments - coming soon)
+-- Chargebee (payments — active)
 INSERT OR REPLACE INTO connector_configs (
   id, provider, name, auth_type, is_active, connector_type, category,
   description, icon_name, icon_color, sort_order,
@@ -329,13 +329,13 @@ INSERT OR REPLACE INTO connector_configs (
   theme_bg_color, theme_border_color, theme_text_color,
   has_actual_value, value_field, permissions_description, platform_id
 ) VALUES (
-  'chargebee-001', 'chargebee', 'Chargebee', 'api_key', FALSE, 'payments', 'commerce',
+  'chargebee-001', 'chargebee', 'Chargebee', 'api_key', TRUE, 'payments', 'commerce',
   'Track subscriptions and invoices from Chargebee',
   'CreditCard', '#FF6633', 46,
-  TRUE, FALSE, TRUE, TRUE,
+  TRUE, FALSE, TRUE, FALSE,
   json('[
-    {"id":"invoice_paid","name":"Invoice Paid","fields":["amount","currency","customer_email"]},
-    {"id":"subscription_created","name":"Subscription Created","fields":["amount","interval","plan"]}
+    {"id":"invoice_paid","name":"Invoice Paid","fields":["amount","currency","customer_email"],"statuses":["paid","pending","voided"],"default_status":["paid"]},
+    {"id":"subscription_created","name":"Subscription Created","fields":["amount","interval","plan"],"statuses":["active","in_trial","cancelled"],"default_status":["active"]}
   ]'),
   'bg-orange-50', 'border-orange-200', 'text-orange-700',
   TRUE, 'amount',
@@ -343,7 +343,7 @@ INSERT OR REPLACE INTO connector_configs (
   'chargebee'
 );
 
--- Recurly (payments - coming soon)
+-- Recurly (payments — active)
 INSERT OR REPLACE INTO connector_configs (
   id, provider, name, auth_type, is_active, connector_type, category,
   description, icon_name, icon_color, sort_order,
@@ -352,13 +352,13 @@ INSERT OR REPLACE INTO connector_configs (
   theme_bg_color, theme_border_color, theme_text_color,
   has_actual_value, value_field, permissions_description, platform_id
 ) VALUES (
-  'recurly-001', 'recurly', 'Recurly', 'api_key', FALSE, 'payments', 'commerce',
+  'recurly-001', 'recurly', 'Recurly', 'api_key', TRUE, 'payments', 'commerce',
   'Track subscriptions and invoices from Recurly',
   'CreditCard', '#F5447B', 47,
-  TRUE, FALSE, TRUE, TRUE,
+  TRUE, FALSE, TRUE, FALSE,
   json('[
-    {"id":"purchase","name":"Purchase","fields":["amount","currency","customer_email"]},
-    {"id":"subscription_created","name":"Subscription Created","fields":["amount","interval","plan"]}
+    {"id":"purchase","name":"Purchase","fields":["amount","currency","customer_email"],"statuses":["paid","pending","refunded"],"default_status":["paid"]},
+    {"id":"subscription_created","name":"Subscription Created","fields":["amount","interval","plan"],"statuses":["active","in_trial","cancelled"],"default_status":["active"]}
   ]'),
   'bg-pink-50', 'border-pink-200', 'text-pink-700',
   TRUE, 'amount',

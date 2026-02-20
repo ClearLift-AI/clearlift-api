@@ -180,7 +180,8 @@ import {
   ConnectAttentive,
   UpdateAttentiveConfig,
   TriggerAttentiveSync,
-  TestAttentiveConnection
+  TestAttentiveConnection,
+  AttentiveWebhook
 } from "./endpoints/v1/connectors/attentive";
 import {
   ConnectLemonSqueezy,
@@ -599,6 +600,7 @@ openapi.post("/v1/connectors/stripe/:connection_id/sync", auth, TriggerStripeSyn
 openapi.post("/v1/connectors/stripe/:connection_id/test", auth, TestStripeConnection);
 
 // Attentive-specific connector endpoints
+openapi.post("/v1/connectors/attentive/webhook", AttentiveWebhook);  // No auth — HMAC signature validates
 openapi.post("/v1/connectors/attentive/connect", auth, ConnectAttentive);
 openapi.put("/v1/connectors/attentive/:connection_id/config", auth, UpdateAttentiveConfig);
 openapi.post("/v1/connectors/attentive/:connection_id/sync", auth, TriggerAttentiveSync);
