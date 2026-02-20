@@ -527,33 +527,33 @@ export class HierarchicalAnalyzer {
     platformSummaries: AnalysisSummary[];
     createdAt: string;
   } | null> {
-    // Get the most recent run
-    const latestRun = await this.db.prepare(`
-      SELECT DISTINCT analysis_run_id, created_at
-      FROM analysis_summaries
-      WHERE organization_id = ? AND level = 'cross_platform'
-      ORDER BY created_at DESC
+    // Query analysis_jobs directly — the agentic loop writes here, not analysis_summaries
+    const latestJob = await this.db.prepare(`
+      SELECT id, analysis_run_id, created_at
+      FROM analysis_jobs
+      WHERE organization_id = ? AND status = 'completed' AND analysis_run_id IS NOT NULL
+      ORDER BY completed_at DESC
       LIMIT 1
-    `).bind(orgId).first<{ analysis_run_id: string; created_at: string }>();
+    `).bind(orgId).first<{ id: string; analysis_run_id: string; created_at: string }>();
 
-    if (!latestRun) return null;
+    if (!latestJob) return null;
 
-    // Get all summaries for this run
+    // Load summaries if they exist (legacy runs have them, agentic runs may not)
     const summaries = await this.db.prepare(`
       SELECT * FROM analysis_summaries
       WHERE analysis_run_id = ?
       ORDER BY level, entity_name
-    `).bind(latestRun.analysis_run_id).all<AnalysisSummary>();
+    `).bind(latestJob.analysis_run_id).all<AnalysisSummary>();
 
     const results = summaries.results || [];
     const crossPlatform = results.find(s => s.level === 'cross_platform') || null;
     const platforms = results.filter(s => s.level === 'account');
 
     return {
-      runId: latestRun.analysis_run_id,
+      runId: latestJob.analysis_run_id,
       crossPlatformSummary: crossPlatform,
       platformSummaries: platforms,
-      createdAt: latestRun.created_at
+      createdAt: latestJob.created_at
     };
   }
 
