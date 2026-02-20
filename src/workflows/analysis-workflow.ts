@@ -71,6 +71,7 @@ import {
   AgenticToolDef,
   AgenticToolResult,
 } from '../services/analysis/agentic-client';
+import { LiveApiExecutor, QUERY_API_TOOL } from '../services/analysis/live-api-executor';
 
 /**
  * Result from the complete workflow
@@ -84,6 +85,28 @@ export interface AnalysisWorkflowResult {
   agenticIterations: number;
   stoppedReason: 'max_recommendations' | 'no_tool_calls' | 'max_iterations' | 'early_termination';
   terminationReason?: string;
+}
+
+/**
+ * Build a compact JSON summary of the entity tree for the dashboard tree visualization.
+ * Format: JSON array of { name, platform, level, children: [...] } — kept under 4KB.
+ */
+function buildTreeSummaryForEvents(tree: SerializedEntityTree): string {
+  type TreeNode = { n: string; p: string; l: string; c?: TreeNode[] };
+  const buildNode = (entity: SerializedEntity): TreeNode => {
+    const node: TreeNode = { n: entity.name, p: entity.platform, l: entity.level };
+    if (entity.children && entity.children.length > 0) {
+      node.c = entity.children.map(buildNode);
+    }
+    return node;
+  };
+  const roots = tree.accounts.map(([, entity]) => buildNode(entity));
+  const json = JSON.stringify(roots);
+  // Truncate if too large (keep under 4KB for D1 TEXT column efficiency)
+  if (json.length > 4000) {
+    return json.substring(0, 3997) + '...';
+  }
+  return json;
 }
 
 /**
@@ -205,6 +228,14 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
 
     // Use filtered tree for all subsequent processing
     const activeTree = filteredTree;
+
+    // Log entity tree structure so dashboard can build the tree visualization
+    try {
+      const treeSummary = buildTreeSummaryForEvents(activeTree);
+      await this.env.DB.prepare(
+        `INSERT INTO analysis_events (job_id, organization_id, iteration, event_type, tool_name, tool_input_summary, tool_status) VALUES (?, ?, 0, 'entity_tree', NULL, ?, NULL)`
+      ).bind(jobId, orgId, treeSummary).run();
+    } catch (e) { /* non-critical */ }
 
     // Storage for summaries - passed between steps as JSON
     let summariesByEntity: Record<string, string> = {};
@@ -612,6 +643,13 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
 
       summaries[entity.id] = summary;
       processedCount++;
+
+      // Log entity completion for tree visualization
+      try {
+        await this.env.DB.prepare(
+          `INSERT INTO analysis_events (job_id, organization_id, iteration, event_type, tool_name, tool_input_summary, tool_status) VALUES (?, ?, 0, 'entity_complete', NULL, ?, ?)`
+        ).bind(jobId, orgId, `${entity.name}`, `${entity.platform}:${level}`).run();
+      } catch (e) { /* non-critical */ }
     }
 
     // Log batch efficiency
@@ -1022,18 +1060,19 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         }
       } catch { /* connector_events query failed */ }
 
-      // CRM pipeline
+      // CRM pipeline (from connector_events — HubSpot deal events)
       try {
         const crm = await this.env.ANALYTICS_DB.prepare(`
           SELECT COUNT(*) as deals,
-                 COUNT(CASE WHEN status = 'won' THEN 1 END) as won,
-                 COUNT(CASE WHEN status = 'lost' THEN 1 END) as lost,
-                 COUNT(CASE WHEN status = 'open' THEN 1 END) as open_deals,
+                 COUNT(CASE WHEN platform_status = 'closedwon' THEN 1 END) as won,
+                 COUNT(CASE WHEN platform_status = 'closedlost' THEN 1 END) as lost,
+                 COUNT(CASE WHEN platform_status NOT IN ('closedwon', 'closedlost') THEN 1 END) as open_deals,
                  SUM(value_cents) as pipeline_cents,
-                 SUM(CASE WHEN status = 'won' THEN value_cents ELSE 0 END) as won_cents
-          FROM crm_deals
+                 SUM(CASE WHEN platform_status = 'closedwon' THEN value_cents ELSE 0 END) as won_cents
+          FROM connector_events
           WHERE organization_id = ?
-            AND created_at >= date('now', '-${days} days')
+            AND source_platform = 'hubspot' AND event_type = 'deal'
+            AND transacted_at >= date('now', '-${days} days')
         `).bind(orgId).first<{
           deals: number; won: number; lost: number; open_deals: number;
           pipeline_cents: number | null; won_cents: number | null;
@@ -1051,7 +1090,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           }
           additionalContext += '\n';
         }
-      } catch { /* crm_deals may not exist */ }
+      } catch { /* connector_events deal query failed */ }
 
       // Subscription activity (from connector_events — Stripe subscription events)
       try {
@@ -1078,40 +1117,34 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         }
       } catch { /* connector_events subscription query failed */ }
 
-      // Email/SMS engagement
+      // Email/SMS engagement (from connector_events)
       try {
         const comms = await this.env.ANALYTICS_DB.prepare(`
-          SELECT COUNT(*) as campaigns, SUM(audience_count) as total_sent
-          FROM comm_campaigns
+          SELECT event_type, COUNT(*) as count
+          FROM connector_events
           WHERE organization_id = ?
-            AND sent_at >= date('now', '-${days} days')
-        `).bind(orgId).first<{ campaigns: number; total_sent: number | null }>();
+            AND source_platform IN ('sendgrid', 'attentive', 'mailchimp', 'tracking_link')
+            AND transacted_at >= date('now', '-${days} days')
+          GROUP BY event_type
+        `).bind(orgId).all<{ event_type: string; count: number }>();
 
-        if (comms && (comms.campaigns || 0) > 0) {
-          const engagements = await this.env.ANALYTICS_DB.prepare(`
-            SELECT engagement_type, COUNT(*) as count
-            FROM comm_engagements
-            WHERE organization_id = ?
-              AND occurred_at >= date('now', '-${days} days')
-            GROUP BY engagement_type
-          `).bind(orgId).all<{ engagement_type: string; count: number }>();
+        const engMap: Record<string, number> = {};
+        for (const r of comms.results || []) {
+          engMap[r.event_type] = r.count;
+        }
 
-          const engMap: Record<string, number> = {};
-          for (const r of engagements.results || []) {
-            engMap[r.engagement_type] = r.count;
-          }
+        const sent = (engMap['email_sent'] || 0) + (engMap['sms_sent'] || 0);
+        const opens = engMap['email_open'] || 0;
+        const clicks = (engMap['email_click'] || 0) + (engMap['sms_click'] || 0) + (engMap['link_click'] || 0);
+        const totalEvents = Object.values(engMap).reduce((a, b) => a + b, 0);
 
-          const sent = comms.total_sent || 0;
-          const opens = engMap['open'] || engMap['opened'] || 0;
-          const clicks = engMap['click'] || engMap['clicked'] || 0;
-
+        if (totalEvents > 0) {
           additionalContext += `## Email/SMS (${days}d)\n`;
-          additionalContext += `- Campaigns: ${comms.campaigns}\n`;
           additionalContext += `- Sent: ${sent.toLocaleString()}\n`;
           additionalContext += `- Opens: ${opens.toLocaleString()} (${sent > 0 ? (opens / sent * 100).toFixed(1) : '0'}%)\n`;
           additionalContext += `- Clicks: ${clicks.toLocaleString()} (${sent > 0 ? (clicks / sent * 100).toFixed(1) : '0'}%)\n\n`;
         }
-      } catch { /* comm tables may not exist */ }
+      } catch { /* connector_events comm query failed */ }
 
     } catch {
       // Non-critical — additional context is best-effort
@@ -1430,7 +1463,8 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     const explorationTools = enableExploration
       ? await getExplorationToolsForOrg(this.env.ANALYTICS_DB, orgId)
       : [];
-    const baseTools = [...getToolDefinitions(), ...explorationTools] as AgenticToolDef[];
+    const liveApiTools = enableExploration ? [QUERY_API_TOOL] : [];
+    const baseTools = [...getToolDefinitions(), ...explorationTools, ...liveApiTools] as AgenticToolDef[];
     const tools = getToolsWithSimulationGeneric(baseTools) as AgenticToolDef[];
 
     // Call LLM via provider-agnostic client
@@ -1563,6 +1597,19 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
           content: exploreResult
         });
         await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged');
+        continue;
+      }
+
+      // Handle live API queries
+      if (toolCall.name === 'query_api') {
+        const liveApi = new LiveApiExecutor(this.env.DB, this.env);
+        const liveResult = await liveApi.execute(toolCall.input as any, orgId);
+        toolResults.push({
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          content: liveResult
+        });
+        await logEvent(toolCall.name, summarizeToolInput(toolCall), liveResult.success ? 'logged' : 'error');
         continue;
       }
 

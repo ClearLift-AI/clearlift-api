@@ -924,23 +924,15 @@ export class ShopifyCustomerRedact extends OpenAPIRoute {
         ).bind(org.organization_id, shopifyCustomerId)
       );
 
-      // 2. Null out customer data in ecommerce_orders (ANALYTICS_DB)
+      // 2. Null out customer data in connector_customers (ANALYTICS_DB)
       statements.push(
         c.env.ANALYTICS_DB.prepare(
-          `UPDATE ecommerce_orders SET customer_email_hash = NULL, customer_external_id = NULL
-           WHERE organization_id = ? AND platform = 'shopify' AND customer_external_id = ?`
+          `UPDATE connector_customers SET email_hash = NULL, name = NULL, phone_hash = NULL
+           WHERE organization_id = ? AND source_platform = 'shopify' AND external_id = ?`
         ).bind(org.organization_id, shopifyCustomerId)
       );
 
-      // 3. Null out customer data in ecommerce_customers (ANALYTICS_DB)
-      statements.push(
-        c.env.ANALYTICS_DB.prepare(
-          `UPDATE ecommerce_customers SET email_hash = NULL, name = NULL, phone_hash = NULL
-           WHERE organization_id = ? AND platform = 'shopify' AND external_id = ?`
-        ).bind(org.organization_id, shopifyCustomerId)
-      );
-
-      // 4. Remove from customer_identities (ANALYTICS_DB)
+      // 3. Remove from customer_identities (ANALYTICS_DB)
       statements.push(
         c.env.ANALYTICS_DB.prepare(
           `DELETE FROM customer_identities
@@ -1045,13 +1037,7 @@ export class ShopifyShopRedact extends OpenAPIRoute {
             `DELETE FROM connector_events WHERE organization_id = ? AND source_platform = 'shopify'`
           ).bind(org.organization_id),
           c.env.ANALYTICS_DB.prepare(
-            `DELETE FROM ecommerce_orders WHERE organization_id = ? AND platform = 'shopify'`
-          ).bind(org.organization_id),
-          c.env.ANALYTICS_DB.prepare(
-            `DELETE FROM ecommerce_customers WHERE organization_id = ? AND platform = 'shopify'`
-          ).bind(org.organization_id),
-          c.env.ANALYTICS_DB.prepare(
-            `DELETE FROM ecommerce_products WHERE organization_id = ? AND platform = 'shopify'`
+            `DELETE FROM connector_customers WHERE organization_id = ? AND source_platform = 'shopify'`
           ).bind(org.organization_id),
           c.env.ANALYTICS_DB.prepare(
             `DELETE FROM customer_identities WHERE organization_id = ? AND source_platform = 'shopify'`
