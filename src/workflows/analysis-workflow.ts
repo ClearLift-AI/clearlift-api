@@ -409,6 +409,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
 
     // Run agentic iterations as separate steps
     // Loop continues until: we have an insight AND 3 action recs, OR max iterations, OR early termination
+    const budgetStrategy = config?.budgetStrategy || 'moderate';
+    let nudgeUsed = false;  // Only nudge once to avoid infinite loops
+
     while (iterations < maxIterations && actionRecommendations.length < maxActionRecommendations) {
       iterations++;
 
@@ -450,6 +453,31 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       }
 
       if (iterResult.shouldStop) {
+        // In aggressive mode, nudge the LLM to produce at least one action before giving up
+        if (
+          budgetStrategy === 'aggressive' &&
+          !nudgeUsed &&
+          actionRecommendations.length === 0 &&
+          (iterResult.stopReason === 'no_tool_calls' || iterResult.stopReason === 'early_termination')
+        ) {
+          nudgeUsed = true;
+          agenticMessages = [
+            ...iterResult.messages,
+            agenticClient.buildUserMessage(
+              `You are in AGGRESSIVE budget mode — the user expects bold action recommendations, not just insights. ` +
+              `You have not made any action recommendations yet. Look harder:\n` +
+              `- Are there underperforming entities that should be paused to free up budget?\n` +
+              `- Are there top performers whose budget could be increased by 10-20%?\n` +
+              `- Are there paused campaigns with strong historical ROAS worth re-enabling?\n` +
+              `- Can you reallocate budget from low-ROAS to high-ROAS entities?\n\n` +
+              `Use simulate_change first, then make at least ONE concrete action recommendation. ` +
+              `If you genuinely cannot find any action after this review, call terminate_analysis with a specific explanation of why no action is possible.`
+            )
+          ];
+          console.log(`[Analysis] Aggressive mode nudge: LLM stopped with no actions, injecting retry prompt`);
+          continue;  // Re-enter the loop for another iteration
+        }
+
         stoppedReason = iterResult.stopReason || 'no_tool_calls';
         terminationReason = iterResult.terminationReason;
         break;
