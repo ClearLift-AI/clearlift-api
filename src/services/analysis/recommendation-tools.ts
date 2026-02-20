@@ -382,7 +382,7 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
   },
   {
     name: 'general_insight',
-    description: 'Surface strategic observations that CANNOT be addressed with set_budget, set_status, or set_audience. Examples: cross-platform attribution gaps, data quality issues, seasonal patterns. Do NOT use this for underperforming campaigns/ads - use set_status to recommend pausing those instead. NOTE: All general_insight calls ACCUMULATE into a single document and count as ONE recommendation toward your limit.',
+    description: 'FALLBACK ONLY — use this for observations that genuinely cannot be expressed as set_budget, set_status, set_audience, or reallocate_budget. Examples: data quality gaps, missing tracking setup, cross-platform attribution issues. Do NOT use this for underperforming campaigns/ads — use set_status to recommend pausing those instead. Do NOT use this as a substitute for action tools. Multiple calls accumulate into a single document and do NOT count toward your action limit.',
     input_schema: {
       type: 'object',
       properties: {
