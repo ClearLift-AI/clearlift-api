@@ -368,6 +368,10 @@ export interface AnalysisWorkflowParams {
       maxRecommendations?: number;
       enableExploration?: boolean;
     };
+    budgetStrategy?: 'conservative' | 'moderate' | 'aggressive';
+    dailyCapCents?: number | null;
+    monthlyCapCents?: number | null;
+    maxCacCents?: number | null;
   };
 }
 

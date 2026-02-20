@@ -85,10 +85,14 @@ export class RunAnalysis extends OpenAPIRoute {
       return error(c, "CONFIGURATION_ERROR", "AI service not configured — secret keys unavailable", 500);
     }
 
-    // Load settings from org (including LLM configuration)
+    // Load settings from org (including LLM configuration and budget strategy)
     const settings = await c.env.DB.prepare(`
       SELECT
         custom_instructions,
+        budget_optimization,
+        daily_cap_cents,
+        monthly_cap_cents,
+        max_cac_cents,
         llm_default_provider,
         llm_claude_model,
         llm_gemini_model,
@@ -97,6 +101,10 @@ export class RunAnalysis extends OpenAPIRoute {
       FROM ai_optimization_settings WHERE org_id = ?
     `).bind(orgId).first<{
       custom_instructions: string | null;
+      budget_optimization: string | null;
+      daily_cap_cents: number | null;
+      monthly_cap_cents: number | null;
+      max_cac_cents: number | null;
       llm_default_provider: string | null;
       llm_claude_model: string | null;
       llm_gemini_model: string | null;
@@ -116,7 +124,11 @@ export class RunAnalysis extends OpenAPIRoute {
       agentic: {
         maxRecommendations: settings?.llm_max_recommendations ?? 3,
         enableExploration: settings?.llm_enable_exploration !== 0
-      }
+      },
+      budgetStrategy: (settings?.budget_optimization || 'moderate') as 'conservative' | 'moderate' | 'aggressive',
+      dailyCapCents: settings?.daily_cap_cents || null,
+      monthlyCapCents: settings?.monthly_cap_cents || null,
+      maxCacCents: settings?.max_cac_cents || null,
     };
 
     const jobs = new JobManager(c.env.DB);

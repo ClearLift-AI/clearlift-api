@@ -384,7 +384,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       return {
         recentRecs,
         contextPrompt,
-        systemPrompt: this.buildAgenticSystemPrompt(days, customInstructions, recentRecs)
+        systemPrompt: this.buildAgenticSystemPrompt(days, customInstructions, recentRecs, config)
       };
     });
 
@@ -1381,8 +1381,14 @@ Prioritize concrete actions over observations. Insights are a fallback for thing
   private buildAgenticSystemPrompt(
     days: number,
     customInstructions: string | null,
-    recentRecs: Array<{ action: string; parameters: string; reason: string; status: string; days_ago: number }>
+    recentRecs: Array<{ action: string; parameters: string; reason: string; status: string; days_ago: number }>,
+    config?: AnalysisWorkflowParams['config']
   ): string {
+    const budgetStrategy = config?.budgetStrategy || 'moderate';
+    const dailyCapCents = config?.dailyCapCents;
+    const monthlyCapCents = config?.monthlyCapCents;
+    const maxCacCents = config?.maxCacCents;
+
     let systemPrompt = `You are an expert digital advertising strategist. Based on the analysis provided, identify actionable optimizations.
 
 IMPORTANT DATE RANGE: This analysis covers the LAST ${days} DAYS only.
@@ -1394,6 +1400,37 @@ CRITICAL - BUDGET vs SPEND:
 - SPEND is what was actually spent
 - ALWAYS use get_entity_budget to check actual budget before recommending changes.
 
+## SPENDING LIMITS (HARD CAPS — NEVER EXCEED)
+${dailyCapCents ? `- Daily spend cap: $${(dailyCapCents / 100).toFixed(2)}` : '- No daily cap set'}
+${monthlyCapCents ? `- Monthly spend cap: $${(monthlyCapCents / 100).toFixed(2)}` : '- No monthly cap set'}
+${maxCacCents ? `- CAC ceiling: $${(maxCacCents / 100).toFixed(2)} — do NOT recommend changes that would push blended CAC above this` : '- No CAC ceiling set'}
+All recommendations MUST keep projected spend and CAC within these limits. If a recommendation would breach a limit, do not make it.
+
+${budgetStrategy === 'conservative' ? `## BUDGET STRATEGY: CONSERVATIVE — Cut waste, protect margins
+Your goal is to REDUCE or MAINTAIN current total spend.
+NEVER recommend:
+- Re-enabling paused campaigns
+- Increasing any entity's budget
+ALWAYS recommend:
+- Pausing underperforming entities to save spend
+- Decreasing budgets on low-ROAS entities
+- Reallocating budget FROM wasteful entities TO efficient ones (net spend must decrease or stay flat)
+` : budgetStrategy === 'aggressive' ? `## BUDGET STRATEGY: AGGRESSIVE — Invest to grow
+You are authorized to recommend INCREASING total spend where data supports growth.
+DO recommend:
+- Re-enabling promising paused campaigns with strong historical ROAS
+- Increasing budgets on high-performing entities (up to 30% increase per entity)
+- Scaling into new opportunities with projected positive ROAS
+Still require simulation backing for all recommendations — no guessing.
+` : `## BUDGET STRATEGY: MODERATE — Reallocate for efficiency
+Your goal is to MAINTAIN total spend while improving results. Net budget change across all recommendations should be approximately zero.
+DO recommend:
+- Reallocating budget from underperformers to top performers (budget-neutral swaps)
+- Pausing wasteful entities and redistributing their budget to winners
+- Re-enabling a paused campaign ONLY if you simultaneously cut an equal amount elsewhere
+DO NOT recommend:
+- Net increases to total portfolio spend
+`}
 ## OUTPUT STRUCTURE (PRIORITY ORDER)
 Your PRIMARY goal is to produce **action recommendations** — concrete, executable changes the user can accept or reject.
 
@@ -1408,6 +1445,15 @@ Actions are the primary output. Users see these as accept/reject cards:
 4. For pausing: recommend for entities with poor ROAS (<1.5), high CPA, or declining trends
 5. Be specific about entities — use their actual IDs and names
 6. Even with limited data, look for: inactive entities to pause, budget reallocation opportunities, underperforming campaigns
+
+## PAUSED CAMPAIGNS — RELAUNCH OPPORTUNITIES
+${budgetStrategy === 'conservative' ? `IMPORTANT: Under CONSERVATIVE budget strategy, do NOT recommend re-enabling any paused campaigns. Focus only on pausing and cutting spend.` : `Entities that were previously active but are now paused (no recent spend) are included in the portfolio data.
+- Look for paused campaigns/adsets with strong historical performance (good ROAS, reasonable CPA)
+- Use simulate_change with action='enable' to model the impact of re-enabling them
+- Use set_status with recommended_status='ENABLED' to recommend re-enabling promising paused entities
+- Consider recommending budget adjustments alongside re-enabling (e.g. start at lower budget to test)
+- If an entity was paused for poor performance, do NOT recommend re-enabling without a strategy change (audience, bid, creative)
+- This is a key value-add: identifying dormant campaigns that could drive growth if reactivated`}
 
 ## INSIGHT GUIDELINES
 Insights are a fallback for non-actionable observations, NOT the main output:
@@ -1530,11 +1576,13 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     let hitMaxActionRecommendations = false;
 
     // Helper to log tool call events to analysis_events table (fire-and-forget, non-blocking)
-    const logEvent = async (toolName: string, summary: string, status: string) => {
+    const logEvent = async (toolName: string, summary: string, status: string, toolInput?: any, toolOutput?: any) => {
       try {
+        const inputJson = toolInput ? JSON.stringify(toolInput) : null;
+        const outputJson = toolOutput ? JSON.stringify(toolOutput) : null;
         await this.env.DB.prepare(
-          `INSERT INTO analysis_events (job_id, organization_id, iteration, event_type, tool_name, tool_input_summary, tool_status) VALUES (?, ?, ?, 'tool_call', ?, ?, ?)`
-        ).bind(jobId, orgId, iteration, toolName, summary, status).run();
+          `INSERT INTO analysis_events (job_id, organization_id, iteration, event_type, tool_name, tool_input_summary, tool_status, tool_input, tool_output) VALUES (?, ?, ?, 'tool_call', ?, ?, ?, ?, ?)`
+        ).bind(jobId, orgId, iteration, toolName, summary, status, inputJson, outputJson).run();
       } catch (e) {
         // Non-critical — don't fail the iteration if event logging fails
         console.error('[Analysis] Failed to log event:', e);
@@ -1550,7 +1598,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
           content: { status: 'terminating', message: 'Analysis terminated by AI decision' }
         });
 
-        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'terminating');
+        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'terminating', toolCall.input, { status: 'terminating', message: 'Analysis terminated by AI decision' });
 
         // Return immediately with early termination
         if (toolResults.length > 0) {
@@ -1594,7 +1642,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
               total_insights: accumulatedInsights.length
             }
           });
-          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'appended');
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'appended', toolCall.input, { status: 'appended', total_insights: accumulatedInsights.length });
         } else {
           // CREATE new row - insight is separate from action recommendations
           accumulatedInsightId = await this.createAccumulatedInsight(orgId, accumulatedInsights, runId);
@@ -1622,7 +1670,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
               action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
             }
           });
-          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'created');
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'created', toolCall.input, { status: 'created', total_insights: 1 });
         }
         continue;
       }
@@ -1635,7 +1683,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
           name: toolCall.name,
           content: exploreResult
         });
-        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged');
+        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged', toolCall.input, exploreResult);
         continue;
       }
 
@@ -1648,7 +1696,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
           name: toolCall.name,
           content: liveResult
         });
-        await logEvent(toolCall.name, summarizeToolInput(toolCall), liveResult.success ? 'logged' : 'error');
+        await logEvent(toolCall.name, summarizeToolInput(toolCall), liveResult.success ? 'logged' : 'error', toolCall.input, liveResult);
         continue;
       }
 
@@ -1674,7 +1722,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
             data: simResult.data
           }
         });
-        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged');
+        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged', toolCall.input, { success: simResult.success, message: simResult.message, data: simResult.data });
         continue;
       }
 
@@ -1691,7 +1739,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
               message: `Maximum action recommendations (${maxActionRecommendations}) reached. You can still add insights via general_insight.`
             }
           });
-          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'skipped');
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'skipped', toolCall.input, { status: 'skipped' });
           continue;
         }
 
@@ -1726,7 +1774,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
                 recommendation: simResult.recommendation  // PROCEED, RECONSIDER, or TRADEOFF
               }
             });
-            await logEvent(toolCall.name, summarizeToolInput(toolCall), 'simulation_required');
+            await logEvent(toolCall.name, summarizeToolInput(toolCall), 'simulation_required', toolCall.input, { status: 'simulation_required', error: simResult.error, recommendation: simResult.recommendation });
             continue;
           }
 
@@ -1751,7 +1799,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
               action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
             }
           });
-          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged');
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged', toolCall.input, { status: 'logged', calculated_impact: simResult.data?.calculated_impact, recommendation_id: simResult.recommendation_id });
 
           if (actionRecommendations.length >= maxActionRecommendations) {
             hitMaxActionRecommendations = true;
@@ -1776,7 +1824,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
             action_recommendations_remaining: maxActionRecommendations - actionRecommendations.length
           }
         });
-        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged');
+        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged', toolCall.input, { status: 'logged', action_recommendation_count: actionRecommendations.length });
 
         if (actionRecommendations.length >= maxActionRecommendations) {
           hitMaxActionRecommendations = true;

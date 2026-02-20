@@ -399,27 +399,33 @@ RESULT:
     allEntities: EntityMetrics[],
     entityType: EntityLevel
   ): Promise<SimulationResult> {
-    const history = await this.getEntityHistory(target.id, 30, entityType);
+    // Look back 90 days to find historical performance for paused entities
+    const history = await this.getEntityHistory(target.id, 90, entityType);
 
-    if (history.length < 7) {
+    // Filter to only days with actual spend (active days) for averaging
+    const activeDays = history.filter(d => d.spend_cents > 0);
+
+    if (activeDays.length < 3) {
       return {
         success: true,
         current_state: currentState,
         simulated_state: this.emptySimulatedState(),
         confidence: 'low',
         assumptions: ['Insufficient historical data'],
-        math_explanation: `Cannot reliably simulate enabling ${target.name}: only ${history.length} days of historical data (need 7+).`
+        math_explanation: `Cannot reliably simulate enabling ${target.name}: only ${activeDays.length} active days of historical data in last 90 days (need 3+).`
       };
     }
 
-    const avgSpend = history.reduce((s, d) => s + d.spend_cents, 0) / history.length;
-    const avgConversions = history.reduce((s, d) => s + d.conversions, 0) / history.length;
+    const avgSpend = activeDays.reduce((s, d) => s + d.spend_cents, 0) / activeDays.length;
+    const avgConversions = activeDays.reduce((s, d) => s + d.conversions, 0) / activeDays.length;
 
     const newSpend = currentState.total_spend_cents + avgSpend;
     const newConversions = currentState.total_conversions + avgConversions;
-    const newCAC = newSpend / newConversions;
+    const newCAC = newConversions > 0 ? newSpend / newConversions : 0;
 
-    const cacChange = ((newCAC - currentState.blended_cac_cents) / currentState.blended_cac_cents) * 100;
+    const cacChange = currentState.blended_cac_cents > 0
+      ? ((newCAC - currentState.blended_cac_cents) / currentState.blended_cac_cents) * 100
+      : 0;
 
     return {
       success: true,
@@ -432,20 +438,20 @@ RESULT:
         conversion_change_percent: Math.round((avgConversions / currentState.total_conversions) * 100 * 10) / 10,
         spend_change_percent: Math.round((avgSpend / currentState.total_spend_cents) * 100 * 10) / 10
       },
-      confidence: 'medium',
+      confidence: activeDays.length >= 14 ? 'medium' : 'low',
       assumptions: [
-        `Based on ${history.length}-day historical average`,
-        'Assumes similar performance to historical period',
-        'Market conditions may have changed'
+        `Based on ${activeDays.length} active days out of ${history.length}-day lookback`,
+        activeDays.length < 14 ? 'Limited data — actual performance may vary significantly' : 'Assumes similar performance to historical period',
+        'Market conditions may have changed since entity was paused'
       ],
       math_explanation: `
 ENABLE SIMULATION: ${target.name}
 ════════════════════════════════════════════════════════════════
 
-HISTORICAL PERFORMANCE (${history.length}-day average):
+HISTORICAL PERFORMANCE (${activeDays.length} active days, 90-day lookback):
   Avg Daily Spend:       $${(avgSpend / 100).toFixed(2)}
   Avg Daily Conversions: ${avgConversions.toFixed(1)}
-  Historical CAC:        $${(avgSpend / avgConversions / 100).toFixed(2)}
+  Historical CAC:        $${avgConversions > 0 ? '$' + (avgSpend / avgConversions / 100).toFixed(2) : 'N/A (no conversions)'}
 
 PROJECTED PORTFOLIO:
   New Spend:       $${(currentState.total_spend_cents / 100).toFixed(2)} + $${(avgSpend / 100).toFixed(2)} = $${(newSpend / 100).toFixed(2)}
@@ -1181,8 +1187,8 @@ RESULT:
 
     const unifiedEntityType = entityTypeMap[entityType] || 'campaign';
 
-    // Query unified ad_metrics table for all platforms
-    const query = `
+    // Query 1: Active entities with recent spend (last 7 days)
+    const activeQuery = `
       SELECT
         entity_ref as id,
         entity_ref as name,
@@ -1200,12 +1206,48 @@ RESULT:
         AND metric_date >= date('now', '-7 days')
         AND spend_cents > 0
       GROUP BY entity_ref, platform
-      HAVING conversions > 0
+    `;
+
+    // Query 2: Paused/inactive entities — had spend in last 90 days but NOT in last 7
+    // These are candidates for enable recommendations
+    const pausedQuery = `
+      SELECT
+        entity_ref as id,
+        entity_ref as name,
+        platform,
+        ? as entity_type,
+        SUM(spend_cents) as spend_cents,
+        SUM(conversions) as conversions,
+        SUM(impressions) as impressions,
+        SUM(clicks) as clicks,
+        CASE WHEN SUM(impressions) > 0 THEN CAST(SUM(clicks) AS REAL) / SUM(impressions) ELSE 0 END as ctr,
+        CASE WHEN SUM(clicks) > 0 THEN SUM(spend_cents) / SUM(clicks) ELSE 0 END as cpc_cents
+      FROM ad_metrics
+      WHERE organization_id = ?
+        AND entity_type = ?
+        AND metric_date >= date('now', '-90 days')
+        AND metric_date < date('now', '-7 days')
+        AND spend_cents > 0
+        AND entity_ref NOT IN (
+          SELECT DISTINCT entity_ref FROM ad_metrics
+          WHERE organization_id = ?
+            AND entity_type = ?
+            AND metric_date >= date('now', '-7 days')
+            AND spend_cents > 0
+        )
+      GROUP BY entity_ref, platform
     `;
 
     try {
-      const result = await this.analyticsDb.prepare(query).bind(entityType, this.orgId, unifiedEntityType).all();
-      return (result.results || []) as EntityMetrics[];
+      const [activeResult, pausedResult] = await this.analyticsDb.batch([
+        this.analyticsDb.prepare(activeQuery).bind(entityType, this.orgId, unifiedEntityType),
+        this.analyticsDb.prepare(pausedQuery).bind(entityType, this.orgId, unifiedEntityType, this.orgId, unifiedEntityType)
+      ]);
+
+      const activeEntities = (activeResult.results || []) as EntityMetrics[];
+      const pausedEntities = (pausedResult.results || []) as EntityMetrics[];
+
+      return [...activeEntities, ...pausedEntities];
     } catch (err) {
       structuredLog('ERROR', 'Error fetching portfolio metrics', { service: 'simulation', org_id: this.orgId, error: err instanceof Error ? err.message : String(err) });
       return [];
@@ -1224,6 +1266,7 @@ RESULT:
     const unifiedEntityType = entityTypeMap[entityType] || 'campaign';
 
     // Query unified ad_metrics table for entity history
+    // No spend_cents > 0 filter — include $0 days to show paused periods
     const query = `
       SELECT metric_date as date, spend_cents, conversions
       FROM ad_metrics
@@ -1231,7 +1274,6 @@ RESULT:
         AND entity_ref = ?
         AND entity_type = ?
         AND metric_date >= date('now', '-' || ? || ' days')
-        AND spend_cents > 0
       ORDER BY date ASC
     `;
 
