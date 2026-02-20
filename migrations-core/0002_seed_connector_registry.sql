@@ -43,8 +43,7 @@ INSERT OR REPLACE INTO connector_configs (
   'Link', '#8B5CF6', 6,
   FALSE, TRUE, FALSE, FALSE,
   json('[
-    {"id":"link_click","name":"Link Click","fields":["link_id","destination_url","utm_source"]},
-    {"id":"link_conversion","name":"Link Conversion","fields":["link_id","conversion_value"]}
+    {"id":"link_click","name":"Link Click","description":"Email/SMS tracking link clicked","fields":["link_id","destination_url","utm_source","utm_campaign"],"statuses":["clicked"],"default_status":["clicked"]}
   ]'),
   'bg-violet-50', 'border-violet-200', 'text-violet-700',
   FALSE, NULL,
