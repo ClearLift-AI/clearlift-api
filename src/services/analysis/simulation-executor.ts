@@ -484,11 +484,9 @@ async function storeRecommendation(
   recommendation: Recommendation,
   simulation: SimulationResult
 ): Promise<string> {
-  // Determine the correct tool name for ai_decisions
-  let tool = recommendation.tool;
-  if (tool === 'set_status') {
-    tool = recommendation.parameters.recommended_status === 'PAUSED' ? 'pause' : 'enable';
-  }
+  // Store canonical tool name — dashboard switches on 'set_status', not 'pause'/'enable'.
+  // The recommended_status field inside parameters carries the directional intent.
+  const tool = recommendation.tool;
 
   // Dedup: skip if an identical pending decision already exists (workflow retry safety)
   const existing = await aiDb.prepare(`

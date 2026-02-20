@@ -829,7 +829,11 @@ RESULT:
         conversion_change_percent: Math.round(conversionChange * 10) / 10,
         spend_change_percent: Math.round(spendChange * 10) / 10
       },
-      confidence: 'medium',
+      // Bid simulation uses hardcoded auction-dynamics exponents (0.75, 0.5) that are
+      // reasonable second-price auction approximations but are NOT fitted to this org's
+      // data. The win-rate elasticity and CPC elasticity vary wildly by vertical,
+      // competition density, and platform. This is a heuristic, not a regression.
+      confidence: 'low',
       assumptions: [
         bidChange.strategy_change
           ? `Strategy change to: ${bidChange.strategy_change}`
@@ -1031,20 +1035,54 @@ RESULT:
     newSpend: number,
     history: HistoricalDataPoint[]
   ): { predictedConversions: number; model: any; confidence: 'high' | 'medium' | 'low' } {
+    // Attempt a proper power-law fit: conv = k · spend^α via OLS in log-space.
+    // Requires ≥14 days of (spend > 0, conv > 0) data for a meaningful regression.
     if (history.length >= 14) {
       const model = this.fitPowerLaw(history);
 
       if (model.r_squared > 0.6) {
+        // Good fit. Confidence thresholds:
+        //   R² > 0.8  → 'high'  — model explains >80% of log-variance
+        //   R² > 0.6  → 'medium' — decent signal, some noise
         const predicted = model.k * Math.pow(newSpend, model.alpha);
+
+        // Extrapolation penalty: if the proposed spend is outside the observed
+        // range, the power-law is extrapolating rather than interpolating.
+        // Extrapolation beyond ±50% of observed [min, max] drops confidence one tier.
+        const spendValues = history.filter(d => d.spend_cents > 0).map(d => d.spend_cents);
+        const minObserved = Math.min(...spendValues);
+        const maxObserved = Math.max(...spendValues);
+        const range = maxObserved - minObserved;
+        const isExtrapolating = newSpend < minObserved - range * 0.5
+          || newSpend > maxObserved + range * 0.5;
+
+        let confidence: 'high' | 'medium' | 'low';
+        if (isExtrapolating) {
+          // Extrapolation: cap at 'medium' regardless of R²
+          confidence = model.r_squared > 0.8 ? 'medium' : 'low';
+        } else {
+          confidence = model.r_squared > 0.8 ? 'high' : 'medium';
+        }
+
         return {
           predictedConversions: predicted,
-          model: { ...model, data_points: history.length },
-          confidence: model.r_squared > 0.8 ? 'high' : 'medium'
+          model: { ...model, data_points: history.length, extrapolating: isExtrapolating },
+          confidence
         };
       }
     }
 
-    // Fallback: Industry-standard diminishing returns (α = 0.7)
+    // Fallback: single-point calibration with industry-standard α = 0.7.
+    //
+    // This model has ZERO degrees of freedom — k is solved from the single
+    // equation k = conv_current / spend_current^α, so it reproduces today's
+    // data point exactly and tells us nothing about how conversions respond
+    // to DIFFERENT spend levels. The α = 0.7 is a prior, not evidence.
+    //
+    // Confidence is ALWAYS 'low'. Having 7 or 30 days of history doesn't help
+    // when the power-law fit failed (R² < 0.6 or < 14 valid days) — the data
+    // is too noisy or too flat for the model to extract a spend→conversion
+    // relationship. Promoting to 'medium' here was a lie.
     const alpha = 0.7;
     const k = target.conversions / Math.pow(target.spend_cents, alpha);
     const predicted = k * Math.pow(newSpend, alpha);
@@ -1057,11 +1095,15 @@ RESULT:
         r_squared: 0,
         data_points: history.length
       },
-      confidence: history.length >= 7 ? 'medium' : 'low'
+      confidence: 'low'
     };
   }
 
   private fitPowerLaw(history: HistoricalDataPoint[]): { k: number; alpha: number; r_squared: number } {
+    // Power law model:  conv = k · spend^α
+    // In log-space:     ln(conv) = ln(k) + α · ln(spend)
+    // This is ordinary least squares on (ln(spend), ln(conv)).
+
     const valid = history.filter(d => d.conversions > 0 && d.spend_cents > 0);
 
     if (valid.length < 7) {
@@ -1070,32 +1112,48 @@ RESULT:
 
     const logSpend = valid.map(d => Math.log(d.spend_cents));
     const logConv = valid.map(d => Math.log(d.conversions));
-
     const n = valid.length;
+
+    // OLS for ln(conv) = β₀ + β₁ · ln(spend)
+    //   β₁ = (n·Σxy − Σx·Σy) / (n·Σx² − (Σx)²)
+    //   β₀ = ȳ − β₁·x̄
     const sumX = logSpend.reduce((a, b) => a + b, 0);
     const sumY = logConv.reduce((a, b) => a + b, 0);
     const sumXY = logSpend.reduce((acc, x, i) => acc + x * logConv[i], 0);
     const sumX2 = logSpend.reduce((acc, x) => acc + x * x, 0);
 
-    const alpha = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-    const logK = (sumY - alpha * sumX) / n;
+    const denom = n * sumX2 - sumX * sumX;
+    if (Math.abs(denom) < 1e-12) {
+      // Degenerate case: all spend values identical → no slope estimable
+      return { k: 0, alpha: 0.7, r_squared: 0 };
+    }
+
+    const rawAlpha = (n * sumXY - sumX * sumY) / denom;
+
+    // Clamp α ∈ [0.3, 1.0].
+    //   α < 0.3 implies pathological super-diminishing returns (likely noise).
+    //   α > 1.0 implies increasing returns to scale (violates the model assumption).
+    const alpha = Math.max(0.3, Math.min(1.0, rawAlpha));
+
+    // Refit intercept for the clamped α via least-squares on the constrained model:
+    //   ln(conv) = ln(k) + α_clamped · ln(spend)
+    //   ln(k) = ȳ − α_clamped · x̄
+    // This minimises Σ(yᵢ − ln(k) − α · xᵢ)² w.r.t. ln(k) given fixed α.
+    const meanX = sumX / n;
+    const meanY = sumY / n;
+    const logK = meanY - alpha * meanX;
     const k = Math.exp(logK);
 
-    const meanY = sumY / n;
-    const ssTotal = logConv.reduce((acc, y) => acc + Math.pow(y - meanY, 2), 0);
+    // Recompute R² for the CLAMPED model, not the unclamped one.
+    // R² = 1 − SS_res / SS_tot, where residuals use the clamped (α, ln(k)).
+    const ssTotal = logConv.reduce((acc, y) => acc + (y - meanY) ** 2, 0);
     const ssResidual = logConv.reduce((acc, y, i) => {
       const predicted = logK + alpha * logSpend[i];
-      return acc + Math.pow(y - predicted, 2);
+      return acc + (y - predicted) ** 2;
     }, 0);
-    const r_squared = 1 - (ssResidual / ssTotal);
+    const r_squared = ssTotal > 0 ? Math.max(0, 1 - ssResidual / ssTotal) : 0;
 
-    const clampedAlpha = Math.max(0.3, Math.min(1.0, alpha));
-
-    return {
-      k: k * Math.pow(Math.exp(sumX / n), alpha - clampedAlpha),
-      alpha: clampedAlpha,
-      r_squared: Math.max(0, r_squared)
-    };
+    return { k, alpha, r_squared };
   }
 
   private buildBudgetAssumptions(model: any, dataPoints: number, changePercent: number): string[] {
@@ -1103,18 +1161,21 @@ RESULT:
 
     if (model.r_squared > 0.6) {
       assumptions.push(`Diminishing returns: conv = ${model.k.toFixed(4)} × spend^${model.alpha.toFixed(2)}`);
-      assumptions.push(`Model fit: R² = ${(model.r_squared * 100).toFixed(0)}% (${dataPoints} days)`);
+      assumptions.push(`Model fit: R² = ${(model.r_squared * 100).toFixed(0)}% (${model.data_points || dataPoints} days of valid data)`);
+      if (model.extrapolating) {
+        assumptions.push('⚠ Proposed spend is outside observed historical range — extrapolating beyond training data');
+      }
     } else {
-      assumptions.push(`Using industry-standard α = ${model.alpha}`);
-      assumptions.push(`Limited data (${dataPoints} days) - conservative estimate`);
+      assumptions.push(`Single-point calibration with assumed α = ${model.alpha} (industry prior, not fitted)`);
+      assumptions.push(`Power-law regression failed or insufficient data (${dataPoints} days) — 0 degrees of freedom`);
     }
 
     if (Math.abs(changePercent) > 50) {
-      assumptions.push('⚠ Large budget change (>50%) - higher uncertainty');
+      assumptions.push('⚠ Large budget change (>50%) — diminishing returns curve is steeper far from current spend');
     }
 
-    assumptions.push('Assumes stable market conditions');
-    assumptions.push('Does not account for creative fatigue');
+    assumptions.push('Assumes stable market conditions and constant competitive landscape');
+    assumptions.push('Does not account for creative fatigue, seasonality, or auction-level variance');
 
     return assumptions;
   }
