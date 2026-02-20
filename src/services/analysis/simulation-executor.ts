@@ -133,7 +133,11 @@ Returns detailed math explanation showing exactly how the numbers were calculate
       },
       entity_id: {
         type: 'string',
-        description: 'ID of the campaign/ad_set/ad to simulate changes for'
+        description: 'Name or ID of the campaign/ad_set/ad to simulate changes for. Can use the human-readable name from analysis summaries (e.g. "DTC US = Refurb Classic Post-Labor Day 2025") or the entity_ref UUID.'
+      },
+      days: {
+        type: 'number',
+        description: 'Lookback window in days for portfolio metrics (default 30). Use larger values (60, 90) for entities that may not have recent spend.'
       },
       budget_change_percent: {
         type: 'number',
