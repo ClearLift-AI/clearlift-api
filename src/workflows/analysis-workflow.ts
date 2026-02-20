@@ -196,20 +196,25 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       retries: { limit: 2, delay: '5 seconds' },
       timeout: '1 minute'
     }, async () => {
-      // Single batch query to find all entity IDs with any activity
+      // Find entities with activity in the analysis window OR recent activity (last 30 days)
+      // Rank by composite score: spend in window + recency bonus for recently active entities
       const activeResult = await this.env.ANALYTICS_DB.prepare(`
-        SELECT entity_ref, SUM(spend_cents) as total_spend
+        SELECT entity_ref,
+               SUM(CASE WHEN metric_date >= ? AND metric_date <= ? THEN spend_cents ELSE 0 END) as window_spend,
+               SUM(spend_cents) as total_spend,
+               MAX(metric_date) as last_active
         FROM ad_metrics
         WHERE organization_id = ?
-          AND metric_date >= ?
-          AND metric_date <= ?
+          AND metric_date >= date(?, '-30 days')
           AND (spend_cents > 0 OR impressions > 0)
         GROUP BY entity_ref
-        ORDER BY total_spend DESC
+        ORDER BY window_spend DESC, last_active DESC, total_spend DESC
         LIMIT ?
-      `).bind(orgId, dateRange.start, dateRange.end, MAX_ENTITIES_PER_WORKFLOW).all<{
+      `).bind(dateRange.start, dateRange.end, orgId, dateRange.start, MAX_ENTITIES_PER_WORKFLOW).all<{
         entity_ref: string;
+        window_spend: number;
         total_spend: number;
+        last_active: string;
       }>();
 
       const activeEntityIds = new Set((activeResult.results || []).map(r => r.entity_ref));
@@ -217,13 +222,14 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       if (activeEntityIds.size === 0) {
         console.log(`[Analysis] No entities with activity in ${days}-day window, capping tree by historical spend`);
 
-        // Query total historical spend per entity to rank them
+        // Query total historical spend per entity, ranked by recency then spend
         const spendResult = await this.env.ANALYTICS_DB.prepare(`
-          SELECT entity_ref, SUM(spend_cents) as total_spend
+          SELECT entity_ref, SUM(spend_cents) as total_spend, MAX(metric_date) as last_active
           FROM ad_metrics
           WHERE organization_id = ?
           GROUP BY entity_ref
-        `).bind(orgId).all<{ entity_ref: string; total_spend: number }>();
+          ORDER BY last_active DESC, total_spend DESC
+        `).bind(orgId).all<{ entity_ref: string; total_spend: number; last_active: string }>();
 
         const spendMap = new Map<string, number>();
         for (const r of (spendResult.results || [])) {
