@@ -170,10 +170,12 @@ Returns detailed math explanation showing exactly how the numbers were calculate
       },
       hours_to_add: {
         type: 'array',
+        items: { type: 'number' },
         description: 'For schedule changes: hours (0-23) to add'
       },
       hours_to_remove: {
         type: 'array',
+        items: { type: 'number' },
         description: 'For schedule changes: hours (0-23) to remove'
       }
     },

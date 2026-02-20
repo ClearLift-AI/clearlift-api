@@ -216,6 +216,7 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
         },
         age_groups: {
           type: 'array',
+          items: { type: 'string' },
           description: 'Age groups to target. TikTok: AGE_13_17, AGE_18_24, AGE_25_34, AGE_35_44, AGE_45_54, AGE_55_100. Facebook: 18-24, 25-34, 35-44, 45-54, 55-64, 65+'
         },
         gender: {
@@ -225,14 +226,17 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
         },
         locations: {
           type: 'array',
+          items: { type: 'string' },
           description: 'Location IDs or names to target'
         },
         interests: {
           type: 'array',
+          items: { type: 'string' },
           description: 'Interest category IDs to target'
         },
         exclude_interests: {
           type: 'array',
+          items: { type: 'string' },
           description: 'Interest category IDs to exclude'
         },
         reason: {
@@ -341,18 +345,22 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
         },
         hours_to_add: {
           type: 'array',
+          items: { type: 'number' },
           description: 'Hours (0-23) to add to the schedule'
         },
         hours_to_remove: {
           type: 'array',
+          items: { type: 'number' },
           description: 'Hours (0-23) to remove from the schedule'
         },
         days_to_add: {
           type: 'array',
+          items: { type: 'number' },
           description: 'Days to add (0=Sunday, 6=Saturday)'
         },
         days_to_remove: {
           type: 'array',
+          items: { type: 'number' },
           description: 'Days to remove (0=Sunday, 6=Saturday)'
         },
         reason: {
