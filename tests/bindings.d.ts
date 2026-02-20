@@ -5,6 +5,10 @@ export type Env = AppEnv & {
   MIGRATIONS: D1Migration[];
   ANALYTICS_MIGRATIONS: D1Migration[];
   AI_MIGRATIONS: D1Migration[];
+  ADBLISS_CORE_MIGRATIONS: D1Migration[];
+  ADBLISS_ANALYTICS_MIGRATIONS: D1Migration[];
+  ADBLISS_DB: D1Database;
+  ADBLISS_ANALYTICS_DB: D1Database;
 };
 
 declare module "cloudflare:test" {

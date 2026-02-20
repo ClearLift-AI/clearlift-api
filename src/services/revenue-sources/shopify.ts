@@ -38,8 +38,8 @@ const shopifyProvider: RevenueSourceProvider = {
     const result = await db.prepare(`
       SELECT
         COUNT(*) as total_orders,
-        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as paid_orders,
-        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as paid_orders,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents,
         COUNT(DISTINCT customer_external_id) as unique_customers
       FROM connector_events
       WHERE organization_id = ?
@@ -63,8 +63,8 @@ const shopifyProvider: RevenueSourceProvider = {
     const result = await db.prepare(`
       SELECT
         strftime('%Y-%m-%d %H:00:00', transacted_at) as bucket,
-        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as conversions,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents
       FROM connector_events
       WHERE organization_id = ?
         AND source_platform = 'shopify'
@@ -88,8 +88,8 @@ const shopifyProvider: RevenueSourceProvider = {
     const result = await db.prepare(`
       SELECT
         COUNT(*) as total_orders,
-        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as paid_orders,
-        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as paid_orders,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents,
         COUNT(DISTINCT customer_external_id) as unique_customers
       FROM connector_events
       WHERE organization_id = ?
@@ -114,8 +114,8 @@ const shopifyProvider: RevenueSourceProvider = {
     const result = await db.prepare(`
       SELECT
         DATE(transacted_at) as bucket,
-        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN platform_status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as conversions,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN COALESCE(value_cents, 0) ELSE 0 END) as net_revenue_cents
       FROM connector_events
       WHERE organization_id = ?
         AND source_platform = 'shopify'

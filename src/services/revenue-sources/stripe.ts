@@ -7,7 +7,7 @@
  * - Conversions are events that made it past incomplete/incomplete_expired status.
  *   What matters is the sign-up date (transacted_at) and that the subscription/charge
  *   succeeded — not its current status.
- * - platform_status IN ('succeeded', 'paid', 'active') covers both charges and subscriptions.
+ * - status IN ('succeeded', 'paid', 'active') covers both charges and subscriptions.
  * - Subscription renewals are excluded from conversion count via event_type filtering
  *   but still contribute to revenue.
  *
@@ -38,7 +38,7 @@ const meta: RevenueSourceMeta = {
  */
 const CONVERSION_COUNT_SQL = `
   SUM(CASE
-    WHEN platform_status IN ('succeeded', 'paid', 'active')
+    WHEN status IN ('succeeded', 'paid', 'active')
       AND (event_type IS NULL OR event_type != 'subscription_cycle')
     THEN 1 ELSE 0
   END)
@@ -49,7 +49,7 @@ const CONVERSION_COUNT_SQL = `
  */
 const NET_REVENUE_SQL = `
   SUM(CASE
-    WHEN platform_status IN ('succeeded', 'paid', 'active')
+    WHEN status IN ('succeeded', 'paid', 'active')
     THEN COALESCE(value_cents, 0)
     ELSE 0
   END)
@@ -183,14 +183,14 @@ const stripeProvider: RevenueSourceProvider = {
     // Get active subscription events (latest per customer)
     const activeResult = await db.prepare(`
       SELECT
-        COUNT(CASE WHEN platform_status IN ('active', 'trialing') THEN 1 END) as active_count,
-        COUNT(CASE WHEN platform_status = 'trialing' THEN 1 END) as trial_count,
-        COALESCE(SUM(CASE WHEN platform_status = 'active' THEN value_cents ELSE 0 END), 0) as mrr_cents
+        COUNT(CASE WHEN status IN ('active', 'trialing') THEN 1 END) as active_count,
+        COUNT(CASE WHEN status = 'trialing' THEN 1 END) as trial_count,
+        COALESCE(SUM(CASE WHEN status = 'active' THEN value_cents ELSE 0 END), 0) as mrr_cents
       FROM connector_events
       WHERE organization_id = ?
         AND source_platform = 'stripe'
         AND event_type LIKE '%subscription%'
-        AND platform_status IN ('active', 'trialing')
+        AND status IN ('active', 'trialing')
     `).bind(orgId).first<{
       active_count: number;
       trial_count: number;
@@ -204,7 +204,7 @@ const stripeProvider: RevenueSourceProvider = {
       WHERE organization_id = ?
         AND source_platform = 'stripe'
         AND event_type LIKE '%subscription%'
-        AND platform_status IN ('canceled', 'cancelled', 'unpaid')
+        AND status IN ('canceled', 'cancelled', 'unpaid')
         AND transacted_at >= date('now', 'start of month')
     `).bind(orgId).first<{ churned: number }>();
 

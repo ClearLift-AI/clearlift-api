@@ -160,7 +160,7 @@
       "database_name": "clearlift-shard-3",
       "database_id": "ff763599-df7b-4041-b766-b574e7b3415b",
       "migrations_dir": "shard-migrations"
-    }
+    },
   ],
 
   // KV namespace for caching hot data (org settings, user profiles)

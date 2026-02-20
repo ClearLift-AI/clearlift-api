@@ -31,7 +31,8 @@
     "test": "wrangler deploy --dry-run && npx vitest run --config tests/vitest.config.mts",
     "test:local": "npx vitest run --config tests/vitest.config.mts tests/api.test.ts",
     "test:prod": "npx vitest run tests/api-production.test.ts",
-    "test:all": "npm run test:local && npm run test:prod",
+    "test:schema": "npx vitest run --config tests/vitest-v2.config.mts",
+    "test:all": "npm run test:local && npm run test:prod && npm run test:schema",
     "test:db": "./test-database-access.sh",
     "seed:local": "npx tsx scripts/seed-local.ts"
   },

@@ -1230,7 +1230,7 @@ export class ExplorationToolExecutor {
         FROM connector_events
         WHERE organization_id = ?
           AND transacted_at >= ? AND transacted_at <= ?
-          AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+          AND status IN ('succeeded', 'paid', 'completed', 'active')
       `;
       const result = await this.db.prepare(sql).bind(orgId, startStr, endStr + 'T23:59:59Z').first<{
         total_cents: number | null;
@@ -1425,9 +1425,9 @@ export class ExplorationToolExecutor {
     try {
       // Build D1 SQL query for connector_events table (Stripe)
       let sql = `
-        SELECT platform_external_id as charge_id, value_cents as amount_cents, currency,
-               platform_status as status, customer_external_id as customer_id,
-               transacted_at as created_at, raw_metadata as metadata
+        SELECT external_id as charge_id, value_cents as amount_cents, currency,
+               status, customer_external_id as customer_id,
+               transacted_at as created_at, metadata
         FROM connector_events
         WHERE organization_id = ?
           AND source_platform = 'stripe'
@@ -1437,7 +1437,7 @@ export class ExplorationToolExecutor {
 
       // Apply status filter
       if (filters?.status) {
-        sql += ` AND platform_status = ?`;
+        sql += ` AND status = ?`;
         params.push(filters.status);
       }
       if (filters?.min_amount_cents) {
@@ -1560,12 +1560,12 @@ export class ExplorationToolExecutor {
     try {
       // D1 SQL query for Jobber connector_events
       let sql = `
-        SELECT platform_external_id as job_id, value_cents as total_amount_cents,
+        SELECT external_id as job_id, value_cents as total_amount_cents,
                customer_external_id as client_id, transacted_at as completed_at
         FROM connector_events
         WHERE organization_id = ?
           AND source_platform = 'jobber'
-          AND platform_status IN ('completed', 'paid', 'succeeded')
+          AND status IN ('completed', 'paid', 'succeeded')
           AND transacted_at >= ? AND transacted_at <= ?
         ORDER BY transacted_at ASC
       `;
@@ -1724,7 +1724,7 @@ export class ExplorationToolExecutor {
         FROM connector_events
         WHERE organization_id = ?
           AND transacted_at >= ? AND transacted_at <= ?
-          AND platform_status IN ('succeeded', 'paid', 'completed', 'active')
+          AND status IN ('succeeded', 'paid', 'completed', 'active')
       `;
       const stripeResult = await this.db.prepare(stripeSql).bind(orgId, startStr, endStr + 'T23:59:59Z').first<{
         total_cents: number | null;
@@ -1883,9 +1883,9 @@ export class ExplorationToolExecutor {
 
     try {
       // Build D1 SQL query for Stripe subscription events from connector_events
-      let sql = `SELECT id, platform_external_id, customer_external_id, value_cents,
-                        platform_status as status, event_type, transacted_at,
-                        raw_metadata, currency
+      let sql = `SELECT id, external_id, customer_external_id, value_cents,
+                        status, event_type, transacted_at,
+                        metadata, currency
                  FROM connector_events
                  WHERE organization_id = ? AND source_platform = 'stripe' AND event_type LIKE '%subscription%'`;
       const params: any[] = [orgId];
@@ -3155,18 +3155,18 @@ export class ExplorationToolExecutor {
       // Query daily metrics for overall event counts
       const dailyResult = await this.db.prepare(`
         SELECT
-          metric_date,
+          date,
           SUM(total_visits) as page_views,
           SUM(unique_visitors) as unique_visitors,
           SUM(total_conversions) as conversions,
           SUM(total_conversion_value) as conversion_value_cents
         FROM daily_metrics
         WHERE organization_id = ?
-          AND metric_date >= ?
-        GROUP BY metric_date
-        ORDER BY metric_date DESC
+          AND date >= ?
+        GROUP BY date
+        ORDER BY date DESC
       `).bind(orgId, startStr).all<{
-        metric_date: string;
+        date: string;
         page_views: number;
         unique_visitors: number;
         conversions: number;
@@ -3185,7 +3185,7 @@ export class ExplorationToolExecutor {
             COALESCE(SUM(value_cents), 0) as total_value_cents
           FROM conversions
           WHERE organization_id = ?
-            AND converted_at >= ?
+            AND conversion_timestamp >= ?
         `;
         const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
@@ -3220,7 +3220,7 @@ export class ExplorationToolExecutor {
             ROUND(AVG(total_visits * 1.0 / NULLIF(unique_visitors, 0)), 2) as avg_pages_per_visitor
           FROM daily_metrics
           WHERE organization_id = ?
-            AND metric_date >= ?
+            AND date >= ?
         `).bind(orgId, startStr).first<{
           total_sessions: number;
           total_page_views: number;
@@ -3265,7 +3265,7 @@ export class ExplorationToolExecutor {
       let query = `
         SELECT
           id, source_platform, external_id, event_type,
-          platform_status, value_cents, metadata, transacted_at
+          status, value_cents, metadata, transacted_at
         FROM connector_events
         WHERE organization_id = ?
           AND event_type = 'deal'
@@ -3274,14 +3274,14 @@ export class ExplorationToolExecutor {
       const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
       if (status && status !== 'all') {
-        // Map deal status to platform_status values
+        // Map deal status to status values
         const statusMap: Record<string, string[]> = {
           won: ['closedwon', 'won'],
           lost: ['closedlost', 'lost'],
           open: ['open', 'appointmentscheduled', 'qualifiedtobuy', 'presentationscheduled', 'decisionmakerboughtin', 'contractsent']
         };
         const statuses = statusMap[status] || [status];
-        query += ` AND platform_status IN (${statuses.map(() => '?').join(',')})`;
+        query += ` AND status IN (${statuses.map(() => '?').join(',')})`;
         params.push(...statuses);
       }
 
@@ -3297,7 +3297,7 @@ export class ExplorationToolExecutor {
         source_platform: string;
         external_id: string;
         event_type: string;
-        platform_status: string;
+        status: string;
         value_cents: number | null;
         metadata: string | null;
         transacted_at: string;
@@ -3311,7 +3311,7 @@ export class ExplorationToolExecutor {
         try { return JSON.parse(meta); } catch { return {}; }
       };
 
-      // Map platform_status to simplified status
+      // Map status to simplified status
       const normalizeStatus = (ps: string): string => {
         if (['closedwon', 'won'].includes(ps)) return 'won';
         if (['closedlost', 'lost'].includes(ps)) return 'lost';
@@ -3323,8 +3323,8 @@ export class ExplorationToolExecutor {
         return {
           ...d,
           deal_name: meta.deal_name || meta.dealname || d.external_id,
-          stage: meta.dealstage || meta.stage || d.platform_status,
-          normalized_status: normalizeStatus(d.platform_status),
+          stage: meta.dealstage || meta.stage || d.status,
+          normalized_status: normalizeStatus(d.status),
           owner_name: meta.hubspot_owner_id || meta.owner_name || null,
           source: meta.source || null,
           utm_source: meta.utm_source || null,
@@ -3383,7 +3383,7 @@ export class ExplorationToolExecutor {
           name: d.deal_name,
           stage: d.stage,
           status: d.normalized_status,
-          platform_status: d.platform_status,
+          platform_status: d.status,
           value: d.value_cents ? '$' + (d.value_cents / 100).toFixed(2) : null,
           owner: d.owner_name,
           created_at: d.transacted_at,
@@ -3515,7 +3515,7 @@ export class ExplorationToolExecutor {
             SELECT
               source_platform,
               COUNT(*) as deals,
-              SUM(CASE WHEN platform_status IN ('closedwon', 'won') THEN 1 ELSE 0 END) as won,
+              SUM(CASE WHEN status IN ('closedwon', 'won') THEN 1 ELSE 0 END) as won,
               SUM(value_cents) as total_value_cents
             FROM connector_events
             WHERE organization_id = ?
@@ -3715,10 +3715,10 @@ export class ExplorationToolExecutor {
       // 3. Check revenue sources via conversions table
       if (!connector_type || connector_type === 'all' || connector_type === 'payments' || connector_type === 'ecommerce') {
         const revenueResult = await this.db.prepare(`
-          SELECT source, COUNT(*) as count, MAX(created_at) as last_sync
+          SELECT conversion_source as source, COUNT(*) as count, MAX(conversion_timestamp) as last_sync
           FROM conversions
           WHERE organization_id = ?
-          GROUP BY source
+          GROUP BY conversion_source
         `).bind(orgId).all<{ source: string; count: number; last_sync: string | null }>();
 
         for (const r of revenueResult.results || []) {
@@ -3800,9 +3800,9 @@ export class ExplorationToolExecutor {
     try {
       const db = this.coreDb || this.db;
       const row = await db.prepare(
-        'SELECT org_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1'
-      ).bind(orgId).first<{ org_tag: string }>();
-      return row?.org_tag || null;
+        'SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1'
+      ).bind(orgId).first<{ short_tag: string }>();
+      return row?.short_tag || null;
     } catch {
       return null;
     }
@@ -4155,10 +4155,10 @@ export class ExplorationToolExecutor {
 
       // Try hourly_metrics first for recent data
       let rows: Array<{
-        hour_ts?: string;
-        metric_date?: string;
+        hour?: string;
+        date?: string;
         sessions: number;
-        unique_users: number;
+        users: number;
         page_views: number;
         conversions: number;
         revenue_cents: number;
@@ -4170,12 +4170,12 @@ export class ExplorationToolExecutor {
 
       try {
         const hourlyResult = await this.db.prepare(`
-          SELECT hour_ts, sessions, unique_users, page_views, conversions, revenue_cents,
+          SELECT hour, sessions, users, page_views, conversions, revenue_cents,
                  by_channel, by_device, by_geo, by_utm_source
           FROM hourly_metrics
           WHERE org_tag = ?
-            AND hour_ts >= datetime('now', '-${Math.min(hours, 168)} hours')
-          ORDER BY hour_ts DESC
+            AND hour >= datetime('now', '-${Math.min(hours, 168)} hours')
+          ORDER BY hour DESC
         `).bind(orgTag).all<any>();
         rows = hourlyResult.results || [];
       } catch {
@@ -4187,12 +4187,12 @@ export class ExplorationToolExecutor {
         const dailyDays = Math.ceil(hours / 24);
         try {
           const dailyResult = await this.db.prepare(`
-            SELECT metric_date, sessions, unique_users, page_views, conversions, revenue_cents,
+            SELECT date, sessions, users, page_views, conversions, revenue_cents,
                    by_channel, by_device, by_geo, by_utm_source
             FROM daily_metrics
             WHERE org_tag = ?
-              AND metric_date >= date('now', '-${dailyDays} days')
-            ORDER BY metric_date DESC
+              AND date >= date('now', '-${dailyDays} days')
+            ORDER BY date DESC
           `).bind(orgTag).all<any>();
           rows = dailyResult.results || [];
         } catch {
@@ -4207,14 +4207,14 @@ export class ExplorationToolExecutor {
       // Aggregate totals
       const totals = {
         sessions: 0,
-        unique_users: 0,
+        users: 0,
         page_views: 0,
         conversions: 0,
         revenue_cents: 0
       };
       for (const row of rows) {
         totals.sessions += row.sessions || 0;
-        totals.unique_users += row.unique_users || 0;
+        totals.users += row.users || 0;
         totals.page_views += row.page_views || 0;
         totals.conversions += row.conversions || 0;
         totals.revenue_cents += row.revenue_cents || 0;
@@ -4225,7 +4225,7 @@ export class ExplorationToolExecutor {
         data_points: rows.length,
         summary: {
           sessions: totals.sessions,
-          unique_users: totals.unique_users,
+          users: totals.users,
           page_views: totals.page_views,
           conversions: totals.conversions,
           revenue: '$' + (totals.revenue_cents / 100).toFixed(2),
@@ -4297,12 +4297,12 @@ export class ExplorationToolExecutor {
 
     try {
       let sql = `
-        SELECT platform_external_id as shopify_order_id,
+        SELECT external_id as shopify_order_id,
                value_cents as total_price_cents, currency,
-               platform_status as financial_status,
+               status as financial_status,
                customer_external_id,
                transacted_at as shopify_created_at,
-               raw_metadata
+               metadata
         FROM connector_events
         WHERE organization_id = ?
           AND source_platform = 'shopify'
@@ -4311,12 +4311,12 @@ export class ExplorationToolExecutor {
       const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
       if (filters?.financial_status) {
-        sql += ' AND platform_status = ?';
+        sql += ' AND status = ?';
         params.push(filters.financial_status);
       }
       if (filters?.fulfillment_status) {
-        // fulfillment_status may be in raw_metadata
-        sql += " AND json_extract(raw_metadata, '$.fulfillment_status') = ?";
+        // fulfillment_status may be in metadata JSON
+        sql += " AND json_extract(metadata, '$.fulfillment_status') = ?";
         params.push(filters.fulfillment_status);
       }
       if (filters?.min_total_cents) {
@@ -4738,7 +4738,7 @@ export class ExplorationToolExecutor {
       // Query connector_events for e-commerce orders
       const ecommPlatforms = platform ? [platform] : ['shopify', 'stripe', 'lemon_squeezy', 'paddle', 'chargebee'];
       let orderSql = `
-        SELECT id, source_platform, external_id, event_type, platform_status,
+        SELECT id, source_platform, external_id, event_type, status,
                value_cents, metadata, transacted_at
         FROM connector_events
         WHERE organization_id = ?
@@ -4757,8 +4757,8 @@ export class ExplorationToolExecutor {
       }
 
       const totalRevenue = orders.reduce((s: number, o: any) => s + (o.value_cents || 0), 0);
-      const paidOrders = orders.filter((o: any) => ['paid', 'completed', 'succeeded'].includes(o.platform_status));
-      const cancelledOrders = orders.filter((o: any) => ['cancelled', 'refunded', 'voided'].includes(o.platform_status));
+      const paidOrders = orders.filter((o: any) => ['paid', 'completed', 'succeeded'].includes(o.status));
+      const cancelledOrders = orders.filter((o: any) => ['cancelled', 'refunded', 'voided'].includes(o.status));
 
       // Parse metadata for UTM info
       const parseMeta = (m: string | null) => { try { return m ? JSON.parse(m) : {}; } catch { return {}; } };
@@ -4788,7 +4788,7 @@ export class ExplorationToolExecutor {
             key = order.source_platform || 'unknown';
             break;
           case 'status':
-            key = order.platform_status || 'unknown';
+            key = order.status || 'unknown';
             break;
           case 'utm_source':
             key = meta.utm_source || '(direct)';
@@ -5044,20 +5044,20 @@ export class ExplorationToolExecutor {
 
       // Status breakdown
       const statusSql = `
-        SELECT platform_status, COUNT(*) as count, SUM(value_cents) as value_cents
+        SELECT status, COUNT(*) as count, SUM(value_cents) as value_cents
         FROM connector_events
         WHERE organization_id = ?
           AND source_platform IN (${platforms.map(() => '?').join(',')})
           AND transacted_at >= ?
-        GROUP BY platform_status
+        GROUP BY status
         ORDER BY count DESC LIMIT 20
       `;
       const statusResult = await this.db.prepare(statusSql)
         .bind(orgId, ...platforms, startStr + 'T00:00:00Z')
-        .all<{ platform_status: string; count: number; value_cents: number | null }>();
+        .all<{ status: string; count: number; value_cents: number | null }>();
 
       response.by_status = (statusResult.results || []).map(r => ({
-        status: r.platform_status,
+        status: r.status,
         count: r.count,
         value: '$' + ((r.value_cents || 0) / 100).toFixed(2)
       }));
@@ -5084,7 +5084,7 @@ export class ExplorationToolExecutor {
 
       // Group by dimension if requested
       if (group_by) {
-        const grpCol = group_by === 'day' ? `date(${dateGroupCol})` : 'platform_status';
+        const grpCol = group_by === 'day' ? `date(${dateGroupCol})` : 'status';
         const grpSql = `
           SELECT ${grpCol} as dimension, COUNT(*) as count, SUM(value_cents) as value_cents
           FROM connector_events

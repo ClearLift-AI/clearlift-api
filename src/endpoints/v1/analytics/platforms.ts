@@ -211,7 +211,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         FROM connector_events
         WHERE organization_id = ?
         AND source_platform = 'stripe'
-        AND platform_status IN ('succeeded', 'paid', 'active')
+        AND status IN ('succeeded', 'paid', 'active')
         AND DATE(transacted_at) >= ?
         AND DATE(transacted_at) <= ?
         GROUP BY DATE(transacted_at)

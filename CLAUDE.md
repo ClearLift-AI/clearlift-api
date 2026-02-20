@@ -22,27 +22,22 @@ ClearLift API Worker - A Cloudflare Workers-based API that serves as the authent
 
 ### Data Sources
 
-#### D1 Databases (Dual Database Architecture)
+#### D1 Databases
 
-This API uses **two separate D1 databases** for isolation between operational and AI workloads:
+**Current local architecture (Feb 2026 consolidation):** 2 databases, 92 tables total.
 
-| Binding | Database Name | Migrations Dir | Purpose |
-|---------|--------------|----------------|---------|
-| `DB` | ClearLiftDash-D1 | `migrations/` | Core operational data (users, sessions, orgs, connections) |
-| `AI_DB` | clearlift-ai | `migrations-ai/` | AI recommendations, analysis logs, LLM audit trail |
+| Binding | Database Name | Migrations Dir | Purpose | Status |
+|---------|--------------|----------------|---------|--------|
+| `DB` | adbliss-core | `migrations-core/` | Core operational + AI engine (52 tables: auth, orgs, connections, settings, admin, audit, AI tables merged from former AI_DB) | ✅ Active |
+| `ANALYTICS_DB` | adbliss-analytics-0 | `migrations-analytics-v2/` | Connectors, ad platforms, events/identity, webhooks, journeys, attribution, conversions, metrics (40 tables) | ✅ Active |
+| `AI_DB` | clearlift-ai | `migrations-ai/` | ⚠️ **MERGED INTO DB (Feb 2026)** — AI tables now in adbliss-core. Binding remains for production until cutover. | 🔄 Legacy |
+| `SHARD_0-3` | clearlift-shard-{0-3} | `shard-migrations/` | ⚠️ **REMOVED (Feb 2026)** — Shard system removed. Bindings remain in production wrangler.jsonc only. | ❌ Removed |
 
-**Why two databases?**
-- Separates transactional application data from heavy analytical workloads
-- AI tables can be cleared/rebuilt independently
-- Different access patterns (frequent reads vs batch writes)
+**Historical note (pre-consolidation):** AI_DB was a separate database to isolate analytical workloads. SHARD_0-3 used FNV-1a consistent hashing for org-based sharding. Both were removed in the Feb 2026 D1 consolidation.
 
-#### ANALYTICS_DB (D1 Analytics Database)
+#### ANALYTICS_DB Details
 
-A third D1 database for pre-aggregated analytics (sub-millisecond queries):
-
-| Binding | Database Name | Migrations Dir | Purpose |
-|---------|--------------|----------------|---------|
-| `ANALYTICS_DB` | clearlift-analytics-prod | `migrations-analytics/` | Aggregated metrics, attribution, journeys |
+ANALYTICS_DB provides pre-aggregated analytics (sub-millisecond queries). See database table above for binding info.
 
 **Legacy Tables (per-platform):**
 - `hourly_metrics`, `daily_metrics` - Pre-aggregated event metrics
@@ -97,7 +92,12 @@ The unified tables use a `platform`/`source_platform` column to distinguish sour
 
 See `clearlift-cron/docs/SHARED_CODE.md §21` for full unified architecture documentation.
 
-#### D1 Sharding Infrastructure (SHARD_0-3)
+#### D1 Sharding Infrastructure (SHARD_0-3) — ⚠️ REMOVED (Feb 2026)
+
+> **Shard system removed in Feb 2026 consolidation.** All platform data now lives in ANALYTICS_DB unified tables. Shard bindings remain in production wrangler.jsonc only for backward compatibility until cutover. No local shard databases exist.
+
+<details>
+<summary>Legacy shard details (production-only, pre-cutover)</summary>
 
 Four shard databases for scaling platform data by organization:
 
@@ -108,58 +108,18 @@ Four shard databases for scaling platform data by organization:
 | `SHARD_2` | clearlift-shard-2 | `shard-migrations/` | Org data (hash % 4 == 2) |
 | `SHARD_3` | clearlift-shard-3 | `shard-migrations/` | Org data (hash % 4 == 3) |
 
-**Shard Schema** (`shard-migrations/`):
-
-| Migration | Tables | Status |
-|-----------|--------|--------|
-| `0001_platform_tables.sql` | Legacy: Google/Facebook/TikTok campaigns, ad_groups, ads, metrics | ❌ Deprecated |
-| `0002_pre_aggregation_tables.sql` | `org_daily_summary`, `campaign_period_summary`, `platform_comparison`, `org_timeseries`, `aggregation_jobs` | ✅ Active |
-| `0003_unified_ad_tables.sql` | `ad_campaigns`, `ad_groups`, `ads`, `ad_metrics` (unified schema) | ✅ Active |
-
 **Routing:** Uses `ShardRouter` with FNV-1a consistent hashing. See `src/services/shard-router.ts`.
 
-**Migration status:** Tracked in `shard_routing` table (per-org assignment).
-
-**Local Development - Shard Migrations:**
+**Production-only shard migration commands:**
 ```bash
-# Apply shard migrations to all local shards
-npx wrangler d1 migrations apply SHARD_0 --local --env local
-npx wrangler d1 migrations apply SHARD_1 --local --env local
-npx wrangler d1 migrations apply SHARD_2 --local --env local
-npx wrangler d1 migrations apply SHARD_3 --local --env local
-
-# Verify tables exist
-npx wrangler d1 execute clearlift-shard-0 --local --env local \
-  --command "SELECT name FROM sqlite_master WHERE type='table'"
-```
-
-**Production - Shard Migrations:**
-```bash
-# Apply shard migrations to production shards (CAUTION: affects live data)
+# LEGACY: Only run against production if needed before cutover
 npx wrangler d1 migrations apply SHARD_0 --env "" --remote
 npx wrangler d1 migrations apply SHARD_1 --env "" --remote
 npx wrangler d1 migrations apply SHARD_2 --env "" --remote
 npx wrangler d1 migrations apply SHARD_3 --env "" --remote
 ```
 
-**Current Status (Feb 2026):**
-- ✅ Shard databases created in Cloudflare
-- ✅ Unified shard schema defined (`shard-migrations/0003_unified_ad_tables.sql`)
-- ✅ `migrations_dir` configured in wrangler.jsonc for all environments
-- ✅ Local migrations applied and tested
-- ✅ AggregationService reads from shards (unified tables)
-- ✅ DataWriter writes to shards via ShardRouter (clearlift-cron)
-- ✅ Production migrations applied to all 4 shards (SHARD_0-3): 0001 (55 cmds), 0002 (18 cmds), 0003 (22 cmds)
-- ⚠️ API read endpoints still query ANALYTICS_DB (not shards)
-
-**Pending API Read Migration:**
-These D1AnalyticsService methods should be updated to query shards:
-- `getGoogleCampaignsWithMetrics()` - queries unified `ad_campaigns` + `ad_metrics`
-- `getFacebookCampaignsWithMetrics()` - queries unified `ad_campaigns` + `ad_metrics`
-- `getTikTokCampaignsWithMetrics()` - queries unified `ad_campaigns` + `ad_metrics`
-- `getUnifiedPlatformSummary()` - queries unified tables
-
-Summary endpoints can continue reading from ANALYTICS_DB (pre-aggregated by AggregationService).
+</details>
 
 #### Data Sources Summary
 
@@ -167,8 +127,8 @@ Summary endpoints can continue reading from ANALYTICS_DB (pre-aggregated by Aggr
 |-----------|---------|-------------|-------|
 | Real-time events | Analytics Engine | `/v1/analytics/realtime/*` | Sub-second queries |
 | Event aggregations | D1 ANALYTICS_DB | `/v1/analytics/d1/*` | Pre-aggregated metrics |
-| Platform campaigns | D1 Shards | `/v1/analytics/platforms` | Sharded by org |
-| Platform metrics | D1 Shards | `/v1/analytics/platforms` | Sharded by org |
+| Platform campaigns | D1 ANALYTICS_DB | `/v1/analytics/platforms` | Unified `ad_campaigns` + `ad_metrics` tables |
+| Platform metrics | D1 ANALYTICS_DB | `/v1/analytics/platforms` | Unified tables (shards removed Feb 2026) |
 | Raw events (archive) | R2 SQL | `/v1/analytics/events` | 15-25s queries, 96-field schema |
 
 #### Other Data Sources
@@ -183,7 +143,7 @@ Summary endpoints can continue reading from ANALYTICS_DB (pre-aggregated by Aggr
 
 ## Database Schema
 
-### Main Database (DB) - `migrations/`
+### Main Database (DB) - `migrations-core/` (local) / `migrations/` (production pre-cutover)
 
 Core operational tables:
 
@@ -218,9 +178,11 @@ Core operational tables:
    - LLM settings: `llm_default_provider`, `llm_claude_model`, `llm_gemini_model`
    - `custom_instructions` for business context
 
-### AI Database (AI_DB) - `migrations-ai/`
+### AI Database (AI_DB) - `migrations-ai/` — ⚠️ MERGED INTO DB (Feb 2026)
 
-AI-specific tables (isolated for performance):
+> **These tables now live in DB (adbliss-core) locally.** The `AI_DB` binding and `migrations-ai/` directory remain for production until cutover. `attribution_model_results` moved to ANALYTICS_DB.
+
+AI-specific tables (historically isolated for performance, now merged into DB):
 
 1. **ai_decisions** - Pending AI recommendations
    - `organization_id`, `tool`, `platform`, `entity_type`, `entity_id`
@@ -249,13 +211,13 @@ AI-specific tables (isolated for performance):
    - `status`: pending → running → completed/failed
    - `total_entities`, `processed_entities`, `current_level`
 
-8. **attribution_model_results** - Pre-computed attribution (Markov/Shapley)
+8. **attribution_model_results** - Pre-computed attribution (Markov/Shapley) *(Note: moved to ANALYTICS_DB in new consolidated schema)*
    - `organization_id`, `model` ('markov_chain' or 'shapley_value'), `channel`
    - `attributed_credit` (0-1 normalized), `removal_effect` (Markov), `shapley_value` (Shapley)
    - `computation_date`, `expires_at` (7-day TTL)
    - Populated by Attribution Workflow, read by attribution endpoint
 
-9. **cac_history** - Daily CAC records (goal-aware since 0006 migration)
+9. **cac_history** - Daily CAC records (goal-aware since 0006 migration) *(Note: in ANALYTICS_DB in new consolidated schema)*
    - `organization_id`, `date`, `spend_cents`, `conversions`, `cac_cents`, `revenue_cents`
    - `conversions_goal` — deduplicated count from connector conversions
    - `conversions_platform` — count from ad_metrics (platform-reported)
@@ -304,17 +266,18 @@ npm install
 # Run development server (see Local vs Remote below)
 npx wrangler dev --env local --port 8787
 
-# Apply D1 migrations locally (BOTH databases)
-npx wrangler d1 migrations apply DB --local --env local      # Main database
-npx wrangler d1 migrations apply AI_DB --local --env local   # AI database
+# Apply D1 migrations locally (2 databases — NO AI_DB or shards locally)
+npx wrangler d1 migrations apply DB --local --env local           # adbliss-core (52 tables)
+npx wrangler d1 migrations apply ANALYTICS_DB --local --env local # adbliss-analytics-0 (40 tables)
 
-# Apply D1 migrations to production (BOTH databases)
-npx wrangler d1 migrations apply DB --env "" --remote      # Main database
-npx wrangler d1 migrations apply AI_DB --env "" --remote   # AI database
+# Apply D1 migrations to production (LEGACY: includes AI_DB until cutover)
+npx wrangler d1 migrations apply DB --env "" --remote           # Main database
+npx wrangler d1 migrations apply AI_DB --env "" --remote        # AI database (production only)
+npx wrangler d1 migrations apply ANALYTICS_DB --env "" --remote # Analytics database
 
 # Check migration status
 npx wrangler d1 migrations list DB --local --env local
-npx wrangler d1 migrations list AI_DB --local --env local
+npx wrangler d1 migrations list ANALYTICS_DB --local --env local
 
 # Generate TypeScript types from wrangler.jsonc
 npm run cf-typegen
@@ -354,8 +317,9 @@ npx wrangler dev --port 8787
 | Feature | `--env local` | Default |
 |---------|---------------|---------|
 | Secrets | Plain strings from `.dev.vars` | Secrets Store bindings |
-| D1 (DB) | Local SQLite in `.wrangler/state/` | Local SQLite |
-| D1 (AI_DB) | Local SQLite in `.wrangler/state/` | Local SQLite |
+| D1 (DB) | Local SQLite in `.wrangler/state/` (adbliss-core, 52 tables) | Local SQLite |
+| D1 (ANALYTICS_DB) | Local SQLite in `.wrangler/state/` (adbliss-analytics-0, 40 tables) | Local SQLite |
+| D1 (AI_DB) | ⚠️ Not used locally (merged into DB) | Not used locally |
 | Best for | Local development | Pre-deploy testing |
 
 ### Required `.dev.vars` for Local Mode
@@ -380,10 +344,10 @@ APP_BASE_URL=https://app-local.clearlift.ai
 
 | Database | Local State | Production State | Notes |
 |----------|-------------|------------------|-------|
-| `DB` | `.wrangler/state/` SQLite (75 migrations) | Cloudflare D1 `8e55bba7-...` | ✅ Both up to date |
-| `AI_DB` | `.wrangler/state/` SQLite (8 migrations) | Cloudflare D1 `3fb300f4-...` | ⚠️ Prod pending: `0008_drop_dead_cac_history.sql` |
-| `ANALYTICS_DB` | `.wrangler/state/` SQLite (47 migrations) | Cloudflare D1 `a69beb57-...` | ⚠️ Prod pending: `0046`, `0047` |
-| `SHARD_0-3` | No local SQLite files (shards unused locally) | Cloudflare D1 (3 migrations each) | Shards only in production |
+| `DB` | `.wrangler/state/` SQLite — `migrations-core/` (52 tables) | Cloudflare D1 `8e55bba7-...` — `migrations/` | Local uses new consolidated schema; prod uses old schema until cutover |
+| `ANALYTICS_DB` | `.wrangler/state/` SQLite — `migrations-analytics-v2/` (40 tables) | Cloudflare D1 `a69beb57-...` — `migrations-analytics/` | Local uses new consolidated schema; prod uses old schema until cutover |
+| `AI_DB` | ⚠️ **Not used locally** (merged into DB) | Cloudflare D1 `3fb300f4-...` — `migrations-ai/` | Production only until cutover |
+| `SHARD_0-3` | ⚠️ **Not used locally** (removed) | Cloudflare D1 (3 migrations each) | Production only until cutover, then removed |
 
 **Migration commands:**
 ```bash
@@ -575,11 +539,12 @@ Tests use Vitest with Cloudflare Workers pool:
 ## Deployment
 
 - **Auto-deployment**: Pushes to GitHub main branch trigger deployment
-- **Databases**:
+- **Databases (production)**:
   - Main DB (DB): `8e55bba7-4b54-4992-b5e5-050611499c18`
-  - AI DB (AI_DB): `3fb300f4-4523-4a29-9efc-955d1684f392`
+  - AI DB (AI_DB): `3fb300f4-4523-4a29-9efc-955d1684f392` *(legacy — merged into DB locally, production only until cutover)*
+  - ANALYTICS_DB: `a69beb57-...`
 - **Domain**: api.clearlift.ai (configured in Cloudflare)
-- **Important**: After adding new migrations, apply to BOTH databases in production
+- **Important**: After adding new migrations, apply to DB + ANALYTICS_DB locally. For production, also apply AI_DB until cutover.
 
 ## AI Analysis Engine
 
