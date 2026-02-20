@@ -30,6 +30,7 @@ import {
   createLimiter,
   isActiveStatus,
   pruneEntityTree,
+  capEntityTree,
   MAX_ENTITIES_PER_WORKFLOW
 } from './analysis-helpers';
 import { EntityTreeBuilder, Entity, EntityLevel, Platform } from '../services/analysis/entity-tree';
@@ -189,6 +190,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     // Step 1.5: Pre-filter entities with activity in the analysis window
     // This dramatically reduces entity count for large accounts (e.g. 1692 → ~200)
     // by skipping entities with zero spend/impressions upfront, avoiding per-entity D1 queries
+    let entityTreeCapNotice: string | null = null;
     const filteredTree = await step.do('filter_active_entities', {
       retries: { limit: 2, delay: '5 seconds' },
       timeout: '1 minute'
@@ -212,8 +214,27 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       const activeEntityIds = new Set((activeResult.results || []).map(r => r.entity_ref));
 
       if (activeEntityIds.size === 0) {
-        console.log(`[Analysis] No entities with activity in ${days}-day window, processing full tree`);
-        return entityTree;
+        console.log(`[Analysis] No entities with activity in ${days}-day window, capping tree by historical spend`);
+
+        // Query total historical spend per campaign to rank them
+        const spendResult = await this.env.ANALYTICS_DB.prepare(`
+          SELECT campaign_id, SUM(spend_cents) as total_spend
+          FROM ad_metrics
+          WHERE organization_id = ?
+          GROUP BY campaign_id
+        `).bind(orgId).all<{ campaign_id: string; total_spend: number }>();
+
+        const spendMap = new Map<string, number>();
+        for (const r of (spendResult.results || [])) {
+          spendMap.set(r.campaign_id, r.total_spend);
+        }
+
+        const { cappedTree, totalCampaigns, wasCapped } = capEntityTree(entityTree, 20, spendMap);
+        if (wasCapped) {
+          console.log(`[Analysis] Entity tree capped: ${totalCampaigns} campaigns → 20 (by historical spend)`);
+          entityTreeCapNotice = `\n## Entity Tree Note\n⚠️ Entity tree capped to top 20 campaigns by historical spend (${totalCampaigns} total). Use exploration tools to discover additional campaigns.\n`;
+        }
+        return cappedTree;
       }
 
       const pruned = pruneEntityTree(entityTree, activeEntityIds);
@@ -313,7 +334,11 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       );
     });
 
-    const { crossPlatformSummary, platformSummaries, additionalContext } = crossPlatformResult;
+    const { crossPlatformSummary, platformSummaries } = crossPlatformResult;
+    let additionalContext = crossPlatformResult.additionalContext || '';
+    if (entityTreeCapNotice) {
+      additionalContext = (additionalContext ? additionalContext + '\n' : '') + entityTreeCapNotice;
+    }
     processedCount = crossPlatformResult.processedCount;
 
     // Steps 7+: Agentic loop (dynamic iterations)

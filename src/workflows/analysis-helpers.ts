@@ -288,6 +288,69 @@ export function pruneEntityTree(
 }
 
 /**
+ * Cap entity tree to top N campaigns sorted by historical spend (highest first).
+ * Used when the activity filter finds zero active entities — instead of sending
+ * the full tree to the LLM, we send the most important campaigns.
+ */
+export function capEntityTree(
+  tree: SerializedEntityTree,
+  maxCampaigns: number,
+  spendMap: Map<string, number>
+): { cappedTree: SerializedEntityTree; totalCampaigns: number; wasCapped: boolean } {
+  // Collect all campaigns across accounts with their spend
+  const allCampaigns: Array<{ accountKey: string; campaign: SerializedEntity; spend: number }> = [];
+
+  for (const [key, account] of tree.accounts) {
+    for (const campaign of account.children) {
+      allCampaigns.push({
+        accountKey: key,
+        campaign,
+        spend: spendMap.get(campaign.externalId) || 0
+      });
+    }
+  }
+
+  const totalCampaigns = allCampaigns.length;
+  if (totalCampaigns <= maxCampaigns) {
+    return { cappedTree: tree, totalCampaigns, wasCapped: false };
+  }
+
+  // Sort by spend descending (zero-spend campaigns go last)
+  allCampaigns.sort((a, b) => b.spend - a.spend);
+  const kept = new Set(allCampaigns.slice(0, maxCampaigns).map(c => c.campaign.id));
+
+  // Rebuild tree keeping only selected campaigns
+  const cappedAccounts: Array<[string, SerializedEntity]> = [];
+  let cappedTotal = 0;
+
+  const countNode = (entity: SerializedEntity): number => {
+    let count = 1;
+    for (const child of entity.children) count += countNode(child);
+    return count;
+  };
+
+  for (const [key, account] of tree.accounts) {
+    const keptCampaigns = account.children.filter(c => kept.has(c.id));
+    if (keptCampaigns.length > 0) {
+      const cappedAccount = { ...account, children: keptCampaigns };
+      cappedAccounts.push([key, cappedAccount]);
+      cappedTotal += countNode(cappedAccount);
+    }
+  }
+
+  return {
+    cappedTree: {
+      organizationId: tree.organizationId,
+      accounts: cappedAccounts,
+      totalEntities: cappedTotal,
+      platforms: tree.platforms
+    },
+    totalCampaigns,
+    wasCapped: true
+  };
+}
+
+/**
  * Parameters for the analysis workflow
  */
 export interface AnalysisWorkflowParams {

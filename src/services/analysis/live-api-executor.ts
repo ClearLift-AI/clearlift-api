@@ -17,6 +17,13 @@
 
 import { FieldEncryption } from '../../utils/crypto';
 import { getSecret } from '../../utils/secrets';
+import { GoogleAdsOAuthProvider } from '../oauth/google';
+import { FacebookAdsOAuthProvider } from '../oauth/facebook';
+import { TikTokAdsOAuthProvider } from '../oauth/tiktok';
+import { ShopifyOAuthProvider } from '../oauth/shopify';
+import { HubSpotOAuthProvider } from '../oauth/hubspot';
+import { JobberOAuthProvider } from '../oauth/jobber';
+import type { OAuthProvider } from '../oauth/base';
 
 // Env type — matches worker-configuration.d.ts
 interface LiveApiEnv {
@@ -47,6 +54,7 @@ interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
   first<T = unknown>(colName?: string): Promise<T | null>;
   all<T = unknown>(): Promise<D1Result<T>>;
+  run(): Promise<D1Result>;
 }
 
 interface D1Result<T = unknown> {
@@ -170,16 +178,57 @@ export class LiveApiExecutor {
         this.encryption = await FieldEncryption.create(encKey);
       }
 
-      const accessToken = await this.encryption.decrypt(connection.credentials_encrypted);
+      let accessToken = await this.encryption.decrypt(connection.credentials_encrypted);
 
-      // 3. Check token expiry (basic check — full refresh requires OAuth provider logic)
+      // 3. Check token expiry and auto-refresh if possible
       if (connection.expires_at) {
         const expiresAt = new Date(connection.expires_at);
         if (expiresAt < new Date()) {
-          return {
-            success: false,
-            error: `${connector} access token has expired. The connection needs to be re-authenticated.`
-          };
+          // Attempt to refresh the token
+          if (!connection.refresh_token_encrypted) {
+            await this.markNeedsReauth(connection.id, 'Token expired, no refresh token available');
+            return {
+              success: false,
+              error: `${connector} access token has expired and no refresh token is available. Please reconnect.`
+            };
+          }
+
+          try {
+            const refreshToken = await this.encryption.decrypt(connection.refresh_token_encrypted);
+            const provider = await this.getOAuthProvider(platform, connection);
+
+            if (!provider) {
+              await this.markNeedsReauth(connection.id, 'Token expired, OAuth provider not configured');
+              return {
+                success: false,
+                error: `${connector} access token has expired. OAuth provider secrets not configured for refresh.`
+              };
+            }
+
+            const tokens = await provider.refreshAccessToken(refreshToken);
+            accessToken = tokens.access_token;
+
+            // Persist the new token
+            const encryptedNewToken = await this.encryption.encrypt(tokens.access_token);
+            const newExpiresAt = tokens.expires_in
+              ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+              : null;
+
+            await this.db.prepare(`
+              UPDATE platform_connections
+              SET credentials_encrypted = ?, expires_at = ?, needs_reauth = FALSE, reauth_reason = NULL
+              WHERE id = ?
+            `).bind(encryptedNewToken, newExpiresAt, connection.id).run();
+
+          } catch (refreshErr) {
+            // Refresh failed — mark connection for re-auth
+            const reason = refreshErr instanceof Error ? refreshErr.message : 'Token refresh failed';
+            await this.markNeedsReauth(connection.id, reason);
+            return {
+              success: false,
+              error: `${connector} token refresh failed. Please reconnect the platform. (${reason})`
+            };
+          }
         }
       }
 
@@ -781,6 +830,75 @@ export class LiveApiExecutor {
       throw err;
     } finally {
       clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Get OAuth provider instance for token refresh.
+   * Returns null if required secrets are not configured.
+   */
+  private async getOAuthProvider(platform: string, connection: ConnectionInfo): Promise<OAuthProvider | null> {
+    // Dummy redirect URI — only used for auth flow, not refresh
+    const redirectUri = 'https://api.adbliss.io/v1/connectors/callback';
+
+    switch (platform) {
+      case 'google': {
+        const clientId = await getSecret(this.env.GOOGLE_CLIENT_ID);
+        const clientSecret = await getSecret(this.env.GOOGLE_CLIENT_SECRET);
+        if (!clientId || !clientSecret) return null;
+        return new GoogleAdsOAuthProvider(clientId, clientSecret, redirectUri);
+      }
+      case 'facebook': {
+        const clientId = await getSecret(this.env.FACEBOOK_APP_ID);
+        const clientSecret = await getSecret(this.env.FACEBOOK_APP_SECRET);
+        if (!clientId || !clientSecret) return null;
+        return new FacebookAdsOAuthProvider(clientId, clientSecret, redirectUri);
+      }
+      case 'tiktok': {
+        const clientId = await getSecret(this.env.TIKTOK_APP_ID);
+        const clientSecret = await getSecret(this.env.TIKTOK_APP_SECRET);
+        if (!clientId || !clientSecret) return null;
+        return new TikTokAdsOAuthProvider(clientId, clientSecret, redirectUri);
+      }
+      case 'shopify': {
+        const clientId = await getSecret(this.env.SHOPIFY_CLIENT_ID);
+        const clientSecret = await getSecret(this.env.SHOPIFY_CLIENT_SECRET);
+        if (!clientId || !clientSecret) return null;
+        // Shopify requires shop domain — extract from account_id
+        const shopDomain = connection.account_id?.includes('.myshopify.com')
+          ? connection.account_id
+          : `${connection.account_id}.myshopify.com`;
+        return new ShopifyOAuthProvider(clientId, clientSecret, redirectUri, shopDomain);
+      }
+      case 'hubspot': {
+        const clientId = await getSecret(this.env.HUBSPOT_CLIENT_ID);
+        const clientSecret = await getSecret(this.env.HUBSPOT_CLIENT_SECRET);
+        if (!clientId || !clientSecret) return null;
+        return new HubSpotOAuthProvider(clientId, clientSecret, redirectUri);
+      }
+      case 'jobber': {
+        const clientId = await getSecret(this.env.JOBBER_CLIENT_ID);
+        const clientSecret = await getSecret(this.env.JOBBER_CLIENT_SECRET);
+        if (!clientId || !clientSecret) return null;
+        return new JobberOAuthProvider(clientId, clientSecret, redirectUri);
+      }
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Mark a connection as needing re-authentication
+   */
+  private async markNeedsReauth(connectionId: string, reason: string): Promise<void> {
+    try {
+      await this.db.prepare(`
+        UPDATE platform_connections
+        SET needs_reauth = TRUE, reauth_reason = ?
+        WHERE id = ?
+      `).bind(reason, connectionId).run();
+    } catch {
+      // Non-critical — don't fail the main operation
     }
   }
 }

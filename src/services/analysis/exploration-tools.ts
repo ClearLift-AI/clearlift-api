@@ -3733,22 +3733,25 @@ export class ExplorationToolExecutor {
         }
       }
 
-      // 4. Check events/tag
+      // 4. Check events/tag (daily_metrics uses org_tag, not organization_id)
       if (!connector_type || connector_type === 'all') {
         try {
-          const eventsResult = await this.db.prepare(`
-            SELECT COUNT(*) as count, MAX(metric_date) as last_date
-            FROM daily_metrics
-            WHERE organization_id = ?
-          `).bind(orgId).first<{ count: number; last_date: string | null }>();
+          const orgTag = await this.resolveOrgTag(orgId);
+          if (orgTag) {
+            const eventsResult = await this.db.prepare(`
+              SELECT COUNT(*) as count, MAX(date) as last_date
+              FROM daily_metrics
+              WHERE org_tag = ?
+            `).bind(orgTag).first<{ count: number; last_date: string | null }>();
 
-          if (eventsResult && eventsResult.count > 0) {
-            connectors.push({
-              type: 'events',
-              platform: 'clearlift_tag',
-              has_data: true,
-              ...(include_data_stats ? { record_count: eventsResult.count, last_sync: eventsResult.last_date || undefined } : {})
-            });
+            if (eventsResult && eventsResult.count > 0) {
+              connectors.push({
+                type: 'events',
+                platform: 'clearlift_tag',
+                has_data: true,
+                ...(include_data_stats ? { record_count: eventsResult.count, last_sync: eventsResult.last_date || undefined } : {})
+              });
+            }
           }
         } catch { /* table doesn't exist */ }
       }
