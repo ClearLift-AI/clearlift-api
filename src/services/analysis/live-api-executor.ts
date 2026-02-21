@@ -84,22 +84,34 @@ const API_TIMEOUT_MS = 10_000;
 
 export const QUERY_API_TOOL = {
   name: 'query_api',
-  description: 'Make a live read-only API call to a connected platform. Use this for real-time data or details not available in D1 (keyword performance, audience breakdowns, recent transactions). Data is fresh but slower than D1 queries.',
+  description: `Make a live read-only API call to a connected platform. Use this for real-time data not available in D1. Data is fresh but slower than D1 queries.
+
+IMPORTANT: Use the exact connector names listed below — NOT platform names like "google" or "meta".
+
+Supported endpoints per connector:
+- google_ads: campaign_details, keyword_performance, audience_breakdown, geographic_performance, device_performance
+- meta_ads: campaign_details, audience_breakdown, placement_performance, device_performance
+- tiktok_ads: campaign_details
+- stripe: recent_transactions, subscription_details, customer_details, refunds, product_performance
+- shopify: recent_transactions, subscription_details, customer_details, refunds, product_performance
+- jobber: job_details, client_details, quote_pipeline
+- hubspot: deal_pipeline, contact_activity, deal_stage_history
+
+Do NOT use endpoints that are not listed for a connector — they will fail.`,
   input_schema: {
     type: 'object' as const,
     properties: {
       connector: {
         type: 'string',
         enum: ['google_ads', 'meta_ads', 'tiktok_ads', 'stripe', 'shopify', 'jobber', 'hubspot'],
-        description: 'Which connector to query'
+        description: 'Which connector to query. Use exact names: google_ads (NOT "google"), meta_ads (NOT "meta" or "facebook"), tiktok_ads (NOT "tiktok").'
       },
       endpoint: {
         type: 'string',
         enum: [
           // Ad platforms
           'campaign_details', 'keyword_performance', 'audience_breakdown',
-          'geographic_performance', 'device_performance', 'ad_schedule_performance',
-          'placement_performance',
+          'device_performance', 'placement_performance',
           // Revenue
           'recent_transactions', 'subscription_details', 'customer_details',
           'refunds', 'product_performance',
@@ -108,7 +120,7 @@ export const QUERY_API_TOOL = {
           // Field service
           'job_details', 'client_details', 'quote_pipeline'
         ],
-        description: 'What data to fetch'
+        description: 'What data to fetch. Only use endpoints listed for the chosen connector.'
       },
       params: {
         type: 'object',
@@ -133,7 +145,13 @@ export class LiveApiExecutor {
     input: QueryApiInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { connector, endpoint, params = {} } = input;
+    // Auto-correct common LLM connector name mistakes
+    const CONNECTOR_ALIASES: Record<string, string> = {
+      google: 'google_ads', meta: 'meta_ads', facebook: 'meta_ads',
+      tiktok: 'tiktok_ads', fb: 'meta_ads', fb_ads: 'meta_ads',
+    };
+    const connector = CONNECTOR_ALIASES[input.connector] || input.connector;
+    const { endpoint, params = {} } = input;
 
     try {
       // 1. Look up connection

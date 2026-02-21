@@ -192,6 +192,12 @@ CRITICAL - WORKFLOW ORDER:
    - If data is genuinely insufficient for any recommendation (zero spend, no entities), THEN you may terminate early with an explanation.
    - Do NOT terminate after only exploration or general_insight calls.
 
+TOOL USAGE RULES — AVOID COMMON ERRORS:
+- query_ad_metrics: ALWAYS provide platform (google/facebook/tiktok), entity_type (campaign/adset/ad/ad_group), AND entity_id (UUID from prior query results). Do NOT pass campaign names as entity_id. Do NOT use entity_type "account" with scope "budgets".
+- query_api: Use exact connector names: google_ads, meta_ads, tiktok_ads, stripe, shopify, jobber, hubspot. NOT "google", "meta", "facebook", or "tiktok". Only call endpoints supported for that connector (see tool description).
+- simulate_change: Use the human-readable campaign NAME (from analysis summaries) or the UUID. The tool supports name-based matching.
+- All D1 queries: Column names must match the schema exactly. The conversions table uses "id" (not "conversion_id"), "source_platform" (not "source").
+
 After analyzing the data, use the available tools to make specific recommendations.
 If you see underperforming campaigns or ads, use set_status to recommend pausing them.`;
 
