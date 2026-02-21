@@ -50,7 +50,7 @@ interface D1ExecResult {
 export const EXPLORATION_TOOLS = {
   query_ad_metrics: {
     name: 'query_ad_metrics',
-    description: 'Query ad platform data. Scopes: "performance" — metrics for a specific entity (spend, impressions, clicks, etc.); "creatives" — ad creative details (copy, media); "audiences" — targeting/audience breakdown by dimension; "budgets" — current budget configuration for a campaign or ad set. Common params: platform, entity_type, entity_id, days. For "performance" scope: metrics array, include_verified_revenue. For "creatives" scope: ad_id. For "audiences" scope: dimension. For "budgets" scope: entity_type includes ad_group.',
+    description: 'Query ad platform data from D1. REQUIRED: platform (google/facebook/tiktok) and entity_type (campaign/adset/ad/ad_group) for all scopes except account-level. entity_id is REQUIRED for non-account queries — use the UUID from earlier query results, NOT campaign names. Scopes: "performance" — metrics for a specific entity; "creatives" — ad creative details; "audiences" — targeting breakdown by dimension; "budgets" — current budget config. Do NOT use entity_type "account" with budgets scope.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -70,7 +70,7 @@ export const EXPLORATION_TOOLS = {
         },
         entity_id: {
           type: 'string',
-          description: 'The entity ID to query'
+          description: 'REQUIRED for non-account queries. The entity UUID from D1 (e.g. "3f857a38-..."). Use IDs returned by previous queries — do NOT pass campaign names here.'
         },
         metrics: {
           type: 'array',
@@ -1029,9 +1029,19 @@ export class ExplorationToolExecutor {
     try {
       switch (toolName) {
         case 'query_ad_metrics': {
-          // Validate entity_id for scopes that require it
-          if (['performance', 'creatives', 'audiences', 'budgets'].includes(input.scope) && !input.entity_id) {
-            return { success: false, error: `Missing required parameter "entity_id" for scope "${input.scope}". Provide the specific entity ID to query.` };
+          // Validate platform is provided and valid
+          const validPlatforms = ['google', 'facebook', 'tiktok', 'linkedin', 'microsoft', 'pinterest', 'snapchat', 'twitter'];
+          if (!input.platform || typeof input.platform !== 'string') {
+            return { success: false, error: `Missing required parameter "platform". Must be one of: ${validPlatforms.join(', ')}` };
+          }
+          // Validate entity_type is provided for scopes that need it
+          const validEntityTypes = ['ad', 'adset', 'campaign', 'account', 'ad_group'];
+          if (['performance', 'audiences', 'budgets'].includes(input.scope) && (!input.entity_type || !validEntityTypes.includes(input.entity_type))) {
+            return { success: false, error: `Missing or invalid "entity_type" for scope "${input.scope}". Must be one of: ${validEntityTypes.join(', ')}` };
+          }
+          // Validate entity_id for scopes that require it (account-level queries are OK without entity_id)
+          if (['performance', 'creatives', 'audiences', 'budgets'].includes(input.scope) && input.entity_type !== 'account' && !input.entity_id) {
+            return { success: false, error: `Missing required parameter "entity_id" for scope "${input.scope}" with entity_type "${input.entity_type}". Provide the specific entity ID to query.` };
           }
           switch (input.scope) {
             case 'performance': return await this.queryMetrics(input as QueryMetricsInput, orgId);
@@ -2192,7 +2202,7 @@ export class ExplorationToolExecutor {
       // Query conversions from unified conversions table
       let sql = `
         SELECT
-          conversion_id,
+          id,
           conversion_source,
           link_method,
           link_confidence,
@@ -2216,7 +2226,7 @@ export class ExplorationToolExecutor {
       sql += ` ORDER BY conversion_timestamp DESC`;
 
       const result = await this.db.prepare(sql).bind(...params).all<{
-        conversion_id: string;
+        id: string;
         conversion_source: string;
         link_method: string;
         link_confidence: number;
@@ -3484,7 +3494,7 @@ export class ExplorationToolExecutor {
           // Query conversions table for revenue data
           let query = `
             SELECT
-              source,
+              source_platform,
               COUNT(*) as count,
               SUM(value_cents) as total_cents
             FROM conversions
@@ -3494,20 +3504,20 @@ export class ExplorationToolExecutor {
           const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
           if (platform) {
-            query += ' AND source = ?';
+            query += ' AND source_platform = ?';
             params.push(platform);
           }
 
-          query += ' GROUP BY source';
+          query += ' GROUP BY source_platform';
 
           const result = await this.db.prepare(query).bind(...params).all<{
-            source: string;
+            source_platform: string;
             count: number;
             total_cents: number | null;
           }>();
 
           response.sources = (result.results || []).map(r => ({
-            source: r.source,
+            source: r.source_platform,
             conversions: r.count,
             revenue: '$' + ((r.total_cents || 0) / 100).toFixed(2)
           }));
