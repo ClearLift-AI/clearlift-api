@@ -260,63 +260,180 @@ async function main() {
   console.log(`      ${ctRows.length} channel transitions.`);
 
   // =========================================================================
-  // Step 4: Build funnel_transitions (page→page implicit sitemap)
-  // (mirrors ProbabilisticAttributionWorkflow step 10c, but with real page paths
-  //  instead of channel analogs — this is the flow graph the user wants to test)
+  // Step 4: Build daily funnel_transitions (page flow graph + source entries)
+  //
+  // Mirrors ProbabilisticAttributionWorkflow step 10d (populate-page-flow).
+  // Writes one row per day per transition for the D1 30-day hot window.
+  // Daily granularity enables dashboard date range filters to work properly —
+  // the API aggregates matching days via GROUP BY SUM.
+  //
+  // Node types written:
+  //   page_url → page_url  (page-to-page navigation)
+  //   source   → page_url  (UTM/ad campaign → landing page)
+  //   referrer → page_url  (organic referrer → landing page)
   // =========================================================================
-  console.log("\n[4/5] Building page→page flow graph (funnel_transitions)...");
+  console.log("\n[4/5] Building daily page flow graph (funnel_transitions)...");
 
-  const pageTrans = new Map<string, { from: string; to: string; count: number; visitors: Set<string> }>();
-  const pageVisitors = new Map<string, Set<string>>();
-
-  for (const [, evts] of sessions) {
-    const views = evts.filter((e) => e.event_type === "page_view");
-    for (let i = 0; i < views.length; i++) {
-      const fromPath = views[i].page_path as string;
-      const anonId = views[i].anonymous_id as string;
-
-      if (!pageVisitors.has(fromPath)) pageVisitors.set(fromPath, new Set());
-      pageVisitors.get(fromPath)!.add(anonId);
-
-      if (i + 1 < views.length) {
-        const toPath = views[i + 1].page_path as string;
-        if (fromPath === toPath) continue; // skip reloads
-        const key = `${fromPath}→${toPath}`;
-        if (!pageTrans.has(key)) pageTrans.set(key, { from: fromPath, to: toPath, count: 0, visitors: new Set() });
-        const t = pageTrans.get(key)!;
-        t.count++;
-        t.visitors.add(anonId);
-      }
+  // classifyEntrySource — same priority cascade as cron workflow:
+  // gclid > fbclid > ttclid > utm_source > referrer_domain > Direct
+  // Each session produces exactly ONE source entry (no double-counting)
+  function classifyEntrySource(ev: Record<string, unknown>): { label: string; type: 'source' | 'referrer' } {
+    if (ev.gclid) return { label: `Google Ads${ev.utm_campaign ? ' / ' + ev.utm_campaign : ''}`, type: 'source' };
+    if (ev.fbclid) return { label: `Meta Ads${ev.utm_campaign ? ' / ' + ev.utm_campaign : ''}`, type: 'source' };
+    if (ev.ttclid) return { label: `TikTok Ads${ev.utm_campaign ? ' / ' + ev.utm_campaign : ''}`, type: 'source' };
+    if (ev.utm_source) {
+      let label = ev.utm_source as string;
+      if (ev.utm_medium) label += ` / ${ev.utm_medium}`;
+      if (ev.utm_campaign) label += ` / ${ev.utm_campaign}`;
+      return { label, type: 'source' };
     }
+    if (ev.referrer_domain) return { label: ev.referrer_domain as string, type: 'referrer' };
+    return { label: 'Direct', type: 'source' };
   }
 
-  // Top 200 by frequency
-  const topPageTrans = [...pageTrans.values()].sort((a, b) => b.count - a.count).slice(0, 200);
-  const ftRows: string[] = [];
-  for (const t of topPageTrans) {
-    const fromVis = pageVisitors.get(t.from)?.size || 1;
-    const rate = Math.min(t.visitors.size / fromVis, 1);
+  // Group sessions by day of first page_view (same as cron workflow Phase 6c)
+  const daySessionsMap = new Map<string, Array<{ anonId: string; views: Array<Record<string, unknown>> }>>();
+  for (const [, evts] of sessions) {
+    const views = evts.filter((e) => e.event_type === "page_view");
+    if (!views.length) continue;
+    const day = (views[0].timestamp as string).split("T")[0];
+    const anonId = views[0].anonymous_id as string;
+    if (!daySessionsMap.has(day)) daySessionsMap.set(day, []);
+    daySessionsMap.get(day)!.push({ anonId, views });
+  }
 
-    // Matches prod INSERT from probabilistic-attribution.ts line 1097
-    ftRows.push(`INSERT INTO funnel_transitions (
+  // Build anonId → conversion map from sessions visiting conversion-like pages
+  // (mirrors cron Phase 6b anonToEntry — seed uses page pattern heuristic since no connector data)
+  const CONVERSION_PAGE_PATTERNS = [/\/thank[-_]?you/i, /\/order[-_]?confirm/i, /\/success/i, /\/receipt/i];
+  const anonToConverted = new Map<string, { converted: boolean; revenue_cents: number }>();
+  for (const [, evts] of sessions) {
+    const anonId = evts[0].anonymous_id as string;
+    const didConvert = evts.some(e =>
+      e.event_type === 'page_view' && CONVERSION_PAGE_PATTERNS.some(p => p.test(e.page_path as string))
+    );
+    anonToConverted.set(anonId, {
+      converted: didConvert,
+      revenue_cents: didConvert ? Math.round(2000 + Math.random() * 18000) : 0, // $20-$200 simulated
+    });
+  }
+
+  const ftRows: string[] = [];
+  let totalPageRows = 0;
+  let totalSourceRows = 0;
+
+  // Build daily aggregates — one set of rows per day
+  for (const [day, daySessions] of daySessionsMap) {
+    const pageTrans = new Map<string, { from: string; to: string; count: number; visitors: Set<string>; convertedUsers: Set<string>; revenue_cents: number }>();
+    const pageVisitors = new Map<string, Set<string>>();
+    const sourceEntryMap = new Map<string, { source: string; sourceType: string; page: string; count: number; visitors: Set<string>; convertedUsers: Set<string>; revenue_cents: number }>();
+
+    for (const { anonId, views } of daySessions) {
+      const convInfo = anonToConverted.get(anonId);
+      const didConvert = convInfo?.converted ?? false;
+      const convRevenue = convInfo?.revenue_cents ?? 0;
+
+      // Entry source classification from first pageview
+      const first = views[0];
+      const entrySource = classifyEntrySource(first);
+      const entryPage = first.page_path as string;
+      const entryKey = `${entrySource.label}→${entryPage}`;
+      if (!sourceEntryMap.has(entryKey)) {
+        sourceEntryMap.set(entryKey, { source: entrySource.label, sourceType: entrySource.type, page: entryPage, count: 0, visitors: new Set(), convertedUsers: new Set(), revenue_cents: 0 });
+      }
+      const se = sourceEntryMap.get(entryKey)!;
+      se.count++;
+      se.visitors.add(anonId);
+      if (didConvert && !se.convertedUsers.has(anonId)) {
+        se.convertedUsers.add(anonId);
+        se.revenue_cents += convRevenue;
+      }
+
+      // Find last non-reload transition so conversion is attributed once (not per-edge)
+      let lastTransIdx = -1;
+      if (didConvert) {
+        for (let i = views.length - 2; i >= 0; i--) {
+          if ((views[i].page_path as string) !== (views[i + 1].page_path as string)) { lastTransIdx = i; break; }
+        }
+      }
+
+      for (let i = 0; i < views.length; i++) {
+        const fromPath = views[i].page_path as string;
+        if (!pageVisitors.has(fromPath)) pageVisitors.set(fromPath, new Set());
+        pageVisitors.get(fromPath)!.add(anonId);
+
+        if (i + 1 < views.length) {
+          const toPath = views[i + 1].page_path as string;
+          if (fromPath === toPath) continue;
+          const key = `${fromPath}→${toPath}`;
+          if (!pageTrans.has(key)) pageTrans.set(key, { from: fromPath, to: toPath, count: 0, visitors: new Set(), convertedUsers: new Set(), revenue_cents: 0 });
+          const t = pageTrans.get(key)!;
+          t.count++;
+          t.visitors.add(anonId);
+          if (didConvert && i === lastTransIdx && !t.convertedUsers.has(anonId)) {
+            t.convertedUsers.add(anonId);
+            t.revenue_cents += convRevenue;
+          }
+        }
+      }
+    }
+
+    // Top 200 page transitions per day
+    const topPageTrans = [...pageTrans.values()].sort((a, b) => b.count - a.count).slice(0, 200);
+    for (const t of topPageTrans) {
+      const fromVis = pageVisitors.get(t.from)?.size || 1;
+      const rate = Math.min(t.visitors.size / fromVis, 1);
+      const conversions = t.convertedUsers.size;
+      const convRate = t.visitors.size > 0 ? (conversions / t.visitors.size) : 0;
+      ftRows.push(`INSERT INTO funnel_transitions (
   org_tag, from_type, from_id, from_name, to_type, to_id, to_name,
   visitors_at_from, visitors_transitioned, transition_rate,
   conversions, conversion_rate, revenue_cents,
   period_start, period_end
 ) VALUES (
-  ${esc(ORG_TAG)}, 'page', ${esc(t.from)}, ${esc(t.from)},
-  'page', ${esc(t.to)}, ${esc(t.to)},
+  ${esc(ORG_TAG)}, 'page_url', ${esc(t.from)}, ${esc(t.from)},
+  'page_url', ${esc(t.to)}, ${esc(t.to)},
   ${fromVis}, ${t.visitors.size}, ${rate.toFixed(4)},
-  0, 0, 0,
-  ${esc(periodStart)}, ${esc(periodEnd)}
+  ${conversions}, ${convRate.toFixed(4)}, ${t.revenue_cents},
+  ${esc(day)}, ${esc(day)}
 ) ON CONFLICT (org_tag, from_type, from_id, to_type, to_id, period_start) DO UPDATE SET
   visitors_at_from = excluded.visitors_at_from,
   visitors_transitioned = excluded.visitors_transitioned,
   transition_rate = excluded.transition_rate,
+  conversions = excluded.conversions,
+  conversion_rate = excluded.conversion_rate,
+  revenue_cents = excluded.revenue_cents,
   computed_at = datetime('now');`);
+    }
+    totalPageRows += topPageTrans.length;
+
+    // Top 50 source entries per day
+    const topSourceEntries = [...sourceEntryMap.values()].sort((a, b) => b.visitors.size - a.visitors.size).slice(0, 50);
+    for (const s of topSourceEntries) {
+      const sConversions = s.convertedUsers.size;
+      const convRate = s.visitors.size > 0 ? (sConversions / s.visitors.size) : 0;
+      ftRows.push(`INSERT INTO funnel_transitions (
+  org_tag, from_type, from_id, from_name, to_type, to_id, to_name,
+  visitors_at_from, visitors_transitioned, transition_rate,
+  conversions, conversion_rate, revenue_cents,
+  period_start, period_end
+) VALUES (
+  ${esc(ORG_TAG)}, '${s.sourceType}', ${esc(s.source)}, ${esc(s.source)},
+  'page_url', ${esc(s.page)}, ${esc(s.page)},
+  ${s.visitors.size}, ${s.visitors.size}, 1.0,
+  ${sConversions}, ${convRate.toFixed(4)}, ${s.revenue_cents},
+  ${esc(day)}, ${esc(day)}
+) ON CONFLICT (org_tag, from_type, from_id, to_type, to_id, period_start) DO UPDATE SET
+  visitors_at_from = excluded.visitors_at_from,
+  visitors_transitioned = excluded.visitors_transitioned,
+  conversions = excluded.conversions,
+  conversion_rate = excluded.conversion_rate,
+  revenue_cents = excluded.revenue_cents,
+  computed_at = datetime('now');`);
+    }
+    totalSourceRows += topSourceEntries.length;
   }
 
-  console.log(`      ${ftRows.length} page transitions (top 200).`);
+  console.log(`      ${daySessionsMap.size} days, ${totalPageRows} page transitions + ${totalSourceRows} source entries.`);
 
   // =========================================================================
   // Step 5: Compute journey_analytics

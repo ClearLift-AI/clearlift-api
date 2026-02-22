@@ -486,8 +486,23 @@ export class D1AnalyticsService {
   }
 
   /**
-   * Get page-to-page flow transitions for Sankey visualization
-   * Queries funnel_transitions filtered to page→page edges
+   * Get page-to-page flow transitions for the PageFlowChart widget.
+   *
+   * Data architecture (Feb 2026):
+   * - Cron writes daily aggregate rows to funnel_transitions (one row per day per transition)
+   * - This query aggregates across matching days via GROUP BY SUM for the requested date range
+   * - D1 stores 30 days of daily data (rolling window, cleaned up by cron)
+   * - For ranges beyond 30 days, the endpoint handler falls back to R2 SQL reconstruction
+   *
+   * Node types:
+   *   page_url → page_url  — page-to-page navigation
+   *   source   → page_url  — UTM/ad campaign → landing page
+   *   referrer → page_url  — organic referrer → landing page
+   *   page     → page      — legacy channel-level rows (staging compatibility)
+   *   referrer → page      — legacy referrer rows (staging compatibility)
+   *
+   * @see clearlift-cron/.../probabilistic-attribution.ts  — populate-page-flow step
+   * @see clearlift-api/.../d1-metrics.ts                  — GetD1PageFlow endpoint + R2 fallback
    */
   async getPageFlowTransitions(
     orgTag: string,
@@ -508,13 +523,26 @@ export class D1AnalyticsService {
     conversions: number;
     revenue_cents: number;
   }[]> {
+    // Daily aggregate rows: GROUP BY from/to and SUM across matching days
+    // Supports both new page_url/source/referrer types and legacy page/referrer types (staging)
     let query = `
       SELECT from_id, from_name, from_type, to_id, to_name,
-        visitors_at_from, visitors_transitioned, transition_rate,
-        conversions, revenue_cents
+        SUM(visitors_at_from) as visitors_at_from,
+        SUM(visitors_transitioned) as visitors_transitioned,
+        CASE WHEN SUM(visitors_at_from) > 0
+          THEN CAST(SUM(visitors_transitioned) AS REAL) / SUM(visitors_at_from)
+          ELSE 0 END as transition_rate,
+        SUM(conversions) as conversions,
+        SUM(revenue_cents) as revenue_cents
       FROM funnel_transitions
       WHERE org_tag = ?
-        AND ((from_type = 'page' AND to_type = 'page') OR (from_type = 'referrer' AND to_type = 'page'))
+        AND (
+          (from_type = 'page_url' AND to_type = 'page_url')
+          OR (from_type = 'source' AND to_type = 'page_url')
+          OR (from_type = 'referrer' AND to_type = 'page_url')
+          OR (from_type = 'page' AND to_type = 'page')
+          OR (from_type = 'referrer' AND to_type = 'page')
+        )
     `;
     const params: unknown[] = [orgTag];
 
@@ -529,8 +557,11 @@ export class D1AnalyticsService {
       params.push(options.periodEnd);
     }
 
+    query += ` GROUP BY from_type, from_id, from_name, to_id, to_name`;
+
     const limit = options.limit || 50;
-    query += ` ORDER BY visitors_transitioned DESC LIMIT ?`;
+    // Page-URL-level rows rank above legacy channel-level rows
+    query += ` ORDER BY CASE WHEN from_type IN ('page_url', 'source', 'referrer') THEN 0 ELSE 1 END, visitors_transitioned DESC LIMIT ?`;
     params.push(limit);
 
     const stmt = this.session.prepare(query);

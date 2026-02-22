@@ -9,6 +9,9 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
+import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
+import { getSecret } from "../../../utils/secrets";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * GET /v1/analytics/metrics/summary - Get analytics summary from D1
@@ -611,7 +614,8 @@ export class GetD1PageFlow extends OpenAPIRoute {
                   transition_rate: z.number(),
                   conversions: z.number(),
                   revenue_cents: z.number()
-                }))
+                })),
+                source: z.enum(['d1', 'r2sql']).describe("Data source: d1 for hot storage, r2sql for historical reconstruction")
               })
             })
           }
@@ -639,13 +643,169 @@ export class GetD1PageFlow extends OpenAPIRoute {
       return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
     }
 
+    const orgTag = orgTagMapping.short_tag;
+
+    // Check if request extends beyond D1's 30-day hot window (use 32 days to avoid
+    // edge cases where default "last 30 days" range lands 31 days ago)
+    const hotWindowCutoff = new Date(Date.now() - 32 * 86_400_000).toISOString().slice(0, 10);
+    const needsR2Fallback = periodStart && periodStart < hotWindowCutoff;
+
+    if (needsR2Fallback) {
+      // R2 SQL fallback: reconstruct page flow from raw events
+      try {
+        const r2ApiToken = await getSecret(c.env.R2_SQL_TOKEN);
+        if (!r2ApiToken) {
+          // No R2 token — fall through to D1 with whatever data is available
+          structuredLog('WARN', 'R2 SQL token not configured, falling back to D1', { endpoint: 'page-flow', org_tag: orgTag });
+        } else {
+          const r2sql = new R2SQLAdapter(
+            c.env.CLOUDFLARE_ACCOUNT_ID || '',
+            c.env.R2_BUCKET_NAME || 'clearlift-events-lake',
+            r2ApiToken
+          );
+          const transitions = await this.reconstructPageFlowFromR2(r2sql, orgTag, periodStart, periodEnd || new Date().toISOString().slice(0, 10), limit || 50);
+          // Only return R2 results if we got data — otherwise fall through to D1
+          if (transitions.length > 0) {
+            return success(c, { transitions, source: 'r2sql' });
+          }
+          structuredLog('INFO', 'R2 SQL returned empty results, falling back to D1', { endpoint: 'page-flow', org_tag: orgTag });
+        }
+      } catch (err) {
+        structuredLog('WARN', 'R2 SQL page flow reconstruction failed, falling back to D1', {
+          endpoint: 'page-flow', org_tag: orgTag, error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+
+    // D1 hot path: aggregated daily rows
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const transitions = await analyticsService.getPageFlowTransitions(orgTagMapping.short_tag, {
+    const transitions = await analyticsService.getPageFlowTransitions(orgTag, {
       periodStart,
       periodEnd,
       limit
     });
 
-    return success(c, { transitions });
+    return success(c, { transitions, source: 'd1' });
+  }
+
+  /**
+   * Reconstruct page flow transitions from raw R2 SQL events.
+   * Used when the requested date range extends beyond D1's 30-day hot window.
+   */
+  private async reconstructPageFlowFromR2(
+    r2sql: R2SQLAdapter,
+    orgTag: string,
+    periodStart: string,
+    periodEnd: string,
+    limit: number
+  ): Promise<{
+    from_id: string; from_name: string | null; from_type: string;
+    to_id: string; to_name: string | null;
+    visitors_at_from: number; visitors_transitioned: number; transition_rate: number;
+    conversions: number; revenue_cents: number;
+  }[]> {
+    // Fetch page_view events from R2 SQL for the requested period
+    const result = await r2sql.getEvents(orgTag, {
+      lookback: `${Math.ceil((Date.now() - new Date(periodStart).getTime()) / 86_400_000)}d`,
+      limit: 5000,
+    });
+
+    if (result.error || !result.events?.length) return [];
+
+    // Group by session, build page transitions + source entries
+    const sessionMap = new Map<string, typeof result.events>();
+    for (const ev of result.events) {
+      if (ev.event_type !== 'page_view') continue;
+      const sid = ev.session_id as string;
+      if (!sid) continue;
+      if (!sessionMap.has(sid)) sessionMap.set(sid, []);
+      sessionMap.get(sid)!.push(ev);
+    }
+
+    const pageTransMap = new Map<string, { from: string; to: string; visitors: Set<string> }>();
+    const pageVisitors = new Map<string, Set<string>>();
+    const sourceEntryMap = new Map<string, { source: string; type: string; page: string; visitors: Set<string> }>();
+
+    for (const [, events] of sessionMap) {
+      const views = events.sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+      if (!views.length) continue;
+      const anonId = String(views[0].anonymous_id || views[0].session_id);
+      const first = views[0];
+
+      // Classify entry source
+      let entryLabel: string;
+      let entryType: string;
+      if (first.gclid) { entryLabel = `Google Ads${first.utm_campaign ? ' / ' + first.utm_campaign : ''}`; entryType = 'source'; }
+      else if (first.fbclid) { entryLabel = `Meta Ads${first.utm_campaign ? ' / ' + first.utm_campaign : ''}`; entryType = 'source'; }
+      else if (first.ttclid) { entryLabel = `TikTok Ads${first.utm_campaign ? ' / ' + first.utm_campaign : ''}`; entryType = 'source'; }
+      else if (first.utm_source) {
+        entryLabel = String(first.utm_source);
+        if (first.utm_medium) entryLabel += ` / ${first.utm_medium}`;
+        if (first.utm_campaign) entryLabel += ` / ${first.utm_campaign}`;
+        entryType = 'source';
+      } else if (first.referrer_domain) { entryLabel = String(first.referrer_domain); entryType = 'referrer'; }
+      else { entryLabel = 'Direct'; entryType = 'source'; }
+
+      const entryPage = String(first.page_path || '/');
+      const entryKey = `${entryLabel}→${entryPage}`;
+      if (!sourceEntryMap.has(entryKey)) {
+        sourceEntryMap.set(entryKey, { source: entryLabel, type: entryType, page: entryPage, visitors: new Set() });
+      }
+      sourceEntryMap.get(entryKey)!.visitors.add(anonId);
+
+      // Page transitions
+      for (let i = 0; i < views.length; i++) {
+        const path = String(views[i].page_path || '/');
+        if (!pageVisitors.has(path)) pageVisitors.set(path, new Set());
+        pageVisitors.get(path)!.add(anonId);
+
+        if (i + 1 < views.length) {
+          const nextPath = String(views[i + 1].page_path || '/');
+          if (path === nextPath) continue;
+          const key = `${path}→${nextPath}`;
+          if (!pageTransMap.has(key)) pageTransMap.set(key, { from: path, to: nextPath, visitors: new Set() });
+          pageTransMap.get(key)!.visitors.add(anonId);
+        }
+      }
+    }
+
+    // Combine page transitions and source entries, sort by visitors
+    const transitions: Array<{
+      from_id: string; from_name: string | null; from_type: string;
+      to_id: string; to_name: string | null;
+      visitors_at_from: number; visitors_transitioned: number; transition_rate: number;
+      conversions: number; revenue_cents: number;
+    }> = [];
+
+    for (const t of pageTransMap.values()) {
+      const fromVis = pageVisitors.get(t.from)?.size || t.visitors.size;
+      transitions.push({
+        from_id: t.from, from_name: t.from, from_type: 'page_url',
+        to_id: t.to, to_name: t.to,
+        visitors_at_from: fromVis, visitors_transitioned: t.visitors.size,
+        transition_rate: fromVis > 0 ? t.visitors.size / fromVis : 0,
+        conversions: 0, revenue_cents: 0,
+      });
+    }
+
+    for (const s of sourceEntryMap.values()) {
+      transitions.push({
+        from_id: s.source, from_name: s.source, from_type: s.type,
+        to_id: s.page, to_name: s.page,
+        visitors_at_from: s.visitors.size, visitors_transitioned: s.visitors.size,
+        transition_rate: 1.0,
+        conversions: 0, revenue_cents: 0,
+      });
+    }
+
+    // Sort: source/referrer entries first, then by visitors desc
+    transitions.sort((a, b) => {
+      const aRank = a.from_type === 'page_url' ? 1 : 0;
+      const bRank = b.from_type === 'page_url' ? 1 : 0;
+      if (aRank !== bRank) return aRank - bRank;
+      return b.visitors_transitioned - a.visitors_transitioned;
+    });
+
+    return transitions.slice(0, limit);
   }
 }

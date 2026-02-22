@@ -2586,7 +2586,7 @@ export class ExplorationToolExecutor {
    */
   private async hasUnifiedData(orgId: string, platform?: string): Promise<boolean> {
     try {
-      let query = 'SELECT 1 FROM ad_metrics WHERE organization_id = ?';
+      let query = 'SELECT 1 FROM ad_metrics WHERE organization_id = ? AND entity_type = \'campaign\'';
       const params: any[] = [orgId];
 
       if (platform) {
@@ -3456,6 +3456,7 @@ export class ExplorationToolExecutor {
               SUM(conversion_value_cents) as conversion_value_cents
             FROM ad_metrics
             WHERE organization_id = ?
+              AND entity_type = 'campaign'
               AND metric_date >= ?
           `;
           const params: any[] = [orgId, startStr];
@@ -3958,38 +3959,110 @@ export class ExplorationToolExecutor {
         event_type: r.platform,
         configuration: r.settings,
       }));
-      const channels = journey.channel_distribution ? JSON.parse(journey.channel_distribution) : {};
       const totalSessions = journey.total_sessions || 1;
 
-      // Build funnel stages from goals
-      const stages = goals.map((goal, idx) => {
-        // Estimate visitors per stage using a simple decay model
-        // First stage gets all sessions, subsequent stages decay
-        const decayFactor = Math.pow(0.6, idx);
-        const estimatedVisitors = Math.round(totalSessions * decayFactor);
-        const nextVisitors = idx < goals.length - 1
-          ? Math.round(totalSessions * Math.pow(0.6, idx + 1))
-          : journey.converting_sessions;
-        const dropoffRate = estimatedVisitors > 0
-          ? ((estimatedVisitors - nextVisitors) / estimatedVisitors * 100)
-          : 0;
+      // Query real page flow data from funnel_transitions (daily aggregates)
+      const days = 30;
+      const pageFlowResult = await this.db.prepare(`
+        SELECT to_id as page,
+               SUM(visitors_transitioned) as visitors,
+               SUM(conversions) as conversions,
+               SUM(revenue_cents) as revenue_cents
+        FROM funnel_transitions
+        WHERE org_tag = ?
+          AND from_type = 'page_url' AND to_type = 'page_url'
+          AND period_start >= date('now', '-' || ? || ' days')
+        GROUP BY to_id
+        ORDER BY visitors DESC
+        LIMIT 20
+      `).bind(orgTag, days).all<{
+        page: string;
+        visitors: number;
+        conversions: number;
+        revenue_cents: number;
+      }>();
 
-        return {
-          goal_id: goal.id,
-          goal_name: goal.goal_name,
-          goal_type: goal.goal_type,
-          estimated_visitors: estimatedVisitors,
-          dropoff_rate: Math.round(dropoffRate * 10) / 10,
-          conversion_rate: totalSessions > 0
-            ? Math.round((nextVisitors / totalSessions) * 1000) / 10
-            : 0
-        };
-      });
+      const topSourcesResult = await this.db.prepare(`
+        SELECT from_id as source, from_type,
+               SUM(visitors_transitioned) as visitors,
+               SUM(conversions) as conversions
+        FROM funnel_transitions
+        WHERE org_tag = ? AND from_type IN ('source','referrer') AND to_type = 'page_url'
+          AND period_start >= date('now', '-' || ? || ' days')
+        GROUP BY from_id, from_type
+        ORDER BY visitors DESC
+        LIMIT 10
+      `).bind(orgTag, days).all<{
+        source: string;
+        from_type: string;
+        visitors: number;
+        conversions: number;
+      }>();
 
-      // Identify bottleneck (highest dropoff)
-      const bottleneck = stages.length > 0
-        ? stages.reduce((max, s) => s.dropoff_rate > max.dropoff_rate ? s : max, stages[0])
-        : null;
+      const pageFlowPages = pageFlowResult.results || [];
+      const topSources = topSourcesResult.results || [];
+
+      let stages: Array<{
+        page: string;
+        visitors: number;
+        conversions: number;
+        revenue_cents: number;
+        dropoff_rate: number;
+        conversion_rate: number;
+      }>;
+      let bottleneck: { page: string; dropoff_rate: number } | null = null;
+
+      if (pageFlowPages.length > 0) {
+        // Build stages from real page data
+        stages = pageFlowPages.map((p, idx) => {
+          const nextVisitors = idx + 1 < pageFlowPages.length ? pageFlowPages[idx + 1].visitors : 0;
+          const dropoffRate = p.visitors > 0
+            ? ((p.visitors - nextVisitors) / p.visitors * 100)
+            : 0;
+          const conversionRate = p.visitors > 0
+            ? Math.round((p.conversions / p.visitors) * 1000) / 10
+            : 0;
+          return {
+            page: p.page,
+            visitors: p.visitors,
+            conversions: p.conversions,
+            revenue_cents: p.revenue_cents,
+            dropoff_rate: Math.round(dropoffRate * 10) / 10,
+            conversion_rate: conversionRate,
+          };
+        });
+
+        // Bottleneck: page with highest traffic-to-next-page dropoff (excluding last page)
+        const stagesForBottleneck = stages.slice(0, -1);
+        if (stagesForBottleneck.length > 0) {
+          bottleneck = stagesForBottleneck.reduce(
+            (max, s) => s.dropoff_rate > max.dropoff_rate ? { page: s.page, dropoff_rate: s.dropoff_rate } : max,
+            { page: stagesForBottleneck[0].page, dropoff_rate: stagesForBottleneck[0].dropoff_rate }
+          );
+        }
+      } else {
+        // Fallback: decay model when no funnel_transitions data exists
+        stages = goals.map((goal, idx) => {
+          const decayFactor = Math.pow(0.6, idx);
+          const estimatedVisitors = Math.round(totalSessions * decayFactor);
+          const nextVisitors = idx < goals.length - 1
+            ? Math.round(totalSessions * Math.pow(0.6, idx + 1))
+            : journey.converting_sessions;
+          const dropoffRate = estimatedVisitors > 0
+            ? ((estimatedVisitors - nextVisitors) / estimatedVisitors * 100)
+            : 0;
+          return {
+            page: goal.goal_name,
+            visitors: estimatedVisitors,
+            conversions: 0,
+            revenue_cents: 0,
+            dropoff_rate: Math.round(dropoffRate * 10) / 10,
+            conversion_rate: totalSessions > 0
+              ? Math.round((nextVisitors / totalSessions) * 1000) / 10
+              : 0,
+          };
+        });
+      }
 
       return {
         success: true,
@@ -4000,8 +4073,16 @@ export class ExplorationToolExecutor {
             ? Math.round((journey.converting_sessions / journey.total_sessions) * 1000) / 10
             : 0,
           stages,
-          bottleneck_stage: bottleneck ? { goal_name: bottleneck.goal_name, dropoff_rate: bottleneck.dropoff_rate } : null,
-          computed_at: journey.computed_at
+          top_sources: topSources.map(s => ({
+            source: s.source,
+            type: s.from_type,
+            visitors: s.visitors,
+            conversions: s.conversions,
+          })),
+          bottleneck_page: bottleneck,
+          goals: goals.map(g => ({ id: g.id, name: g.goal_name, type: g.event_type })),
+          computed_at: journey.computed_at,
+          data_source: pageFlowPages.length > 0 ? 'funnel_transitions' : 'estimated',
         }
       };
     } catch (err) {

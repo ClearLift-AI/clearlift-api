@@ -692,7 +692,8 @@ export class GetJourneysOverview extends OpenAPIRoute {
           total_conversions: 0,
           total_revenue: 0
         },
-        top_paths: [],
+        top_journeys: [],
+        top_converting_paths: [],
         conversion_by_path_length: [],
         revenue_by_source: {}
       });
