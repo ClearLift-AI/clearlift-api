@@ -11,7 +11,8 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { getSecret } from "../../../utils/secrets";
-import { JobManager, AnalysisConfig } from "../../../services/analysis";
+import { JobManager } from "../../../services/analysis";
+import { AnalysisWorkflowParams } from "../../../workflows/analysis-helpers";
 import { structuredLog } from "../../../utils/structured-logger";
 
 export class RunAnalysis extends OpenAPIRoute {
@@ -115,7 +116,7 @@ export class RunAnalysis extends OpenAPIRoute {
     const customInstructions = settings?.custom_instructions || null;
 
     // Build analysis configuration from org settings
-    const analysisConfig: AnalysisConfig = {
+    const analysisConfig: AnalysisWorkflowParams['config'] = {
       llm: {
         defaultProvider: (settings?.llm_default_provider || 'auto') as 'auto' | 'claude' | 'gemini',
         claudeModel: (settings?.llm_claude_model || 'haiku') as 'opus' | 'sonnet' | 'haiku',
