@@ -240,6 +240,7 @@ import {
   AdminStartImpersonation,
   AdminEndImpersonation
 } from "./endpoints/v1/admin/tasks";
+import { AdminGetAnalysisCosts } from "./endpoints/v1/admin/analysis-costs";
 import {
   GetMatrixSettings,
   UpdateMatrixSettings,
@@ -410,6 +411,9 @@ openapi.post("/v1/admin/tasks/:id/comments", auth, AdminAddTaskComment);
 // Admin impersonation endpoints
 openapi.post("/v1/admin/impersonate", auth, AdminStartImpersonation);
 openapi.post("/v1/admin/end-impersonation", auth, AdminEndImpersonation);
+
+// Admin analysis cost tracking
+openapi.get("/v1/admin/analysis/costs", auth, AdminGetAnalysisCosts);
 
 // Authentication endpoints (no auth required)
 openapi.post("/v1/auth/register", Register);

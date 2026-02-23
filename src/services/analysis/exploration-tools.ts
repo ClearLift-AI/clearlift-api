@@ -1343,16 +1343,16 @@ export class ExplorationToolExecutor {
 
     // Get name column based on platform and entity type
     const nameCol = this.getNameColumn(platform, entity_type);
-    const sql = `SELECT ${nameCol} as name, targeting FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
+    const sql = `SELECT ${nameCol} as name, platform_fields FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
 
     try {
-      const entity = await this.db.prepare(sql).bind(entity_id, orgId).first<{ name: string; targeting: string }>();
+      const entity = await this.db.prepare(sql).bind(entity_id, orgId).first<{ name: string; platform_fields: string }>();
 
       if (!entity) {
         return { success: false, error: `Entity not found: ${entity_id}` };
       }
 
-      const targeting = this.parseTargeting(entity.targeting);
+      const targeting = this.parseTargeting(entity.platform_fields);
 
       return {
         success: true,
@@ -2096,21 +2096,11 @@ export class ExplorationToolExecutor {
       let budget_cents: number | null = null;
       let budget_type: 'daily' | 'lifetime' | null = null;
 
-      if (platform === 'google') {
-        budget_cents = entity.budget_amount_cents;
-        budget_type = entity.budget_type === 'DAILY' ? 'daily' : 'lifetime';
-      } else if (platform === 'facebook') {
-        // Facebook: prefer daily, fallback to lifetime
-        if (entity.daily_budget_cents && entity.daily_budget_cents > 0) {
-          budget_cents = entity.daily_budget_cents;
-          budget_type = 'daily';
-        } else if (entity.lifetime_budget_cents && entity.lifetime_budget_cents > 0) {
-          budget_cents = entity.lifetime_budget_cents;
-          budget_type = 'lifetime';
-        }
-      } else if (platform === 'tiktok') {
-        budget_cents = entity.budget_cents;
-        budget_type = entity.budget_mode === 'BUDGET_MODE_DAY' ? 'daily' : 'lifetime';
+      // Unified schema: budget_cents + budget_type columns on ad_campaigns
+      budget_cents = entity.budget_cents ?? null;
+      if (entity.budget_type) {
+        budget_type = entity.budget_type === 'daily' || entity.budget_type === 'DAILY' || entity.budget_type === 'BUDGET_MODE_DAY'
+          ? 'daily' : 'lifetime';
       }
 
       const name = entity.name || entity.campaign_name || entity.ad_group_name;
@@ -2126,12 +2116,11 @@ export class ExplorationToolExecutor {
           budget_cents,
           budget: budget_cents ? '$' + (budget_cents / 100).toFixed(2) : null,
           budget_type,
-          // Platform-specific raw data
-          raw_budget_data: platform === 'facebook' ? {
-            daily_budget_cents: entity.daily_budget_cents,
-            lifetime_budget_cents: entity.lifetime_budget_cents,
-            budget_remaining_cents: entity.budget_remaining_cents
-          } : undefined,
+          // Raw budget data from unified schema
+          raw_budget_data: {
+            budget_cents: entity.budget_cents ?? null,
+            budget_type: entity.budget_type ?? null,
+          },
           // Helper for recommendations
           recommendation_hint: budget_cents === null || budget_cents === 0
             ? 'WARNING: No budget set or budget is $0. Cannot calculate percentage-based changes on zero budget.'

@@ -975,7 +975,12 @@ CREATE TABLE analysis_jobs (
   started_at TEXT,
   completed_at TEXT,
   stopped_reason TEXT,
-  termination_reason TEXT
+  termination_reason TEXT,
+  total_input_tokens INTEGER DEFAULT 0,
+  total_output_tokens INTEGER DEFAULT 0,
+  estimated_cost_cents INTEGER DEFAULT 0,
+  llm_provider TEXT,
+  llm_model TEXT
 );
 
 CREATE INDEX idx_jobs_org_created ON analysis_jobs(organization_id, created_at DESC);

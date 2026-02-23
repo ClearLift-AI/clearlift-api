@@ -25,7 +25,7 @@ import {
 import { EntityTreeBuilder, EntityLevel } from '../services/analysis/entity-tree';
 import { DateRange } from '../services/analysis/metrics-fetcher';
 import { JobManager } from '../services/analysis/job-manager';
-import { GEMINI_MODELS } from '../services/analysis/llm-provider';
+import { GEMINI_MODELS, calculateCostCents } from '../services/analysis/llm-provider';
 import {
   getToolDefinitions,
   isRecommendationTool,
@@ -238,6 +238,10 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     // before creating recommendations with REAL numbers instead of guessed ones.
     const simulationCache = createSimulationCache();
 
+    // LLM token usage tracking (accumulated across all iterations)
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
     // Initialize agentic loop context
     const agenticContext = await step.do('agentic_init', {
       retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' },
@@ -326,6 +330,10 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       recommendations = iterResult.recommendations;
       actionRecommendations = iterResult.actionRecommendations || actionRecommendations;
 
+      // Accumulate LLM token usage
+      totalInputTokens += iterResult.inputTokens || 0;
+      totalOutputTokens += iterResult.outputTokens || 0;
+
       // Merge accumulated insight state
       if (iterResult.accumulatedInsightId) {
         accumulatedInsightId = iterResult.accumulatedInsightId;
@@ -404,7 +412,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     // Get final summary if we stopped due to max recommendations
     let finalSummary = crossPlatformSummary;
     if (stoppedReason === 'max_recommendations') {
-      const finalResult = await step.do('agentic_final_summary', {
+      const finalSummaryResult = await step.do('agentic_final_summary', {
         retries: { limit: 2, delay: '5 seconds', backoff: 'exponential' },
         timeout: '2 minutes'
       }, async () => {
@@ -416,13 +424,16 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           agenticClient
         );
       });
-      finalSummary = finalResult || crossPlatformSummary;
+      finalSummary = finalSummaryResult.summary || crossPlatformSummary;
+      totalInputTokens += finalSummaryResult.inputTokens;
+      totalOutputTokens += finalSummaryResult.outputTokens;
     }
 
     // Increment for recommendations step
     processedCount++;
 
-    // Final step: Complete the job
+    // Final step: Complete the job and record LLM usage
+    const estimatedCostCents = calculateCostCents('gemini', GEMINI_MODELS.FLASH, totalInputTokens, totalOutputTokens);
     await step.do('complete_job', {
       retries: { limit: 3, delay: '1 second' },
       timeout: '30 seconds'
@@ -430,6 +441,26 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       const jobs = new JobManager(this.env.DB);
       await jobs.updateProgress(jobId, processedCount, 'recommendations');
       await jobs.completeJob(jobId, runId, stoppedReason, terminationReason);
+
+      // Write LLM usage stats to analysis_jobs
+      await this.env.DB.prepare(`
+        UPDATE analysis_jobs
+        SET total_input_tokens = ?,
+            total_output_tokens = ?,
+            estimated_cost_cents = ?,
+            llm_provider = ?,
+            llm_model = ?
+        WHERE id = ?
+      `).bind(
+        totalInputTokens,
+        totalOutputTokens,
+        estimatedCostCents,
+        'gemini',
+        GEMINI_MODELS.FLASH,
+        jobId
+      ).run();
+
+      console.log(`[Analysis] LLM usage for job ${jobId}: ${totalInputTokens} in / ${totalOutputTokens} out, ~${estimatedCostCents}c`);
     });
 
     // Generate CAC predictions from recommendations with simulation data
@@ -1557,7 +1588,9 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
         stopReason: 'no_tool_calls',
         accumulatedInsightId: accumulatedInsightId || undefined,
         accumulatedInsights,
-        toolCallNames: []
+        toolCallNames: [],
+        inputTokens: callResult.inputTokens,
+        outputTokens: callResult.outputTokens
       };
     }
 
@@ -1662,7 +1695,9 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
           terminationReason: toolCall.input.reason,
           accumulatedInsightId: accumulatedInsightId || undefined,
           accumulatedInsights,
-          toolCallNames: callResult.toolCalls.map(tc => tc.name)
+          toolCallNames: callResult.toolCalls.map(tc => tc.name),
+          inputTokens: callResult.inputTokens,
+          outputTokens: callResult.outputTokens
         };
       }
 
@@ -1840,7 +1875,9 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
       stopReason: hitMaxActionRecommendations ? 'max_recommendations' : undefined,
       accumulatedInsightId: accumulatedInsightId || undefined,
       accumulatedInsights,
-      toolCallNames: callResult.toolCalls.map(tc => tc.name)
+      toolCallNames: callResult.toolCalls.map(tc => tc.name),
+      inputTokens: callResult.inputTokens,
+      outputTokens: callResult.outputTokens
     };
   }
 
@@ -1853,7 +1890,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     enableExploration: boolean,
     orgId?: string,
     client?: AgenticClient
-  ): Promise<string | null> {
+  ): Promise<{ summary: string | null; inputTokens: number; outputTokens: number }> {
     const explorationTools = enableExploration && orgId
       ? await getExplorationToolsForOrg(this.env.ANALYTICS_DB, orgId)
       : enableExploration ? getExplorationToolDefinitions() : [];
@@ -1867,9 +1904,13 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
 
     try {
       const callResult = await client.call(messages, systemPrompt, tools);
-      return callResult.textBlocks.join('\n') || null;
+      return {
+        summary: callResult.textBlocks.join('\n') || null,
+        inputTokens: callResult.inputTokens,
+        outputTokens: callResult.outputTokens
+      };
     } catch {
-      return null;
+      return { summary: null, inputTokens: 0, outputTokens: 0 };
     }
   }
 

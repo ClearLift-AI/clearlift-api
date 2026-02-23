@@ -195,4 +195,7 @@ export interface AgenticIterationResult {
   accumulatedInsights?: AccumulatedInsightData[];
   // Tool call names from this iteration (for sequential pattern detection)
   toolCallNames?: string[];
+  // Token usage from this iteration's LLM call
+  inputTokens?: number;
+  outputTokens?: number;
 }

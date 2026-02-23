@@ -121,7 +121,7 @@ export class GetCACTimeline extends OpenAPIRoute {
           ]);
 
           const todaySpend = todayMetrics?.spend_cents || 0;
-          const todayPlatformConv = todayMetrics?.conversions || 0;
+          const todayPlatformConv = Math.round(todayMetrics?.conversions || 0);
           const todayGoalConv = todayGoals?.conversions || 0;
           const todayGoalRevenue = todayGoals?.revenue_cents || 0;
 

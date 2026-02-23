@@ -132,8 +132,8 @@ export interface FacebookCampaignRow {
   campaign_name: string;
   campaign_status: string;
   objective: string | null;
-  daily_budget_cents: number | null;
-  lifetime_budget_cents: number | null;
+  budget_cents: number | null;
+  budget_type: string | null;
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;
@@ -161,7 +161,7 @@ export interface TikTokCampaignRow {
   campaign_name: string;
   campaign_status: string;
   objective: string | null;
-  budget_mode: string | null;
+  budget_type: string | null;
   budget_cents: number | null;
   last_synced_at: string | null;
   created_at: string;
@@ -674,7 +674,7 @@ export class D1AnalyticsService {
         impressions: row.impressions || 0,
         clicks: row.clicks || 0,
         spend: (row.spend_cents || 0) / 100,
-        conversions: row.conversions || 0,
+        conversions: Math.round(row.conversions || 0),
         revenue: (row.conversion_value_cents || 0) / 100,
         ctr: row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0,
         cpc: row.clicks > 0 ? (row.spend_cents / row.clicks) / 100 : 0,
@@ -704,7 +704,10 @@ export class D1AnalyticsService {
       WHERE c.organization_id = ? AND c.platform = 'google'
     `).bind(startDate, endDate, orgId).first<PlatformSummary>();
 
-    return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    if (!result) return { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    // Google Ads stores fractional conversions — round for integer display
+    result.conversions = Math.round(result.conversions);
+    return result;
   }
 
   // =============================================================================
@@ -722,7 +725,7 @@ export class D1AnalyticsService {
     let query = `
       SELECT
         id, organization_id, account_id, campaign_id, campaign_name,
-        campaign_status, objective, daily_budget_cents, lifetime_budget_cents,
+        campaign_status, objective, budget_cents, budget_type,
         updated_at as last_synced_at, created_at, updated_at
       FROM ad_campaigns
       WHERE organization_id = ? AND platform = 'facebook'
@@ -794,7 +797,7 @@ export class D1AnalyticsService {
         impressions: row.impressions || 0,
         clicks: row.clicks || 0,
         spend: (row.spend_cents || 0) / 100,
-        conversions: row.conversions || 0,
+        conversions: Math.round(row.conversions || 0),
         revenue: (row.conversion_value_cents || 0) / 100,
         ctr: row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0,
         cpc: row.clicks > 0 ? (row.spend_cents / row.clicks) / 100 : 0,
@@ -824,7 +827,9 @@ export class D1AnalyticsService {
       WHERE c.organization_id = ? AND c.platform = 'facebook'
     `).bind(startDate, endDate, orgId).first<PlatformSummary>();
 
-    return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    if (!result) return { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    result.conversions = Math.round(result.conversions);
+    return result;
   }
 
   // =============================================================================
@@ -842,7 +847,7 @@ export class D1AnalyticsService {
     let query = `
       SELECT
         id, organization_id, account_id as advertiser_id, campaign_id, campaign_name,
-        campaign_status, objective, budget_mode, budget_cents,
+        campaign_status, objective, budget_type, budget_cents,
         updated_at as last_synced_at, created_at, updated_at
       FROM ad_campaigns
       WHERE organization_id = ? AND platform = 'tiktok'
@@ -914,7 +919,7 @@ export class D1AnalyticsService {
         impressions: row.impressions || 0,
         clicks: row.clicks || 0,
         spend: (row.spend_cents || 0) / 100,
-        conversions: row.conversions || 0,
+        conversions: Math.round(row.conversions || 0),
         revenue: (row.conversion_value_cents || 0) / 100,
         ctr: row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0,
         cpc: row.clicks > 0 ? (row.spend_cents / row.clicks) / 100 : 0,
@@ -944,7 +949,9 @@ export class D1AnalyticsService {
       WHERE c.organization_id = ? AND c.platform = 'tiktok'
     `).bind(startDate, endDate, orgId).first<PlatformSummary>();
 
-    return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    if (!result) return { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    result.conversions = Math.round(result.conversions);
+    return result;
   }
 
   // =============================================================================
@@ -1024,7 +1031,7 @@ export class D1AnalyticsService {
         spend_cents: row.spend_cents,
         impressions: row.impressions,
         clicks: row.clicks,
-        conversions: row.conversions,
+        conversions: Math.round(row.conversions),
         conversion_value_cents: row.conversion_value_cents,
         campaigns: row.campaigns,
       };
@@ -1421,7 +1428,6 @@ export class D1AnalyticsService {
 export interface StripeChargeRow {
   id: string;
   organization_id: string;
-  connection_id: string;
   charge_id: string;
   customer_id: string | null;
   customer_email_hash: string | null;
@@ -1432,7 +1438,6 @@ export interface StripeChargeRow {
   payment_method_type: string | null;
   stripe_created_at: string;
   metadata: string | null;
-  raw_data: string | null;
   created_at: string;
 }
 

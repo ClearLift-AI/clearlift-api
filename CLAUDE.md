@@ -24,11 +24,11 @@ ClearLift API Worker - A Cloudflare Workers-based API that serves as the authent
 
 #### D1 Databases
 
-**Current local architecture (Feb 2026 consolidation):** 2 databases, 92 tables total.
+**Current local architecture (Feb 2026 consolidation):** 2 databases, 91 tables total.
 
 | Binding | Database Name | Migrations Dir | Purpose | Status |
 |---------|--------------|----------------|---------|--------|
-| `DB` | adbliss-core | `migrations-core/` | Core operational + AI engine (52 tables: auth, orgs, connections, settings, admin, audit, AI tables merged from former AI_DB) | ✅ Active |
+| `DB` | adbliss-core | `migrations-core/` | Core operational + AI engine (51 tables: auth, orgs, connections, settings, admin, audit, AI tables merged from former AI_DB) | ✅ Active |
 | `ANALYTICS_DB` | adbliss-analytics-0 | `migrations-analytics-v2/` | Connectors, ad platforms, events/identity, webhooks, journeys, attribution, conversions, metrics (40 tables) | ✅ Active |
 | `AI_DB` | clearlift-ai | `migrations-ai/` | ⚠️ **MERGED INTO DB (Feb 2026)** — AI tables now in adbliss-core. Binding remains for production until cutover. | 🔄 Legacy |
 | `SHARD_0-3` | clearlift-shard-{0-3} | `shard-migrations/` | ⚠️ **REMOVED (Feb 2026)** — Shard system removed. Bindings remain in production wrangler.jsonc only. | ❌ Removed |
@@ -76,9 +76,7 @@ ANALYTICS_DB provides pre-aggregated analytics (sub-millisecond queries). See da
 - `src/services/d1-analytics.ts` - `getGoogleCampaignMetrics()` and all platform methods
 - `src/endpoints/v1/analytics/platforms.ts` - Cross-platform time series
 - `src/endpoints/v1/analytics/cac-timeline.ts` - CAC backfill queries
-- `src/endpoints/v1/analytics/flow-metrics.ts` - Flow stage metrics
 - `src/workflows/analysis-workflow.ts` - CAC calculation
-- `src/workflows/attribution-workflow.ts` - Click attribution
 - `src/services/analysis/metrics-fetcher.ts` - AI metrics fetching
 - `src/services/analysis/simulation-service.ts` - Budget simulation
 - `src/services/analysis/exploration-tools.ts` - AI exploration
@@ -267,7 +265,7 @@ npm install
 npx wrangler dev --env local --port 8787
 
 # Apply D1 migrations locally (2 databases — NO AI_DB or shards locally)
-npx wrangler d1 migrations apply DB --local --env local           # adbliss-core (52 tables)
+npx wrangler d1 migrations apply DB --local --env local           # adbliss-core (51 tables)
 npx wrangler d1 migrations apply ANALYTICS_DB --local --env local # adbliss-analytics-0 (40 tables)
 
 # Apply D1 migrations to production (LEGACY: includes AI_DB until cutover)
@@ -344,7 +342,7 @@ APP_BASE_URL=https://app-local.clearlift.ai
 
 | Database | Local State | Production State | Notes |
 |----------|-------------|------------------|-------|
-| `DB` | `.wrangler/state/` SQLite — `migrations-core/` (52 tables) | Cloudflare D1 `8e55bba7-...` — `migrations/` | Local uses new consolidated schema; prod uses old schema until cutover |
+| `DB` | `.wrangler/state/` SQLite — `migrations-core/` (51 tables) | Cloudflare D1 `8e55bba7-...` — `migrations/` | Local uses new consolidated schema; prod uses old schema until cutover |
 | `ANALYTICS_DB` | `.wrangler/state/` SQLite — `migrations-analytics-v2/` (40 tables) | Cloudflare D1 `a69beb57-...` — `migrations-analytics/` | Local uses new consolidated schema; prod uses old schema until cutover |
 | `AI_DB` | ⚠️ **Not used locally** (merged into DB) | Cloudflare D1 `3fb300f4-...` — `migrations-ai/` | Production only until cutover |
 | `SHARD_0-3` | ⚠️ **Not used locally** (removed) | Cloudflare D1 (3 migrations each) | Production only until cutover, then removed |
@@ -436,9 +434,9 @@ OAuth providers require HTTPS callback URLs. We use `local.clearlift.ai` as a pe
 
 | Purpose | Local (tunnel) | Staging | Production |
 |---------|---------------|---------|------------|
-| Dashboard | `app-local.clearlift.ai` | `dev.clearlift.ai` | `app.clearlift.ai` |
-| API | `local.clearlift.ai` | `api-dev.clearlift.ai` | `api.clearlift.ai` |
-| Events | `events-local.clearlift.ai` | `iris-dev.clearlift.ai` | `iris.clearlift.ai` |
+| Dashboard | `app-local.clearlift.ai` | `dev.clearlift.ai` | `app.adbliss.io` |
+| API | `local.clearlift.ai` | `api-dev.clearlift.ai` | `api.adbliss.io` |
+| Events | `events-local.clearlift.ai` | `iris-dev.clearlift.ai` | `iris.adbliss.io` |
 
 **Registered redirect URIs** (already configured in provider consoles):
 - `https://local.clearlift.ai/v1/connectors/google/callback`
@@ -557,19 +555,17 @@ POST /v1/analysis/run
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  EntityTreeBuilder → MetricsFetcher → PromptManager         │
+│  EntityTreeBuilder → MetricsFetcher → AnalysisQueries       │
 │         │                  │                │               │
 │         ▼                  ▼                ▼               │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │            HierarchicalAnalyzer                     │    │
-│  │                                                     │    │
-│  │   Ad → AdSet → Campaign → Account → Cross-Platform  │    │
-│  │        (bottom-up analysis with LLM routing)        │    │
+│  │         compute_portfolio (SQL math phase)          │    │
+│  │   Campaign KPIs, trends, anomaly flags — ~2 seconds │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │              AgenticLoop (Claude Opus)              │    │
+│  │           AgenticClient (Claude Opus)               │    │
 │  │   Tools: set_budget, set_status, set_audience...   │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          │                                  │
@@ -598,14 +594,15 @@ Users can override via Settings UI (stored in `ai_optimization_settings.llm_*` c
 | Service | Purpose |
 |---------|---------|
 | `entity-tree.ts` | Builds hierarchy from D1 (campaigns → adsets → ads) |
-| `metrics-fetcher.ts` | Fetches timeseries metrics from `*_daily_metrics` tables |
-| `prompt-manager.ts` | Template hydration from `analysis_prompts` table |
-| `llm-router.ts` | Routes to Claude/Gemini based on level or config |
-| `hierarchical-analyzer.ts` | Orchestrates bottom-up analysis |
-| `agentic-loop.ts` | Tool-calling loop for recommendations |
+| `metrics-fetcher.ts` | Fetches timeseries metrics from `ad_metrics` table |
+| `analysis-queries.ts` | SQL queries for portfolio computation (replaces per-entity LLM calls) |
+| `llm-provider.ts` | Routes to Claude/Gemini based on level or config |
+| `agentic-client.ts` | Tool-calling agentic loop for recommendations |
+| `job-manager.ts` | Analysis job lifecycle management |
 | `exploration-tools.ts` | AI exploration tools for verified conversion analysis |
-| `anthropic-client.ts` | Claude API integration |
-| `gemini-client.ts` | Gemini API integration |
+| `recommendation-tools.ts` | Tool definitions for AI recommendation generation |
+| `simulation-executor.ts` | Executes budget simulation scenarios |
+| `simulation-service.ts` | Budget simulation service layer |
 
 ### AI Exploration Tools for Verified Conversions
 
@@ -631,59 +628,30 @@ GET  /v1/analysis/latest           # Get most recent analysis
 GET  /v1/settings/ai-decisions     # List pending recommendations
 POST /v1/settings/ai-decisions/:id/accept   # Execute recommendation
 POST /v1/settings/ai-decisions/:id/reject   # Dismiss recommendation
+
+# Admin
+GET  /v1/admin/analysis/costs?org_id=xxx   # LLM cost tracking (admin only)
 ```
 
-## Attribution Analysis Workflow
+## Attribution (Read-Only — Computed by Cron)
 
-The API includes a Cloudflare Workflow for computing advanced multi-touch attribution models.
+Attribution is computed by the daily cron (`ProbabilisticAttributionWorkflow` in `clearlift-cron`) and written to `ANALYTICS_DB.attribution_results`. The API serves pre-computed results read-only.
 
-### Architecture
+**The manual `AttributionWorkflow` (`src/workflows/attribution-workflow.ts`) was deleted in Feb 2026.** No manual "Run Attribution" button exists.
+
+### Attribution API Endpoints
 
 ```
-┌─────────────────────┐     ┌───────────────────────────┐
-│  Dashboard UI       │     │  Attribution Workflow     │
-│  "Run Attribution"  │────▶│  (Cloudflare Durable)     │
-└─────────────────────┘     └───────────┬───────────────┘
-                                        │
-                             ┌──────────┴───────────┐
-                             ▼                      ▼
-                    ┌────────────────┐    ┌─────────────────┐
-                    │ Markov Chain   │    │ Shapley Value   │
-                    │ Removal Effect │    │ Attribution     │
-                    └───────┬────────┘    └────────┬────────┘
-                            │                      │
-                            ▼                      ▼
-                    ┌──────────────────────────────────────┐
-                    │   D1: attribution_model_results      │
-                    │   (pre-computed credits by channel)  │
-                    └──────────────────────────────────────┘
+GET  /v1/analytics/attribution/computed?org_id=xxx&model=markov_chain  # Pre-computed results by model (markov_chain or shapley_value)
+GET  /v1/analytics/attribution?org_id=xxx                              # Main attribution endpoint (reads from pre-computed)
 ```
-
-### Workflow Steps
-
-1. **fetch_paths** - Query conversion paths from D1 (conversion_attribution table)
-2. **markov_chain** - Calculate removal effects using Markov Chain model
-3. **shapley_value** - Calculate fair credit using Shapley Value (or Monte Carlo for >10 channels)
-4. **store_results** - Write to `attribution_model_results` table with 7-day TTL
-5. **complete** - Mark job as completed
 
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/workflows/attribution-workflow.ts` | Cloudflare Workflow class |
-| `src/services/attribution-models.ts` | Core calculation algorithms |
-| `src/endpoints/v1/analytics/attribution.ts` | API endpoints |
-| `migrations-ai/0004_attribution_model_results.sql` | D1 schema |
-
-### Attribution API Endpoints
-
-```
-POST /v1/analytics/attribution/run         # Start workflow (returns job_id)
-GET  /v1/analytics/attribution/status/:id  # Poll job status
-GET  /v1/analytics/attribution/computed    # Get pre-computed results by model
-GET  /v1/analytics/attribution             # Main attribution endpoint (reads from pre-computed)
-```
+| `src/services/attribution-models.ts` | Core calculation algorithms (Markov Chain, Shapley Value) |
+| `src/endpoints/v1/analytics/attribution.ts` | Read-only API endpoints |
 
 ### Data Quality Levels
 

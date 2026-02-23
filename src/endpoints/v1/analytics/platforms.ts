@@ -322,7 +322,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         const spend = row.spend_cents || 0;
         const impressions = row.impressions || 0;
         const clicks = row.clicks || 0;
-        const conversions = row.conversions || 0;
+        const conversions = Math.round(row.conversions || 0);
 
         // Add to totals
         dayData.total_spend_cents += spend;

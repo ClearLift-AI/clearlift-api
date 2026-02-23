@@ -136,8 +136,12 @@ export class GetD1DailyMetrics extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const orgId = c.get("org_id" as any) as string;
-    const startDate = c.req.query("start_date")!;
-    const endDate = c.req.query("end_date")!;
+    const startDate = c.req.query("start_date");
+    const endDate = c.req.query("end_date");
+
+    if (!startDate || !endDate) {
+      return error(c, "INVALID_PARAMS", "start_date and end_date are required", 400);
+    }
 
     if (!c.env.ANALYTICS_DB) {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
