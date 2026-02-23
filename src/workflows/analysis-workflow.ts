@@ -378,28 +378,46 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       }
 
       if (iterResult.shouldStop) {
-        // In aggressive mode, nudge the LLM to produce at least one action before giving up
+        // Pre-termination nudge: if the agent is stopping with zero actions, push it to
+        // generate at least one concrete recommendation before giving up. Users pay for
+        // analysis — "everything looks great" with no actions is not acceptable output.
         if (
-          budgetStrategy === 'aggressive' &&
           !nudgeUsed &&
           actionRecommendations.length === 0 &&
           (iterResult.stopReason === 'no_tool_calls' || iterResult.stopReason === 'early_termination')
         ) {
           nudgeUsed = true;
+
+          const strategyNudge = budgetStrategy === 'aggressive'
+            ? `You are in AGGRESSIVE budget mode — the user expects bold action recommendations.\n` +
+              `- Are there top performers whose budget could be increased by 10-20%?\n` +
+              `- Are there paused campaigns with strong historical ROAS worth re-enabling?\n`
+            : budgetStrategy === 'conservative'
+            ? `You are in CONSERVATIVE budget mode — the user wants to reduce waste.\n` +
+              `- Are there entities with below-average efficiency that should be paused?\n` +
+              `- Can any budgets be decreased to improve blended CPA?\n`
+            : `You are in MODERATE budget mode — the user wants to reallocate for better results.\n` +
+              `- Can you shift budget from underperformers to top performers (net-zero change)?\n` +
+              `- Are there any entities to pause and redistribute their spend to winners?\n`;
+
           agenticMessages = [
             ...iterResult.messages,
             agenticClient.buildUserMessage(
-              `You are in AGGRESSIVE budget mode — the user expects bold action recommendations, not just insights. ` +
-              `You have not made any action recommendations yet. Look harder:\n` +
+              `IMPORTANT: You have not made any action recommendations yet. Insights alone are not enough — ` +
+              `the user is paying for actionable optimization suggestions, not just observations.\n\n` +
+              `${strategyNudge}` +
               `- Are there underperforming entities that should be paused to free up budget?\n` +
-              `- Are there top performers whose budget could be increased by 10-20%?\n` +
-              `- Are there paused campaigns with strong historical ROAS worth re-enabling?\n` +
-              `- Can you reallocate budget from low-ROAS to high-ROAS entities?\n\n` +
-              `Use simulate_change first, then make at least ONE concrete action recommendation. ` +
-              `If you genuinely cannot find any action after this review, call terminate_analysis with a specific explanation of why no action is possible.`
+              `- Can you reallocate budget from low-efficiency to high-efficiency entities?\n\n` +
+              `Even if the portfolio is performing well overall, there are ALWAYS optimization opportunities:\n` +
+              `- Reallocating 10-15% from the weakest campaign to the strongest\n` +
+              `- Adjusting budgets to match efficiency scores (higher budget for higher efficiency)\n` +
+              `- Pausing campaigns with declining trends before they waste more spend\n\n` +
+              `Use simulate_change to model at least ONE concrete action, then recommend it. ` +
+              `If you genuinely cannot find ANY action after this review, call terminate_analysis ` +
+              `with a specific explanation of why no optimization is possible.`
             )
           ];
-          console.log(`[Analysis] Aggressive mode nudge: LLM stopped with no actions, injecting retry prompt`);
+          console.log(`[Analysis] Pre-termination nudge: LLM stopped with no actions (${budgetStrategy} mode), injecting retry prompt`);
           continue;  // Re-enter the loop for another iteration
         }
 
