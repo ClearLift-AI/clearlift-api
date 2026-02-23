@@ -213,8 +213,10 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     // Active tree is the full entity tree — agent uses exploration tools for drill-down
     const activeTree = entityTree;
 
-    // Steps 7+: Agentic loop (dynamic iterations)
-    const maxIterations = 200;
+    // Steps 7+: Agentic loop — real limit is context length, not iteration count.
+    // Gemini Flash: 1M context, Claude: 200K. Set iteration cap high enough that
+    // context exhaustion is always the binding constraint.
+    const maxIterations = 1000;
     // Separate limits: 1 insight (accumulated) + up to 3 action recommendations = 4 total max
     const maxActionRecommendations = config?.agentic?.maxRecommendations
       ? Math.min(config.agentic.maxRecommendations - 1, 3)  // Reserve 1 slot for insight
@@ -286,8 +288,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     let lastSingleExploreTool = '';
     let sequentialNudgeFired = false;
 
-    // Fake a 100-turn budget to create urgency (real limit is 200)
-    const displayMaxIterations = 100;
+    // Display the full turn budget to give the LLM room to explore
+    const displayMaxIterations = 200;
 
     while (iterations < maxIterations && actionRecommendations.length < maxActionRecommendations) {
       iterations++;
@@ -1033,52 +1035,47 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       summary += '\n';
     }
 
-    // Top performers (by efficiency score, minimum $1 spend)
+    // ── Full Campaign Roster (paginated presentation) ──
+    // Show ALL campaigns sorted by efficiency, presented as "page 1 of N" to create
+    // semantic pressure for the LLM to explore deeper with query tools.
     const withSpend = analyzed.filter(c => c.spend_cents >= 100); // $1 minimum
-    const topByEfficiency = [...withSpend].sort((a, b) => b.efficiency_score - a.efficiency_score).slice(0, 10);
-    if (topByEfficiency.length > 0) {
-      summary += `### Top Performers (by Efficiency Score)\n`;
-      summary += `| Campaign | Platform | Eff. | Spend | $/day | ROAS | CPA | CVR | Trend |\n|---|---|---|---|---|---|---|---|---|\n`;
-      for (const c of topByEfficiency) {
+    const allSorted = [...withSpend].sort((a, b) => b.efficiency_score - a.efficiency_score);
+    const pausedCampaigns = analyzed.filter(c => c.spend_cents === 0 && c.flags.length > 0);
+    const totalCampaignCount = allSorted.length + pausedCampaigns.length;
+    const pageSize = 10;
+    const shownCount = Math.min(pageSize, allSorted.length);
+
+    if (allSorted.length > 0) {
+      summary += `### Campaign Roster — Page 1 of ${Math.ceil(totalCampaignCount / pageSize)} (showing ${shownCount} of ${totalCampaignCount} campaigns, sorted by efficiency)\n`;
+      summary += `| # | Campaign | Platform | Eff. | Spend | $/day | ROAS | CPA | CVR | Trend | Flags |\n|---|---|---|---|---|---|---|---|---|---|---|\n`;
+      for (let i = 0; i < shownCount; i++) {
+        const c = allSorted[i];
         const trend = c.roas_trend_pct !== null ? `${c.roas_trend_pct > 0 ? '+' : ''}${c.roas_trend_pct.toFixed(0)}%` : '—';
-        summary += `| ${c.name} | ${c.platform} | ${c.efficiency_score} | ${fmt(c.spend_cents)} | ${fmt(c.daily_spend_cents)} | ${c.roas.toFixed(2)}x | ${fmt(c.cpa_cents)} | ${c.cvr.toFixed(1)}% | ${trend} |\n`;
+        const flagStr = c.flags.length > 0 ? c.flags.join(', ') : '—';
+        summary += `| ${i + 1} | ${c.name} | ${c.platform} | ${c.efficiency_score} | ${fmt(c.spend_cents)} | ${fmt(c.daily_spend_cents)} | ${c.roas.toFixed(2)}x | ${c.cpa_cents > 0 ? fmt(c.cpa_cents) : 'N/A'} | ${c.cvr.toFixed(1)}% | ${trend} | ${flagStr} |\n`;
+      }
+      if (allSorted.length > pageSize) {
+        summary += `\n*${allSorted.length - pageSize} more active campaigns not shown. Use query_ad_metrics to explore campaigns #${pageSize + 1}-${allSorted.length} for deeper analysis.*\n`;
       }
       summary += '\n';
     }
 
-    // Underperformers (low ROAS or zero conversions, with spend)
-    const underperformers = withSpend
-      .filter(c => c.flags.some(f => ['zero_conversions', 'unprofitable_roas', 'low_roas', 'high_cpa'].includes(f)))
-      .sort((a, b) => a.roas - b.roas)
-      .slice(0, 10);
-    if (underperformers.length > 0) {
-      summary += `### Underperformers\n`;
-      summary += `| Campaign | Platform | Status | Spend | ROAS | CPA | Flags |\n|---|---|---|---|---|---|---|\n`;
-      for (const c of underperformers) {
-        summary += `| ${c.name} | ${c.platform} | ${c.status} | ${fmt(c.spend_cents)} | ${c.roas.toFixed(2)}x | ${c.cpa_cents > 0 ? fmt(c.cpa_cents) : 'N/A'} | ${c.flags.join(', ')} |\n`;
-      }
+    // Bottom performers callout (explicit)
+    if (allSorted.length >= 2) {
+      const worst = allSorted[allSorted.length - 1];
+      const best = allSorted[0];
+      summary += `### ⚠ Optimization Opportunity\n`;
+      summary += `- **Weakest active campaign:** ${worst.name} (efficiency ${worst.efficiency_score}/100, ${worst.roas.toFixed(2)}x ROAS, ${fmt(worst.spend_cents)} spend)\n`;
+      summary += `- **Strongest active campaign:** ${best.name} (efficiency ${best.efficiency_score}/100, ${best.roas.toFixed(2)}x ROAS, ${fmt(best.spend_cents)} spend)\n`;
+      summary += `- **Efficiency gap:** ${best.efficiency_score - worst.efficiency_score} points — budget reallocation from weakest to strongest could improve portfolio efficiency\n`;
       summary += '\n';
     }
 
-    // Paused campaigns with strong historical performance
-    const pausedOpportunities = analyzed
-      .filter(c => c.flags.includes('paused_strong_history'))
-      .sort((a, b) => (b.historical_roas || 0) - (a.historical_roas || 0))
-      .slice(0, 5);
-    if (pausedOpportunities.length > 0) {
-      summary += `### Paused — Relaunch Candidates\n`;
-      summary += `| Campaign | Platform | Historical ROAS | Historical Conversions | Last Active |\n|---|---|---|---|---|\n`;
-      for (const c of pausedOpportunities) {
-        summary += `| ${c.name} | ${c.platform} | ${c.historical_roas?.toFixed(2)}x | ${c.historical_conversions} | ${c.last_active_date || 'unknown'} |\n`;
-      }
-      summary += '\n';
-    }
-
-    // Trend alerts (includes all trend-based flags)
+    // Trend alerts
     const trendFlags = ['declining_roas', 'spend_spike', 'cpa_increasing', 'high_concentration', 'diminishing_returns', 'cvr_declining'];
     const trendAlerts = analyzed.filter(c => c.flags.some(f => trendFlags.includes(f)));
     if (trendAlerts.length > 0) {
-      summary += `### Trend Alerts\n`;
+      summary += `### ⚠ Trend Alerts (${trendAlerts.length} campaigns with concerning trends)\n`;
       for (const c of trendAlerts) {
         const parts: string[] = [];
         if (c.flags.includes('diminishing_returns')) parts.push(`DIMINISHING RETURNS: spend up ${c.spend_trend_pct?.toFixed(0)}% but ROAS down ${c.roas_trend_pct?.toFixed(0)}%`);
@@ -1091,6 +1088,24 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           parts.push(`${share}% of total spend (concentration risk)`);
         }
         summary += `- **${c.name}** (${c.platform}): ${parts.join(', ')} — ${c.roas.toFixed(2)}x ROAS, ${fmt(c.daily_spend_cents)}/day, efficiency ${c.efficiency_score}/100\n`;
+      }
+      summary += `\n*These campaigns have actionable trends. Use simulate_change to model budget adjustments before they worsen.*\n`;
+      summary += '\n';
+    }
+
+    // Paused campaigns with potential
+    const pausedOpportunities = analyzed
+      .filter(c => c.flags.includes('paused_strong_history'))
+      .sort((a, b) => (b.historical_roas || 0) - (a.historical_roas || 0))
+      .slice(0, 5);
+    if (pausedOpportunities.length > 0) {
+      summary += `### Paused — Relaunch Candidates (${pausedOpportunities.length} of ${pausedCampaigns.length} paused campaigns)\n`;
+      summary += `| Campaign | Platform | Historical ROAS | Historical Conversions | Last Active |\n|---|---|---|---|---|\n`;
+      for (const c of pausedOpportunities) {
+        summary += `| ${c.name} | ${c.platform} | ${c.historical_roas?.toFixed(2)}x | ${c.historical_conversions} | ${c.last_active_date || 'unknown'} |\n`;
+      }
+      if (pausedCampaigns.length > pausedOpportunities.length) {
+        summary += `\n*${pausedCampaigns.length - pausedOpportunities.length} more paused campaigns not shown. Use query_ad_metrics with include_paused=true to explore.*\n`;
       }
       summary += '\n';
     }
