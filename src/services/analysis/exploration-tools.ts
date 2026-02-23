@@ -120,7 +120,7 @@ export const EXPLORATION_TOOLS = {
         },
         group_by: {
           type: 'string',
-          description: 'Time/dimension grouping. For stripe/jobber: day/week/month. For shopify: day/week/month/utm_source/utm_campaign/source_name/shipping_country. For ecommerce: day/platform/status/utm_source/utm_campaign. For accounting: day/month/status/category.'
+          description: 'Time/dimension grouping. For stripe: day/week/month/geo (geo extracts country/state from billing address metadata). For jobber: day/week/month. For shopify: day/week/month/utm_source/utm_campaign/source_name/shipping_country. For ecommerce: day/platform/status/utm_source/utm_campaign. For accounting: day/month/status/category.'
         },
         platform: {
           type: 'string',
@@ -789,7 +789,7 @@ interface MetadataFilter {
 interface QueryStripeRevenueInput {
   days: number;
   conversion_type?: 'all' | 'charges' | 'subscriptions' | 'subscription_initial' | 'subscription_renewal';
-  group_by?: 'day' | 'week' | 'month';
+  group_by?: 'day' | 'week' | 'month' | 'geo';
   filters?: {
     status?: 'succeeded' | 'active' | 'trialing';
     min_amount_cents?: number;
@@ -1507,6 +1507,40 @@ export class ExplorationToolExecutor {
       // Add metadata breakdown if requested
       if (breakdown_by_metadata_key) {
         response.by_metadata = this.breakdownByMetadata(filteredData, breakdown_by_metadata_key);
+      }
+
+      // Geo breakdown from customer billing/shipping address in metadata
+      if (group_by === 'geo') {
+        const geoMap = new Map<string, { revenue_cents: number; count: number }>();
+        for (const row of filteredData) {
+          const meta = row.metadata || {};
+          // Extract country from billing_details, shipping, or charge metadata
+          const country =
+            meta?.billing_details?.address?.country ||
+            meta?.shipping?.address?.country ||
+            meta?.customer_address?.country ||
+            meta?.country ||
+            'Unknown';
+          const state =
+            meta?.billing_details?.address?.state ||
+            meta?.shipping?.address?.state ||
+            meta?.customer_address?.state ||
+            '';
+          const geoKey = state ? `${country}/${state}` : country;
+          const existing = geoMap.get(geoKey) || { revenue_cents: 0, count: 0 };
+          existing.revenue_cents += row.amount_cents || 0;
+          existing.count++;
+          geoMap.set(geoKey, existing);
+        }
+        response.by_geo = Array.from(geoMap.entries())
+          .sort((a, b) => b[1].revenue_cents - a[1].revenue_cents)
+          .map(([geo, stats]) => ({
+            location: geo,
+            revenue: '$' + (stats.revenue_cents / 100).toFixed(2),
+            revenue_cents: stats.revenue_cents,
+            transactions: stats.count,
+            pct_of_total: totalRevenue > 0 ? (stats.revenue_cents / totalRevenue * 100).toFixed(1) + '%' : '0%',
+          }));
       }
 
       // Add available metadata keys

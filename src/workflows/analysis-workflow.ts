@@ -1611,12 +1611,34 @@ The simulation result will show you the EXACT impact and you must acknowledge it
 - set_audience/reallocate_budget: Up to 3 total action recommendations allowed.
 - terminate_analysis: Call this when you have made action recommendations or exhausted all possibilities. Provide a clear reason.
 
+## CROSS-CONNECTOR ANALYSIS — BATCH THESE TOGETHER
+You have access to revenue, traffic, and ad data across all connected platforms. Use them together in a SINGLE turn to build a complete picture:
+
+**Geo targeting opportunity detection** (batch all in one turn):
+- query_traffic(scope='realtime', breakdown='geo') — where visitors come from
+- query_revenue(scope='shopify', group_by='shipping_country') — where buyers are located
+- query_ad_metrics(scope='audiences', dimension='geo') — where ad spend is targeted
+→ If visitors/buyers cluster in regions where ad spend is low, recommend geo bid adjustments or new geo-targeted campaigns
+
+**Channel ROI comparison** (batch all in one turn):
+- query_revenue(scope='stripe', group_by='day') — daily verified revenue
+- query_ad_metrics(scope='performance', entity_type='campaign') — per-campaign spend
+- query_traffic(scope='realtime', breakdown='channel') — traffic by acquisition channel
+→ Identify which channels drive the most revenue per dollar of spend
+
+**Customer quality analysis** (batch all in one turn):
+- query_revenue(scope='subscriptions', metric='ltv') — lifetime value by channel
+- query_contacts(scope='identities', breakdown_by='source') — customer acquisition source
+- query_conversions(scope='by_goal') — conversion quality by goal
+→ Higher-LTV channels deserve more budget even if CPA is higher
+
 ## EFFICIENCY: CALL MULTIPLE TOOLS PER TURN
 You can call multiple tools in a SINGLE response. This is critical for performance:
 - Call multiple exploration/query tools at once when investigating different entities or metrics
 - Call simulate_change for multiple entities in one turn
 - Example: instead of querying campaign A, then campaign B, then campaign C in 3 turns, query all 3 in one turn
 - Each turn has overhead — minimize turns by batching independent tool calls together
+- Use the cross-connector analysis patterns above — one turn with 3 tools beats 3 turns with 1 tool each
 
 ## WHEN TO USE terminate_analysis
 ONLY call terminate_analysis AFTER you have made at least one action recommendation. If you have zero actions, you MUST try harder.
