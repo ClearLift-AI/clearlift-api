@@ -681,6 +681,29 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
 
     const campaigns = campaignMetrics.results || [];
 
+    // ── Query 1b: Verified revenue from connectors (Stripe, Shopify, etc.) ──
+    // Platform-reported revenue (ad_metrics.conversion_value_cents) is usually near-zero
+    // because payment platforms don't share revenue back to ad networks.
+    // Verified revenue from connector_events IS the ground truth.
+    let verifiedRevenueCents = 0;
+    let verifiedConversions = 0;
+    try {
+      const verified = await this.env.ANALYTICS_DB.prepare(`
+        SELECT COUNT(*) as conversions, COALESCE(SUM(value_cents), 0) as revenue_cents
+        FROM conversions
+        WHERE organization_id = ?
+          AND conversion_timestamp >= ? AND conversion_timestamp <= ?
+      `).bind(orgId, dateRange.start, dateRange.end).first<{
+        conversions: number; revenue_cents: number;
+      }>();
+      if (verified) {
+        verifiedRevenueCents = verified.revenue_cents || 0;
+        verifiedConversions = verified.conversions || 0;
+      }
+    } catch { /* conversions table may be empty */ }
+
+    const hasVerifiedRevenue = verifiedRevenueCents > 0;
+
     // ── Query 2: Prior-period metrics for trend calculation ──
     const priorStart = new Date(dateRange.start);
     priorStart.setDate(priorStart.getDate() - days);
@@ -798,8 +821,13 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     }
 
     // Portfolio-level averages for relative comparisons
-    const avgCpa = totalConversions > 0 ? totalSpendCents / totalConversions : 0;
-    const avgRoas = totalSpendCents > 0 ? totalRevenueCents / totalSpendCents : 0;
+    // When verified revenue is available, use it for ROAS/CPA averages.
+    // Platform-reported revenue is near-zero for most orgs — using it would
+    // make every campaign look like it has 0% efficiency.
+    const effectiveRevenueCents = hasVerifiedRevenue ? verifiedRevenueCents : totalRevenueCents;
+    const effectiveConversions = hasVerifiedRevenue ? verifiedConversions : totalConversions;
+    const avgCpa = effectiveConversions > 0 ? totalSpendCents / effectiveConversions : 0;
+    const avgRoas = totalSpendCents > 0 ? effectiveRevenueCents / totalSpendCents : 0;
     const medianSpend = (() => {
       const spends = campaigns.filter(c => c.spend_cents > 0).map(c => c.spend_cents).sort((a, b) => a - b);
       if (spends.length === 0) return 0;
@@ -811,9 +839,18 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     for (const c of campaigns) {
       const ctr = c.impressions > 0 ? (c.clicks / c.impressions) * 100 : 0;
       const cpc_cents = c.clicks > 0 ? Math.round(c.spend_cents / c.clicks) : 0;
-      const cpa_cents = c.conversions > 0 ? Math.round(c.spend_cents / c.conversions) : 0;
-      const roas = c.spend_cents > 0 ? c.revenue_cents / c.spend_cents : 0;
-      const cvr = c.clicks > 0 ? (c.conversions / c.clicks) * 100 : 0;
+      // When verified revenue is available, distribute proportionally by spend for per-campaign ROAS.
+      // This is an approximation — the attribution engine provides per-campaign credit, but that
+      // data isn't available in the math phase. Spend-share is a reasonable proxy.
+      const effectiveCampaignRevenue = hasVerifiedRevenue && totalSpendCents > 0
+        ? Math.round(verifiedRevenueCents * (c.spend_cents / totalSpendCents))
+        : c.revenue_cents;
+      const effectiveCampaignConversions = hasVerifiedRevenue && totalSpendCents > 0
+        ? Math.round(verifiedConversions * (c.spend_cents / totalSpendCents))
+        : c.conversions;
+      const cpa_cents = effectiveCampaignConversions > 0 ? Math.round(c.spend_cents / effectiveCampaignConversions) : 0;
+      const roas = c.spend_cents > 0 ? effectiveCampaignRevenue / c.spend_cents : 0;
+      const cvr = c.clicks > 0 ? (effectiveCampaignConversions / c.clicks) * 100 : 0;
       const daily_spend_cents = c.active_days > 0 ? Math.round(c.spend_cents / c.active_days) : 0;
 
       // Trend calculations (WoW change)
@@ -821,7 +858,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       const spend_trend_pct = prior && prior.spend_cents > 0
         ? ((c.spend_cents - prior.spend_cents) / prior.spend_cents) * 100
         : null;
-      const priorRoas = prior && prior.spend_cents > 0 ? prior.revenue_cents / prior.spend_cents : null;
+      // When using verified revenue, skip ROAS trends — we don't have prior-period verified revenue
+      // to compare against, so the comparison would be meaningless.
+      const priorRoas = !hasVerifiedRevenue && prior && prior.spend_cents > 0 ? prior.revenue_cents / prior.spend_cents : null;
       const roas_trend_pct = priorRoas !== null && priorRoas > 0
         ? ((roas - priorRoas) / priorRoas) * 100
         : null;
@@ -863,7 +902,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       const flags: string[] = [];
       const isActive = ['ACTIVE', 'ENABLED', 'RUNNING', 'LIVE'].includes((c.campaign_status || '').toUpperCase());
 
-      if (c.spend_cents > 0 && c.conversions === 0) flags.push('zero_conversions');
+      // Only flag zero_conversions if we don't have verified revenue — with verified revenue,
+      // platform-reported conversions being 0 is expected and normal.
+      if (c.spend_cents > 0 && effectiveCampaignConversions === 0) flags.push('zero_conversions');
       if (roas > 0 && roas < 1.0) flags.push('unprofitable_roas');
       if (roas >= 1.0 && roas < 1.5) flags.push('low_roas');
       if (cpa_cents > 0 && avgCpa > 0 && cpa_cents > avgCpa * 2) flags.push('high_cpa');
@@ -893,8 +934,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         spend_cents: c.spend_cents,
         impressions: c.impressions,
         clicks: c.clicks,
-        conversions: c.conversions,
-        revenue_cents: c.revenue_cents,
+        conversions: effectiveCampaignConversions,
+        revenue_cents: effectiveCampaignRevenue,
         ctr, cpc_cents, cpa_cents, roas, cvr,
         spend_trend_pct, roas_trend_pct, cpa_trend_pct, cvr_trend_pct,
         efficiency_score, daily_spend_cents,
@@ -907,20 +948,35 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     }
 
     // ── Format structured output for the agent ──
-    const blendedRoas = totalSpendCents > 0 ? (totalRevenueCents / totalSpendCents).toFixed(2) : '0.00';
+    // Use verified revenue (from connectors) as primary ROAS when available.
+    // Platform-reported revenue is typically near-zero because ad platforms don't
+    // know about revenue that happens in Stripe/Shopify/etc.
+    const primaryRevenueCents = hasVerifiedRevenue ? verifiedRevenueCents : totalRevenueCents;
+    const primaryConversions = hasVerifiedRevenue ? verifiedConversions : totalConversions;
+    const trueRoas = totalSpendCents > 0 ? (primaryRevenueCents / totalSpendCents).toFixed(2) : '0.00';
 
     let summary = `## Portfolio Summary (${days}d)\n`;
     summary += `| Metric | Value |\n|---|---|\n`;
-    summary += `| Total Spend | ${fmt(totalSpendCents)} |\n`;
-    summary += `| Total Revenue | ${fmt(totalRevenueCents)} |\n`;
-    summary += `| Blended ROAS | ${blendedRoas}x |\n`;
+    summary += `| Total Ad Spend | ${fmt(totalSpendCents)} |\n`;
+    if (hasVerifiedRevenue) {
+      summary += `| Verified Revenue (connectors) | ${fmt(verifiedRevenueCents)} |\n`;
+      summary += `| True ROAS | ${trueRoas}x |\n`;
+      summary += `| Verified Conversions | ${verifiedConversions.toLocaleString()} |\n`;
+      summary += `| True CPA | ${verifiedConversions > 0 ? fmt(Math.round(totalSpendCents / verifiedConversions)) : 'N/A'} |\n`;
+      if (totalRevenueCents > 0) {
+        summary += `| Platform-Reported Revenue | ${fmt(totalRevenueCents)} (ad platforms only — typically incomplete) |\n`;
+      }
+    } else {
+      summary += `| Platform-Reported Revenue | ${fmt(totalRevenueCents)} |\n`;
+      summary += `| Blended ROAS | ${trueRoas}x |\n`;
+      summary += `| Platform Conversions | ${totalConversions.toLocaleString()} |\n`;
+      summary += `| Blended CPA | ${totalConversions > 0 ? fmt(Math.round(totalSpendCents / totalConversions)) : 'N/A'} |\n`;
+    }
     summary += `| Impressions | ${totalImpressions.toLocaleString()} |\n`;
     summary += `| Clicks | ${totalClicks.toLocaleString()} |\n`;
     summary += `| CTR | ${pct(totalClicks, totalImpressions)} |\n`;
-    summary += `| Conversions | ${totalConversions.toLocaleString()} |\n`;
-    summary += `| Blended CPA | ${totalConversions > 0 ? fmt(Math.round(totalSpendCents / totalConversions)) : 'N/A'} |\n`;
     summary += `| CPC | ${totalClicks > 0 ? fmt(Math.round(totalSpendCents / totalClicks)) : 'N/A'} |\n`;
-    summary += `| Conv Rate | ${pct(totalConversions, totalClicks)} |\n`;
+    summary += `| Click-to-Conversion Rate | ${pct(primaryConversions, totalClicks)} |\n`;
     const activeCampaignsCount = analyzed.filter(c => c.spend_cents > 0).length;
     const avgEfficiency = activeCampaignsCount > 0
       ? Math.round(analyzed.filter(c => c.spend_cents > 0).reduce((sum, c) => sum + c.efficiency_score, 0) / activeCampaignsCount)
@@ -1410,6 +1466,17 @@ CRITICAL - BUDGET vs SPEND:
 - BUDGET is the configured limit
 - SPEND is what was actually spent
 - ALWAYS use get_entity_budget to check actual budget before recommending changes.
+
+CRITICAL - PLATFORM-REPORTED vs VERIFIED REVENUE:
+AdBliss exists to solve the attribution gap between ad platforms and payment processors. This is the core value proposition — NOT a bug or tracking issue.
+- **Platform-reported revenue** (from Google/Meta/TikTok) is almost always near-zero or grossly inaccurate because ad platforms cannot track conversions that happen in external systems (Stripe checkout, Shopify cart, etc.)
+- **Verified revenue** (from Stripe, Shopify, Jobber, etc.) is the ground truth — this is real money collected by the business
+- A large gap between platform-reported and verified revenue is EXPECTED and NORMAL — it means the user's revenue flows through a payment processor that doesn't feed data back to ad platforms
+- The "True ROAS" in the portfolio summary uses verified revenue and IS the correct metric for decision-making
+- NEVER flag the platform vs verified discrepancy as a problem, tracking issue, or configuration error
+- NEVER recommend "fixing conversion tracking" or "passing value back to ad platforms" — the whole point of AdBliss is that this isn't possible or practical for most businesses
+- When computing efficiency, ROAS, and CPA, always prefer verified/true metrics over platform-reported ones
+- An "efficiency score" based on platform-reported ROAS will be misleadingly low — use verified ROAS for real performance assessment
 
 ## SPENDING LIMITS (HARD CAPS — NEVER EXCEED)
 ${dailyCapCents ? `- Daily spend cap: $${(dailyCapCents / 100).toFixed(2)}` : '- No daily cap set'}

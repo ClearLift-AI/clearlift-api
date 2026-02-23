@@ -1716,22 +1716,19 @@ export class ExplorationToolExecutor {
       const totalPlatformConversions = platformData.reduce((sum, p) => sum + p.platform_conversions, 0);
       const totalPlatformRevenue = platformData.reduce((sum, p) => sum + p.platform_conversion_value_cents, 0);
 
-      const platformRoas = totalSpend > 0 ? totalPlatformRevenue / totalSpend : 0;
       const trueRoas = totalSpend > 0 ? verifiedRevenue / totalSpend : 0;
-      const discrepancyPct = totalPlatformRevenue > 0
-        ? ((verifiedRevenue - totalPlatformRevenue) / totalPlatformRevenue * 100).toFixed(1)
-        : '0';
 
       const response: any = {
         summary: {
           total_spend: '$' + (totalSpend / 100).toFixed(2),
-          platform_reported_revenue: '$' + (totalPlatformRevenue / 100).toFixed(2),
-          verified_stripe_revenue: '$' + (verifiedRevenue / 100).toFixed(2),
+          // NOTE: Platform-reported revenue is almost always near-zero because ad platforms
+          // cannot see revenue that happens in external payment processors. This is expected.
+          platform_reported_revenue: '$' + (totalPlatformRevenue / 100).toFixed(2) + ' (ad platforms lack payment visibility — this being low is expected)',
+          verified_revenue: '$' + (verifiedRevenue / 100).toFixed(2) + ' (ground truth from payment processors)',
           platform_conversions: totalPlatformConversions,
           verified_conversions: verifiedConversions,
-          platform_roas: platformRoas.toFixed(2),
           true_roas: trueRoas.toFixed(2),
-          discrepancy_pct: discrepancyPct + '%'
+          note: 'The gap between platform-reported and verified revenue is the core problem AdBliss solves. Use true_roas for decision-making.'
         }
       };
 
@@ -2390,15 +2387,17 @@ export class ExplorationToolExecutor {
             roas: trueRoas.toFixed(2),
             avg_confidence: avgConfidence.toFixed(2)
           },
-          // Analysis
+          // Analysis — NOTE: Platform underreporting is EXPECTED. Ad platforms cannot track
+          // revenue that happens in external payment processors (Stripe, Shopify, etc.).
+          // This is the core problem AdBliss solves — do NOT treat this gap as an error.
           analysis: {
-            inflation_factor: inflationFactor.toFixed(2) + 'x',
-            platform_overstates_by: totalPlatformRevenue > 0 && totalVerifiedValue > 0
-              ? (((totalPlatformRevenue - totalVerifiedValue) / totalVerifiedValue) * 100).toFixed(1) + '%'
-              : 'N/A',
-            true_roas_vs_reported: platformRoas > 0
-              ? ((trueRoas / platformRoas) * 100).toFixed(1) + '%'
-              : 'N/A'
+            revenue_visibility_gap: totalPlatformRevenue > 0 && totalVerifiedValue > 0
+              ? ((1 - totalPlatformRevenue / totalVerifiedValue) * 100).toFixed(1) + '% of revenue invisible to ad platforms'
+              : totalVerifiedValue > 0
+                ? '100% of revenue invisible to ad platforms (expected for payment processor setups)'
+                : 'No verified revenue data',
+            true_roas: trueRoas.toFixed(2) + 'x',
+            platform_reported_roas: platformRoas.toFixed(2) + 'x (unreliable — ad platforms lack payment data)',
           },
           // Verification metrics
           verification: {
