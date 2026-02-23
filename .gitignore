@@ -49,3 +49,4 @@ test-api.sh
 # Deployment logs (contains timestamps, not secrets)
 deployments.json
 .seed-tmp/
+.next/
