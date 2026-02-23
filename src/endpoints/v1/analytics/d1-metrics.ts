@@ -168,7 +168,7 @@ export class GetD1DailyMetrics extends OpenAPIRoute {
       users: m.users,
       conversions: m.conversions,
       revenue: m.revenue_cents / 100,
-      conversionRate: m.conversion_rate,
+      conversionRate: Math.min(m.conversion_rate, 1.0),
       byChannel: m.by_channel ? JSON.parse(m.by_channel) : undefined,
       byDevice: m.by_device ? JSON.parse(m.by_device) : undefined,
       byGeo: m.by_geo ? JSON.parse(m.by_geo) : undefined
@@ -331,7 +331,7 @@ export class GetD1UTMPerformance extends OpenAPIRoute {
       pageViews: m.page_views,
       conversions: m.conversions,
       revenue: m.revenue_cents / 100,
-      conversionRate: m.conversion_rate
+      conversionRate: Math.min(m.conversion_rate, 1.0)
     }));
 
     return success(c, data);

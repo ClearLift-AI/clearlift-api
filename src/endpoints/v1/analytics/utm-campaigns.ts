@@ -222,7 +222,25 @@ Fetches aggregated UTM campaign performance data including:
         sources: uniqueSources,
       });
     } catch (err: any) {
-      structuredLog('ERROR', 'UTM campaigns query failed', { endpoint: 'analytics/utm-campaigns', error: err instanceof Error ? err.message : String(err) });
+      const errMsg = err instanceof Error ? err.message : String(err);
+      // D1 throws "no such table" if utm_performance hasn't been populated yet — return empty data
+      if (errMsg.includes('no such table') || errMsg.includes('no such column')) {
+        structuredLog('WARN', 'UTM table not yet populated', { endpoint: 'analytics/utm-campaigns', error: errMsg });
+        return success(c, {
+          campaigns: [],
+          summary: {
+            total_sessions: 0,
+            total_users: 0,
+            total_page_views: 0,
+            total_conversions: 0,
+            total_revenue_cents: 0,
+            avg_conversion_rate: 0,
+            avg_bounce_rate: 0,
+          },
+          sources: [],
+        });
+      }
+      structuredLog('ERROR', 'UTM campaigns query failed', { endpoint: 'analytics/utm-campaigns', error: errMsg });
       return error(c, "INTERNAL_ERROR", "Failed to fetch UTM campaign data", 500);
     }
   }
@@ -433,7 +451,22 @@ Fetches daily UTM traffic metrics as a time series:
         },
       });
     } catch (err: any) {
-      structuredLog('ERROR', 'UTM time series query failed', { endpoint: 'analytics/utm-campaigns', error: err instanceof Error ? err.message : String(err) });
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('no such table') || errMsg.includes('no such column')) {
+        structuredLog('WARN', 'UTM table not yet populated', { endpoint: 'analytics/utm-campaigns/time-series', error: errMsg });
+        return success(c, {
+          time_series: [],
+          summary: {
+            total_sessions: 0,
+            total_users: 0,
+            total_conversions: 0,
+            total_revenue_cents: 0,
+            avg_conversion_rate: 0,
+            sources: [],
+          },
+        });
+      }
+      structuredLog('ERROR', 'UTM time series query failed', { endpoint: 'analytics/utm-campaigns', error: errMsg });
       return error(c, "INTERNAL_ERROR", "Failed to fetch UTM time series data", 500);
     }
   }
