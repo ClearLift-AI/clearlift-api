@@ -8,16 +8,19 @@
 import { AnalysisLevel } from './llm-provider';
 
 // Tool definitions for Claude/Gemini function calling
+export interface ToolPropertyDef {
+  type: string;
+  description: string;
+  enum?: string[];
+  items?: { type: string };
+}
+
 export interface RecommendationTool {
   name: string;
   description: string;
   input_schema: {
     type: 'object';
-    properties: Record<string, {
-      type: string;
-      description: string;
-      enum?: string[];
-    }>;
+    properties: Record<string, ToolPropertyDef>;
     required: string[];
   };
 }

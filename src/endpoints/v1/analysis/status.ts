@@ -24,7 +24,7 @@ export class GetAnalysisStatus extends OpenAPIRoute {
       }),
       query: z.object({
         after_event_id: z.coerce.number().optional()
-      }).optional()
+      })
     },
     responses: {
       "200": {

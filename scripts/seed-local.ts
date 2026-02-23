@@ -341,8 +341,14 @@ VALUES ('${id}', '${ORG_ID}', '${source}', '${conv.sourceId}', ${valueCents}, 'U
     const cac = 0;
 
     const cacId = `cac_demo_${pad(dayIdx)}`;
-    lines.push(`INSERT OR IGNORE INTO cac_history (id, organization_id, date, spend_cents, conversions, revenue_cents, cac_cents, conversions_goal, conversions_platform, conversion_source, revenue_goal_cents, conversions_stripe, conversions_shopify, conversions_jobber, conversions_tag, revenue_stripe_cents, revenue_shopify_cents, revenue_jobber_cents, created_at)
-VALUES ('${cacId}', '${ORG_ID}', '${ds}', ${totalSpend}, ${totalConvs}, ${totalRevenue}, ${cac}, ${totalConvs}, 0, 'goal', ${totalRevenue}, ${stripeConvs.length}, ${shopifyConvs.length}, ${jobberConvs.length}, 0, ${stripeRevenue}, ${shopifyRevenue}, ${jobberRevenue}, '${now}');`);
+    const perSource: Record<string, { conversions: number; revenue_cents: number }> = {};
+    if (stripeConvs.length > 0) perSource.stripe = { conversions: stripeConvs.length, revenue_cents: stripeRevenue };
+    if (shopifyConvs.length > 0) perSource.shopify = { conversions: shopifyConvs.length, revenue_cents: shopifyRevenue };
+    if (jobberConvs.length > 0) perSource.jobber = { conversions: jobberConvs.length, revenue_cents: jobberRevenue };
+    const perSourceJson = escSql(JSON.stringify(perSource));
+
+    lines.push(`INSERT OR IGNORE INTO cac_history (id, organization_id, date, spend_cents, conversions, revenue_cents, cac_cents, conversions_goal, conversions_platform, conversion_source, revenue_goal_cents, per_source_json, created_at)
+VALUES ('${cacId}', '${ORG_ID}', '${ds}', ${totalSpend}, ${totalConvs}, ${totalRevenue}, ${cac}, ${totalConvs}, 0, 'goal', ${totalRevenue}, '${perSourceJson}', '${now}');`);
   }
 
   // -- 3. Handoff patterns --
@@ -688,8 +694,8 @@ async function main() {
     { name: "conversions by source", db: "ANALYTICS_DB", sql: `SELECT conversion_source, COUNT(*) as cnt, SUM(value_cents) as total_value FROM conversions WHERE organization_id = '${ORG_ID}' GROUP BY conversion_source` },
     // 3. CAC math: sum spend, sum conversions, verify CAC = spend/convs
     { name: "CAC totals (28 days)", db: "ANALYTICS_DB", sql: `SELECT SUM(spend_cents) as total_spend, SUM(conversions) as total_convs, SUM(revenue_cents) as total_rev, ROUND(CAST(SUM(spend_cents) AS REAL) / MAX(SUM(conversions), 1)) as computed_cac, ROUND(AVG(cac_cents)) as avg_stored_cac FROM cac_history WHERE organization_id = '${ORG_ID}'` },
-    // 4. Per-source breakdown from cac_history
-    { name: "CAC per-source totals", db: "ANALYTICS_DB", sql: `SELECT SUM(conversions_stripe) as stripe, SUM(conversions_tag) as tag, SUM(revenue_stripe_cents) as stripe_rev FROM cac_history WHERE organization_id = '${ORG_ID}'` },
+    // 4. Per-source breakdown from cac_history (via per_source_json)
+    { name: "CAC per-source sample", db: "ANALYTICS_DB", sql: `SELECT date, per_source_json FROM cac_history WHERE organization_id = '${ORG_ID}' AND per_source_json != '{}' LIMIT 3` },
     // 5. connector_events ↔ conversions join (stripe events should match conversions)
     { name: "connector_events→conversions match", db: "ANALYTICS_DB", sql: `SELECT COUNT(*) as matched FROM connector_events ce JOIN conversions c ON c.organization_id = ce.organization_id AND c.source_id = ce.external_id AND c.conversion_source = 'stripe' WHERE ce.organization_id = '${ORG_ID}' AND ce.source_platform = 'stripe'` },
     // 6. platform_connections settings

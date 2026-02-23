@@ -1135,59 +1135,21 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // Try unified tables first (ad_metrics)
-      const hasUnified = await this.hasUnifiedData(orgId, platform);
-      let data: Array<{
+      // Use unified ad_metrics table
+      const { query, params } = this.buildUnifiedMetricsQuery(platform, entity_type, entity_id, days, orgId);
+      const result = await this.db.prepare(query).bind(...params).all<{
         metric_date: string;
-        spend_cents: number;
         impressions: number;
         clicks: number;
+        spend_cents: number;
         conversions: number;
         conversion_value_cents: number;
-      }> = [];
-
-      if (hasUnified) {
-        // Use unified ad_metrics table
-        const { query, params } = this.buildUnifiedMetricsQuery(platform, entity_type, entity_id, days, orgId);
-        const result = await this.db.prepare(query).bind(...params).all<{
-          metric_date: string;
-          impressions: number;
-          clicks: number;
-          spend_cents: number;
-          conversions: number;
-          conversion_value_cents: number;
-          ctr: number;
-          cpc_cents: number;
-          cpm_cents: number;
-          extra_metrics: string | null;
-        }>();
-        data = result.results || [];
-      } else {
-        // Fall back to legacy platform-specific tables
-        const tableInfo = this.getMetricsTableInfo(platform, entity_type);
-        if (!tableInfo) {
-          return { success: false, error: `Unsupported platform/entity for metrics: ${platform}/${entity_type}` };
-        }
-
-        // D1 SQL query for legacy tables
-        const sql = `
-          SELECT metric_date, spend_cents, impressions, clicks, conversions, conversion_value_cents
-          FROM ${tableInfo.table}
-          WHERE ${tableInfo.idColumn} = ? AND organization_id = ?
-            AND metric_date >= ? AND metric_date <= ?
-          ORDER BY metric_date ASC
-        `;
-
-        const result = await this.db.prepare(sql).bind(entity_id, orgId, startStr, endStr).all<{
-          metric_date: string;
-          spend_cents: number;
-          impressions: number;
-          clicks: number;
-          conversions: number;
-          conversion_value_cents: number;
-        }>();
-        data = result.results || [];
-      }
+        ctr: number;
+        cpc_cents: number;
+        cpm_cents: number;
+        extra_metrics: string | null;
+      }>();
+      const data = result.results || [];
 
       // Enrich with derived metrics
       const enrichedData = this.enrichMetrics(data || [], metrics);
@@ -1210,9 +1172,9 @@ export class ExplorationToolExecutor {
           : 0;
 
         response.verified_metrics = {
-          stripe_revenue_cents: verifiedMetrics.revenue_cents,
-          stripe_revenue: '$' + (verifiedMetrics.revenue_cents / 100).toFixed(2),
-          stripe_conversions: verifiedMetrics.conversions,
+          revenue_cents: verifiedMetrics.revenue_cents,
+          revenue: '$' + (verifiedMetrics.revenue_cents / 100).toFixed(2),
+          conversions: verifiedMetrics.conversions,
           true_roas: platformSpend > 0
             ? ((verifiedMetrics.revenue_cents / 100) / platformSpend).toFixed(2)
             : '0',
@@ -2580,28 +2542,6 @@ export class ExplorationToolExecutor {
 
   // Helper methods
 
-  /**
-   * Check if unified tables have data for this platform/org combination
-   * Used to determine whether to use unified or legacy tables
-   */
-  private async hasUnifiedData(orgId: string, platform?: string): Promise<boolean> {
-    try {
-      let query = 'SELECT 1 FROM ad_metrics WHERE organization_id = ? AND entity_type = \'campaign\'';
-      const params: any[] = [orgId];
-
-      if (platform) {
-        query += ' AND platform = ?';
-        params.push(platform);
-      }
-
-      query += ' LIMIT 1';
-
-      const result = await this.db.prepare(query).bind(...params).first();
-      return !!result;
-    } catch {
-      return false;
-    }
-  }
 
   /**
    * Get METRICS table info (for queryMetrics, compareEntities)
@@ -2703,8 +2643,7 @@ export class ExplorationToolExecutor {
 
   /**
    * Get ENTITY table info (for getCreativeDetails, getAudienceBreakdown)
-   * UPDATED: Now uses unified tables (ad_campaigns, ad_groups, ads) for all platforms
-   * Falls back to legacy platform-specific tables for backward compatibility
+   * Uses unified tables (ad_campaigns, ad_groups, ads) for all platforms
    */
   private getEntityTableInfo(platform: string, entityType: string): { table: string; idColumn: string; unified: boolean } | null {
     // All platforms use unified tables — no legacy fallback
@@ -3963,9 +3902,9 @@ export class ExplorationToolExecutor {
       // Get conversion config from platform_connections (in coreDb / DB)
       const pcDb = this.coreDb || this.db;
       let goalSql = `
-        SELECT id, provider, platform, display_name, settings
+        SELECT id, platform, settings
         FROM platform_connections
-        WHERE organization_id = ? AND status = 'active'
+        WHERE organization_id = ? AND is_active = 1
           AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
       `;
       const goalParams: any[] = [orgId];
@@ -3976,16 +3915,14 @@ export class ExplorationToolExecutor {
 
       const goalsResult = await pcDb.prepare(goalSql).bind(...goalParams).all<{
         id: string;
-        provider: string;
         platform: string;
-        display_name: string | null;
         settings: string | null;
       }>();
 
       // Map platform_connections to goal-like objects for the AI
       const goals = (goalsResult.results || []).map(r => ({
         id: r.id,
-        goal_name: r.display_name || r.platform,
+        goal_name: r.platform,
         goal_type: 'conversion',
         event_type: r.platform,
         configuration: r.settings,

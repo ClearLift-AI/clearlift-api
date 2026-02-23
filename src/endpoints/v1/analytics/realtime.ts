@@ -197,7 +197,7 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
         ORDER BY hour ASC
       `).bind(orgTagMapping.short_tag, hours).all();
 
-      return success(c, ((result.results || []) as TimeSeriesRow[]).map((row: TimeSeriesRow) => ({
+      return success(c, ((result.results || []) as unknown as TimeSeriesRow[]).map((row: TimeSeriesRow) => ({
         bucket: row.bucket,
         events: row.events || 0,
         sessions: row.sessions || 0,
@@ -851,6 +851,32 @@ export class GetRealtimeGoals extends OpenAPIRoute {
         // If filtering by goal_id, skip non-matching connections
         if (goalIdFilter && conn.id !== goalIdFilter) continue;
 
+        // Parse conversion_events config to build proper WHERE filters
+        let settings: { conversion_events?: Array<{ event_type: string; status?: string[]; statuses?: string[]; default_status?: string }> } = {};
+        try { settings = JSON.parse(conn.settings || '{}'); } catch { /* ignore */ }
+        const convEvents = settings.conversion_events || [];
+
+        // Build event_type + status filter conditions from conversion_events config
+        const filterConditions: string[] = [];
+        const filterBinds: string[] = [];
+        for (const ce of convEvents) {
+          // Handle both field names: dashboard writes 'status', some configs use 'statuses'
+          const statuses = ce.statuses || ce.status || (ce.default_status ? [ce.default_status] : []);
+          if (statuses.length > 0) {
+            const placeholders = statuses.map(() => '?').join(', ');
+            filterConditions.push(`(event_type = ? AND status IN (${placeholders}))`);
+            filterBinds.push(ce.event_type, ...statuses);
+          } else {
+            filterConditions.push(`(event_type = ?)`);
+            filterBinds.push(ce.event_type);
+          }
+        }
+
+        // If no valid conversion event configs, skip (shouldn't happen given the JSON length check)
+        if (filterConditions.length === 0) continue;
+
+        const eventFilter = `AND (${filterConditions.join(' OR ')})`;
+
         const metricsResult = await analyticsDb.prepare(`
           SELECT
             COUNT(*) as conversions,
@@ -860,7 +886,8 @@ export class GetRealtimeGoals extends OpenAPIRoute {
           WHERE organization_id = ?
             AND source_platform = ?
             AND transacted_at >= datetime('now', '-' || ? || ' hours')
-        `).bind(orgId, conn.platform, hours).first<{
+            ${eventFilter}
+        `).bind(orgId, conn.platform, hours, ...filterBinds).first<{
           conversions: number;
           revenue_cents: number;
           unique_customers: number;

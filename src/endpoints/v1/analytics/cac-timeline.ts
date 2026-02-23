@@ -734,26 +734,39 @@ export class BackfillCACHistory extends OpenAPIRoute {
         platformMap.set(row.date, { spend_cents: row.spend_cents, conversions: row.conversions });
       }
 
-      // Fetch unified conversions if connectors with conversion config exist
-      let goalMap = new Map<string, { conversions: number; revenue_cents: number }>();
+      // Fetch unified conversions with generic per-source breakdown
+      interface GoalDay { conversions: number; revenue_cents: number; perSource: Record<string, { conversions: number; revenue_cents: number }> }
+      let goalMap = new Map<string, GoalDay>();
       if (hasGoals) {
         const goalResult = await c.env.ANALYTICS_DB.prepare(`
           SELECT
             DATE(conversion_timestamp) as date,
+            conversion_source,
             COUNT(*) as conversions,
             COALESCE(SUM(value_cents), 0) as revenue_cents
           FROM conversions
           WHERE organization_id = ?
             AND DATE(conversion_timestamp) >= date('now', '-' || ? || ' days')
-          GROUP BY DATE(conversion_timestamp)
+          GROUP BY DATE(conversion_timestamp), conversion_source
         `).bind(org_id, days).all<{
           date: string;
+          conversion_source: string;
           conversions: number;
           revenue_cents: number;
         }>();
 
         for (const row of goalResult.results || []) {
-          goalMap.set(row.date, { conversions: row.conversions, revenue_cents: row.revenue_cents || 0 });
+          if (!goalMap.has(row.date)) {
+            goalMap.set(row.date, { conversions: 0, revenue_cents: 0, perSource: {} });
+          }
+          const day = goalMap.get(row.date)!;
+          day.conversions += row.conversions;
+          day.revenue_cents += row.revenue_cents || 0;
+          const src = (row.conversion_source || 'unknown').toLowerCase();
+          day.perSource[src] = {
+            conversions: (day.perSource[src]?.conversions || 0) + row.conversions,
+            revenue_cents: (day.perSource[src]?.revenue_cents || 0) + (row.revenue_cents || 0),
+          };
         }
       }
 
@@ -783,12 +796,15 @@ export class BackfillCACHistory extends OpenAPIRoute {
 
         const cacCents = primaryConversions > 0 ? Math.round(platform.spend_cents / primaryConversions) : 0;
 
+        const perSourceJson = JSON.stringify(goal?.perSource || {});
+
         await c.env.ANALYTICS_DB.prepare(`
           INSERT INTO cac_history (
             organization_id, date, spend_cents, conversions, revenue_cents, cac_cents,
-            conversions_goal, conversions_platform, conversion_source, goal_ids, revenue_goal_cents
+            conversions_goal, conversions_platform, conversion_source, goal_ids, revenue_goal_cents,
+            per_source_json
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(organization_id, date)
           DO UPDATE SET
             spend_cents = excluded.spend_cents,
@@ -800,12 +816,14 @@ export class BackfillCACHistory extends OpenAPIRoute {
             conversion_source = excluded.conversion_source,
             goal_ids = excluded.goal_ids,
             revenue_goal_cents = excluded.revenue_goal_cents,
+            per_source_json = excluded.per_source_json,
             created_at = datetime('now')
         `).bind(
           org_id, date, platform.spend_cents, primaryConversions,
           goal?.revenue_cents || 0, cacCents,
           goal?.conversions || 0, platform.conversions,
-          conversionSource, goalIdsJson, goal?.revenue_cents || 0
+          conversionSource, goalIdsJson, goal?.revenue_cents || 0,
+          perSourceJson
         ).run();
 
         rowsInserted++;
@@ -858,20 +876,14 @@ export class GetCACSummary extends OpenAPIRoute {
 
     try {
       // Aggregate cac_history for the period (from ANALYTICS_DB)
+      // per_source_json is aggregated from individual rows since JSON can't be SUMmed
       const historyResult = await c.env.ANALYTICS_DB.prepare(`
         SELECT
           SUM(spend_cents) as total_spend_cents,
           SUM(conversions) as total_conversions,
           SUM(conversions_goal) as total_conversions_goal,
           SUM(conversions_platform) as total_conversions_platform,
-          SUM(revenue_goal_cents) as total_revenue_goal_cents,
-          SUM(conversions_stripe) as total_conversions_stripe,
-          SUM(conversions_shopify) as total_conversions_shopify,
-          SUM(conversions_jobber) as total_conversions_jobber,
-          SUM(conversions_tag) as total_conversions_tag,
-          SUM(revenue_stripe_cents) as total_revenue_stripe_cents,
-          SUM(revenue_shopify_cents) as total_revenue_shopify_cents,
-          SUM(revenue_jobber_cents) as total_revenue_jobber_cents
+          SUM(revenue_goal_cents) as total_revenue_goal_cents
         FROM cac_history
         WHERE organization_id = ?
           AND date >= date('now', '-' || ? || ' days')
@@ -881,14 +893,29 @@ export class GetCACSummary extends OpenAPIRoute {
         total_conversions_goal: number | null;
         total_conversions_platform: number | null;
         total_revenue_goal_cents: number | null;
-        total_conversions_stripe: number | null;
-        total_conversions_shopify: number | null;
-        total_conversions_jobber: number | null;
-        total_conversions_tag: number | null;
-        total_revenue_stripe_cents: number | null;
-        total_revenue_shopify_cents: number | null;
-        total_revenue_jobber_cents: number | null;
       }>();
+
+      // Aggregate per-source JSON from individual daily rows
+      const perSourceRows = await c.env.ANALYTICS_DB.prepare(`
+        SELECT per_source_json FROM cac_history
+        WHERE organization_id = ?
+          AND date >= date('now', '-' || ? || ' days')
+          AND per_source_json IS NOT NULL AND per_source_json != '{}'
+      `).bind(org_id, days).all<{ per_source_json: string }>();
+
+      const aggregatedPerSource: Record<string, { conversions: number; revenue_cents: number }> = {};
+      for (const row of perSourceRows.results || []) {
+        try {
+          const daySource = JSON.parse(row.per_source_json) as Record<string, { conversions?: number; revenue_cents?: number }>;
+          for (const [src, data] of Object.entries(daySource)) {
+            if (!aggregatedPerSource[src]) {
+              aggregatedPerSource[src] = { conversions: 0, revenue_cents: 0 };
+            }
+            aggregatedPerSource[src].conversions += data.conversions || 0;
+            aggregatedPerSource[src].revenue_cents += data.revenue_cents || 0;
+          }
+        } catch { /* skip malformed JSON */ }
+      }
 
       // SUM returns null when no rows match the date range — propagate as null
       // so the dashboard fallback chain fires. 0 is only returned for genuine zeros.
@@ -931,6 +958,16 @@ export class GetCACSummary extends OpenAPIRoute {
         goalCount = goalNames.length;
       }
 
+      // Filter out sources with 0 conversions for a cleaner response
+      const perSource: Record<string, { conversions: number; revenue_cents?: number }> = {};
+      for (const [src, data] of Object.entries(aggregatedPerSource)) {
+        if (data.conversions > 0) {
+          perSource[src] = data.revenue_cents > 0
+            ? { conversions: data.conversions, revenue_cents: data.revenue_cents }
+            : { conversions: data.conversions };
+        }
+      }
+
       return success(c, {
         cac_cents: cacCents,
         conversions,
@@ -941,23 +978,7 @@ export class GetCACSummary extends OpenAPIRoute {
         spend_cents: spendCents,
         goal_count: goalCount,
         goal_names: goalNames,
-        per_source: {
-          stripe: {
-            conversions: historyResult.total_conversions_stripe ?? 0,
-            revenue_cents: historyResult.total_revenue_stripe_cents ?? 0,
-          },
-          shopify: {
-            conversions: historyResult.total_conversions_shopify ?? 0,
-            revenue_cents: historyResult.total_revenue_shopify_cents ?? 0,
-          },
-          jobber: {
-            conversions: historyResult.total_conversions_jobber ?? 0,
-            revenue_cents: historyResult.total_revenue_jobber_cents ?? 0,
-          },
-          tag: {
-            conversions: historyResult.total_conversions_tag ?? 0,
-          },
-        },
+        per_source: perSource,
       });
 
     } catch (err) {

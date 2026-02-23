@@ -117,9 +117,9 @@ describe('CAC Summary per_source', () => {
       return d.toISOString().split('T')[0];
     };
     const days = [
-      { date: dateStr(3), spend: 50000, conv: 3, rev: 12500, cs: 2, csh: 1, cj: 0, ct: 0, rs: 8000, rsh: 4500, rj: 0 },
-      { date: dateStr(2), spend: 45000, conv: 4, rev: 17500, cs: 2, csh: 1, cj: 0, ct: 1, rs: 9500, rsh: 6000, rj: 0 },
-      { date: dateStr(1), spend: 55000, conv: 3, rev: 18000, cs: 1, csh: 1, cj: 1, ct: 0, rs: 10000, rsh: 8000, rj: 3000 },
+      { date: dateStr(3), spend: 50000, conv: 3, rev: 12500, perSource: { stripe: { conversions: 2, revenue_cents: 8000 }, shopify: { conversions: 1, revenue_cents: 4500 } } },
+      { date: dateStr(2), spend: 45000, conv: 4, rev: 17500, perSource: { stripe: { conversions: 2, revenue_cents: 9500 }, shopify: { conversions: 1, revenue_cents: 6000 }, tag: { conversions: 1 } } },
+      { date: dateStr(1), spend: 55000, conv: 3, rev: 18000, perSource: { stripe: { conversions: 1, revenue_cents: 10000 }, shopify: { conversions: 1, revenue_cents: 8000 }, jobber: { conversions: 1, revenue_cents: 3000 } } },
     ];
 
     for (const d of days) {
@@ -127,18 +127,16 @@ describe('CAC Summary per_source', () => {
         INSERT INTO cac_history (
           id, organization_id, date, spend_cents, conversions, revenue_cents, cac_cents,
           conversions_goal, conversions_platform, conversion_source,
-          conversions_stripe, conversions_shopify, conversions_jobber, conversions_tag,
-          revenue_stripe_cents, revenue_shopify_cents, revenue_jobber_cents
+          per_source_json
         ) VALUES (
           lower(hex(randomblob(16))), ?, ?, ?, ?, ?, ?,
           ?, 0, 'goal',
-          ?, ?, ?, ?,
-          ?, ?, ?
+          ?
         )
       `).bind(
         orgId, d.date, d.spend, d.conv, d.rev,
         d.conv > 0 ? Math.round(d.spend / d.conv) : 0,
-        d.conv, d.cs, d.csh, d.cj, d.ct, d.rs, d.rsh, d.rj
+        d.conv, JSON.stringify(d.perSource)
       ).run();
     }
 

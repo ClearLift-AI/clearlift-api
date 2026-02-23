@@ -266,6 +266,7 @@ interface TriggerConfig {
   page_pattern?: string;
   revenue_min?: number;
   custom_event?: string;
+  status_filter?: string;
 }
 
 interface ConversionGoal {
@@ -297,9 +298,9 @@ interface EventFilter {
 // Helper: Query conversion config from platform_connections settings
 async function getConversionGoals(db: D1Database, orgId: string): Promise<ConversionGoal[]> {
   const result = await db.prepare(`
-    SELECT id, provider, platform, display_name, settings
+    SELECT id, platform, settings
     FROM platform_connections
-    WHERE organization_id = ? AND status = 'active'
+    WHERE organization_id = ? AND is_active = 1
       AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
   `).bind(orgId).all();
 
@@ -311,7 +312,7 @@ async function getConversionGoals(db: D1Database, orgId: string): Promise<Conver
       for (const evt of conversionEvents) {
         goals.push({
           id: `${row.id}_${evt.event_type || 'default'}`,
-          name: (row.display_name as string) || (row.platform as string),
+          name: row.platform as string,
           type: 'conversion',
           trigger_config: {
             event_type: evt.event_type,

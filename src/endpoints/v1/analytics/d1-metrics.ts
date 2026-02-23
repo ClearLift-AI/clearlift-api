@@ -705,8 +705,13 @@ export class GetD1PageFlow extends OpenAPIRoute {
     conversions: number; revenue_cents: number;
   }[]> {
     // Fetch page_view events from R2 SQL for the requested period
+    // Cap lookback at 90 days — R2 SQL is slow and Analytics Engine retention is 90 days
+    const lookbackDays = Math.min(
+      Math.ceil((Date.now() - new Date(periodStart).getTime()) / 86_400_000),
+      90
+    );
     const result = await r2sql.getEvents(orgTag, {
-      lookback: `${Math.ceil((Date.now() - new Date(periodStart).getTime()) / 86_400_000)}d`,
+      lookback: `${lookbackDays}d`,
       limit: 5000,
     });
 
@@ -714,12 +719,22 @@ export class GetD1PageFlow extends OpenAPIRoute {
 
     // Group by session, build page transitions + source entries
     const sessionMap = new Map<string, typeof result.events>();
+    let skippedNoSession = 0;
     for (const ev of result.events) {
       if (ev.event_type !== 'page_view') continue;
       const sid = ev.session_id as string;
-      if (!sid) continue;
+      if (!sid) { skippedNoSession++; continue; }
       if (!sessionMap.has(sid)) sessionMap.set(sid, []);
       sessionMap.get(sid)!.push(ev);
+    }
+    if (skippedNoSession > 0) {
+      structuredLog('WARN', 'Page flow R2 fallback: events without session_id skipped', {
+        endpoint: 'analytics/d1-metrics',
+        step: 'r2-page-flow',
+        skipped: skippedNoSession,
+        total: result.events.length,
+        org_tag: orgTag,
+      });
     }
 
     const pageTransMap = new Map<string, { from: string; to: string; visitors: Set<string> }>();

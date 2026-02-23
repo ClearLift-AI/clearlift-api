@@ -804,14 +804,8 @@ CREATE TABLE cac_history (
   conversion_source TEXT DEFAULT 'platform',
   goal_ids TEXT DEFAULT NULL,
   revenue_goal_cents INTEGER DEFAULT 0,
+  per_source_json TEXT DEFAULT '{}',
   created_at DATETIME DEFAULT (datetime('now')),
-  conversions_stripe INTEGER DEFAULT 0,
-  conversions_shopify INTEGER DEFAULT 0,
-  conversions_jobber INTEGER DEFAULT 0,
-  conversions_tag INTEGER DEFAULT 0,
-  revenue_stripe_cents INTEGER DEFAULT 0,
-  revenue_shopify_cents INTEGER DEFAULT 0,
-  revenue_jobber_cents INTEGER DEFAULT 0,
   UNIQUE(organization_id, date)
 );
 

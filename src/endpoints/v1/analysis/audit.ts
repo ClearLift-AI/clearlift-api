@@ -23,7 +23,7 @@ export class GetAnalysisAudit extends OpenAPIRoute {
       }),
       query: z.object({
         include: z.string().optional().default("events,summaries")
-      }).optional()
+      })
     },
     responses: {
       "200": {
