@@ -95,7 +95,7 @@ function execOnce(cmd: string, opts?: { cwd?: string; timeout?: number }): strin
 }
 
 function exec(cmd: string, opts?: { cwd?: string; timeout?: number }): string {
-  const MAX_RETRIES = 3;
+  const MAX_RETRIES = 5;
   const isRemote = cmd.includes('--remote');
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -104,9 +104,10 @@ function exec(cmd: string, opts?: { cwd?: string; timeout?: number }): string {
       const msg = e.message || '';
       const isRateLimit = msg.includes('429') || msg.includes('rate limit') ||
         msg.includes('A request to the Clo') || msg.includes('A fetch r');
-      if (isRemote && isRateLimit && attempt < MAX_RETRIES) {
-        const delay = attempt * 5;
-        log(`  RATE LIMITED (attempt ${attempt}/${MAX_RETRIES}), waiting ${delay}s...`);
+      const isSqliteBusy = msg.includes('SQLITE_BUSY') || msg.includes('database is locked');
+      if ((isRemote && isRateLimit || isSqliteBusy) && attempt < MAX_RETRIES) {
+        const delay = isSqliteBusy ? attempt * 2 : attempt * 5;
+        log(`  ${isSqliteBusy ? 'SQLITE_BUSY' : 'RATE LIMITED'} (attempt ${attempt}/${MAX_RETRIES}), waiting ${delay}s...`);
         execSync(`sleep ${delay}`);
         continue;
       }
@@ -145,7 +146,7 @@ function escapeSQL(val: any): string {
 
 function getLocalColumns(binding: string, table: string): string[] {
   const output = exec(
-    `npx wrangler d1 execute ${binding} --local --env local --command "PRAGMA table_info(${table})"`,
+    `npx wrangler d1 execute ${binding} --local --env local --command "PRAGMA table_info(${table})" --json`,
     { timeout: 15000 }
   );
   return parseD1Results(output).map((r: any) => r.name);
@@ -172,11 +173,12 @@ function importBatch(binding: string, table: string, columns: string[], rows: an
   }
 
   const tmpFile = path.join(TMP_DIR, `import_${binding}_${table}_${Date.now()}.sql`);
+  if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
   fs.writeFileSync(tmpFile, statements.join('\n'));
 
   exec(
-    `npx wrangler d1 execute ${binding} --local --env local --file ${tmpFile} 2>&1`,
-    { timeout: 60000 }
+    `npx wrangler d1 execute ${binding} --local --env local --file "${tmpFile}"`,
+    { timeout: 120000 }
   );
 
   try { fs.unlinkSync(tmpFile); } catch {}
@@ -184,7 +186,7 @@ function importBatch(binding: string, table: string, columns: string[], rows: an
 
 function countLocal(binding: string, table: string): number {
   const output = exec(
-    `npx wrangler d1 execute ${binding} --local --env local --command "SELECT COUNT(*) as c FROM ${table}"`,
+    `npx wrangler d1 execute ${binding} --local --env local --command "SELECT COUNT(*) as c FROM ${table}" --json`,
     { timeout: 15000 }
   );
   const results = parseD1Results(output);

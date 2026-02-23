@@ -741,7 +741,6 @@ export class GetJourneysOverview extends OpenAPIRoute {
         { start: dateFrom, end: dateTo }
       );
       revenueData = combinedRevenue.summary;
-      console.log(`[Journey Overview] Revenue sources for org ${orgId}:`, Object.keys(revenueData.sources));
     } catch (err) {
       structuredLog('WARN', 'Failed to query unified revenue sources', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
     }
@@ -799,13 +798,24 @@ export class GetJourneysOverview extends OpenAPIRoute {
           results: Array<{ path: string; journeys: number; conversions: number; revenue_cents: number }>
         };
 
-        topJourneys = (journeysResult.results || []).map(row => ({
-          path: row.path,
-          journeys: row.journeys,
-          conversions: row.conversions || 0,
-          revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100,
-          conversion_rate: row.journeys > 0 ? Math.round((row.conversions || 0) / row.journeys * 100 * 100) / 100 : 0
-        }));
+        topJourneys = (journeysResult.results || []).map(row => {
+          // channel_path is stored as JSON array string (e.g. '["google","direct"]')
+          // Parse it to a readable path like "google → direct"
+          let displayPath = row.path;
+          try {
+            const parsed = JSON.parse(row.path);
+            if (Array.isArray(parsed)) {
+              displayPath = parsed.join(' → ');
+            }
+          } catch { /* already a plain string */ }
+          return {
+            path: displayPath,
+            journeys: row.journeys,
+            conversions: row.conversions || 0,
+            revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100,
+            conversion_rate: row.journeys > 0 ? Math.round((row.conversions || 0) / row.journeys * 100 * 100) / 100 : 0
+          };
+        });
       } catch (err) {
         structuredLog('WARN', 'Failed to query top journeys', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }
@@ -831,11 +841,20 @@ export class GetJourneysOverview extends OpenAPIRoute {
           results: Array<{ path: string; conversions: number; revenue_cents: number }>
         };
 
-        topConvertingPaths = (pathsResult.results || []).map(row => ({
-          path: row.path,
-          conversions: row.conversions,
-          revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100
-        }));
+        topConvertingPaths = (pathsResult.results || []).map(row => {
+          let displayPath = row.path;
+          try {
+            const parsed = JSON.parse(row.path);
+            if (Array.isArray(parsed)) {
+              displayPath = parsed.join(' → ');
+            }
+          } catch { /* already a plain string */ }
+          return {
+            path: displayPath,
+            conversions: row.conversions,
+            revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100
+          };
+        });
       } catch (err) {
         structuredLog('WARN', 'Failed to query top converting paths', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }

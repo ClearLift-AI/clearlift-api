@@ -22,43 +22,36 @@ import { GetEventsHistorical } from "./endpoints/v1/analytics/events-historical"
 import { GetEventsD1 } from "./endpoints/v1/analytics/events-d1";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
-import { GetJobberRevenue, GetJobberInvoices } from "./endpoints/v1/analytics/jobber";
+import { GetJobberRevenue } from "./endpoints/v1/analytics/jobber";
 import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
 import {
   GetAttribution,
   GetAttributionComparison,
   GetComputedAttribution,
-  GetBlendedAttribution,
   GetJourneyAnalytics,
-  GetAssistedDirectStats,
-  GetPipelineStatus
+  GetPipelineStatus,
+  GetAssistedDirectStats
 } from "./endpoints/v1/analytics/attribution";
 import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-campaigns";
 import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
-import { GetClickExtractionStats } from "./endpoints/v1/analytics/click-extraction";
 import { GetSmartAttribution } from "./endpoints/v1/analytics/smart-attribution";
-import { GetTrackingLinkPerformance } from "./endpoints/v1/analytics/tracking-links";
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
 import { GetEventsSyncStatus } from "./endpoints/v1/analytics/events-sync";
 import {
   GetD1MetricsSummary,
   GetD1DailyMetrics,
-  GetD1HourlyMetrics,
-  GetD1UTMPerformance,
-  GetD1Attribution,
-  GetD1Journeys,
-  GetD1ChannelTransitions,
-  GetD1PageFlow
+  GetD1PageFlow,
+  GetD1UTMPerformance
 } from "./endpoints/v1/analytics/d1-metrics";
 import {
   GetRealtimeSummary,
   GetRealtimeTimeSeries,
   GetRealtimeBreakdown,
   GetRealtimeEvents,
-  GetRealtimeEventTypes,
   GetRealtimeStripe,
-  GetRealtimeGoals
+  GetRealtimeGoals,
+  GetRealtimeEventTypes
 } from "./endpoints/v1/analytics/realtime";
 import {
   GetCACTimeline,
@@ -70,7 +63,6 @@ import {
 import {
   GetFacebookCampaigns,
   GetFacebookAdSets,
-  GetFacebookCreatives,
   GetFacebookAds,
   GetFacebookMetrics,
   UpdateFacebookCampaignStatus,
@@ -82,7 +74,7 @@ import {
   GetFacebookPages,
   GetFacebookPageInsights,
   GetFacebookAudienceInsights,
-  GetFacebookActionBreakdown
+  GetFacebookCreatives
 } from "./endpoints/v1/analytics/facebook";
 import {
   GetGoogleCampaigns,
@@ -470,21 +462,16 @@ openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributionComparison);
 openapi.get("/v1/analytics/attribution/journey-analytics", auth, requireOrg, GetJourneyAnalytics);
 openapi.get("/v1/analytics/attribution/computed", auth, requireOrg, GetComputedAttribution);
-openapi.get("/v1/analytics/attribution/blended", auth, requireOrg, GetBlendedAttribution);
 openapi.get("/v1/analytics/attribution/assisted-direct", auth, requireOrg, GetAssistedDirectStats);
 openapi.get("/v1/analytics/smart-attribution", auth, requireOrg, GetSmartAttribution);
 openapi.get("/v1/analytics/stripe", auth, requireOrg, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, requireOrg, GetStripeDailyAggregates);
 openapi.get("/v1/analytics/jobber/revenue", auth, requireOrg, GetJobberRevenue);
-openapi.get("/v1/analytics/jobber/invoices", auth, requireOrg, GetJobberInvoices);
 openapi.get("/v1/analytics/platforms/unified", auth, requireOrg, GetUnifiedPlatformData);
 openapi.get("/v1/analytics/utm-campaigns", auth, requireOrg, GetUtmCampaigns);
 openapi.get("/v1/analytics/utm-campaigns/time-series", auth, requireOrg, GetUtmTimeSeries);
 openapi.get("/v1/analytics/click-attribution", auth, requireOrg, GetClickAttribution);
-openapi.get("/v1/analytics/click-extraction/stats", auth, requireOrg, GetClickExtractionStats);
 openapi.get("/v1/analytics/pipeline-status", auth, requireOrg, GetPipelineStatus);
-openapi.get("/v1/analytics/tracking-links", auth, requireOrg, GetTrackingLinkPerformance);
-
 // Identity resolution endpoints
 openapi.post("/v1/analytics/identify", PostIdentify); // Internal - uses service binding or API key auth
 openapi.post("/v1/analytics/identify/merge", PostIdentityMerge); // Internal
@@ -497,21 +484,17 @@ openapi.get("/v1/analytics/journeys/overview", auth, requireOrg, GetJourneysOver
 // D1 Analytics endpoints (dev environment - pure Cloudflare)
 openapi.get("/v1/analytics/metrics/summary", auth, requireOrg, GetD1MetricsSummary);
 openapi.get("/v1/analytics/metrics/daily", auth, requireOrg, GetD1DailyMetrics);
-openapi.get("/v1/analytics/metrics/hourly", auth, requireOrg, GetD1HourlyMetrics);
-openapi.get("/v1/analytics/metrics/utm", auth, requireOrg, GetD1UTMPerformance);
-openapi.get("/v1/analytics/metrics/attribution", auth, requireOrg, GetD1Attribution);
-openapi.get("/v1/analytics/metrics/journeys", auth, requireOrg, GetD1Journeys);
-openapi.get("/v1/analytics/metrics/transitions", auth, requireOrg, GetD1ChannelTransitions);
 openapi.get("/v1/analytics/metrics/page-flow", auth, requireOrg, GetD1PageFlow);
+openapi.get("/v1/analytics/metrics/utm", auth, requireOrg, GetD1UTMPerformance);
 
 // Real-time Analytics Engine endpoints (sub-second latency)
 openapi.get("/v1/analytics/realtime/summary", auth, requireOrg, GetRealtimeSummary);
 openapi.get("/v1/analytics/realtime/timeseries", auth, requireOrg, GetRealtimeTimeSeries);
 openapi.get("/v1/analytics/realtime/breakdown", auth, requireOrg, GetRealtimeBreakdown);
 openapi.get("/v1/analytics/realtime/events", auth, requireOrg, GetRealtimeEvents);
-openapi.get("/v1/analytics/realtime/event-types", auth, requireOrg, GetRealtimeEventTypes);
 openapi.get("/v1/analytics/realtime/stripe", auth, requireOrg, GetRealtimeStripe);
 openapi.get("/v1/analytics/realtime/goals", auth, requireOrg, GetRealtimeGoals);
+openapi.get("/v1/analytics/realtime/event-types", auth, requireOrg, GetRealtimeEventTypes);
 
 // CAC Timeline endpoints (truthful predictions based on simulation data)
 openapi.get("/v1/analytics/cac/timeline", auth, requireOrg, GetCACTimeline);
@@ -523,7 +506,6 @@ openapi.post("/v1/analytics/cac/compute-baselines", auth, requireOrg, ComputeCAC
 // Facebook Ads endpoints
 openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);
 openapi.get("/v1/analytics/facebook/ad-sets", auth, requireOrg, GetFacebookAdSets);
-openapi.get("/v1/analytics/facebook/creatives", auth, requireOrg, GetFacebookCreatives);
 openapi.get("/v1/analytics/facebook/ads", auth, requireOrg, GetFacebookAds);
 openapi.get("/v1/analytics/facebook/metrics/daily", auth, requireOrg, GetFacebookMetrics);
 openapi.patch("/v1/analytics/facebook/campaigns/:campaign_id/status", auth, requireOrg, requireOrgAdmin, UpdateFacebookCampaignStatus);
@@ -537,9 +519,7 @@ openapi.get("/v1/analytics/facebook/pages", auth, requireOrg, GetFacebookPages);
 openapi.get("/v1/analytics/facebook/pages/:page_id/insights", auth, requireOrg, GetFacebookPageInsights);
 // Facebook Audience Insights (read_insights permission - for Meta App Review)
 openapi.get("/v1/analytics/facebook/audience-insights", auth, requireOrg, GetFacebookAudienceInsights);
-// Facebook action type breakdown (per-pixel-action conversion charting)
-openapi.get("/v1/analytics/facebook/action-breakdown", auth, requireOrg, GetFacebookActionBreakdown);
-
+openapi.get("/v1/analytics/facebook/creatives", auth, requireOrg, GetFacebookCreatives);
 // Google Ads endpoints
 openapi.get("/v1/analytics/google/campaigns", auth, requireOrg, GetGoogleCampaigns);
 openapi.get("/v1/analytics/google/ad-groups", auth, requireOrg, GetGoogleAdGroups);
@@ -1168,13 +1148,13 @@ export default {
 
           // Check for connections with conversion_events configured (non-empty array)
           const connectionsResult = await env.DB.prepare(`
-            SELECT id, provider, settings FROM platform_connections
-            WHERE organization_id = ? AND status = 'active'
+            SELECT id, platform, settings FROM platform_connections
+            WHERE organization_id = ? AND is_active = 1
               AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
-          `).bind(orgId).all<{ id: string; provider: string; settings: string }>();
+          `).bind(orgId).all<{ id: string; platform: string; settings: string }>();
           const convConnections = connectionsResult.results || [];
           const hasGoals = convConnections.length > 0;
-          const macroGoals = convConnections.map(c => ({ id: c.id, name: c.provider }));
+          const macroGoals = convConnections.map(c => ({ id: c.id, name: c.platform }));
 
           // Query daily spend and conversions from unified ad_metrics
           const metricsResult = await env.ANALYTICS_DB.prepare(`

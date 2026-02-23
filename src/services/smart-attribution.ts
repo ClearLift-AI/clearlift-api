@@ -548,15 +548,13 @@ export class SmartAttributionService {
     try {
       // Get connectors with conversion events configured (non-empty array)
       const connectionsResult = await this.mainDb.prepare(`
-        SELECT id, provider, platform, display_name, settings
+        SELECT id, platform, settings
         FROM platform_connections
-        WHERE organization_id = ? AND status = 'active'
+        WHERE organization_id = ? AND is_active = 1
           AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
       `).bind(orgId).all<{
         id: string;
-        provider: string;
         platform: string;
-        display_name: string | null;
         settings: string | null;
       }>();
 
@@ -591,7 +589,7 @@ export class SmartAttributionService {
 
       // Ad platforms are top-of-funnel (position 1), revenue connectors are bottom (position 2)
       for (const conn of connections) {
-        const platform = conn.platform || conn.provider;
+        const platform = conn.platform;
         let visitors = 0;
 
         try {
@@ -644,7 +642,7 @@ export class SmartAttributionService {
 
         funnelData.push({
           goalId: conn.id,
-          goalName: conn.display_name || platform,
+          goalName: platform,
           funnelPosition,
           conversionRate: isAdPlatform ? 0.5 : 1.0,
           visitorCount: visitors,
