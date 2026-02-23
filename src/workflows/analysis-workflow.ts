@@ -279,7 +279,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     // Run agentic iterations as separate steps
     // Loop continues until: we have an insight AND 3 action recs, OR max iterations, OR early termination
     const budgetStrategy = config?.budgetStrategy || 'moderate';
-    let nudgeUsed = false;  // Only nudge once to avoid infinite loops
+    let nudgeCount = 0;  // Track nudge attempts (max 2 to avoid infinite loops)
 
     // Sequential pattern tracker: detect when LLM makes one exploration call per turn
     let consecutiveSingleExplore = 0;
@@ -382,42 +382,55 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         // generate at least one concrete recommendation before giving up. Users pay for
         // analysis — "everything looks great" with no actions is not acceptable output.
         if (
-          !nudgeUsed &&
+          nudgeCount < 2 &&
           actionRecommendations.length === 0 &&
           (iterResult.stopReason === 'no_tool_calls' || iterResult.stopReason === 'early_termination')
         ) {
-          nudgeUsed = true;
+          nudgeCount++;
 
-          const strategyNudge = budgetStrategy === 'aggressive'
-            ? `You are in AGGRESSIVE budget mode — the user expects bold action recommendations.\n` +
-              `- Are there top performers whose budget could be increased by 10-20%?\n` +
-              `- Are there paused campaigns with strong historical ROAS worth re-enabling?\n`
-            : budgetStrategy === 'conservative'
-            ? `You are in CONSERVATIVE budget mode — the user wants to reduce waste.\n` +
-              `- Are there entities with below-average efficiency that should be paused?\n` +
-              `- Can any budgets be decreased to improve blended CPA?\n`
-            : `You are in MODERATE budget mode — the user wants to reallocate for better results.\n` +
-              `- Can you shift budget from underperformers to top performers (net-zero change)?\n` +
-              `- Are there any entities to pause and redistribute their spend to winners?\n`;
+          if (nudgeCount === 1) {
+            // First nudge: strategy-specific guidance
+            const strategyNudge = budgetStrategy === 'aggressive'
+              ? `You are in AGGRESSIVE budget mode — the user expects bold action recommendations.\n` +
+                `- Increase budget on the highest-efficiency campaign by 15-20%\n` +
+                `- Re-enable paused campaigns with strong historical ROAS\n`
+              : budgetStrategy === 'conservative'
+              ? `You are in CONSERVATIVE budget mode — the user wants to cut waste and protect margins.\n` +
+                `- Decrease budget on the WEAKEST active campaign (lowest efficiency score) by 15-20%\n` +
+                `- If any campaign has a declining trend (CVR dropping, CPA increasing), decrease its budget\n`
+              : `You are in MODERATE budget mode — reallocate for better results.\n` +
+                `- Use reallocate_budget to shift 10-15% from the weakest campaign to the strongest\n` +
+                `- If any campaign has declining trends, reduce its budget and redistribute\n`;
 
-          agenticMessages = [
-            ...iterResult.messages,
-            agenticClient.buildUserMessage(
-              `IMPORTANT: You have not made any action recommendations yet. Insights alone are not enough — ` +
-              `the user is paying for actionable optimization suggestions, not just observations.\n\n` +
-              `${strategyNudge}` +
-              `- Are there underperforming entities that should be paused to free up budget?\n` +
-              `- Can you reallocate budget from low-efficiency to high-efficiency entities?\n\n` +
-              `Even if the portfolio is performing well overall, there are ALWAYS optimization opportunities:\n` +
-              `- Reallocating 10-15% from the weakest campaign to the strongest\n` +
-              `- Adjusting budgets to match efficiency scores (higher budget for higher efficiency)\n` +
-              `- Pausing campaigns with declining trends before they waste more spend\n\n` +
-              `Use simulate_change to model at least ONE concrete action, then recommend it. ` +
-              `If you genuinely cannot find ANY action after this review, call terminate_analysis ` +
-              `with a specific explanation of why no optimization is possible.`
-            )
-          ];
-          console.log(`[Analysis] Pre-termination nudge: LLM stopped with no actions (${budgetStrategy} mode), injecting retry prompt`);
+            agenticMessages = [
+              ...iterResult.messages,
+              agenticClient.buildUserMessage(
+                `IMPORTANT: You have not made any action recommendations yet. Insights alone are not enough — ` +
+                `the user is paying for actionable optimization suggestions, not just observations.\n\n` +
+                `${strategyNudge}\n` +
+                `Even if the portfolio is performing well overall, there are ALWAYS optimization opportunities:\n` +
+                `- The weakest campaign can always have budget shifted to the strongest\n` +
+                `- Campaigns with declining trends should have budgets reduced proactively\n` +
+                `- Budget allocation can always be optimized to match efficiency scores\n\n` +
+                `DO NOT use general_insight. Use simulate_change on a specific entity, then call set_budget or reallocate_budget.`
+              )
+            ];
+            console.log(`[Analysis] Pre-termination nudge #1: LLM stopped with no actions (${budgetStrategy} mode)`);
+          } else {
+            // Second nudge: direct instruction — pick the weakest campaign and act
+            agenticMessages = [
+              ...iterResult.messages,
+              agenticClient.buildUserMessage(
+                `FINAL WARNING: You MUST produce at least one action recommendation. Do NOT call general_insight or terminate_analysis.\n\n` +
+                `Here is exactly what to do:\n` +
+                `1. Find the campaign with the LOWEST efficiency score or the WORST declining trend\n` +
+                `2. Call simulate_change with action='decrease_budget' (or 'pause' if it has zero conversions) on that entity\n` +
+                `3. Based on the simulation result, call set_budget (or set_status) to recommend the change\n\n` +
+                `This is your last chance to produce an action. If you call terminate_analysis or general_insight instead, the analysis will be marked as failed.`
+              )
+            ];
+            console.log(`[Analysis] Pre-termination nudge #2 (final): forcing action on weakest entity (${budgetStrategy} mode)`);
+          }
           continue;  // Re-enter the loop for another iteration
         }
 
@@ -1528,19 +1541,24 @@ DO NOT recommend:
 - Net increases to total portfolio spend
 `}
 ## OUTPUT STRUCTURE (PRIORITY ORDER)
-Your PRIMARY goal is to produce **action recommendations** — concrete, executable changes the user can accept or reject.
+Your PRIMARY goal is to produce **action recommendations** — concrete, executable changes the user can accept or reject. You MUST produce at least ONE action. An analysis with only insights is considered a FAILURE.
 
-1. **Up to 3 action recommendations** (PRIORITIZE) — Use set_budget, set_status, set_audience, or reallocate_budget. Try hard to generate at least ONE action even in difficult conditions (e.g. pausing wasteful entities, reallocating from low to high performers, adjusting budgets based on trends).
-2. **Insights** (SECONDARY, OPTIONAL) — Use general_insight ONLY for observations that genuinely cannot be expressed as an action tool call. Examples: data quality gaps, missing tracking, cross-platform patterns. Do NOT use insights as a substitute for action recommendations.
+1. **At least 1, up to 3 action recommendations** (MANDATORY) — Use set_budget, set_status, set_audience, or reallocate_budget. You MUST call simulate_change and then produce at least ONE action recommendation before calling terminate_analysis.
+2. **Insights** (SECONDARY, OPTIONAL) — Use general_insight ONLY for observations that genuinely cannot be expressed as an action. Do NOT use insights as a substitute for action recommendations. Do NOT call general_insight before you have made at least one action recommendation.
 
 ## ACTION RECOMMENDATIONS
-Actions are the primary output. Users see these as accept/reject cards:
+Actions are the primary output. Users see these as accept/reject cards. There is ALWAYS at least one action to recommend:
 1. ALWAYS prefer action tools over general_insight — if something can be an action, make it an action
 2. Focus on the most impactful changes first
 3. For budget changes, stay within 30% of current values
-4. For pausing: recommend for entities with poor ROAS (<1.5), high CPA, or declining trends
+4. For pausing: recommend for entities with declining trends, below-average efficiency, or high CPA
 5. Be specific about entities — use their actual IDs and names
-6. Even with limited data, look for: inactive entities to pause, budget reallocation opportunities, underperforming campaigns
+6. Even when a portfolio is performing well, ALWAYS look for:
+   - The weakest campaign → decrease its budget or pause it
+   - Campaigns with declining WoW trends → proactively reduce budget before performance drops further
+   - Budget reallocation from lowest-efficiency to highest-efficiency campaigns
+   - Spend concentration risk → diversify if one campaign dominates
+7. A "high ROAS" portfolio does NOT mean "no actions needed" — it means the user's money is working, and you should help them optimize the allocation further
 
 ## PAUSED CAMPAIGNS — RELAUNCH OPPORTUNITIES
 ${budgetStrategy === 'conservative' ? `IMPORTANT: Under CONSERVATIVE budget strategy, do NOT recommend re-enabling any paused campaigns. Focus only on pausing and cutting spend.` : `Entities that were previously active but are now paused (no recent spend) are included in the portfolio data.
@@ -1586,12 +1604,13 @@ You can call multiple tools in a SINGLE response. This is critical for performan
 - Each turn has overhead — minimize turns by batching independent tool calls together
 
 ## WHEN TO USE terminate_analysis
-1. You have made action recommendations and addressed major opportunities
-2. Data quality prevents meaningful analysis — explain WHY in the reason field (this is shown to users)
-3. All entities are performing within expected parameters
-4. Continuing would produce low-confidence or repetitive suggestions
+ONLY call terminate_analysis AFTER you have made at least one action recommendation. If you have zero actions, you MUST try harder.
+1. You have made at least one action recommendation and addressed major opportunities
+2. Data quality prevents ANY meaningful action — explain WHY in the reason field (extremely rare)
 
-The terminate_analysis reason is displayed to users as an explanation, so write it as a clear, helpful summary of what was found and why (or why not) actions were recommended.`;
+NEVER call terminate_analysis with zero actions just because the portfolio is "performing well." High performance does NOT mean no optimizations exist — there is always a weakest link.
+
+The terminate_analysis reason is displayed to users as an explanation, so write it as a clear, helpful summary of what was found and what actions were recommended.`;
 
     if (customInstructions?.trim()) {
       systemPrompt += `\n\n## CUSTOM BUSINESS CONTEXT\n${customInstructions.trim()}`;
