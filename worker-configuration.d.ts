@@ -55,7 +55,6 @@ declare namespace Cloudflare {
 		ANALYTICS: AnalyticsEngineDataset;
 		SYNC_QUEUE: Queue;
 		ANALYSIS_WORKFLOW: Workflow<Parameters<import("./src/index").AnalysisWorkflow['run']>[0]['payload']>;
-		ATTRIBUTION_WORKFLOW: Workflow<Parameters<import("./src/index").AttributionWorkflow['run']>[0]['payload']>;
 	}
 }
 interface Env extends Cloudflare.Env {}

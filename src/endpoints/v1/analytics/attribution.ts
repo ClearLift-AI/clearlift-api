@@ -300,7 +300,7 @@ async function getConversionGoals(db: D1Database, orgId: string): Promise<Conver
     SELECT id, provider, platform, display_name, settings
     FROM platform_connections
     WHERE organization_id = ? AND status = 'active'
-      AND json_extract(settings, '$.conversion_events') IS NOT NULL
+      AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
   `).bind(orgId).all();
 
   const goals: ConversionGoal[] = [];
@@ -1450,156 +1450,6 @@ export class GetAttributionComparison extends OpenAPIRoute {
   }
 }
 
-/**
- * POST /v1/analytics/attribution/run
- *
- * Trigger Markov Chain and Shapley Value attribution workflow.
- * These models are compute-intensive and run as a background workflow.
- */
-export class RunAttributionAnalysis extends OpenAPIRoute {
-  schema = {
-    tags: ["Analytics"],
-    summary: "Run attribution analysis workflow",
-    description: "Trigger Markov Chain and Shapley Value attribution calculation. Returns a job ID to poll for completion.",
-    security: [{ bearerAuth: [] }],
-    request: {
-      query: z.object({
-        org_id: z.string().describe("Organization ID"),
-        days: z.coerce.number().optional().default(30).describe("Days of data to analyze")
-      })
-    },
-    responses: {
-      "200": {
-        description: "Analysis job started",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                job_id: z.string(),
-                status: z.enum(['pending', 'running', 'completed', 'failed'])
-              })
-            })
-          }
-        }
-      }
-    }
-  };
-
-  async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-
-    const orgId = c.get("org_id" as any) || data.query.org_id;
-    const days = data.query.days || 30;
-    const jobId = crypto.randomUUID().replace(/-/g, '');
-
-    // Create job record
-    await c.env.DB.prepare(`
-      INSERT INTO analysis_jobs (id, organization_id, type, status, created_at)
-      VALUES (?, ?, 'attribution', 'pending', datetime('now'))
-    `).bind(jobId, orgId).run();
-
-    // Start the workflow
-    try {
-      const workflow = (c.env as any).ATTRIBUTION_WORKFLOW;
-      if (!workflow) {
-        return error(c, "WORKFLOW_NOT_CONFIGURED", "Attribution workflow not configured", 500);
-      }
-
-      await workflow.create({
-        id: jobId,
-        params: { orgId, jobId, days }
-      });
-
-      console.log(`[Attribution] Started workflow ${jobId} for org ${orgId} (${days} days)`);
-
-      return success(c, {
-        job_id: jobId,
-        status: 'pending'
-      });
-    } catch (err: any) {
-      // Update job status to failed
-      await c.env.DB.prepare(`
-        UPDATE analysis_jobs SET status = 'failed', result = ?
-        WHERE id = ?
-      `).bind(JSON.stringify({ error: err.message }), jobId).run();
-
-      structuredLog('ERROR', 'Failed to start attribution workflow', { endpoint: 'attribution', step: 'start_workflow', error: err instanceof Error ? err.message : String(err) });
-      return error(c, "WORKFLOW_START_FAILED", `Failed to start attribution analysis: ${err.message}`, 500);
-    }
-  }
-}
-
-/**
- * GET /v1/analytics/attribution/status/:job_id
- *
- * Get the status of an attribution analysis job.
- */
-export class GetAttributionJobStatus extends OpenAPIRoute {
-  schema = {
-    tags: ["Analytics"],
-    summary: "Get attribution job status",
-    description: "Check the status of an attribution analysis workflow",
-    security: [{ bearerAuth: [] }],
-    request: {
-      params: z.object({
-        job_id: z.string().describe("Job ID from run endpoint")
-      }),
-      query: z.object({
-        org_id: z.string().describe("Organization ID")
-      })
-    },
-    responses: {
-      "200": {
-        description: "Job status",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                job_id: z.string(),
-                status: z.enum(['pending', 'running', 'completed', 'failed']),
-                result: z.any().optional(),
-                created_at: z.string(),
-                completed_at: z.string().nullable()
-              })
-            })
-          }
-        }
-      }
-    }
-  };
-
-  async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-
-    const orgId = c.get("org_id" as any) || data.query.org_id;
-
-    const job = await c.env.DB.prepare(`
-      SELECT id, status, result, created_at, completed_at
-      FROM analysis_jobs
-      WHERE id = ? AND organization_id = ? AND type = 'attribution'
-    `).bind(data.params.job_id, orgId).first<{
-      id: string;
-      status: string;
-      result: string | null;
-      created_at: string;
-      completed_at: string | null;
-    }>();
-
-    if (!job) {
-      return error(c, "JOB_NOT_FOUND", "Job not found", 404);
-    }
-
-    return success(c, {
-      job_id: job.id,
-      status: job.status,
-      result: job.result ? JSON.parse(job.result) : null,
-      created_at: job.created_at,
-      completed_at: job.completed_at
-    });
-  }
-}
 
 /**
  * GET /v1/analytics/attribution/computed
@@ -1652,44 +1502,6 @@ export class GetComputedAttribution extends OpenAPIRoute {
     const orgId = c.get("org_id" as any) || data.query.org_id;
     const model = data.query.model;
 
-    // Try DB first (from API-triggered attribution workflow)
-    const results = await c.env.DB.prepare(`
-      SELECT channel, attributed_credit, removal_effect, shapley_value,
-             computation_date, conversion_count, path_count
-      FROM attribution_model_results
-      WHERE organization_id = ?
-        AND model = ?
-        AND expires_at > datetime('now')
-      ORDER BY computation_date DESC
-    `).bind(orgId, model).all<{
-      channel: string;
-      attributed_credit: number;
-      removal_effect: number | null;
-      shapley_value: number | null;
-      computation_date: string;
-      conversion_count: number;
-      path_count: number;
-    }>();
-
-    if (results.results && results.results.length > 0) {
-      const first = results.results[0];
-      return success(c, {
-        model,
-        computation_date: first.computation_date,
-        attributions: results.results.map(r => ({
-          channel: r.channel,
-          attributed_credit: r.attributed_credit,
-          removal_effect: r.removal_effect,
-          shapley_value: r.shapley_value
-        })),
-        metadata: {
-          conversion_count: first.conversion_count,
-          path_count: first.path_count
-        }
-      });
-    }
-
-    // Fallback: try ANALYTICS_DB (from daily cron probabilistic attribution workflow)
     // The cron uses short model names: 'markov' / 'shapley'
     const cronModelName = apiToDbModel(model);
     const analyticsDb = c.env.ANALYTICS_DB;
@@ -1754,11 +1566,11 @@ export class GetComputedAttribution extends OpenAPIRoute {
           });
         }
       } catch (err) {
-        structuredLog('WARN', 'Fallback to ANALYTICS_DB failed', { endpoint: 'attribution', step: 'get_computed', error: err instanceof Error ? err.message : String(err) });
+        structuredLog('WARN', 'ANALYTICS_DB attribution query failed', { endpoint: 'attribution', step: 'get_computed', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
-    return error(c, "NO_RESULTS", `No ${model} results available. Run attribution analysis first.`, 404);
+    return error(c, "NO_RESULTS", `No ${model} results available. Attribution data is computed automatically by the daily pipeline.`, 404);
   }
 }
 
@@ -2169,231 +1981,6 @@ Works even without click tracking or event data.
   }
 }
 
-/**
- * POST /v1/analytics/attribution/probabilistic/run
- *
- * Run probabilistic attribution using connector conversions + tag events.
- * This workflow matches connector events to tag sessions for multi-touch attribution
- * WITHOUT requiring ad platform data.
- *
- * Supports multiple conversion sources:
- * - 'stripe': Use Stripe connector events as conversions
- * - 'tag': Use tag conversion events as conversions
- * - 'all': Use both (default)
- *
- * Matching strategies (in priority order):
- * 1. Direct tag: Tag conversions already know their journey
- * 2. Identity match: Hash of customer_email matches tag user_id_hash
- * 3. Time proximity: Sessions with engagement within conversion window
- */
-export class RunProbabilisticAttribution extends OpenAPIRoute {
-  schema = {
-    tags: ["Analytics"],
-    summary: "Run probabilistic attribution",
-    description: `
-Trigger probabilistic attribution using Stripe + tag data.
-Matches Stripe conversions to tag events for multi-touch attribution.
-Returns a job ID to poll for completion.
-
-**Conversion Sources:**
-- \`stripe\`: Use Stripe connector events as conversions
-- \`tag\`: Use tag conversion events as conversions
-- \`all\`: Use both (default)
-
-**No ad platform data required** - perfect for orgs with Stripe but no ad spend data.
-    `.trim(),
-    security: [{ bearerAuth: [] }],
-    request: {
-      query: z.object({
-        org_id: z.string().describe("Organization ID"),
-        days: z.coerce.number().optional().default(7).describe("Days of data to analyze"),
-        lookback_days: z.coerce.number().optional().default(30).describe("Days to look back for touchpoints"),
-        conversion_window_hours: z.coerce.number().optional().default(24).describe("Hours before conversion to look for touchpoints"),
-        conversion_sources: z.string().optional().default('all').describe("Comma-separated: stripe,tag,all")
-      })
-    },
-    responses: {
-      "200": {
-        description: "Analysis job started",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                job_id: z.string(),
-                status: z.enum(['pending', 'running', 'completed', 'failed'])
-              })
-            })
-          }
-        }
-      }
-    }
-  };
-
-  async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-
-    const orgId = c.get("org_id" as any) || data.query.org_id;
-    const days = data.query.days || 7;
-    const lookbackDays = data.query.lookback_days || 30;
-    const conversionWindowHours = data.query.conversion_window_hours || 24;
-    const conversionSources = (data.query.conversion_sources || 'all').split(',').map(s => s.trim()) as any[];
-
-    const jobId = crypto.randomUUID().replace(/-/g, '');
-
-    // Get org tag for R2 SQL queries
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!tagMapping?.short_tag) {
-      return error(c, "NO_TAG_CONFIGURED", "Organization has no tracking tag configured", 400);
-    }
-
-    // Calculate date range
-    const endDate = new Date().toISOString().split('T')[0];
-    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-    // Create job record (days is required, status defaults to 'pending', current_level tracks job type)
-    await c.env.DB.prepare(`
-      INSERT INTO analysis_jobs (id, organization_id, days, status, current_level, created_at)
-      VALUES (?, ?, ?, 'pending', 'probabilistic_attribution', datetime('now'))
-    `).bind(jobId, orgId, days).run();
-
-    // Trigger the workflow via service binding to queue-consumer
-    try {
-      const cronService = (c.env as any).CLEARLIFT_CRON;
-      if (!cronService) {
-        return error(c, "SERVICE_NOT_CONFIGURED", "CLEARLIFT_CRON service binding not configured", 500);
-      }
-
-      const response = await cronService.fetch('https://internal/workflows/probabilistic-attribution', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'CF-Worker': 'true'
-        },
-        body: JSON.stringify({
-          org_id: orgId,
-          org_tag: tagMapping.short_tag,
-          start_date: startDate,
-          end_date: endDate,
-          lookback_days: lookbackDays,
-          conversion_window_hours: conversionWindowHours,
-          conversion_sources: conversionSources,
-          job_id: jobId
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({})) as any;
-        throw new Error(errorData.error || `Workflow trigger failed: ${response.status}`);
-      }
-
-      console.log(`[ProbabilisticAttribution] Started job ${jobId} for org ${orgId} (${tagMapping.short_tag})`);
-
-      return success(c, {
-        job_id: jobId,
-        status: 'pending',
-        config: {
-          org_tag: tagMapping.short_tag,
-          start_date: startDate,
-          end_date: endDate,
-          lookback_days: lookbackDays,
-          conversion_window_hours: conversionWindowHours,
-          conversion_sources: conversionSources
-        }
-      });
-
-    } catch (err: any) {
-      // Update job status to failed
-      await c.env.DB.prepare(`
-        UPDATE analysis_jobs SET status = 'failed', error_message = ?
-        WHERE id = ?
-      `).bind(err.message, jobId).run();
-
-      structuredLog('ERROR', 'Failed to start probabilistic attribution workflow', { endpoint: 'attribution', step: 'probabilistic_workflow', error: err instanceof Error ? err.message : String(err) });
-      return error(c, "WORKFLOW_START_FAILED", `Failed to start probabilistic attribution: ${err.message}`, 500);
-    }
-  }
-}
-
-/**
- * GET /v1/analytics/attribution/probabilistic/status/:job_id
- *
- * Get the status of a probabilistic attribution job.
- */
-export class GetProbabilisticAttributionStatus extends OpenAPIRoute {
-  schema = {
-    tags: ["Analytics"],
-    summary: "Get probabilistic attribution job status",
-    description: "Check the status of a probabilistic attribution workflow",
-    security: [{ bearerAuth: [] }],
-    request: {
-      params: z.object({
-        job_id: z.string().describe("Job ID from run endpoint")
-      }),
-      query: z.object({
-        org_id: z.string().describe("Organization ID")
-      })
-    },
-    responses: {
-      "200": {
-        description: "Job status",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                job_id: z.string(),
-                status: z.enum(['pending', 'running', 'completed', 'failed']),
-                result: z.any().optional(),
-                created_at: z.string(),
-                completed_at: z.string().nullable()
-              })
-            })
-          }
-        }
-      }
-    }
-  };
-
-  async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-
-    const orgId = c.get("org_id" as any) || data.query.org_id;
-
-    const job = await c.env.DB.prepare(`
-      SELECT id, status, error_message, created_at, completed_at, processed_entities, total_entities
-      FROM analysis_jobs
-      WHERE id = ? AND organization_id = ? AND current_level = 'probabilistic_attribution'
-    `).bind(data.params.job_id, orgId).first<{
-      id: string;
-      status: string;
-      error_message: string | null;
-      created_at: string;
-      completed_at: string | null;
-      processed_entities: number | null;
-      total_entities: number | null;
-    }>();
-
-    if (!job) {
-      return error(c, "JOB_NOT_FOUND", "Job not found", 404);
-    }
-
-    return success(c, {
-      job_id: job.id,
-      status: job.status,
-      error: job.error_message,
-      progress: job.total_entities ? {
-        processed: job.processed_entities || 0,
-        total: job.total_entities
-      } : null,
-      created_at: job.created_at,
-      completed_at: job.completed_at
-    });
-  }
-}
 
 /**
  * GET /v1/analytics/attribution/journey-analytics
@@ -2724,5 +2311,101 @@ are actually return visitors influenced by earlier marketing.
         end: dateTo
       }
     });
+  }
+}
+
+/**
+ * GET /v1/analytics/pipeline-status
+ *
+ * Returns the status of automated data pipelines from sync_watermarks.
+ * Replaces the manual "Run" buttons — pipelines now run automatically.
+ */
+export class GetPipelineStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Get data pipeline status",
+    description: "Returns the status of automated data pipelines (attribution, click extraction, etc.) from sync watermarks.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Pipeline status",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                pipelines: z.array(z.object({
+                  name: z.string(),
+                  sync_type: z.string(),
+                  last_run: z.string().nullable(),
+                  records_processed: z.number(),
+                  status: z.string()
+                }))
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+
+    // Resolve org_tag
+    const tagMapping = await c.env.DB.prepare(
+      `SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1`
+    ).bind(orgId).first<{ short_tag: string }>();
+
+    if (!tagMapping?.short_tag) {
+      return success(c, { pipelines: [] });
+    }
+
+    const analyticsDb = c.env.ANALYTICS_DB;
+
+    try {
+      const watermarks = await analyticsDb.prepare(`
+        SELECT sync_type, last_synced_ts, records_synced, status, error_message, updated_at
+        FROM sync_watermarks
+        WHERE org_tag = ?
+        ORDER BY sync_type
+      `).bind(tagMapping.short_tag).all<{
+        sync_type: string;
+        last_synced_ts: string | null;
+        records_synced: number;
+        status: string;
+        error_message: string | null;
+        updated_at: string;
+      }>();
+
+      const PIPELINE_NAMES: Record<string, string> = {
+        aggregations: 'Conversion Aggregation',
+        conversion_linking: 'Conversion Linking',
+        click_extraction: 'Click Extraction',
+        identity_extraction: 'Identity Resolution',
+        probabilistic_attribution: 'Attribution Analysis',
+        page_flow: 'Page Flow Graph',
+        cac_refresh: 'CAC Refresh',
+      };
+
+      const pipelines = (watermarks.results || []).map(w => ({
+        name: PIPELINE_NAMES[w.sync_type] || w.sync_type,
+        sync_type: w.sync_type,
+        last_run: w.last_synced_ts || w.updated_at,
+        records_processed: w.records_synced || 0,
+        status: w.status || 'unknown',
+        error: w.error_message || null,
+      }));
+
+      return success(c, { pipelines });
+    } catch (err) {
+      structuredLog('WARN', 'Failed to query pipeline status', { endpoint: 'pipeline-status', error: err instanceof Error ? err.message : String(err) });
+      return success(c, { pipelines: [] });
+    }
   }
 }
