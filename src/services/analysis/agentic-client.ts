@@ -47,6 +47,12 @@ export interface AgenticToolResult {
   content: Record<string, any>;
 }
 
+/** Options for controlling LLM call behavior */
+export interface AgenticCallOptions {
+  /** Thinking level for Gemini 3 models: 'minimal' | 'low' | 'medium' | 'high' */
+  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high';
+}
+
 /** Provider-agnostic agentic client */
 export interface AgenticClient {
   /** Build the initial user message in the correct provider format */
@@ -57,7 +63,8 @@ export interface AgenticClient {
     messages: any[],
     systemPrompt: string,
     tools: AgenticToolDef[],
-    maxTokens?: number
+    maxTokens?: number,
+    options?: AgenticCallOptions
   ): Promise<AgenticCallResult>;
 
   /** Build the assistant message to append to conversation history */
@@ -117,9 +124,22 @@ export class GeminiAgenticClient implements AgenticClient {
     messages: any[],
     systemPrompt: string,
     tools: AgenticToolDef[],
-    maxTokens: number = 2048
+    maxTokens: number = 2048,
+    options?: AgenticCallOptions
   ): Promise<AgenticCallResult> {
     const url = `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`;
+
+    const generationConfig: Record<string, any> = {
+      maxOutputTokens: maxTokens,
+      temperature: 0.3
+    };
+
+    // Add thinkingConfig for Gemini 3 models (supports: minimal, low, medium, high)
+    if (options?.thinkingLevel) {
+      generationConfig.thinkingConfig = {
+        thinkingLevel: options.thinkingLevel.toUpperCase()
+      };
+    }
 
     const request = {
       contents: messages,
@@ -129,10 +149,7 @@ export class GeminiAgenticClient implements AgenticClient {
       tools: [{
         functionDeclarations: tools.map(t => this.translateToolDef(t))
       }],
-      generationConfig: {
-        maxOutputTokens: maxTokens,
-        temperature: 0.3
-      }
+      generationConfig
     };
 
     let lastError: Error | null = null;
@@ -300,7 +317,8 @@ export class AnthropicAgenticClient implements AgenticClient {
     messages: any[],
     systemPrompt: string,
     tools: AgenticToolDef[],
-    maxTokens: number = 2048
+    maxTokens: number = 2048,
+    _options?: AgenticCallOptions
   ): Promise<AgenticCallResult> {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',

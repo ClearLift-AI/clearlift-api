@@ -103,7 +103,7 @@ export const EXPLORATION_TOOLS = {
 
   query_revenue: {
     name: 'query_revenue',
-    description: 'Query revenue data from connected platforms. Scopes: "stripe" — Stripe charges/subscriptions with metadata filtering; "jobber" — Jobber completed jobs for field service; "shopify" — Shopify orders with UTM attribution and product breakdown; "ecommerce" — unified e-commerce data across platforms; "subscriptions" — MRR, LTV, churn, retention cohort analysis; "accounting" — invoices, expenses, P&L from QuickBooks/Xero. Common params: days, group_by. For "stripe": conversion_type, filters, metadata_filters, breakdown_by_metadata_key. For "shopify": filters (financial_status, fulfillment_status, etc.), include_products, include_attribution. For "ecommerce": platform, include_products, include_customers. For "subscriptions": metric (required), breakdown_by, filters. For "accounting": platform, data_type.',
+    description: 'Query revenue data from connected platforms (all via connector_events in ANALYTICS_DB). Scopes: "stripe" — Stripe payments with metadata filtering; "jobber" — Jobber completed jobs for field service; "shopify" — Shopify orders with UTM attribution and product breakdown; "ecommerce" — unified e-commerce data across platforms; "subscriptions" — MRR, LTV, churn, retention cohort analysis; "accounting" — invoices, expenses, P&L from QuickBooks/Xero. Common params: days, group_by. For "stripe": conversion_type, filters, metadata_filters, breakdown_by_metadata_key. For "shopify": filters (financial_status, fulfillment_status, etc.), include_products, include_attribution. For "ecommerce": platform, include_products, include_customers. For "subscriptions": metric (required), breakdown_by, filters. For "accounting": platform, data_type.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -1883,7 +1883,7 @@ export class ExplorationToolExecutor {
 
   /**
    * Query subscription cohort metrics (MRR, LTV, churn, retention) (D1 version)
-   * Note: Requires stripe_subscriptions table in ANALYTICS_DB
+   * Note: Queries connector_events WHERE source_platform='stripe' AND event_type LIKE '%subscription%' in ANALYTICS_DB
    */
   private async querySubscriptionCohorts(
     input: QuerySubscriptionCohortsInput,
@@ -2634,7 +2634,7 @@ export class ExplorationToolExecutor {
   private buildUnifiedMetricsQuery(
     platform: string,
     entityType: string,
-    entityId: string,
+    entityId: string | undefined,
     days: number,
     orgId: string
   ): { query: string; params: any[] } {
@@ -2648,6 +2648,31 @@ export class ExplorationToolExecutor {
     const dateFrom = new Date();
     dateFrom.setDate(dateFrom.getDate() - days);
     const dateFromStr = dateFrom.toISOString().split('T')[0];
+
+    // Account-level queries: aggregate across all campaign-level entities for this platform
+    if (entityType === 'account' || !entityId) {
+      const query = `
+        SELECT
+          metric_date,
+          SUM(impressions) as impressions,
+          SUM(clicks) as clicks,
+          SUM(spend_cents) as spend_cents,
+          SUM(conversions) as conversions,
+          SUM(conversion_value_cents) as conversion_value_cents,
+          CASE WHEN SUM(impressions) > 0 THEN CAST(SUM(clicks) AS REAL) / SUM(impressions) * 100 ELSE 0 END as ctr,
+          CASE WHEN SUM(clicks) > 0 THEN SUM(spend_cents) / SUM(clicks) ELSE 0 END as cpc_cents,
+          CASE WHEN SUM(impressions) > 0 THEN SUM(spend_cents) * 1000.0 / SUM(impressions) ELSE 0 END as cpm_cents,
+          NULL as extra_metrics
+        FROM ad_metrics
+        WHERE organization_id = ?
+          AND platform = ?
+          AND entity_type = 'campaign'
+          AND metric_date >= ?
+        GROUP BY metric_date
+        ORDER BY metric_date DESC
+      `;
+      return { query, params: [orgId, platform, dateFromStr] };
+    }
 
     const query = `
       SELECT
@@ -3430,7 +3455,13 @@ export class ExplorationToolExecutor {
     input: QueryUnifiedDataInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { connector_type, platform, days, metrics, group_by } = input;
+    // LLM sometimes sends "connector" instead of "connector_type" — normalize
+    const connector_type = input.connector_type || (input as any).connector;
+    const { platform, days, metrics, group_by } = input;
+
+    if (!connector_type) {
+      return { success: false, error: 'Missing required parameter "connector_type". Valid types: ad_platform, payments, ecommerce, crm, communication, field_service' };
+    }
 
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
@@ -3935,7 +3966,7 @@ export class ExplorationToolExecutor {
         SELECT id, provider, platform, display_name, settings
         FROM platform_connections
         WHERE organization_id = ? AND status = 'active'
-          AND json_extract(settings, '$.conversion_events') IS NOT NULL
+          AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
       `;
       const goalParams: any[] = [orgId];
       if (goal_id) {

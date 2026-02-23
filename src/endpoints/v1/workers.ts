@@ -1072,8 +1072,8 @@ export class TriggerSync extends OpenAPIRoute {
 export class TriggerRecalculation extends OpenAPIRoute {
   public schema = {
     tags: ["Workers"],
-    summary: "Trigger recalculation after flow/goal changes",
-    description: "Queues a conversion aggregation job that cascades through the full pipeline: aggregation → conversion linking → CAC refresh. Use after flow or goal changes instead of waiting for the 15-minute cron cycle.",
+    summary: "Trigger recalculation after connector config changes",
+    description: "Queues a conversion aggregation job that cascades through the full pipeline: aggregation → conversion linking → CAC refresh. Use after conversion event or connector configuration changes instead of waiting for the 15-minute cron cycle.",
     operationId: "trigger-recalculation",
     security: [{ bearerAuth: [] }],
     request: {

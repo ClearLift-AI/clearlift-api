@@ -739,8 +739,8 @@ export class GetRealtimeStripe extends OpenAPIRoute {
 export class GetRealtimeGoals extends OpenAPIRoute {
   schema = {
     tags: ["Analytics"],
-    summary: "Get real-time metrics for all conversion goals",
-    description: "Returns conversion and revenue metrics for all active goals configured for the organization. Supports goals backed by revenue sources (Stripe, Shopify, Jobber), tag events, or manual logging.",
+    summary: "Get real-time metrics for all conversion sources",
+    description: "Returns conversion and revenue metrics for all active conversion sources configured for the organization. Supports sources backed by revenue connectors (Stripe, Shopify, Jobber), tag events, or manual logging.",
     operationId: "get-realtime-goals",
     security: [{ bearerAuth: [] }],
     request: {
@@ -805,12 +805,12 @@ export class GetRealtimeGoals extends OpenAPIRoute {
     }
 
     try {
-      // Query platform_connections with conversion_events configured (from DB)
+      // Query platform_connections with conversion_events configured (non-empty array)
       const connectionsResult = await c.env.DB.prepare(`
         SELECT id, platform, settings
         FROM platform_connections
         WHERE organization_id = ? AND is_active = 1
-          AND json_extract(settings, '$.conversion_events') IS NOT NULL
+          AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
       `).bind(orgId).all<{ id: string; platform: string; settings: string }>();
 
       const connections = connectionsResult.results || [];

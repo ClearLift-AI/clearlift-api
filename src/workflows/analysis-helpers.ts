@@ -193,4 +193,6 @@ export interface AgenticIterationResult {
   // Accumulated insight state (passed between iterations)
   accumulatedInsightId?: string;
   accumulatedInsights?: AccumulatedInsightData[];
+  // Tool call names from this iteration (for sequential pattern detection)
+  toolCallNames?: string[];
 }
