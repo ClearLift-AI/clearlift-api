@@ -96,7 +96,7 @@ export interface ConnectorDefinition {
   requires_api_key: boolean;
   config_schema: Record<string, any>;
 
-  // Events for Flow Builder
+  // Events schema (used by ConversionEventPicker + AI exploration tools)
   events: ConnectorEvent[];
 
   // Sync configuration
@@ -324,7 +324,7 @@ export class ConnectorRegistryService {
   }
 
   /**
-   * Get events schema for a connector (for Flow Builder)
+   * Get events schema for a connector (for ConversionEventPicker + AI tools)
    */
   async getConnectorEvents(provider: string): Promise<ConnectorEvent[]> {
     const connector = await this.getConnector(provider);

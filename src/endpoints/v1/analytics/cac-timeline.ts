@@ -701,11 +701,11 @@ export class BackfillCACHistory extends OpenAPIRoute {
     const { org_id, days } = data.body;
 
     try {
-      // Check for connections with conversion_events configured
+      // Check for connections with conversion_events configured (non-empty array)
       const connectorsResult = await c.env.DB.prepare(`
         SELECT id, platform FROM platform_connections
         WHERE organization_id = ? AND is_active = 1
-          AND json_extract(settings, '$.conversion_events') IS NOT NULL
+          AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
       `).bind(org_id).all<{ id: string; platform: string }>();
       const connectorIds = (connectorsResult.results || []).map(c => c.id);
       const hasGoals = connectorIds.length > 0;
@@ -837,8 +837,8 @@ export class BackfillCACHistory extends OpenAPIRoute {
 export class GetCACSummary extends OpenAPIRoute {
   schema = {
     tags: ["Analytics"],
-    summary: "Get aggregated CAC summary with goal awareness",
-    description: "Returns overall CAC metrics for the selected period, including goal vs platform conversion split",
+    summary: "Get aggregated CAC summary with conversion source awareness",
+    description: "Returns overall CAC metrics for the selected period, including connector vs platform conversion split",
     operationId: "get-cac-summary",
     security: [{ bearerAuth: [] }],
     request: {
@@ -914,7 +914,7 @@ export class GetCACSummary extends OpenAPIRoute {
           SELECT platform, json_extract(settings, '$.conversion_events') as events
           FROM platform_connections
           WHERE organization_id = ? AND is_active = 1
-            AND json_extract(settings, '$.conversion_events') IS NOT NULL
+            AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
         `).bind(org_id).all<{ platform: string; events: string }>();
 
         const platformDisplayNames: Record<string, string> = {

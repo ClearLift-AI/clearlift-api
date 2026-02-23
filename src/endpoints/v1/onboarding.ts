@@ -209,7 +209,7 @@ export class GetOnboardingStatus extends OpenAPIRoute {
     const goalsCount = await c.env.DB.prepare(`
       SELECT COUNT(*) as count FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
-        AND json_extract(settings, '$.conversion_events') IS NOT NULL
+        AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
     `).bind(orgId).first<{ count: number }>();
 
     const gCount = goalsCount?.count || 0;
@@ -377,10 +377,10 @@ export class ValidateOnboarding extends OpenAPIRoute {
           hasOrganization: false,
           hasConnectedPlatform: false,
           hasInstalledTag: false,
-          hasDefinedGoal: false,
+          hasDefinedConversion: false,
           isComplete: false,
-          missingSteps: ['organization', 'platforms', 'tracking', 'goals'],
-          details: { connectedPlatforms: 0, verifiedDomains: 0, definedGoals: 0 }
+          missingSteps: ['organization', 'platforms', 'tracking', 'conversions'],
+          details: { connectedPlatforms: 0, verifiedDomains: 0, definedConversions: 0 }
         });
       }
       orgId = orgResult.organization_id;
@@ -398,34 +398,34 @@ export class ValidateOnboarding extends OpenAPIRoute {
       WHERE organization_id = ? AND is_verified = 1
     `).bind(orgId).first<{ count: number }>();
 
-    // Check goals (conversion criteria now in platform_connections.settings.conversion_events)
-    const goals = await c.env.DB.prepare(`
+    // Check conversion tracking (criteria in platform_connections.settings.conversion_events)
+    const conversions = await c.env.DB.prepare(`
       SELECT COUNT(*) as count FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
-        AND json_extract(settings, '$.conversion_events') IS NOT NULL
+        AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
     `).bind(orgId).first<{ count: number }>();
 
     const connectedPlatforms = connections?.count || 0;
     const verifiedDomains = domains?.count || 0;
-    const definedGoals = goals?.count || 0;
+    const definedConversions = conversions?.count || 0;
 
     const hasConnectedPlatform = connectedPlatforms > 0;
     const hasInstalledTag = verifiedDomains > 0;
-    const hasDefinedGoal = definedGoals > 0;
+    const hasDefinedConversion = definedConversions > 0;
 
     const missingSteps: string[] = [];
     if (!hasConnectedPlatform) missingSteps.push('platforms');
     if (!hasInstalledTag) missingSteps.push('tracking');
-    if (!hasDefinedGoal) missingSteps.push('goals');
+    if (!hasDefinedConversion) missingSteps.push('conversions');
 
     return success(c, {
       hasOrganization: true,
       hasConnectedPlatform,
       hasInstalledTag,
-      hasDefinedGoal,
+      hasDefinedConversion,
       isComplete: missingSteps.length === 0,
       missingSteps,
-      details: { connectedPlatforms, verifiedDomains, definedGoals }
+      details: { connectedPlatforms, verifiedDomains, definedConversions }
     });
   }
 }

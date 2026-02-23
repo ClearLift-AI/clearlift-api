@@ -546,12 +546,12 @@ export class SmartAttributionService {
     endDate: string
   ): Promise<FunnelPositionData[]> {
     try {
-      // Get connectors with conversion events configured
+      // Get connectors with conversion events configured (non-empty array)
       const connectionsResult = await this.mainDb.prepare(`
         SELECT id, provider, platform, display_name, settings
         FROM platform_connections
         WHERE organization_id = ? AND status = 'active'
-          AND json_extract(settings, '$.conversion_events') IS NOT NULL
+          AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
       `).bind(orgId).all<{
         id: string;
         provider: string;

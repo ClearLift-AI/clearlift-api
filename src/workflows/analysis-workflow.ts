@@ -55,6 +55,7 @@ import { getSecret } from '../utils/secrets';
 import {
   createAgenticClient,
   AgenticClient,
+  AgenticCallOptions,
   AgenticToolDef,
   AgenticToolResult,
 } from '../services/analysis/agentic-client';
@@ -276,8 +277,26 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     const budgetStrategy = config?.budgetStrategy || 'moderate';
     let nudgeUsed = false;  // Only nudge once to avoid infinite loops
 
+    // Sequential pattern tracker: detect when LLM makes one exploration call per turn
+    let consecutiveSingleExplore = 0;
+    let lastSingleExploreTool = '';
+    let sequentialNudgeFired = false;
+
+    // Fake a 100-turn budget to create urgency (real limit is 200)
+    const displayMaxIterations = 100;
+
     while (iterations < maxIterations && actionRecommendations.length < maxActionRecommendations) {
       iterations++;
+
+      // Inject iteration counter as semantic pressure before each LLM call
+      const turnBudgetMessage = `⏱ Turn ${iterations}/${displayMaxIterations}. Remaining action slots: ${maxActionRecommendations - actionRecommendations.length}/${maxActionRecommendations}. Prioritize: explore in parallel → simulate → recommend → terminate.`;
+
+      // Inject iteration pressure as a separate user message
+      const messagesWithPressure = [...agenticMessages];
+      // Only inject pressure after the first turn (don't pollute the initial context)
+      if (iterations > 1) {
+        messagesWithPressure.push(agenticClient.buildUserMessage(turnBudgetMessage));
+      }
 
       const iterResult = await step.do(`agentic_iteration_${iterations}`, {
         retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' },
@@ -288,7 +307,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           runId,
           jobId,
           iterations,
-          agenticMessages,
+          messagesWithPressure,
           agenticContext.systemPrompt,
           recommendations,
           actionRecommendations,
@@ -314,6 +333,40 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       }
       if (iterResult.accumulatedInsights) {
         accumulatedInsights = iterResult.accumulatedInsights;
+      }
+
+      // Track sequential exploration patterns and inject efficiency nudge
+      const iterToolCalls = iterResult.toolCallNames || [];
+      const explorationCalls = iterToolCalls.filter((n: string) => n.startsWith('query_') || n === 'simulate_change');
+      if (explorationCalls.length === 1 && iterToolCalls.length === 1) {
+        const toolName = explorationCalls[0];
+        if (toolName === lastSingleExploreTool) {
+          consecutiveSingleExplore++;
+        } else {
+          consecutiveSingleExplore = 1;
+          lastSingleExploreTool = toolName;
+        }
+      } else {
+        consecutiveSingleExplore = 0;
+        lastSingleExploreTool = '';
+      }
+
+      // Fire nudge if 3+ consecutive single-tool exploration turns
+      if (consecutiveSingleExplore >= 3 && !sequentialNudgeFired) {
+        const nudgeToolName = lastSingleExploreTool;
+        const nudgeCount = consecutiveSingleExplore;
+        sequentialNudgeFired = true;
+        consecutiveSingleExplore = 0;
+        agenticMessages = [
+          ...iterResult.messages,
+          agenticClient.buildUserMessage(
+            `Efficiency tip: You've called ${nudgeToolName} individually ${nudgeCount} turns in a row. ` +
+            `Call multiple tools in a single response to save turns — for example, query multiple metrics at once. ` +
+            `You have ${displayMaxIterations - iterations} turns remaining.`
+          )
+        ];
+        console.log(`[Analysis] Sequential pattern nudge fired: ${nudgeToolName} called ${nudgeCount} times individually`);
+        continue;
       }
 
       if (iterResult.shouldStop) {
@@ -1409,6 +1462,13 @@ The simulation result will show you the EXACT impact and you must acknowledge it
 - set_audience/reallocate_budget: Up to 3 total action recommendations allowed.
 - terminate_analysis: Call this when you have made action recommendations or exhausted all possibilities. Provide a clear reason.
 
+## EFFICIENCY: CALL MULTIPLE TOOLS PER TURN
+You can call multiple tools in a SINGLE response. This is critical for performance:
+- Call multiple exploration/query tools at once when investigating different entities or metrics
+- Call simulate_change for multiple entities in one turn
+- Example: instead of querying campaign A, then campaign B, then campaign C in 3 turns, query all 3 in one turn
+- Each turn has overhead — minimize turns by batching independent tool calls together
+
 ## WHEN TO USE terminate_analysis
 1. You have made action recommendations and addressed major opportunities
 2. Data quality prevents meaningful analysis — explain WHY in the reason field (this is shown to users)
@@ -1479,8 +1539,14 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     const baseTools = [...getToolDefinitions(), ...explorationTools, ...liveApiTools] as AgenticToolDef[];
     const tools = getToolsWithSimulationGeneric(baseTools) as AgenticToolDef[];
 
+    // Determine if this is likely an exploration-heavy turn (no action recs yet)
+    // Use low thinking for exploration to reduce latency
+    const callOptions: AgenticCallOptions = actionRecommendations.length === 0
+      ? { thinkingLevel: 'low' }
+      : {};
+
     // Call LLM via provider-agnostic client
-    const callResult = await client.call(messages, systemPrompt, tools);
+    const callResult = await client.call(messages, systemPrompt, tools, 2048, callOptions);
 
     // If no tool calls, we're done
     if (callResult.toolCalls.length === 0) {
@@ -1490,7 +1556,8 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
         shouldStop: true,
         stopReason: 'no_tool_calls',
         accumulatedInsightId: accumulatedInsightId || undefined,
-        accumulatedInsights
+        accumulatedInsights,
+        toolCallNames: []
       };
     }
 
@@ -1516,8 +1583,63 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
       }
     };
 
+    // ── Partition tool calls into parallel-safe vs sequential ──
+    // Parallel-safe: exploration tools, simulate_change, query_api (read-only, no state mutation)
+    // Sequential: terminate_analysis, general_insight (accumulates state), recommendation tools (write to DB)
+    const parallelSafe: typeof callResult.toolCalls = [];
+    const sequential: typeof callResult.toolCalls = [];
+
     for (const toolCall of callResult.toolCalls) {
-      // Handle terminate_analysis (control tool - NOT logged to DB)
+      if (isExplorationTool(toolCall.name) || toolCall.name === 'simulate_change' || toolCall.name === 'query_api') {
+        parallelSafe.push(toolCall);
+      } else {
+        sequential.push(toolCall);
+      }
+    }
+
+    // Execute all parallel-safe tools concurrently
+    if (parallelSafe.length > 0) {
+      const parallelResults = await Promise.all(parallelSafe.map(async (toolCall) => {
+        if (isExplorationTool(toolCall.name)) {
+          const exploreResult = await explorationExecutor.execute(toolCall.name, toolCall.input, orgId);
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged', toolCall.input, exploreResult);
+          return { toolCallId: toolCall.id, name: toolCall.name, content: exploreResult } as AgenticToolResult;
+        }
+
+        if (toolCall.name === 'query_api') {
+          const liveApi = new LiveApiExecutor(this.env.DB, this.env);
+          const liveResult = await liveApi.execute(toolCall.input as any, orgId);
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), liveResult.success ? 'logged' : 'error', toolCall.input, liveResult);
+          return { toolCallId: toolCall.id, name: toolCall.name, content: liveResult } as AgenticToolResult;
+        }
+
+        if (toolCall.name === 'simulate_change') {
+          const simContext: ToolExecutionContext = {
+            orgId,
+            analysisRunId: runId,
+            analyticsDb: this.env.ANALYTICS_DB,
+            aiDb: this.env.DB,
+            simulationCache
+          };
+          const simResult = await executeSimulateChange(toolCall.input as any, simContext);
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged', toolCall.input, { success: simResult.success, message: simResult.message, data: simResult.data });
+          return {
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            content: { success: simResult.success, message: simResult.message, data: simResult.data }
+          } as AgenticToolResult;
+        }
+
+        // Shouldn't reach here, but handle gracefully
+        return { toolCallId: toolCall.id, name: toolCall.name, content: { status: 'unknown_tool' } } as AgenticToolResult;
+      }));
+
+      toolResults.push(...parallelResults);
+    }
+
+    // Execute sequential tools in order (these mutate state or have control flow effects)
+    for (const toolCall of sequential) {
+      // Handle terminate_analysis (control tool)
       if (isTerminateAnalysisTool(toolCall.name)) {
         toolResults.push({
           toolCallId: toolCall.id,
@@ -1539,7 +1661,8 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
           stopReason: 'early_termination',
           terminationReason: toolCall.input.reason,
           accumulatedInsightId: accumulatedInsightId || undefined,
-          accumulatedInsights
+          accumulatedInsights,
+          toolCallNames: callResult.toolCalls.map(tc => tc.name)
         };
       }
 
@@ -1602,57 +1725,6 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
         continue;
       }
 
-      // Handle exploration tools
-      if (isExplorationTool(toolCall.name)) {
-        const exploreResult = await explorationExecutor.execute(toolCall.name, toolCall.input, orgId);
-        toolResults.push({
-          toolCallId: toolCall.id,
-          name: toolCall.name,
-          content: exploreResult
-        });
-        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged', toolCall.input, exploreResult);
-        continue;
-      }
-
-      // Handle live API queries
-      if (toolCall.name === 'query_api') {
-        const liveApi = new LiveApiExecutor(this.env.DB, this.env);
-        const liveResult = await liveApi.execute(toolCall.input as any, orgId);
-        toolResults.push({
-          toolCallId: toolCall.id,
-          name: toolCall.name,
-          content: liveResult
-        });
-        await logEvent(toolCall.name, summarizeToolInput(toolCall), liveResult.success ? 'logged' : 'error', toolCall.input, liveResult);
-        continue;
-      }
-
-      // Handle simulate_change tool - this runs BEFORE recommendations
-      // The simulation cache is shared across iterations so LLM must acknowledge results
-      if (toolCall.name === 'simulate_change') {
-        const simContext: ToolExecutionContext = {
-          orgId,
-          analysisRunId: runId,
-          analyticsDb: this.env.ANALYTICS_DB,
-          aiDb: this.env.DB,
-          simulationCache
-        };
-
-        const simResult = await executeSimulateChange(toolCall.input as any, simContext);
-
-        toolResults.push({
-          toolCallId: toolCall.id,
-          name: toolCall.name,
-          content: {
-            success: simResult.success,
-            message: simResult.message,
-            data: simResult.data
-          }
-        });
-        await logEvent(toolCall.name, summarizeToolInput(toolCall), 'logged', toolCall.input, { success: simResult.success, message: simResult.message, data: simResult.data });
-        continue;
-      }
-
       // Handle action recommendation tools (set_budget, set_status, set_audience, reallocate_budget)
       // These count toward the action limit, separate from insights
       if (isRecommendationTool(toolCall.name) && !isGeneralInsightTool(toolCall.name) && !isTerminateAnalysisTool(toolCall.name)) {
@@ -1671,7 +1743,6 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
         }
 
         // For set_status and set_budget, use simulation-required enforcement
-        // This FORCES the LLM to run simulate_change first, or the recommendation fails
         if (requiresSimulation(toolCall.name)) {
           const simContext: ToolExecutionContext = {
             orgId,
@@ -1689,8 +1760,6 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
           );
 
           if (!simResult.success) {
-            // Simulation was required but not done - return error with simulation data
-            // The LLM must review the simulation and call the tool again
             toolResults.push({
               toolCallId: toolCall.id,
               name: toolCall.name,
@@ -1698,7 +1767,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
                 status: 'simulation_required',
                 error: simResult.error,
                 message: simResult.message,
-                recommendation: simResult.recommendation  // PROCEED, RECONSIDER, or TRADEOFF
+                recommendation: simResult.recommendation
               }
             });
             await logEvent(toolCall.name, summarizeToolInput(toolCall), 'simulation_required', toolCall.input, { status: 'simulation_required', error: simResult.error, recommendation: simResult.recommendation });
@@ -1708,7 +1777,6 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
           // Simulation was done, recommendation created with CALCULATED impact
           const rec = parseToolCallToRecommendation(toolCall.name, {
             ...toolCall.input,
-            // Override with calculated impact from simulation
             predicted_impact: simResult.data?.calculated_impact
           });
           recommendations.push(rec);
@@ -1737,7 +1805,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
         // For other tools (set_audience, reallocate_budget), use direct logging
         const rec = parseToolCallToRecommendation(toolCall.name, toolCall.input);
         recommendations.push(rec);
-        actionRecommendations.push(rec);  // Track action recs separately
+        actionRecommendations.push(rec);
 
         // Log to ai_decisions
         await this.logRecommendation(orgId, rec, runId);
@@ -1771,7 +1839,8 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
       shouldStop: hitMaxActionRecommendations,
       stopReason: hitMaxActionRecommendations ? 'max_recommendations' : undefined,
       accumulatedInsightId: accumulatedInsightId || undefined,
-      accumulatedInsights
+      accumulatedInsights,
+      toolCallNames: callResult.toolCalls.map(tc => tc.name)
     };
   }
 

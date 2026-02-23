@@ -113,7 +113,7 @@ export class GetConversions extends OpenAPIRoute {
           SELECT COUNT(*) as count FROM platform_connections
           WHERE organization_id = ?
             AND is_active = 1
-            AND json_extract(settings, '$.conversion_events') IS NOT NULL
+            AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
         `).bind(orgId).first<{ count: number }>(),
       ]);
 

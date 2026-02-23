@@ -173,7 +173,7 @@ export class GetConnectorFromRegistry extends OpenAPIRoute {
 }
 
 /**
- * GET /v1/connectors/registry/:provider/events - Get events schema for Flow Builder
+ * GET /v1/connectors/registry/:provider/events - Get events schema for ConversionEventPicker
  * Public endpoint
  */
 export class GetConnectorEvents extends OpenAPIRoute {
