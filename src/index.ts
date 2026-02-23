@@ -27,18 +27,15 @@ import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
 import {
   GetAttribution,
   GetAttributionComparison,
-  RunAttributionAnalysis,
-  GetAttributionJobStatus,
   GetComputedAttribution,
   GetBlendedAttribution,
-  RunProbabilisticAttribution,
-  GetProbabilisticAttributionStatus,
   GetJourneyAnalytics,
-  GetAssistedDirectStats
+  GetAssistedDirectStats,
+  GetPipelineStatus
 } from "./endpoints/v1/analytics/attribution";
 import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-campaigns";
 import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
-import { RunClickExtraction, GetClickExtractionStats } from "./endpoints/v1/analytics/click-extraction";
+import { GetClickExtractionStats } from "./endpoints/v1/analytics/click-extraction";
 import { GetSmartAttribution } from "./endpoints/v1/analytics/smart-attribution";
 import { GetTrackingLinkPerformance } from "./endpoints/v1/analytics/tracking-links";
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
@@ -471,10 +468,6 @@ openapi.get("/v1/analytics/events/historical", auth, requireOrg, GetEventsHistor
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributionComparison);
-openapi.post("/v1/analytics/attribution/run", auth, requireOrg, RunAttributionAnalysis);
-openapi.get("/v1/analytics/attribution/status/:job_id", auth, requireOrg, GetAttributionJobStatus);
-openapi.post("/v1/analytics/attribution/probabilistic/run", auth, requireOrg, RunProbabilisticAttribution);
-openapi.get("/v1/analytics/attribution/probabilistic/status/:job_id", auth, requireOrg, GetProbabilisticAttributionStatus);
 openapi.get("/v1/analytics/attribution/journey-analytics", auth, requireOrg, GetJourneyAnalytics);
 openapi.get("/v1/analytics/attribution/computed", auth, requireOrg, GetComputedAttribution);
 openapi.get("/v1/analytics/attribution/blended", auth, requireOrg, GetBlendedAttribution);
@@ -488,8 +481,8 @@ openapi.get("/v1/analytics/platforms/unified", auth, requireOrg, GetUnifiedPlatf
 openapi.get("/v1/analytics/utm-campaigns", auth, requireOrg, GetUtmCampaigns);
 openapi.get("/v1/analytics/utm-campaigns/time-series", auth, requireOrg, GetUtmTimeSeries);
 openapi.get("/v1/analytics/click-attribution", auth, requireOrg, GetClickAttribution);
-openapi.post("/v1/analytics/click-extraction/run", auth, requireOrg, RunClickExtraction);
 openapi.get("/v1/analytics/click-extraction/stats", auth, requireOrg, GetClickExtractionStats);
+openapi.get("/v1/analytics/pipeline-status", auth, requireOrg, GetPipelineStatus);
 openapi.get("/v1/analytics/tracking-links", auth, requireOrg, GetTrackingLinkPerformance);
 
 // Identity resolution endpoints
@@ -1173,18 +1166,13 @@ export default {
         try {
           const orgId = org.organization_id;
 
-          // Check for connections with conversion_events configured
+          // Check for connections with conversion_events configured (non-empty array)
           const connectionsResult = await env.DB.prepare(`
             SELECT id, provider, settings FROM platform_connections
             WHERE organization_id = ? AND status = 'active'
-              AND json_extract(settings, '$.conversion_events') IS NOT NULL
+              AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
           `).bind(orgId).all<{ id: string; provider: string; settings: string }>();
-          const convConnections = (connectionsResult.results || []).filter(c => {
-            try {
-              const s = JSON.parse(c.settings || '{}');
-              return Array.isArray(s.conversion_events) && s.conversion_events.length > 0;
-            } catch { return false; }
-          });
+          const convConnections = connectionsResult.results || [];
           const hasGoals = convConnections.length > 0;
           const macroGoals = convConnections.map(c => ({ id: c.id, name: c.provider }));
 
@@ -1293,4 +1281,3 @@ export default {
 
 // Export workflow classes for Cloudflare Workflows bindings
 export { AnalysisWorkflow } from './workflows/analysis-workflow';
-export { AttributionWorkflow } from './workflows/attribution-workflow';

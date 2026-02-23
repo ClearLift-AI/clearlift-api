@@ -193,11 +193,6 @@
       "name": "analysis-workflow",
       "binding": "ANALYSIS_WORKFLOW",
       "class_name": "AnalysisWorkflow"
-    },
-    {
-      "name": "attribution-workflow",
-      "binding": "ATTRIBUTION_WORKFLOW",
-      "class_name": "AttributionWorkflow"
     }
   ],
 
@@ -260,11 +255,6 @@
           "name": "analysis-workflow",
           "binding": "ANALYSIS_WORKFLOW",
           "class_name": "AnalysisWorkflow"
-        },
-        {
-          "name": "attribution-workflow-local",
-          "binding": "ATTRIBUTION_WORKFLOW",
-          "class_name": "AttributionWorkflow"
         }
       ],
       // KV namespace for local caching (emulated by wrangler)
@@ -346,11 +336,6 @@
           "name": "analysis-workflow",
           "binding": "ANALYSIS_WORKFLOW",
           "class_name": "AnalysisWorkflow"
-        },
-        {
-          "name": "attribution-workflow",
-          "binding": "ATTRIBUTION_WORKFLOW",
-          "class_name": "AttributionWorkflow"
         }
       ],
       "secrets_store_secrets": [
@@ -481,8 +466,7 @@
       "queues": { "producers": [{ "binding": "SYNC_QUEUE", "queue": "sync-jobs-staging" }] },
       "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "clearlift_events_staging" }],
       "workflows": [
-        { "name": "analysis-workflow-staging",    "binding": "ANALYSIS_WORKFLOW",    "class_name": "AnalysisWorkflow" },
-        { "name": "attribution-workflow-staging", "binding": "ATTRIBUTION_WORKFLOW", "class_name": "AttributionWorkflow" }
+        { "name": "analysis-workflow-staging",    "binding": "ANALYSIS_WORKFLOW",    "class_name": "AnalysisWorkflow" }
       ],
       "services": [{ "binding": "CLEARLIFT_CRON", "service": "clearlift-queue-consumer-staging" }],
       "triggers": { "crons": [] },
