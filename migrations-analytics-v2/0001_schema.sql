@@ -731,6 +731,7 @@ CREATE TABLE IF NOT EXISTS hourly_metrics (
   revenue_cents INTEGER DEFAULT 0,
   by_channel TEXT,
   by_device TEXT,
+  by_page TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   UNIQUE(org_tag, hour)
 );
