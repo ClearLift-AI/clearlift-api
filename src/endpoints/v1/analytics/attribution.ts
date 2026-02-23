@@ -2232,32 +2232,33 @@ are actually return visitors influenced by earlier marketing.
       return error(c, "DATABASE_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    // Query to find direct sessions and their prior touchpoints
+    // Query touchpoints table to find direct sessions and their prior touchpoints
+    // Uses org_tag (not organization_id) and channel_group (not touchpoint_source)
     const result = await analyticsDb.prepare(`
       WITH direct_sessions AS (
         SELECT DISTINCT
           t.session_id,
           t.anonymous_id,
-          t.touchpoint_timestamp
-        FROM journey_touchpoints t
-        WHERE t.organization_id = ?
-          AND t.touchpoint_source = 'direct'
-          AND DATE(t.touchpoint_timestamp) >= ?
-          AND DATE(t.touchpoint_timestamp) <= ?
+          t.touchpoint_ts
+        FROM touchpoints t
+        WHERE t.org_tag = ?
+          AND t.channel_group = 'direct'
+          AND DATE(t.touchpoint_ts) >= ?
+          AND DATE(t.touchpoint_ts) <= ?
       ),
       prior_touches AS (
         SELECT
           ds.session_id,
           ds.anonymous_id,
           (
-            SELECT jt.touchpoint_source
-            FROM journey_touchpoints jt
-            WHERE jt.organization_id = ?
+            SELECT jt.channel_group
+            FROM touchpoints jt
+            WHERE jt.org_tag = ?
               AND jt.anonymous_id = ds.anonymous_id
-              AND jt.touchpoint_source != 'direct'
-              AND jt.touchpoint_timestamp < ds.touchpoint_timestamp
-              AND jt.touchpoint_timestamp >= datetime(ds.touchpoint_timestamp, '-' || ? || ' hours')
-            ORDER BY jt.touchpoint_timestamp DESC
+              AND jt.channel_group != 'direct'
+              AND jt.touchpoint_ts < ds.touchpoint_ts
+              AND jt.touchpoint_ts >= datetime(ds.touchpoint_ts, '-' || ? || ' hours')
+            ORDER BY jt.touchpoint_ts DESC
             LIMIT 1
           ) as assisted_by
         FROM direct_sessions ds
@@ -2270,7 +2271,7 @@ are actually return visitors influenced by earlier marketing.
         COUNT(DISTINCT CASE WHEN assisted_by IS NOT NULL THEN session_id END) as count_by_channel
       FROM prior_touches
       GROUP BY assisted_by
-    `).bind(orgId, dateFrom, dateTo, orgId, lookbackHours).all();
+    `).bind(tagMapping.short_tag, dateFrom, dateTo, tagMapping.short_tag, lookbackHours).all();
 
     const stats = {
       total_direct_sessions: 0,

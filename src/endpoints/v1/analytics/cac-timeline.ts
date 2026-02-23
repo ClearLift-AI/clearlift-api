@@ -789,7 +789,7 @@ export class BackfillCACHistory extends OpenAPIRoute {
         const goal = goalMap.get(date);
 
         const useGoals = hasGoals && goal && goal.conversions > 0;
-        const primaryConversions = useGoals ? goal.conversions : platform.conversions;
+        const primaryConversions = useGoals ? goal.conversions : Math.round(platform.conversions);
         const conversionSource = useGoals ? 'goal' : 'platform';
 
         if (platform.spend_cents === 0 && primaryConversions === 0) continue;
@@ -821,7 +821,7 @@ export class BackfillCACHistory extends OpenAPIRoute {
         `).bind(
           org_id, date, platform.spend_cents, primaryConversions,
           goal?.revenue_cents || 0, cacCents,
-          goal?.conversions || 0, platform.conversions,
+          goal?.conversions || 0, Math.round(platform.conversions),
           conversionSource, goalIdsJson, goal?.revenue_cents || 0,
           perSourceJson
         ).run();
@@ -917,6 +917,26 @@ export class GetCACSummary extends OpenAPIRoute {
         } catch { /* skip malformed JSON */ }
       }
 
+      // Fallback: if per_source_json was never populated, derive from conversion_daily_summary
+      if (Object.keys(aggregatedPerSource).length === 0) {
+        const fallbackResult = await c.env.ANALYTICS_DB.prepare(`
+          SELECT conversion_source, SUM(conversion_count) as conv, SUM(total_value_cents) as rev
+          FROM conversion_daily_summary
+          WHERE organization_id = ?
+            AND summary_date >= date('now', '-' || ? || ' days')
+          GROUP BY conversion_source
+        `).bind(org_id, days).all<{ conversion_source: string; conv: number; rev: number }>();
+
+        for (const row of fallbackResult.results || []) {
+          if (row.conv > 0) {
+            aggregatedPerSource[row.conversion_source] = {
+              conversions: row.conv,
+              revenue_cents: row.rev || 0,
+            };
+          }
+        }
+      }
+
       // SUM returns null when no rows match the date range — propagate as null
       // so the dashboard fallback chain fires. 0 is only returned for genuine zeros.
       if (!historyResult || historyResult.total_conversions === null) {
@@ -936,7 +956,19 @@ export class GetCACSummary extends OpenAPIRoute {
       // Get connector names if using goal-linked conversions
       let goalCount = 0;
       let goalNames: string[] = [];
+      const platformDisplayNames: Record<string, string> = {
+        stripe: 'Stripe Payment',
+        shopify: 'Shopify Order',
+        jobber: 'Jobber Invoice',
+        hubspot: 'HubSpot Deal',
+        adbliss_tag: 'Tag Conversion',
+        lemon_squeezy: 'Lemon Squeezy Payment',
+        paddle: 'Paddle Payment',
+        chargebee: 'Chargebee Subscription',
+        recurly: 'Recurly Subscription',
+      };
       if (conversionsGoal > 0) {
+        // First try: live connectors with conversion_events configured
         const connectorsResult = await c.env.DB.prepare(`
           SELECT platform, json_extract(settings, '$.conversion_events') as events
           FROM platform_connections
@@ -944,18 +976,40 @@ export class GetCACSummary extends OpenAPIRoute {
             AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
         `).bind(org_id).all<{ platform: string; events: string }>();
 
-        const platformDisplayNames: Record<string, string> = {
-          stripe: 'Stripe Payment',
-          shopify: 'Shopify Order',
-          jobber: 'Jobber Invoice',
-          hubspot: 'HubSpot Deal',
-          adbliss_tag: 'Tag Conversion',
-        };
-
         goalNames = (connectorsResult.results || []).map(
-          c => platformDisplayNames[c.platform] || `${c.platform} Conversion`
+          r => platformDisplayNames[r.platform] || `${r.platform} Conversion`
         );
         goalCount = goalNames.length;
+
+        // Fallback: if live lookup returns nothing, use stored goal_ids from cac_history
+        if (goalCount === 0) {
+          const storedGoals = await c.env.ANALYTICS_DB.prepare(`
+            SELECT DISTINCT goal_ids FROM cac_history
+            WHERE organization_id = ? AND goal_ids IS NOT NULL AND goal_ids != ''
+              AND date >= date('now', '-' || ? || ' days')
+            LIMIT 10
+          `).bind(org_id, days).all<{ goal_ids: string }>();
+
+          const connectorIds = new Set<string>();
+          for (const row of storedGoals.results || []) {
+            try {
+              const ids: string[] = JSON.parse(row.goal_ids);
+              ids.forEach(id => connectorIds.add(id));
+            } catch { /* skip malformed */ }
+          }
+
+          if (connectorIds.size > 0) {
+            const placeholders = Array.from(connectorIds).map(() => '?').join(',');
+            const connectors = await c.env.DB.prepare(`
+              SELECT platform FROM platform_connections WHERE id IN (${placeholders})
+            `).bind(...Array.from(connectorIds)).all<{ platform: string }>();
+
+            goalNames = (connectors.results || []).map(
+              r => platformDisplayNames[r.platform] || `${r.platform} Conversion`
+            );
+            goalCount = goalNames.length;
+          }
+        }
       }
 
       // Filter out sources with 0 conversions for a cleaner response
