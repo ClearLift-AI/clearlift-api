@@ -495,11 +495,12 @@ export class D1AnalyticsService {
    * - For ranges beyond 30 days, the endpoint handler falls back to R2 SQL reconstruction
    *
    * Node types:
-   *   page_url → page_url  — page-to-page navigation
-   *   source   → page_url  — UTM/ad campaign → landing page
-   *   referrer → page_url  — organic referrer → landing page
-   *   page     → page      — legacy channel-level rows (staging compatibility)
-   *   referrer → page      — legacy referrer rows (staging compatibility)
+   *   page_url  → page_url   — page-to-page navigation
+   *   source    → page_url   — UTM/ad campaign → landing page
+   *   referrer  → page_url   — organic referrer → landing page
+   *   page_url  → connector  — page → external connector endpoint (Stripe, Shopify, etc.)
+   *   page      → page       — legacy channel-level rows (staging compatibility)
+   *   referrer  → page       — legacy referrer rows (staging compatibility)
    *
    * @see clearlift-cron/.../probabilistic-attribution.ts  — populate-page-flow step
    * @see clearlift-api/.../d1-metrics.ts                  — GetD1PageFlow endpoint + R2 fallback
@@ -517,6 +518,7 @@ export class D1AnalyticsService {
     from_type: string;
     to_id: string;
     to_name: string | null;
+    to_type: string;
     visitors_at_from: number;
     visitors_transitioned: number;
     transition_rate: number;
@@ -526,7 +528,7 @@ export class D1AnalyticsService {
     // Daily aggregate rows: GROUP BY from/to and SUM across matching days
     // Supports both new page_url/source/referrer types and legacy page/referrer types (staging)
     let query = `
-      SELECT from_id, from_name, from_type, to_id, to_name,
+      SELECT from_id, from_name, from_type, to_id, to_name, to_type,
         SUM(visitors_at_from) as visitors_at_from,
         SUM(visitors_transitioned) as visitors_transitioned,
         CASE WHEN SUM(visitors_at_from) > 0
@@ -540,6 +542,7 @@ export class D1AnalyticsService {
           (from_type = 'page_url' AND to_type = 'page_url')
           OR (from_type = 'source' AND to_type = 'page_url')
           OR (from_type = 'referrer' AND to_type = 'page_url')
+          OR (from_type = 'page_url' AND to_type = 'connector')
           OR (from_type = 'page' AND to_type = 'page')
           OR (from_type = 'referrer' AND to_type = 'page')
         )
@@ -557,7 +560,7 @@ export class D1AnalyticsService {
       params.push(options.periodEnd);
     }
 
-    query += ` GROUP BY from_type, from_id, from_name, to_id, to_name`;
+    query += ` GROUP BY from_type, from_id, from_name, to_type, to_id, to_name`;
 
     const limit = options.limit || 50;
     // Page-URL-level rows rank above legacy channel-level rows
@@ -571,6 +574,7 @@ export class D1AnalyticsService {
       from_type: string;
       to_id: string;
       to_name: string | null;
+      to_type: string;
       visitors_at_from: number;
       visitors_transitioned: number;
       transition_rate: number;
