@@ -347,7 +347,7 @@ export class D1AnalyticsService {
     totalConversions: number;
     totalRevenue: number;
     conversionRate: number;
-    topChannels: { channel: string; sessions: number; conversions: number }[];
+    topChannels: { channel: string; sessions: number }[];
     topCampaigns: { campaign: string; sessions: number; revenue: number }[];
   }> {
     const endDate = new Date().toISOString().slice(0, 10);
@@ -362,7 +362,7 @@ export class D1AnalyticsService {
     let totalUsers = 0;
     let totalConversions = 0;
     let totalRevenue = 0;
-    const channelAgg: Record<string, { sessions: number; conversions: number }> = {};
+    const channelAgg: Record<string, { sessions: number }> = {};
 
     for (const dm of dailyMetrics) {
       totalEvents += dm.total_events;
@@ -371,12 +371,12 @@ export class D1AnalyticsService {
       totalConversions += dm.conversions;
       totalRevenue += dm.revenue_cents;
 
-      // Parse channel breakdown
+      // Parse channel breakdown (by_channel stores event counts per channel, not conversions)
       try {
         const byChannel = JSON.parse(dm.by_channel || '{}') as Record<string, number>;
         for (const [channel, count] of Object.entries(byChannel)) {
           if (!channelAgg[channel]) {
-            channelAgg[channel] = { sessions: 0, conversions: 0 };
+            channelAgg[channel] = { sessions: 0 };
           }
           channelAgg[channel].sessions += count;
         }
@@ -414,7 +414,7 @@ export class D1AnalyticsService {
       totalUsers,
       totalConversions,
       totalRevenue: totalRevenue / 100, // Convert cents to dollars
-      conversionRate: totalSessions > 0 ? totalConversions / totalSessions : 0,
+      conversionRate: totalSessions > 0 ? Math.min(totalConversions / totalSessions, 1.0) : 0,
       topChannels,
       topCampaigns
     };
