@@ -653,24 +653,8 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
       // Return empty keys if D1 query fails - don't block the response
     }
 
-    // Get cached metadata key info from main D1 DB (may not exist for new connections)
-    let cachedKeys: any[] = [];
-    try {
-      const result = await c.env.DB.prepare(`
-        SELECT object_type, key_path, sample_values, value_type, occurrence_count
-        FROM stripe_metadata_keys
-        WHERE connection_id = ?
-        ORDER BY occurrence_count DESC
-      `).bind(connectionId).all();
-      cachedKeys = result.results || [];
-    } catch (err: any) {
-      structuredLog('ERROR', 'Failed to get cached metadata keys', { endpoint: 'GET /v1/connectors/:id/filters/discover', error: err instanceof Error ? err.message : String(err) });
-      // Table may not exist - not a critical error
-    }
-
     return success(c, {
       discovered_keys: keys,
-      metadata_info: cachedKeys,
       total_keys: keys.charge.length + keys.product.length
     });
   }

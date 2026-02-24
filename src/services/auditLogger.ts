@@ -62,23 +62,6 @@ export interface DataAccessEntry {
   ip_address?: string;
 }
 
-export interface ConfigChangeEntry {
-  user_id: string;
-  organization_id?: string;
-  config_type: string;
-  config_id?: string;
-  action: 'create' | 'update' | 'delete';
-  field_name?: string;
-  old_value?: any;
-  new_value?: any;
-  requires_approval?: boolean;
-  approved_by?: string;
-  approved_at?: string;
-  request_id?: string;
-  ip_address?: string;
-  reason?: string;
-}
-
 export interface SecurityEventEntry {
   severity: 'info' | 'warning' | 'critical';
   event_type: string;
@@ -220,42 +203,6 @@ export class AuditLogger {
   }
 
   /**
-   * Log configuration changes
-   */
-  async logConfigChange(entry: ConfigChangeEntry): Promise<void> {
-    try {
-      // Encrypt sensitive values if needed
-      const oldValue = this.sanitizeValue(entry.old_value);
-      const newValue = this.sanitizeValue(entry.new_value);
-
-      await this.db.prepare(`
-        INSERT INTO config_audit_logs (
-          user_id, organization_id, config_type, config_id, action,
-          field_name, old_value, new_value, requires_approval,
-          approved_by, approved_at, request_id, ip_address, reason
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(
-        entry.user_id,
-        entry.organization_id || null,
-        entry.config_type,
-        entry.config_id || null,
-        entry.action,
-        entry.field_name || null,
-        oldValue,
-        newValue,
-        entry.requires_approval ? 1 : 0,
-        entry.approved_by || null,
-        entry.approved_at || null,
-        entry.request_id || null,
-        entry.ip_address || null,
-        entry.reason || null
-      ).run();
-    } catch (error) {
-      structuredLog('ERROR', 'Failed to write config audit log', { service: 'AuditLogger', error: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /**
    * Log security events
    */
   async logSecurityEvent(entry: SecurityEventEntry): Promise<void> {
@@ -291,28 +238,6 @@ export class AuditLogger {
     } catch (error) {
       structuredLog('ERROR', 'Failed to write security event log', { service: 'AuditLogger', error: error instanceof Error ? error.message : String(error) });
     }
-  }
-
-  /**
-   * Sanitize sensitive values for logging
-   */
-  private sanitizeValue(value: any): string | null {
-    if (value === null || value === undefined) {
-      return null;
-    }
-
-    // Don't log passwords or tokens
-    if (typeof value === 'string') {
-      const sensitive = ['password', 'token', 'secret', 'key', 'credential'];
-      const valueLower = value.toLowerCase();
-      for (const keyword of sensitive) {
-        if (valueLower.includes(keyword)) {
-          return '[REDACTED]';
-        }
-      }
-    }
-
-    return JSON.stringify(value);
   }
 
   /**

@@ -2,7 +2,7 @@
  * Recommendation Tools for Agentic Analysis
  *
  * Tools the LLM can call to make actionable recommendations
- * These map to the ai_tool_registry and ai_decisions tables
+ * These map to the ai_decisions table
  */
 
 import { AnalysisLevel } from './llm-provider';
