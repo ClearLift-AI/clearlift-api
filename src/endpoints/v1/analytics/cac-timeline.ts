@@ -187,8 +187,8 @@ export class GetCACTimeline extends OpenAPIRoute {
         historyMap.set(row.date, {
           cac_cents: row.cac_cents,
           conversion_source: row.conversion_source || 'platform',
-          conversions_goal: row.conversions_goal || 0,
-          conversions_platform: row.conversions_platform || 0,
+          conversions_goal: Math.round(row.conversions_goal || 0),
+          conversions_platform: Math.round(row.conversions_platform || 0),
           revenue_goal_cents: row.revenue_goal_cents || 0,
         });
       }
@@ -1024,10 +1024,10 @@ export class GetCACSummary extends OpenAPIRoute {
 
       return success(c, {
         cac_cents: cacCents,
-        conversions,
+        conversions: Math.round(conversions),
         conversion_source: conversionSource,
-        conversions_goal: conversionsGoal,
-        conversions_platform: conversionsPlatform,
+        conversions_goal: Math.round(conversionsGoal),
+        conversions_platform: Math.round(conversionsPlatform),
         revenue_goal_cents: revenueGoalCents,
         spend_cents: spendCents,
         goal_count: goalCount,

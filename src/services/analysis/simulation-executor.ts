@@ -436,16 +436,16 @@ If these numbers don't support your recommendation, do NOT proceed.`,
   const recommendation: Recommendation = {
     tool: toolName,
     platform: toolInput.platform || context.platform || 'unknown',
-    entity_type: toolInput.entity_type,
-    entity_id: toolInput.entity_id,
-    entity_name: toolInput.entity_name || sim.current_state.entity.name,
+    entity_type: toolInput.entity_type || 'campaign',
+    entity_id: toolInput.entity_id || toolInput.campaign_id || 'unknown',
+    entity_name: toolInput.entity_name || sim.current_state.entity.name || 'unknown',
     parameters: {
       ...toolInput,
       // Override any guessed impact with calculated value
       predicted_impact: sim.simulated_state.cac_change_percent,
       predicted_conversion_change: sim.simulated_state.conversion_change_percent
     },
-    reason: toolInput.reason,
+    reason: toolInput.reason || 'No reason provided',
     // USE CALCULATED IMPACT, NOT LLM'S GUESS
     predicted_impact: sim.simulated_state.cac_change_percent,
     confidence: sim.confidence
@@ -492,13 +492,20 @@ async function storeRecommendation(
   // The recommended_status field inside parameters carries the directional intent.
   const tool = recommendation.tool;
 
+  // Guard against undefined values that crash D1 bind()
+  const platform = recommendation.platform || 'unknown';
+  const entityType = recommendation.entity_type || 'campaign';
+  const entityId = recommendation.entity_id || 'unknown';
+  const entityName = recommendation.entity_name || 'unknown';
+  const reason = recommendation.reason || '';
+
   // Dedup: skip if an identical pending decision already exists (workflow retry safety)
   const existing = await aiDb.prepare(`
     SELECT id FROM ai_decisions
     WHERE organization_id = ? AND tool = ? AND platform = ? AND entity_type = ? AND entity_id = ?
       AND status = 'pending'
     LIMIT 1
-  `).bind(orgId, tool, recommendation.platform, recommendation.entity_type, recommendation.entity_id)
+  `).bind(orgId, tool, platform, entityType, entityId)
     .first<{ id: string }>();
 
   if (existing) return existing.id;
@@ -517,26 +524,26 @@ async function storeRecommendation(
     id,
     orgId,
     tool,
-    recommendation.platform,
-    recommendation.entity_type,
-    recommendation.entity_id,
-    recommendation.entity_name,
-    JSON.stringify(recommendation.parameters),
-    JSON.stringify(simulation.current_state),
-    recommendation.reason,
-    simulation.simulated_state.cac_change_percent,
-    simulation.confidence,
+    platform,
+    entityType,
+    entityId,
+    entityName,
+    JSON.stringify(recommendation.parameters || {}),
+    JSON.stringify(simulation.current_state || {}),
+    reason,
+    simulation.simulated_state?.cac_change_percent ?? 0,
+    simulation.confidence ?? 0,
     JSON.stringify({
       analysis_run_id: analysisRunId,
-      math_explanation: simulation.math_explanation,
-      assumptions: simulation.assumptions
+      math_explanation: simulation.math_explanation || '',
+      assumptions: simulation.assumptions || []
     }),
     JSON.stringify({
-      current_state: simulation.current_state,
-      simulated_state: simulation.simulated_state,
-      diminishing_returns_model: simulation.diminishing_returns_model
+      current_state: simulation.current_state || {},
+      simulated_state: simulation.simulated_state || {},
+      diminishing_returns_model: simulation.diminishing_returns_model || null
     }),
-    simulation.confidence,
+    simulation.confidence ?? 0,
     expiresAt
   ).run();
 
