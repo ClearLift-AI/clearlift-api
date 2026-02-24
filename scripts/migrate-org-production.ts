@@ -1,0 +1,987 @@
+#!/usr/bin/env npx tsx
+/**
+ * Interactive D1 Migration Wizard
+ *
+ * Copies 5 auth/identity tables from production → staging/production adbliss
+ * databases, interactively configures connector settings, triggers resync,
+ * and provides dashboard login credentials.
+ *
+ * Usage:
+ *   npx tsx scripts/migrate-org-production.ts
+ *
+ * The wizard guides you through:
+ *   1. Select environment (staging / production)
+ *   2. List all orgs from PRODUCTION DB
+ *   3. Select an org to migrate
+ *   4. Confirm migration plan
+ *   5. Copy 5 tables (FK order, paginated)
+ *   6. Interactive connector onboarding per connection
+ *   7. Create session token for dashboard login
+ *   8. Trigger resync + poll completion
+ *   9. Print chrome console commands for login
+ *
+ * Prerequisites:
+ *   1. New databases created (adbliss-core-staging / adbliss-analytics-staging)
+ *   2. wrangler.jsonc updated with database IDs
+ *   3. Migrations applied to new databases
+ *   4. Staging API worker + queue consumer deployed
+ */
+
+import { execSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import { select, confirm } from '@inquirer/prompts';
+import { randomUUID } from 'crypto';
+
+const WORK_DIR = path.resolve(__dirname, '..');
+const TMP_DIR = path.join(WORK_DIR, '.migrate-prod-tmp');
+
+// ============================================================================
+// ENV CONFIG — routes source/target DB bindings per environment
+// ============================================================================
+
+interface EnvConfig {
+  label: string;
+  sourceDb: string;       // Old prod DB (wrangler database-name, always prod)
+  sourceAiDb: string;     // Old prod AI DB (unused for copy, kept for reference)
+  targetDb: string;       // New core DB (wrangler binding name)
+  targetAnalyticsDb: string;
+  wranglerEnv: string;    // --env flag for TARGET wrangler commands
+  apiBase: string;
+  dashboardUrl: string;
+}
+
+const ENV_CONFIG: Record<string, EnvConfig> = {
+  staging: {
+    label: 'Staging (adbliss-core-staging)',
+    sourceDb: 'clearlift-db-prod',
+    sourceAiDb: 'clearlift-ai-prod',
+    targetDb: 'DB',
+    targetAnalyticsDb: 'ANALYTICS_DB',
+    wranglerEnv: '--env staging',
+    apiBase: 'https://api-dev.clearlift.ai',
+    dashboardUrl: 'https://dev.clearlift.ai',
+  },
+  production: {
+    label: 'Production (adbliss-core)',
+    sourceDb: 'clearlift-db-prod',
+    sourceAiDb: 'clearlift-ai-prod',
+    // Uses top-level DB/ANALYTICS_DB bindings — requires wrangler.jsonc database_id
+    // to already point at the new adbliss databases post-cutover
+    targetDb: 'DB',
+    targetAnalyticsDb: 'ANALYTICS_DB',
+    wranglerEnv: '',
+    apiBase: 'https://api.adbliss.io',
+    dashboardUrl: 'https://app.adbliss.io',
+  },
+};
+
+// Tables to copy in FK order (3 phases)
+// NOT copied: onboarding_progress (staging has different steps/flow),
+//             terms_acceptance (legal state shouldn't carry across envs)
+const MIGRATION_TABLES = [
+  // Phase 1: Identity (FK roots)
+  'users', 'organizations', 'organization_members', 'platform_connections', 'org_tag_mappings',
+  // Phase 2: Org config (FK → organizations)
+  'ai_optimization_settings', 'dashboard_layouts', 'tracking_domains', 'script_hashes',
+  'webhook_endpoints', 'org_tracking_configs', 'tracking_links',
+  // Phase 3: Connection config (FK → platform_connections)
+  'connector_filter_rules',
+] as const;
+
+// Platform-specific settings keys that must be preserved from old settings
+const PRESERVED_SETTINGS_KEYS: Record<string, string[]> = {
+  hubspot: ['hub_id', 'hub_domain'],
+  salesforce: ['instance_url'],
+  shopify: ['shop_domain'],
+};
+
+// Timeframe options for connector sync
+const TIMEFRAME_OPTIONS = [
+  { name: 'All time (730 days) — recommended for initial migration', value: 'all_time' },
+  { name: '60 days', value: '60_days' },
+  { name: '7 days', value: '7_days' },
+];
+
+const TIMEFRAME_DAYS: Record<string, number> = {
+  '7_days': 7,
+  '60_days': 60,
+  'all_time': 730,
+};
+
+let currentConfig: EnvConfig;
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+function assertSqlSafe(val: string, label: string): void {
+  if (!/^[a-zA-Z0-9_\-]+$/.test(val)) {
+    throw new Error(`${label} contains unsafe characters: ${val.substring(0, 50)}`);
+  }
+}
+
+function log(msg: string) {
+  console.log(`[${new Date().toISOString()}] ${msg}`);
+}
+
+function execOnce(cmd: string, opts?: { cwd?: string; timeout?: number }): string {
+  try {
+    return execSync(cmd, {
+      cwd: opts?.cwd || WORK_DIR,
+      encoding: 'utf-8',
+      timeout: opts?.timeout || 30000,
+      maxBuffer: 50 * 1024 * 1024,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (e: any) {
+    const stderr = e.stderr?.toString() || '';
+    const stdout = e.stdout?.toString() || '';
+    if (stdout.includes('"results"') && !stderr.includes('SQLITE_ERROR')) {
+      return stdout;
+    }
+    throw new Error(`Command failed: ${cmd}\nstderr: ${stderr}\nstdout: ${stdout}`);
+  }
+}
+
+function exec(cmd: string, opts?: { cwd?: string; timeout?: number }): string {
+  const MAX_RETRIES = 5;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return execOnce(cmd, opts);
+    } catch (e: any) {
+      const msg = e.message || '';
+      const isRateLimit = msg.includes('429') || msg.includes('rate limit') ||
+        msg.includes('A request to the Clo') || msg.includes('A fetch r');
+      const isSqliteBusy = msg.includes('SQLITE_BUSY') || msg.includes('database is locked');
+      if ((isRateLimit || isSqliteBusy) && attempt < MAX_RETRIES) {
+        const delay = isSqliteBusy ? attempt * 2 : attempt * 5;
+        log(`  ${isSqliteBusy ? 'SQLITE_BUSY' : 'RATE LIMITED'} (attempt ${attempt}/${MAX_RETRIES}), waiting ${delay}s...`);
+        execSync(`sleep ${delay}`);
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error('exec: unreachable');
+}
+
+function parseD1Results(output: string): any[] {
+  const start = output.indexOf('[');
+  const end = output.lastIndexOf(']');
+  if (start === -1 || end === -1) return [];
+  try {
+    const json = JSON.parse(output.substring(start, end + 1));
+    return json[0]?.results || [];
+  } catch {
+    const lines = output.split('\n');
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line.trim());
+        if (Array.isArray(parsed)) return parsed[0]?.results || [];
+      } catch { /* skip */ }
+    }
+    return [];
+  }
+}
+
+function escapeSQL(val: any): string {
+  if (val === null || val === undefined) return 'NULL';
+  if (typeof val === 'number') return String(val);
+  if (typeof val === 'boolean') return val ? '1' : '0';
+  const s = String(val);
+  return `'${s.replace(/'/g, "''")}'`;
+}
+
+// ============================================================================
+// DB ACCESS
+// ============================================================================
+
+/**
+ * Query PRODUCTION source database. Always reads from prod — no --env flag.
+ * Fixes Bug #1: old script used config.wranglerEnv for source reads.
+ */
+function querySourceProd(dbName: string, sql: string): any[] {
+  const escaped = sql.replace(/"/g, '\\"');
+  const output = exec(
+    `npx wrangler d1 execute ${dbName} --remote --command "${escaped}" --json`,
+    { timeout: 60000 }
+  );
+  return parseD1Results(output);
+}
+
+/**
+ * Get column names from target database.
+ */
+function getTargetColumns(binding: string, table: string): string[] {
+  const envFlag = currentConfig.wranglerEnv;
+  const output = exec(
+    `npx wrangler d1 execute ${binding} --remote ${envFlag} --command "PRAGMA table_info(${table})" --json`,
+    { timeout: 15000 }
+  );
+  return parseD1Results(output).map((r: any) => r.name);
+}
+
+/**
+ * Count rows in target database. Fixes Bug #3: now accepts whereClause.
+ */
+function countTarget(binding: string, table: string, whereClause?: string): number {
+  const envFlag = currentConfig.wranglerEnv;
+  const where = whereClause ? ` WHERE ${whereClause}` : '';
+  const output = exec(
+    `npx wrangler d1 execute ${binding} --remote ${envFlag} --command "SELECT COUNT(*) as c FROM ${table}${where}" --json`,
+    { timeout: 15000 }
+  );
+  const results = parseD1Results(output);
+  return results[0]?.c || 0;
+}
+
+/**
+ * Execute a write command on the target database via temp file.
+ * Uses --file instead of --command to avoid shell interpretation of
+ * JSON double quotes, backticks, dollar signs, etc.
+ */
+function execTarget(binding: string, sql: string): void {
+  const envFlag = currentConfig.wranglerEnv;
+  const tmpFile = path.join(TMP_DIR, `exec_${binding}_${Date.now()}.sql`);
+  if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+  fs.writeFileSync(tmpFile, sql);
+  try {
+    exec(
+      `npx wrangler d1 execute ${binding} --remote ${envFlag} --file "${tmpFile}"`,
+      { timeout: 30000 }
+    );
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
+}
+
+/**
+ * Import a batch of rows into the target database via temp SQL file.
+ */
+function importBatch(binding: string, table: string, columns: string[], rows: any[]): void {
+  if (rows.length === 0) return;
+
+  const colList = columns.join(', ');
+  const statements: string[] = [
+    // Disable FK checks during import — source data may reference users/orgs
+    // not yet copied (e.g., dashboard_layouts.updated_by → former member)
+    'PRAGMA foreign_keys = OFF;',
+  ];
+
+  for (const row of rows) {
+    const values = columns.map(col => escapeSQL(row[col])).join(', ');
+    statements.push(`INSERT OR IGNORE INTO ${table} (${colList}) VALUES (${values});`);
+  }
+
+  statements.push('PRAGMA foreign_keys = ON;');
+
+  const tmpFile = path.join(TMP_DIR, `import_${binding}_${table}_${Date.now()}.sql`);
+  if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+  fs.writeFileSync(tmpFile, statements.join('\n'));
+
+  const envFlag = currentConfig.wranglerEnv;
+  exec(
+    `npx wrangler d1 execute ${binding} --remote ${envFlag} --file "${tmpFile}"`,
+    { timeout: 120000 }
+  );
+
+  try { fs.unlinkSync(tmpFile); } catch {}
+}
+
+// ============================================================================
+// PAGINATED PULL: source DB (prod) → target DB (new)
+// ============================================================================
+
+function pullTable(
+  sourceDbName: string,
+  targetBinding: string,
+  table: string,
+  whereClause: string,
+  label?: string
+): number {
+  const tag = label || table;
+  const PAGE_SIZE = 500;
+
+  // Check target table exists
+  let targetCols: string[];
+  try {
+    targetCols = getTargetColumns(targetBinding, table);
+  } catch {
+    log(`  SKIP: ${tag} — table does not exist in target ${targetBinding}`);
+    return 0;
+  }
+
+  // Check source table exists
+  let sourceCols: any[];
+  try {
+    sourceCols = querySourceProd(sourceDbName, `PRAGMA table_info(${table})`);
+  } catch {
+    log(`  SKIP: ${tag} — table does not exist in source ${sourceDbName}`);
+    return 0;
+  }
+  const sourceColNames = sourceCols.map((r: any) => r.name);
+  if (sourceColNames.length === 0) {
+    log(`  SKIP: ${tag} — table does not exist in source ${sourceDbName}`);
+    return 0;
+  }
+
+  // Verify WHERE clause column exists
+  const whereColMatch = whereClause.match(/^(\w+)\s*(=|IN)\s*/i);
+  const whereCol = whereColMatch?.[1];
+  if (whereCol && !sourceColNames.includes(whereCol)) {
+    log(`  SKIP: ${tag} — source table missing column '${whereCol}'`);
+    return 0;
+  }
+
+  // Count source rows
+  const countResult = querySourceProd(sourceDbName, `SELECT COUNT(*) as c FROM ${table} WHERE ${whereClause}`);
+  const totalRows = countResult[0]?.c || 0;
+  if (totalRows === 0) {
+    log(`  ${tag}: 0 rows (skipped)`);
+    return 0;
+  }
+
+  log(`  ${tag}: ${totalRows.toLocaleString()} rows to copy...`);
+
+  // Column intersection (handles schema differences between old and new)
+  const commonCols = sourceColNames.filter((c: string) => targetCols.includes(c));
+  if (commonCols.length === 0) {
+    log(`  WARNING: No common columns between source and target for ${table}`);
+    return 0;
+  }
+
+  const selectCols = commonCols.join(', ');
+  let offset = 0;
+  let imported = 0;
+
+  while (offset < totalRows) {
+    const rows = querySourceProd(sourceDbName, `SELECT ${selectCols} FROM ${table} WHERE ${whereClause} ORDER BY rowid LIMIT ${PAGE_SIZE} OFFSET ${offset}`);
+    if (rows.length === 0) break;
+
+    importBatch(targetBinding, table, commonCols, rows);
+    imported += rows.length;
+    offset += PAGE_SIZE;
+
+    if (imported % 2000 === 0 || rows.length < PAGE_SIZE) {
+      log(`    Progress: ${imported.toLocaleString()} / ${totalRows.toLocaleString()}`);
+    }
+
+    if (rows.length < PAGE_SIZE) break;
+  }
+
+  // Verify with WHERE clause (Fixes Bug #3)
+  const targetCount = countTarget(targetBinding, table, whereClause);
+  log(`    Verified: ${targetCount} rows in target ${table}`);
+  return imported;
+}
+
+// ============================================================================
+// ORG INFO
+// ============================================================================
+
+interface OrgInfo {
+  id: string;
+  slug: string;
+  name: string;
+  tag: string | null;
+  memberUserIds: string[];
+  primaryUserId: string;
+  connections: Array<{
+    id: string;
+    platform: string;
+    account_id: string;
+    account_name: string;
+    sync_status: string;
+    settings: string | null;
+  }>;
+}
+
+function discoverOrg(slug: string): OrgInfo {
+  assertSqlSafe(slug, 'slug');
+
+  const orgs = querySourceProd(currentConfig.sourceDb, `SELECT * FROM organizations WHERE slug = '${slug}'`);
+  if (orgs.length === 0) throw new Error(`No org found with slug '${slug}'`);
+
+  const org = orgs[0];
+  const orgId = org.id;
+  assertSqlSafe(orgId, 'org_id');
+
+  // Tag mapping
+  const tagRows = querySourceProd(currentConfig.sourceDb, `SELECT * FROM org_tag_mappings WHERE organization_id = '${orgId}'`);
+  const tag = tagRows[0]?.short_tag || null;
+  if (tag) assertSqlSafe(tag, 'org_tag');
+
+  // Find owner or first member
+  const ownerMembers = querySourceProd(currentConfig.sourceDb, `SELECT * FROM organization_members WHERE organization_id = '${orgId}' AND role = 'owner'`);
+  let primaryUserId: string;
+  if (ownerMembers.length > 0) {
+    primaryUserId = ownerMembers[0].user_id;
+  } else {
+    const anyMembers = querySourceProd(currentConfig.sourceDb, `SELECT * FROM organization_members WHERE organization_id = '${orgId}' LIMIT 1`);
+    if (anyMembers.length === 0) throw new Error(`No members found for org '${slug}'`);
+    primaryUserId = anyMembers[0].user_id;
+  }
+
+  // All member user IDs
+  const allMembers = querySourceProd(currentConfig.sourceDb, `SELECT DISTINCT user_id FROM organization_members WHERE organization_id = '${orgId}'`);
+  const memberUserIds = allMembers.map((m: any) => m.user_id);
+  memberUserIds.forEach((uid: string) => assertSqlSafe(uid, 'user_id'));
+
+  // Platform connections (full row for settings)
+  const connections = querySourceProd(currentConfig.sourceDb,
+    `SELECT id, platform, account_id, account_name, sync_status, settings FROM platform_connections WHERE organization_id = '${orgId}'`
+  );
+
+  return { id: orgId, slug: org.slug, name: org.name, tag, memberUserIds, primaryUserId, connections };
+}
+
+// ============================================================================
+// STEP 1: SELECT ENVIRONMENT
+// ============================================================================
+
+async function stepSelectEnvironment(): Promise<string> {
+  console.log('\n  D1 Migration Wizard\n');
+
+  const env = await select({
+    message: 'Select target environment:',
+    choices: Object.entries(ENV_CONFIG).map(([key, cfg]) => ({
+      name: cfg.label,
+      value: key,
+    })),
+  });
+
+  currentConfig = ENV_CONFIG[env];
+
+  // Validate target DB is reachable
+  log(`Validating target DB (${currentConfig.targetDb})...`);
+  try {
+    const envFlag = currentConfig.wranglerEnv;
+    exec(
+      `npx wrangler d1 execute ${currentConfig.targetDb} --remote ${envFlag} --command "SELECT 1" --json`,
+      { timeout: 15000 }
+    );
+    log('Target DB reachable.');
+  } catch (e: any) {
+    console.error(`\nERROR: Cannot reach target DB '${currentConfig.targetDb}'.`);
+    console.error('Make sure wrangler.jsonc has the correct database_id and migrations are applied.');
+    console.error(`Detail: ${e.message?.substring(0, 200)}`);
+    process.exit(1);
+  }
+
+  return env;
+}
+
+// ============================================================================
+// STEP 2+3: LIST AND SELECT ORG
+// ============================================================================
+
+async function stepListAndSelectOrg(): Promise<OrgInfo> {
+  log('Fetching production orgs...');
+
+  const orgs = querySourceProd(currentConfig.sourceDb, `
+    SELECT o.id, o.slug, o.name, o.subscription_tier, o.created_at
+    FROM organizations o
+    ORDER BY o.name
+  `);
+
+  if (orgs.length === 0) {
+    console.error('No organizations found in production.');
+    process.exit(1);
+  }
+
+  // Validate org IDs and build safe ID list
+  for (const org of orgs) assertSqlSafe(org.id, 'org_id');
+
+  // Batch check: which orgs already exist in target (chunked for safety)
+  const migratedOrgIds = new Set<string>();
+  try {
+    const CHUNK_SIZE = 200;
+    for (let i = 0; i < orgs.length; i += CHUNK_SIZE) {
+      const chunk = orgs.slice(i, i + CHUNK_SIZE);
+      const idList = chunk.map((o: any) => `'${o.id}'`).join(', ');
+      const migratedRows = parseD1Results(
+        exec(`npx wrangler d1 execute ${currentConfig.targetDb} --remote ${currentConfig.wranglerEnv} --command "SELECT id FROM organizations WHERE id IN (${idList})" --json`, { timeout: 15000 })
+      );
+      for (const row of migratedRows) migratedOrgIds.add(row.id);
+    }
+  } catch { /* target table may not exist yet */ }
+
+  // Batch fetch: all connections across all orgs (chunked for safety)
+  const orgConnections = new Map<string, string[]>();
+  try {
+    const CHUNK_SIZE = 200;
+    for (let i = 0; i < orgs.length; i += CHUNK_SIZE) {
+      const chunk = orgs.slice(i, i + CHUNK_SIZE);
+      const idList = chunk.map((o: any) => `'${o.id}'`).join(', ');
+      const connRows = querySourceProd(currentConfig.sourceDb,
+        `SELECT organization_id, platform FROM platform_connections WHERE organization_id IN (${idList})`
+      );
+      for (const row of connRows) {
+        const existing = orgConnections.get(row.organization_id) || [];
+        existing.push(row.platform);
+        orgConnections.set(row.organization_id, existing);
+      }
+    }
+  } catch { /* source query failed */ }
+
+  const selectedSlug = await select({
+    message: 'Select an organization to migrate:',
+    choices: orgs.map((org: any) => {
+      const migrated = migratedOrgIds.has(org.id);
+      const conns = orgConnections.get(org.id) || [];
+      const connStr = conns.length > 0 ? ` [${conns.join(', ')}]` : '';
+      const check = migrated ? ' \u2713' : '';
+      return {
+        name: `${org.name} (${org.slug})${connStr}${check}`,
+        value: org.slug,
+        description: migrated ? 'Already migrated' : undefined,
+      };
+    }),
+  });
+
+  log(`Discovering org: ${selectedSlug}...`);
+  return discoverOrg(selectedSlug);
+}
+
+// ============================================================================
+// STEP 4: CONFIRM
+// ============================================================================
+
+async function stepConfirm(info: OrgInfo): Promise<void> {
+  console.log('\n--- Migration Plan ---');
+  console.log(`  Org:          ${info.name} (${info.slug})`);
+  console.log(`  Org ID:       ${info.id}`);
+  console.log(`  Tag:          ${info.tag || '(none)'}`);
+  console.log(`  Members:      ${info.memberUserIds.length} user(s)`);
+  console.log(`  Connections:  ${info.connections.length > 0 ? info.connections.map(c => `${c.platform}(${c.account_name || c.account_id})`).join(', ') : '(none)'}`);
+  console.log(`  Target DB:    ${currentConfig.targetDb} (${currentConfig.label})`);
+  console.log(`\n  Tables to copy (in FK order):`);
+  for (const table of MIGRATION_TABLES) {
+    console.log(`    - ${table}`);
+  }
+  console.log();
+
+  const proceed = await confirm({
+    message: `Clone prod credentials for "${info.name}" into ${currentConfig.label}?`,
+    default: true,
+  });
+
+  if (!proceed) {
+    console.log('Aborted.');
+    process.exit(0);
+  }
+}
+
+// ============================================================================
+// STEP 5: COPY 5 TABLES
+// ============================================================================
+
+function stepCopy(info: OrgInfo): void {
+  log('\nCopying core tables (FK order)...');
+
+  const orgWhere = `organization_id = '${info.id}'`;
+  const targetDb = currentConfig.targetDb;
+  let totalRows = 0;
+  let tablesCopied = 0;
+
+  function track(n: number) { totalRows += n; if (n > 0) tablesCopied++; }
+
+  // ---- Phase 1: Identity tables (FK roots) ----
+
+  // 1. Users (all members — avoids FK violations)
+  for (const uid of info.memberUserIds) {
+    track(pullTable(currentConfig.sourceDb, targetDb, 'users', `id = '${uid}'`, `users (${uid.substring(0, 8)}...)`));
+  }
+
+  // 2. Organizations
+  track(pullTable(currentConfig.sourceDb, targetDb, 'organizations', `id = '${info.id}'`));
+
+  // 3. Organization members
+  track(pullTable(currentConfig.sourceDb, targetDb, 'organization_members', orgWhere));
+
+  // 4. Platform connections (encrypted OAuth tokens — irreplaceable)
+  track(pullTable(currentConfig.sourceDb, targetDb, 'platform_connections', orgWhere));
+
+  // 5. Org tag mappings
+  track(pullTable(currentConfig.sourceDb, targetDb, 'org_tag_mappings', orgWhere));
+
+  // ---- Phase 2: Org-level config (FK → organizations) ----
+
+  track(pullTable(currentConfig.sourceDb, targetDb, 'ai_optimization_settings', `org_id = '${info.id}'`, 'ai_optimization_settings'));
+  track(pullTable(currentConfig.sourceDb, targetDb, 'dashboard_layouts', orgWhere));
+  track(pullTable(currentConfig.sourceDb, targetDb, 'tracking_domains', orgWhere));
+  track(pullTable(currentConfig.sourceDb, targetDb, 'script_hashes', orgWhere));
+  track(pullTable(currentConfig.sourceDb, targetDb, 'webhook_endpoints', orgWhere));
+  track(pullTable(currentConfig.sourceDb, targetDb, 'org_tracking_configs', orgWhere));
+
+  // Tracking links use org_tag, not organization_id
+  if (info.tag) {
+    track(pullTable(currentConfig.sourceDb, targetDb, 'tracking_links', `org_tag = '${info.tag}'`, 'tracking_links (by org_tag)'));
+  }
+
+  // ---- Phase 3: Connection-level config (FK → platform_connections) ----
+
+  const connectionIds = info.connections.map(c => c.id);
+  if (connectionIds.length > 0) {
+    const connIdList = connectionIds.map(id => `'${id}'`).join(', ');
+    track(pullTable(currentConfig.sourceDb, targetDb, 'connector_filter_rules', `connection_id IN (${connIdList})`, 'connector_filter_rules'));
+  }
+
+  log(`\nCopy complete: ${totalRows} total rows across ${tablesCopied} tables.`);
+}
+
+// ============================================================================
+// STEP 6: INTERACTIVE CONNECTOR ONBOARDING
+// ============================================================================
+
+async function stepOnboardConnectors(info: OrgInfo): Promise<void> {
+  if (info.connections.length === 0) {
+    log('\nNo connectors to configure.');
+    return;
+  }
+
+  console.log(`\n--- Connector Onboarding (${info.connections.length} connection(s)) ---\n`);
+
+  for (const conn of info.connections) {
+    console.log(`\n  ${conn.platform.toUpperCase()} — ${conn.account_name || conn.account_id} (${conn.id.substring(0, 8)}...)`);
+
+    // Parse old settings to preserve platform-specific keys
+    const oldSettings = conn.settings ? JSON.parse(conn.settings) : {};
+
+    // 6a: Sync timeframe
+    const timeframe = await select({
+      message: `  Sync window for ${conn.platform}?`,
+      choices: TIMEFRAME_OPTIONS,
+      default: 'all_time',
+    });
+
+    // Build new settings
+    const newSettings: Record<string, any> = {
+      sync_config: { timeframe },
+      emit_events: true,
+      aggregation_mode: 'conversions_only',
+      dedup_window_hours: 24,
+    };
+
+    // 6b: Google Ads — account selection
+    if (conn.platform === 'google') {
+      const oldAccountMode = oldSettings.accountSelection?.mode || 'unknown';
+      const oldSelected = oldSettings.accountSelection?.selectedAccounts || [];
+
+      const accountMode = await select({
+        message: `  Google Ads account mode? (current: ${oldAccountMode}, ${oldSelected.length} selected)`,
+        choices: [
+          { name: 'All accounts (recommended)', value: 'all' },
+          { name: 'Keep existing selection', value: 'keep' },
+        ],
+        default: 'all',
+      });
+
+      if (accountMode === 'all') {
+        newSettings.accountSelection = { mode: 'all' };
+      } else {
+        // Preserve existing selection
+        newSettings.accountSelection = oldSettings.accountSelection || { mode: 'all' };
+      }
+    }
+
+    // 6c: Data flow defaults
+    const useDefaults = await confirm({
+      message: `  Use default data flow? (emit_events=true, aggregation_mode=conversions_only, dedup_window=24h)`,
+      default: true,
+    });
+
+    if (!useDefaults) {
+      const emitEvents = await confirm({ message: '    emit_events?', default: true });
+      newSettings.emit_events = emitEvents;
+
+      const aggMode = await select({
+        message: '    aggregation_mode?',
+        choices: [
+          { name: 'conversions_only', value: 'conversions_only' },
+          { name: 'all_events', value: 'all_events' },
+          { name: 'none', value: 'none' },
+        ],
+        default: 'conversions_only',
+      });
+      newSettings.aggregation_mode = aggMode;
+    }
+
+    // 6d: Revenue connectors — platform-specific config
+    if (conn.platform === 'stripe') {
+      const syncMode = await select({
+        message: '  Stripe sync mode?',
+        choices: [
+          { name: 'Charges (one-time payments)', value: 'charges' },
+          { name: 'Subscriptions (recurring)', value: 'subscriptions' },
+        ],
+        default: oldSettings.sync_mode || 'charges',
+      });
+      newSettings.sync_mode = syncMode;
+      newSettings.lookback_days = TIMEFRAME_DAYS[timeframe] || 60;
+      newSettings.auto_sync = true;
+      // Remove non-Stripe keys
+      delete newSettings.aggregation_mode;
+      delete newSettings.dedup_window_hours;
+      delete newSettings.emit_events;
+    }
+
+    if (conn.platform === 'shopify' || conn.platform === 'jobber') {
+      const hasConvEvents = oldSettings.conversion_events;
+      if (hasConvEvents) {
+        console.log(`    Current conversion_events: ${JSON.stringify(hasConvEvents)}`);
+        const keepConvEvents = await confirm({
+          message: '    Keep existing conversion_events config?',
+          default: true,
+        });
+        if (keepConvEvents) {
+          newSettings.conversion_events = hasConvEvents;
+        }
+      }
+    }
+
+    // 6e: MERGE old settings (preserve platform-specific keys) then WRITE
+    const preservedKeys = PRESERVED_SETTINGS_KEYS[conn.platform] || [];
+    const preserved: Record<string, any> = {};
+    for (const key of preservedKeys) {
+      if (oldSettings[key] !== undefined) {
+        preserved[key] = oldSettings[key];
+      }
+    }
+
+    const mergedSettings = { ...preserved, ...newSettings };
+    // Safe: JSON.stringify produces only double-quoted strings, so single-quote
+    // escaping is sufficient. No user-controlled input enters the JSON keys.
+    const settingsJson = JSON.stringify(mergedSettings).replace(/'/g, "''");
+
+    log(`  Writing settings for ${conn.platform} (${conn.id.substring(0, 8)}...)...`);
+    execTarget(
+      currentConfig.targetDb,
+      `UPDATE platform_connections SET settings = '${settingsJson}' WHERE id = '${conn.id}'`
+    );
+    log(`  Settings saved.`);
+  }
+}
+
+// ============================================================================
+// STEP 7: CREATE SESSION TOKEN
+// ============================================================================
+
+function stepCreateSession(info: OrgInfo): string {
+  log('\nCreating session token...');
+
+  const token = randomUUID();
+
+  execTarget(
+    currentConfig.targetDb,
+    `INSERT INTO sessions (token, user_id, created_at, expires_at, user_agent) VALUES ('${token}', '${info.primaryUserId}', datetime('now'), datetime('now', '+30 days'), 'migrate-org-wizard')`
+  );
+
+  log(`Session created for user ${info.primaryUserId.substring(0, 8)}... (expires in 30 days)`);
+  return token;
+}
+
+// ============================================================================
+// STEP 8: TRIGGER RESYNC
+// ============================================================================
+
+async function stepTriggerSync(info: OrgInfo, sessionToken: string): Promise<void> {
+  if (info.connections.length === 0) {
+    log('\nNo connectors to sync.');
+    return;
+  }
+
+  const doResync = await confirm({
+    message: `Trigger resync for ${info.connections.length} connector(s)?`,
+    default: true,
+  });
+
+  if (!doResync) {
+    log('Skipping resync. You can trigger manually from the dashboard.');
+    return;
+  }
+
+  // Health check
+  log(`\nChecking API health at ${currentConfig.apiBase}...`);
+  try {
+    const healthResp = await fetch(`${currentConfig.apiBase}/v1/health`);
+    if (!healthResp.ok) {
+      log(`WARNING: API health check failed (${healthResp.status}). Continuing anyway...`);
+    } else {
+      log('API is healthy.');
+    }
+  } catch (e: any) {
+    log(`WARNING: Cannot reach API at ${currentConfig.apiBase}: ${e.message?.substring(0, 80)}`);
+    const proceed = await confirm({ message: 'Continue with resync anyway?', default: false });
+    if (!proceed) return;
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${sessionToken}`,
+    'X-Organization-Id': info.id,
+  };
+
+  // Trigger resync for each connection
+  const syncResults: Array<{ connectionId: string; platform: string; status: string; jobId?: string }> = [];
+
+  for (const conn of info.connections) {
+    try {
+      const resp = await fetch(`${currentConfig.apiBase}/v1/connectors/${conn.id}/resync`, {
+        method: 'POST',
+        headers,
+      });
+
+      const body = await resp.json() as any;
+
+      if (resp.ok) {
+        syncResults.push({ connectionId: conn.id, platform: conn.platform, status: 'triggered', jobId: body.job_id });
+        log(`  Triggered: ${conn.platform} -> job ${body.job_id?.substring(0, 8)}...`);
+      } else if (resp.status === 409) {
+        syncResults.push({ connectionId: conn.id, platform: conn.platform, status: 'already_syncing' });
+        log(`  Already syncing: ${conn.platform} (409)`);
+      } else {
+        syncResults.push({ connectionId: conn.id, platform: conn.platform, status: `error_${resp.status}` });
+        log(`  ERROR: ${conn.platform} (${resp.status}): ${JSON.stringify(body).substring(0, 100)}`);
+      }
+    } catch (e: any) {
+      syncResults.push({ connectionId: conn.id, platform: conn.platform, status: 'network_error' });
+      log(`  ERROR: ${conn.platform} network error: ${e.message?.substring(0, 80)}`);
+    }
+  }
+
+  // Poll sync completion
+  const activeSyncs = syncResults.filter(r => r.status === 'triggered' && r.jobId);
+  if (activeSyncs.length > 0) {
+    const doPoll = await confirm({
+      message: `Poll ${activeSyncs.length} sync(s) for completion? (can take 5-30 min)`,
+      default: true,
+    });
+
+    if (doPoll) {
+      log(`\nPolling ${activeSyncs.length} sync(s)...`);
+
+      const POLL_INTERVAL_MS = 30_000;
+      const POLL_TIMEOUT_MS = 30 * 60 * 1000;
+      const startTime = Date.now();
+      const pending = new Map(activeSyncs.map(s => [s.connectionId, s]));
+
+      while (pending.size > 0 && (Date.now() - startTime) < POLL_TIMEOUT_MS) {
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+
+        for (const [connId, sync] of [...pending.entries()]) {
+          try {
+            const resp = await fetch(`${currentConfig.apiBase}/v1/connectors/${connId}/sync-status`, { headers });
+            const body = await resp.json() as any;
+            const status = body.latest_sync?.status || body.connection?.sync_status;
+
+            if (status === 'completed') {
+              log(`  ${sync.platform} sync completed`);
+              pending.delete(connId);
+            } else if (status === 'failed') {
+              log(`  ${sync.platform} sync FAILED: ${body.latest_sync?.error || 'unknown'}`);
+              pending.delete(connId);
+            } else {
+              const progress = body.latest_sync?.progress_percentage || '?';
+              log(`  ${sync.platform}: ${status} (${progress}%)`);
+            }
+          } catch { /* keep waiting */ }
+        }
+      }
+
+      if (pending.size > 0) {
+        log(`WARNING: ${pending.size} sync(s) still running after 30 min. They will continue in background.`);
+      }
+    }
+  }
+
+  // CAC backfill
+  log('\nTriggering CAC backfill...');
+  try {
+    const resp = await fetch(`${currentConfig.apiBase}/v1/analytics/cac/backfill`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ org_id: info.id, days: 90 }),
+    });
+    if (resp.ok) {
+      log('CAC backfill triggered (90 days).');
+    } else {
+      const body = await resp.text();
+      log(`CAC backfill failed (${resp.status}): ${body.substring(0, 100)}`);
+    }
+  } catch (e: any) {
+    log(`CAC backfill network error: ${e.message?.substring(0, 80)}`);
+  }
+
+  // Summary
+  console.log('\n  Sync summary:');
+  for (const r of syncResults) {
+    const symbol = r.status === 'triggered' ? '\u2713' : r.status === 'already_syncing' ? '~' : '\u2717';
+    console.log(`    ${symbol} ${r.platform}: ${r.status}`);
+  }
+}
+
+// ============================================================================
+// STEP 9: PRINT LOGIN COMMANDS
+// ============================================================================
+
+function stepComplete(info: OrgInfo, sessionToken: string): void {
+  console.log('\n' + '='.repeat(60));
+  console.log('  Migration Complete!');
+  console.log('='.repeat(60));
+  console.log(`\n  Org: ${info.name} (${info.slug})`);
+  console.log(`  Dashboard: ${currentConfig.dashboardUrl}`);
+  console.log('\n  Paste these in Chrome DevTools console to login:\n');
+  console.log(`    localStorage.setItem('adbliss_session', '${sessionToken}');`);
+  console.log(`    localStorage.setItem('adbliss_current_org', '${info.id}');`);
+  console.log(`    location.reload();`);
+  console.log('\n  Session expires in 30 days. Treat this token as a credential.');
+  console.log('  Downstream workflows (identity, attribution) will fire on next cron cycle.');
+  console.log();
+}
+
+// ============================================================================
+// MAIN
+// ============================================================================
+
+async function main() {
+  if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+
+  try {
+    // Step 1: Select environment
+    await stepSelectEnvironment();
+
+    // Step 2+3: List orgs, select one
+    const orgInfo = await stepListAndSelectOrg();
+
+    // Step 4: Confirm
+    await stepConfirm(orgInfo);
+
+    // Step 5: Copy 5 tables
+    stepCopy(orgInfo);
+
+    // Step 6: Interactive connector onboarding
+    await stepOnboardConnectors(orgInfo);
+
+    // Step 7: Create session token
+    const sessionToken = stepCreateSession(orgInfo);
+
+    // Step 8: Trigger resync
+    await stepTriggerSync(orgInfo, sessionToken);
+
+    // Step 9: Print login commands
+    stepComplete(orgInfo, sessionToken);
+  } finally {
+    try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch {}
+  }
+}
+
+main().catch(e => {
+  console.error('\nMigration failed:', e.message || e);
+  console.error('\nIf the failure occurred during table copy (step 5), the migration is');
+  console.error('partially complete. Re-run the wizard to continue — INSERT OR IGNORE');
+  console.error('ensures already-copied rows are safely skipped.');
+  try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch {}
+  process.exit(1);
+});
