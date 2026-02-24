@@ -50,14 +50,14 @@ interface D1ExecResult {
 export const EXPLORATION_TOOLS = {
   query_ad_metrics: {
     name: 'query_ad_metrics',
-    description: 'Query ad platform data from D1. REQUIRED: platform (google/facebook/tiktok) and entity_type (campaign/adset/ad/ad_group) for all scopes except account-level. entity_id is REQUIRED for non-account queries — use the UUID from earlier query results, NOT campaign names. Scopes: "performance" — metrics for a specific entity; "creatives" — ad creative details; "audiences" — targeting breakdown by dimension; "budgets" — current budget config. Do NOT use entity_type "account" with budgets scope.',
+    description: 'Query ad platform data from D1. REQUIRED: platform (google/facebook/tiktok) and entity_type (campaign/adset/ad/ad_group) for all scopes except account-level. entity_id is REQUIRED for non-account queries — pass the campaign/ad group NAME (e.g. "Los Angeles - Search"), platform external ID, or D1 UUID. Names are resolved automatically. Scopes: "performance" — metrics for a specific entity; "children" — LIST all child entities with aggregated KPIs (e.g. entity_type=campaign shows its ad groups, entity_type=ad_group shows its ads); "creatives" — ad creative details; "audiences" — targeting breakdown by dimension; "budgets" — current budget config. Use entity_type "account" for aggregate platform-level performance (not for budgets/audiences). Use "children" scope to drill down the entity tree.',
     input_schema: {
       type: 'object' as const,
       properties: {
         scope: {
           type: 'string',
-          enum: ['performance', 'creatives', 'audiences', 'budgets'],
-          description: 'Which ad metrics operation to perform'
+          enum: ['performance', 'children', 'creatives', 'audiences', 'budgets'],
+          description: 'Which ad metrics operation to perform. Use "children" to list all child entities (ad groups in a campaign, or ads in an ad group) with their aggregated KPIs.'
         },
         platform: {
           type: 'string',
@@ -70,7 +70,7 @@ export const EXPLORATION_TOOLS = {
         },
         entity_id: {
           type: 'string',
-          description: 'REQUIRED for non-account queries. The entity UUID from D1 (e.g. "3f857a38-..."). Use IDs returned by previous queries — do NOT pass campaign names here.'
+          description: 'REQUIRED for non-account queries. Pass the entity NAME (e.g. "Los Angeles - Search", "Atlanta - Performance Max"), platform external ID, or D1 UUID. Names are auto-resolved.'
         },
         metrics: {
           type: 'array',
@@ -120,7 +120,7 @@ export const EXPLORATION_TOOLS = {
         },
         group_by: {
           type: 'string',
-          description: 'Time/dimension grouping. For stripe: day/week/month/geo (geo extracts country/state from billing address metadata). For jobber: day/week/month. For shopify: day/week/month/utm_source/utm_campaign/source_name/shipping_country. For ecommerce: day/platform/status/utm_source/utm_campaign. For accounting: day/month/status/category.'
+          description: 'Time/dimension grouping. For stripe: day/week/month/geo. For jobber: day/week/month. For shopify: day/week/month/utm_source/utm_campaign/source_name. For ecommerce: day/platform/status/utm_source/utm_campaign/geo (geo extracts country/state from billing/shipping metadata — best with Stripe which stores billing_details). For accounting: day/month/status/category.'
         },
         platform: {
           type: 'string',
@@ -133,7 +133,7 @@ export const EXPLORATION_TOOLS = {
         },
         filters: {
           type: 'object',
-          description: 'For "stripe": status, min/max_amount_cents, currency, product_id. For "jobber": min/max_amount_cents. For "shopify": financial_status, fulfillment_status, min/max_total_cents, utm_source, utm_campaign, shipping_country. For "subscriptions": status array, plan_interval, min_ltv_cents.'
+          description: 'For "stripe": status, min/max_amount_cents, currency, product_id. For "jobber": min/max_amount_cents. For "shopify": financial_status, fulfillment_status, min/max_total_cents, utm_source, utm_campaign. For "ecommerce": financial_status, min/max_amount_cents. For "subscriptions": status array, plan_interval, min_ltv_cents.'
         },
         metadata_filters: {
           type: 'array',
@@ -636,14 +636,8 @@ export function getExplorationTools(): Array<{
   return Object.values(EXPLORATION_TOOLS);
 }
 
-// Generic exploration tool definitions (provider-agnostic canonical format)
-export function getExplorationToolDefinitions(): Array<{
-  name: string;
-  description: string;
-  input_schema: object;
-}> {
-  return Object.values(EXPLORATION_TOOLS);
-}
+/** @deprecated Use getExplorationTools() instead */
+export const getExplorationToolDefinitions = getExplorationTools;
 
 /**
  * Check if a tool name is an exploration tool
@@ -917,7 +911,7 @@ interface QueryRealtimeTrafficInput {
 
 interface QueryShopifyRevenueInput {
   days: number;
-  group_by?: 'day' | 'week' | 'month' | 'utm_source' | 'utm_campaign' | 'source_name' | 'shipping_country';
+  group_by?: 'day' | 'week' | 'month' | 'utm_source' | 'utm_campaign' | 'source_name';
   filters?: {
     financial_status?: string;
     fulfillment_status?: string;
@@ -925,7 +919,6 @@ interface QueryShopifyRevenueInput {
     max_total_cents?: number;
     utm_source?: string;
     utm_campaign?: string;
-    shipping_country?: string;
   };
   include_products?: boolean;
   include_attribution?: boolean;
@@ -949,7 +942,7 @@ interface QueryCommEngagementInput {
 interface QueryEcommerceAnalyticsInput {
   days: number;
   platform?: string;
-  group_by?: 'day' | 'platform' | 'status' | 'utm_source' | 'utm_campaign';
+  group_by?: 'day' | 'platform' | 'status' | 'utm_source' | 'utm_campaign' | 'geo';
   include_products?: boolean;
   include_customers?: boolean;
 }
@@ -1040,11 +1033,12 @@ export class ExplorationToolExecutor {
             return { success: false, error: `Missing or invalid "entity_type" for scope "${input.scope}". Must be one of: ${validEntityTypes.join(', ')}` };
           }
           // Validate entity_id for scopes that require it (account-level queries are OK without entity_id)
-          if (['performance', 'creatives', 'audiences', 'budgets'].includes(input.scope) && input.entity_type !== 'account' && !input.entity_id) {
+          if (['performance', 'creatives', 'audiences', 'budgets', 'children'].includes(input.scope) && input.entity_type !== 'account' && !input.entity_id) {
             return { success: false, error: `Missing required parameter "entity_id" for scope "${input.scope}" with entity_type "${input.entity_type}". Provide the specific entity ID to query.` };
           }
           switch (input.scope) {
             case 'performance': return await this.queryMetrics(input as QueryMetricsInput, orgId);
+            case 'children': return await this.queryChildren(input as QueryMetricsInput, orgId);
             case 'creatives': return await this.getCreativeDetails(input as GetCreativeDetailsInput, orgId);
             case 'audiences': return await this.getAudienceBreakdown(input as GetAudienceBreakdownInput, orgId);
             case 'budgets': return await this.getEntityBudget(input as GetEntityBudgetInput, orgId);
@@ -1125,7 +1119,8 @@ export class ExplorationToolExecutor {
     input: QueryMetricsInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { platform, entity_type, entity_id, metrics, days, include_verified_revenue } = input;
+    const { platform, entity_type, metrics, days, include_verified_revenue } = input;
+    let { entity_id } = input;
 
     // Build date range
     const endDate = new Date();
@@ -1135,6 +1130,15 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
+      // Resolve entity_id (name/UUID/external ID) to the external ID used in ad_metrics.entity_ref
+      if (entity_id && entity_type && entity_type !== 'account') {
+        const resolved = await this.resolveEntityId(entity_id, entity_type, platform, orgId);
+        if (resolved) {
+          entity_id = resolved.externalId;
+        }
+        // If resolution fails, pass through as-is — buildUnifiedMetricsQuery will just return empty results
+      }
+
       // Use unified ad_metrics table
       const { query, params } = this.buildUnifiedMetricsQuery(platform, entity_type, entity_id, days, orgId);
       const result = await this.db.prepare(query).bind(...params).all<{
@@ -1188,6 +1192,116 @@ export class ExplorationToolExecutor {
       }
 
       return { success: true, data: response };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+    }
+  }
+
+  /**
+   * List child entities of a parent with aggregated KPIs.
+   * campaign → ad_groups, ad_group → ads
+   */
+  private async queryChildren(
+    input: QueryMetricsInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { platform, entity_type, days } = input;
+    let { entity_id } = input;
+
+    // Determine child entity type
+    const childTypeMap: Record<string, { childEntityType: string; lookupTable: string; parentRefCol: string; nameCol: string; idCol: string; statusCol: string }> = {
+      campaign: { childEntityType: 'ad_group', lookupTable: 'ad_groups', parentRefCol: 'campaign_ref', nameCol: 'ad_group_name', idCol: 'ad_group_id', statusCol: 'ad_group_status' },
+      ad_group: { childEntityType: 'ad', lookupTable: 'ads', parentRefCol: 'ad_group_ref', nameCol: 'ad_name', idCol: 'ad_id', statusCol: 'ad_status' },
+    };
+
+    const mapping = childTypeMap[entity_type || ''];
+    if (!mapping) {
+      return { success: false, error: `Cannot list children of entity_type "${entity_type}". Use entity_type="campaign" to list ad groups, or "ad_group" to list ads.` };
+    }
+
+    try {
+      // Resolve parent entity_id
+      if (entity_id && entity_type) {
+        const resolved = await this.resolveEntityId(entity_id, entity_type, platform, orgId);
+        if (resolved) entity_id = resolved.externalId;
+      }
+
+      const dateFrom = new Date();
+      dateFrom.setDate(dateFrom.getDate() - (days || 7));
+      const dateFromStr = dateFrom.toISOString().split('T')[0];
+
+      // Find child entity refs from the lookup table
+      const childrenQuery = `
+        SELECT ${mapping.idCol} as entity_ref, ${mapping.nameCol} as entity_name, ${mapping.statusCol} as entity_status
+        FROM ${mapping.lookupTable}
+        WHERE organization_id = ? AND platform = ? AND ${mapping.parentRefCol} = ?
+        ORDER BY ${mapping.nameCol}
+        LIMIT 50
+      `;
+      const childRows = await this.db.prepare(childrenQuery).bind(orgId, platform, entity_id).all<{
+        entity_ref: string; entity_name: string; entity_status: string;
+      }>();
+
+      if (!childRows.results || childRows.results.length === 0) {
+        return { success: true, data: { parent: entity_id, children: [], message: `No ${mapping.childEntityType}s found for this ${entity_type}.` } };
+      }
+
+      // Get aggregated metrics for each child
+      const childRefs = childRows.results.map(c => c.entity_ref);
+      const placeholders = childRefs.map(() => '?').join(',');
+      const metricsQuery = `
+        SELECT entity_ref,
+          SUM(impressions) as impressions, SUM(clicks) as clicks,
+          SUM(spend_cents) as spend_cents, SUM(conversions) as conversions,
+          SUM(conversion_value_cents) as conversion_value_cents
+        FROM ad_metrics
+        WHERE organization_id = ? AND platform = ? AND entity_type = ?
+          AND entity_ref IN (${placeholders}) AND metric_date >= ?
+        GROUP BY entity_ref
+      `;
+      const metricsRows = await this.db.prepare(metricsQuery)
+        .bind(orgId, platform, mapping.childEntityType, ...childRefs, dateFromStr)
+        .all<{ entity_ref: string; impressions: number; clicks: number; spend_cents: number; conversions: number; conversion_value_cents: number }>();
+
+      const metricsMap = new Map<string, typeof metricsRows.results[0]>();
+      for (const m of metricsRows.results || []) {
+        metricsMap.set(m.entity_ref, m);
+      }
+
+      // Build response sorted by spend descending
+      const children = childRows.results.map(c => {
+        const m = metricsMap.get(c.entity_ref);
+        const spend = m?.spend_cents || 0;
+        const clicks = m?.clicks || 0;
+        const impressions = m?.impressions || 0;
+        const conversions = m?.conversions || 0;
+        const revenue = m?.conversion_value_cents || 0;
+        return {
+          name: c.entity_name,
+          entity_ref: c.entity_ref,
+          status: c.entity_status,
+          spend: '$' + (spend / 100).toFixed(2),
+          spend_cents: spend,
+          impressions,
+          clicks,
+          ctr: impressions > 0 ? ((clicks / impressions) * 100).toFixed(2) + '%' : '0%',
+          conversions,
+          cpa: conversions > 0 ? '$' + (spend / conversions / 100).toFixed(2) : 'N/A',
+          roas: spend > 0 ? (revenue / spend).toFixed(2) + 'x' : '0x',
+        };
+      }).sort((a, b) => b.spend_cents - a.spend_cents);
+
+      return {
+        success: true,
+        data: {
+          parent: entity_id,
+          parent_type: entity_type,
+          child_type: mapping.childEntityType,
+          days,
+          count: children.length,
+          children
+        }
+      };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
     }
@@ -1301,13 +1415,16 @@ export class ExplorationToolExecutor {
       return { success: false, error: `Unsupported platform` };
     }
 
-    const sql = `SELECT * FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
-
     try {
-      const ad = await this.db.prepare(sql).bind(ad_id, orgId).first<any>();
+      // Resolve ad_id (name/UUID/external ID)
+      const resolved = await this.resolveEntityId(ad_id, 'ad', platform, orgId);
+      const resolvedId = resolved?.externalId || ad_id;
+
+      const sql = `SELECT * FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
+      const ad = await this.db.prepare(sql).bind(resolvedId, orgId).first<any>();
 
       if (!ad) {
-        return { success: false, error: `Ad not found: ${ad_id}` };
+        return { success: false, error: `Ad not found: "${ad_id}". Pass an ad name, platform ID, or D1 UUID.` };
       }
 
       const creativeInfo = this.extractCreativeInfo(ad, platform);
@@ -1341,15 +1458,18 @@ export class ExplorationToolExecutor {
       return { success: false, error: 'Unsupported platform/entity' };
     }
 
-    // Get name column based on platform and entity type
-    const nameCol = this.getNameColumn(platform, entity_type);
-    const sql = `SELECT ${nameCol} as name, platform_fields FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
-
     try {
-      const entity = await this.db.prepare(sql).bind(entity_id, orgId).first<{ name: string; platform_fields: string }>();
+      // Resolve entity_id (name/UUID/external ID)
+      const resolved = await this.resolveEntityId(entity_id, entity_type, platform, orgId);
+      const resolvedId = resolved?.externalId || entity_id;
+
+      // Get name column based on platform and entity type
+      const nameCol = this.getNameColumn(platform, entity_type);
+      const sql = `SELECT ${nameCol} as name, platform_fields FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
+      const entity = await this.db.prepare(sql).bind(resolvedId, orgId).first<{ name: string; platform_fields: string }>();
 
       if (!entity) {
-        return { success: false, error: `Entity not found: ${entity_id}` };
+        return { success: false, error: `Entity not found: "${entity_id}". Pass a campaign name, platform ID, or D1 UUID.` };
       }
 
       const targeting = this.parseTargeting(entity.platform_fields);
@@ -1712,9 +1832,9 @@ export class ExplorationToolExecutor {
           const sql = `
             SELECT SUM(spend_cents) as spend_cents, SUM(conversions) as conversions, SUM(conversion_value_cents) as conversion_value_cents
             FROM ${tableInfo.table}
-            WHERE organization_id = ? AND metric_date >= ? AND metric_date <= ?
+            WHERE organization_id = ? AND platform = ? AND metric_date >= ? AND metric_date <= ?
           `;
-          const result = await this.db.prepare(sql).bind(orgId, startStr, endStr).first<{
+          const result = await this.db.prepare(sql).bind(orgId, platform, startStr, endStr).first<{
             spend_cents: number | null;
             conversions: number | null;
             conversion_value_cents: number | null;
@@ -1806,7 +1926,6 @@ export class ExplorationToolExecutor {
         FROM conversions
         WHERE organization_id = ?
           AND conversion_timestamp >= ? AND conversion_timestamp <= ?
-          AND conversion_source = 'stripe'
       `;
       const result = await this.db.prepare(sql).bind(orgId, startStr, endStr + 'T23:59:59Z').all<any>();
       const conversions = result.results || [];
@@ -1905,16 +2024,10 @@ export class ExplorationToolExecutor {
         params.push(...filters.status);
       }
 
-      // Apply interval filter
-      if (filters?.plan_interval) {
-        sql += ` AND interval = ?`;
-        params.push(filters.plan_interval);
-      }
-
       const result = await this.db.prepare(sql).bind(...params).all<any>();
-      const subscriptions = result.results || [];
+      const rawSubscriptions = result.results || [];
 
-      if (subscriptions.length === 0) {
+      if (rawSubscriptions.length === 0) {
         return {
           success: true,
           data: {
@@ -1924,8 +2037,26 @@ export class ExplorationToolExecutor {
         };
       }
 
+      // Enrich connector_events rows with subscription-specific fields from metadata
+      const subscriptions = rawSubscriptions.map(s => {
+        const meta = s.metadata ? (typeof s.metadata === 'string' ? JSON.parse(s.metadata) : s.metadata) : {};
+        return {
+          ...s,
+          amount_cents: s.value_cents || 0,
+          interval: meta.interval || meta.plan_interval || 'month',
+          interval_count: meta.interval_count || 1,
+          stripe_created_at: s.transacted_at,
+          metadata: meta,
+        };
+      });
+
+      // Apply interval filter in-memory (interval is in metadata, not a column)
+      const filteredSubscriptions = filters?.plan_interval
+        ? subscriptions.filter(s => s.interval === filters.plan_interval)
+        : subscriptions;
+
       // Calculate core subscription metrics
-      const activeSubscriptions = subscriptions.filter(s =>
+      const activeSubscriptions = filteredSubscriptions.filter(s =>
         ['active', 'trialing', 'past_due'].includes(s.status)
       );
 
@@ -1947,7 +2078,7 @@ export class ExplorationToolExecutor {
       // Calculate average subscription age
       const now = new Date();
       const avgAgeDays = activeSubscriptions.reduce((sum, s) => {
-        const created = new Date(s.created_at || s.stripe_created_at);
+        const created = new Date(s.transacted_at);
         const ageDays = (now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);
         return sum + ageDays;
       }, 0) / (activeSubscriptions.length || 1);
@@ -1955,9 +2086,9 @@ export class ExplorationToolExecutor {
       // Calculate churn rate (canceled in last 30 days / active at start)
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      const recentlyCanceled = subscriptions.filter(s =>
+      const recentlyCanceled = filteredSubscriptions.filter(s =>
         s.status === 'canceled' &&
-        new Date(s.updated_at) > thirtyDaysAgo
+        new Date(s.transacted_at) > thirtyDaysAgo
       ).length;
       const churnRate = activeSubscriptions.length > 0
         ? (recentlyCanceled / (activeSubscriptions.length + recentlyCanceled) * 100)
@@ -2113,14 +2244,18 @@ export class ExplorationToolExecutor {
       return { success: false, error: `Unsupported platform/entity for budget: ${platform}/${entity_type}` };
     }
 
-    // Build D1 SQL query
-    const sql = `SELECT * FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
-
     try {
-      const entity = await this.db.prepare(sql).bind(entity_id, orgId).first<any>();
+      // Resolve entity_id (accepts name, UUID, or external ID)
+      const resolved = await this.resolveEntityId(entity_id, normalizedEntityType, platform, orgId);
+      if (!resolved) {
+        return { success: false, error: `Entity not found: "${entity_id}". Pass a campaign name (e.g. "Los Angeles - Search"), platform ID, or D1 UUID.` };
+      }
+
+      const sql = `SELECT * FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
+      const entity = await this.db.prepare(sql).bind(resolved.externalId, orgId).first<any>();
 
       if (!entity) {
-        return { success: false, error: `Entity not found: ${entity_id}` };
+        return { success: false, error: `Entity not found after resolution: ${entity_id} → ${resolved.externalId}` };
       }
 
       // Normalize budget response
@@ -2372,7 +2507,7 @@ export class ExplorationToolExecutor {
         SELECT COUNT(*) as total_count, SUM(value_cents) as total_value_cents
         FROM conversions
         WHERE organization_id = ?
-          AND source_platform IN ('stripe', 'shopify')
+          AND source_platform IN ('stripe', 'shopify', 'jobber', 'hubspot', 'lemon_squeezy', 'paddle', 'chargebee', 'recurly')
           AND conversion_timestamp >= ?
           AND conversion_timestamp <= ?
       `;
@@ -2397,9 +2532,6 @@ export class ExplorationToolExecutor {
       // Calculate key metrics
       const platformRoas = totalSpend > 0 ? totalPlatformRevenue / totalSpend : 0;
       const trueRoas = totalSpend > 0 ? totalVerifiedValue / totalSpend : 0;
-      const inflationFactor = totalVerifiedValue > 0 && totalPlatformRevenue > 0
-        ? totalPlatformRevenue / totalVerifiedValue
-        : 1;
       const verificationRate = totalConnectorConversions > 0
         ? (totalVerifiedCount / totalConnectorConversions) * 100
         : 0;
@@ -2684,6 +2816,51 @@ export class ExplorationToolExecutor {
   }
 
   /**
+   * Resolve an entity identifier (name, UUID, or external ID) to the platform external ID
+   * used by D1 tables. The LLM often passes campaign names from the portfolio summary
+   * or D1 UUIDs — this resolves them to the campaign_id/ad_group_id/ad_id that the
+   * entity tables actually use as lookup keys.
+   *
+   * Resolution order: exact external ID match → name match → UUID match
+   */
+  private async resolveEntityId(
+    entityId: string,
+    entityType: string,
+    platform: string,
+    orgId: string
+  ): Promise<{ externalId: string; name: string } | null> {
+    const tableInfo = this.getEntityTableInfo(platform, entityType);
+    if (!tableInfo) return null;
+
+    const nameColumn = entityType === 'campaign' ? 'campaign_name'
+      : entityType === 'ad' ? 'ad_name'
+      : 'ad_group_name';
+
+    // 1. Try exact match on external ID (campaign_id / ad_group_id / ad_id)
+    const byExternal = await this.db.prepare(
+      `SELECT ${tableInfo.idColumn} as ext_id, ${nameColumn} as name FROM ${tableInfo.table}
+       WHERE ${tableInfo.idColumn} = ? AND organization_id = ? AND platform = ? LIMIT 1`
+    ).bind(entityId, orgId, platform).first<{ ext_id: string; name: string }>();
+    if (byExternal) return { externalId: byExternal.ext_id, name: byExternal.name };
+
+    // 2. Try name match (case-insensitive) — the LLM usually knows campaign names
+    const byName = await this.db.prepare(
+      `SELECT ${tableInfo.idColumn} as ext_id, ${nameColumn} as name FROM ${tableInfo.table}
+       WHERE ${nameColumn} = ? COLLATE NOCASE AND organization_id = ? AND platform = ? LIMIT 1`
+    ).bind(entityId, orgId, platform).first<{ ext_id: string; name: string }>();
+    if (byName) return { externalId: byName.ext_id, name: byName.name };
+
+    // 3. Try D1 UUID primary key
+    const byUuid = await this.db.prepare(
+      `SELECT ${tableInfo.idColumn} as ext_id, ${nameColumn} as name FROM ${tableInfo.table}
+       WHERE id = ? AND organization_id = ? LIMIT 1`
+    ).bind(entityId, orgId).first<{ ext_id: string; name: string }>();
+    if (byUuid) return { externalId: byUuid.ext_id, name: byUuid.name };
+
+    return null;
+  }
+
+  /**
    * Build unified entity query (for getCreativeDetails, etc.)
    */
   private buildUnifiedEntityQuery(
@@ -2715,7 +2892,8 @@ export class ExplorationToolExecutor {
     };
   }
 
-  private enrichMetrics(data: any[], requestedMetrics: string[]): any[] {
+  private enrichMetrics(data: any[], requestedMetrics?: string[]): any[] {
+    if (!requestedMetrics || requestedMetrics.length === 0) return data;
     return data.map(row => {
       const enriched = { ...row };
       const spend = row.spend_cents || 0;
@@ -2872,7 +3050,22 @@ export class ExplorationToolExecutor {
       const date = new Date(timestamp);
       let key: string;
 
-      if (groupBy === 'week') {
+      if (groupBy === 'geo') {
+        // Group by country/state from billing metadata
+        const meta = row.metadata || {};
+        const COUNTRY_NORMALIZE: Record<string, string> = {
+          'USA': 'US', 'GBR': 'GB', 'CAN': 'CA', 'AUS': 'AU',
+          'DEU': 'DE', 'FRA': 'FR', 'NZL': 'NZ', 'JPN': 'JP',
+        };
+        const rawCountry =
+          meta?.billing_details?.address?.country ||
+          meta?.shipping_address?.country_code ||
+          meta?.country ||
+          'Unknown';
+        const country = COUNTRY_NORMALIZE[rawCountry.toUpperCase()] || rawCountry;
+        const state = meta?.billing_details?.address?.state || '';
+        key = state ? `${country}/${state}` : country;
+      } else if (groupBy === 'week') {
         const weekStart = new Date(date);
         weekStart.setDate(date.getDate() - date.getDay());
         key = weekStart.toISOString().split('T')[0];
@@ -4407,39 +4600,54 @@ export class ExplorationToolExecutor {
         params.push(filters.min_total_cents);
       }
       if (filters?.max_total_cents) {
-        sql += ' AND total_price_cents <= ?';
+        sql += ' AND value_cents <= ?';
         params.push(filters.max_total_cents);
       }
       if (filters?.utm_source) {
-        sql += ' AND utm_source = ?';
+        sql += " AND json_extract(metadata, '$.utm_source') = ?";
         params.push(filters.utm_source);
       }
       if (filters?.utm_campaign) {
-        sql += ' AND utm_campaign = ?';
+        sql += " AND json_extract(metadata, '$.utm_campaign') = ?";
         params.push(filters.utm_campaign);
-      }
-      if (filters?.shipping_country) {
-        sql += ' AND shipping_country = ?';
-        params.push(filters.shipping_country);
       }
 
       sql += ' ORDER BY shopify_created_at DESC LIMIT 1000';
 
       const result = await this.db.prepare(sql).bind(...params).all<any>();
-      const orders = result.results || [];
+      const rawOrders = result.results || [];
 
-      if (orders.length === 0) {
+      if (rawOrders.length === 0) {
         return { success: true, data: { time_series: [], summary: { total_revenue: '$0.00', total_orders: 0 }, note: 'No Shopify orders in period' } };
       }
 
+      // Parse metadata JSON and merge fields onto each order
+      const orders = rawOrders.map((o: any) => {
+        const meta = o.metadata ? (typeof o.metadata === 'string' ? JSON.parse(o.metadata) : o.metadata) : {};
+        return {
+          ...o,
+          utm_source: meta.utm_source || null,
+          utm_medium: meta.utm_medium || null,
+          utm_campaign: meta.utm_campaign || null,
+          click_id: meta.click_id || null,
+          click_id_type: meta.click_id_type || null,
+          referring_site: meta.referring_site || null,
+          source_name: meta.landing_site || null,
+          discount_cents: meta.discount_cents || 0,
+          shipping_cents: meta.shipping_cents || 0,
+          tax_cents: meta.tax_cents || 0,
+          refund_cents: meta.refund_cents || 0,
+        };
+      });
+
       // Summary
       const totalRevenue = orders.reduce((s: number, o: any) => s + (o.total_price_cents || 0), 0);
-      const totalDiscount = orders.reduce((s: number, o: any) => s + (o.total_discounts_cents || 0), 0);
-      const totalShipping = orders.reduce((s: number, o: any) => s + (o.total_shipping_cents || 0), 0);
-      const totalTax = orders.reduce((s: number, o: any) => s + (o.total_tax_cents || 0), 0);
-      const uniqueCountries = new Set(orders.map((o: any) => o.shipping_country).filter(Boolean));
-      const newCustomers = orders.filter((o: any) => (o.customer_orders_count || 0) <= 1).length;
-      const returningCustomers = orders.length - newCustomers;
+      const totalDiscount = orders.reduce((s: number, o: any) => s + (o.discount_cents || 0), 0);
+      const totalShipping = orders.reduce((s: number, o: any) => s + (o.shipping_cents || 0), 0);
+      const totalTax = orders.reduce((s: number, o: any) => s + (o.tax_cents || 0), 0);
+      const newCustomers = orders.length; // Can't determine from connector_events without customer history
+      // Count unique customers to estimate new vs returning
+      const uniqueCustomers = new Set(orders.map((o: any) => o.customer_external_id).filter(Boolean));
 
       const summary = {
         total_revenue: '$' + (totalRevenue / 100).toFixed(2),
@@ -4450,11 +4658,7 @@ export class ExplorationToolExecutor {
         total_discounts: '$' + (totalDiscount / 100).toFixed(2),
         total_shipping: '$' + (totalShipping / 100).toFixed(2),
         total_tax: '$' + (totalTax / 100).toFixed(2),
-        new_customers: newCustomers,
-        returning_customers: returningCustomers,
-        returning_customer_pct: orders.length > 0 ? Math.round(returningCustomers / orders.length * 100) : 0,
-        unique_countries: uniqueCountries.size,
-        total_items: orders.reduce((s: number, o: any) => s + (o.total_items_quantity || 0), 0)
+        unique_customers: uniqueCustomers.size,
       };
 
       // Group by dimension
@@ -4481,9 +4685,6 @@ export class ExplorationToolExecutor {
             break;
           case 'source_name':
             key = order.source_name || 'unknown';
-            break;
-          case 'shipping_country':
-            key = order.shipping_country || 'unknown';
             break;
           default:
             key = orderDate;
@@ -4513,9 +4714,10 @@ export class ExplorationToolExecutor {
         const bySource = new Map<string, { revenue_cents: number; orders: number }>();
         for (const order of orders) {
           let source = 'direct';
-          if (order.gclid) source = 'google_ads';
-          else if (order.fbclid) source = 'meta_ads';
-          else if (order.ttclid) source = 'tiktok_ads';
+          const clickType = order.click_id_type;
+          if (clickType === 'gclid') source = 'google_ads';
+          else if (clickType === 'fbclid') source = 'meta_ads';
+          else if (clickType === 'ttclid') source = 'tiktok_ads';
           else if (order.utm_source) source = order.utm_source;
           else if (order.referring_site) source = 'referral';
 
@@ -4818,19 +5020,21 @@ export class ExplorationToolExecutor {
     const startStr = startDate.toISOString().split('T')[0];
 
     try {
-      // Query connector_events for e-commerce orders
+      // Query connector_events for e-commerce transactions
+      // Stripe uses 'charge', Shopify uses 'order', payment platforms vary
       const ecommPlatforms = platform ? [platform] : ['shopify', 'stripe', 'lemon_squeezy', 'paddle', 'chargebee'];
+      const revenueEventTypes = ['order', 'charge', 'payment', 'invoice'];
       let orderSql = `
         SELECT id, source_platform, external_id, event_type, status,
                value_cents, metadata, transacted_at
         FROM connector_events
         WHERE organization_id = ?
           AND source_platform IN (${ecommPlatforms.map(() => '?').join(',')})
-          AND event_type = 'order'
+          AND event_type IN (${revenueEventTypes.map(() => '?').join(',')})
           AND transacted_at >= ?
         ORDER BY transacted_at DESC LIMIT 2000
       `;
-      const orderParams: any[] = [orgId, ...ecommPlatforms, startStr + 'T00:00:00Z'];
+      const orderParams: any[] = [orgId, ...ecommPlatforms, ...revenueEventTypes, startStr + 'T00:00:00Z'];
 
       const orderResult = await this.db.prepare(orderSql).bind(...orderParams).all<any>();
       const orders = orderResult.results || [];
@@ -4879,6 +5083,33 @@ export class ExplorationToolExecutor {
           case 'utm_campaign':
             key = meta.utm_campaign || '(none)';
             break;
+          case 'geo': {
+            // Generic geo extraction from metadata across all connectors
+            // Stripe: billing_details.address.country/state
+            // Shopify: shipping_address.country/province (when available)
+            // Others: fall back to any country/state field in metadata
+            const rawCountry =
+              meta?.billing_details?.address?.country ||
+              meta?.shipping_address?.country_code ||
+              meta?.shipping_address?.country ||
+              meta?.customer_address?.country ||
+              meta?.country ||
+              'Unknown';
+            // Normalize common 3-letter country codes to ISO 2-letter
+            const COUNTRY_NORMALIZE: Record<string, string> = {
+              'USA': 'US', 'GBR': 'GB', 'CAN': 'CA', 'AUS': 'AU',
+              'DEU': 'DE', 'FRA': 'FR', 'NZL': 'NZ', 'JPN': 'JP',
+            };
+            const country = COUNTRY_NORMALIZE[rawCountry.toUpperCase()] || rawCountry;
+            const state =
+              meta?.billing_details?.address?.state ||
+              meta?.shipping_address?.province_code ||
+              meta?.shipping_address?.province ||
+              meta?.customer_address?.state ||
+              '';
+            key = state ? `${country}/${state}` : country;
+            break;
+          }
           default:
             key = (order.transacted_at || '').split('T')[0];
         }
@@ -4930,10 +5161,10 @@ export class ExplorationToolExecutor {
             FROM connector_events
             WHERE organization_id = ?
               AND source_platform IN (${ecommPlatforms.map(() => '?').join(',')})
-              AND event_type = 'order'
+              AND event_type IN (${revenueEventTypes.map(() => '?').join(',')})
               AND transacted_at >= ?
           `;
-          const custResult = await this.db.prepare(custSql).bind(orgId, ...ecommPlatforms, startStr + 'T00:00:00Z').first<any>();
+          const custResult = await this.db.prepare(custSql).bind(orgId, ...ecommPlatforms, ...revenueEventTypes, startStr + 'T00:00:00Z').first<any>();
           response.customers = {
             total_orders: custResult?.total_customers || 0,
             unique_customers: custResult?.unique_customers || 0,

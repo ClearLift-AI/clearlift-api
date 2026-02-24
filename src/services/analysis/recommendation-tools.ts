@@ -133,7 +133,7 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
   },
   {
     name: 'reallocate_budget',
-    description: 'Recommend moving budget from one entity to another. Use when you identify clear winners and losers that could benefit from reallocation.',
+    description: 'Recommend moving budget from one entity to another. Optionally pause the source entity in the same action — use pause_source=true when you want to fully shut down a losing campaign and redirect ALL its budget to a winner. This counts as ONE action slot (not two), so prefer this over separate set_status + set_budget calls.',
     input_schema: {
       type: 'object',
       properties: {
@@ -170,15 +170,19 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
         },
         amount_cents: {
           type: 'number',
-          description: 'Amount to reallocate in cents'
+          description: 'Amount to reallocate in cents (daily budget)'
+        },
+        pause_source: {
+          type: 'boolean',
+          description: 'If true, also pause the source entity after reallocating its budget. Use when the source campaign should be fully shut down (e.g., zero conversions, unprofitable ROAS). This creates a single combined recommendation: "Pause X and move its budget to Y." Defaults to false.'
         },
         reason: {
           type: 'string',
-          description: 'Brief explanation for this recommendation'
+          description: 'Brief explanation for this recommendation. Include dollar impact estimates.'
         },
         predicted_impact: {
           type: 'number',
-          description: 'Expected impact as percentage change'
+          description: 'Expected impact as percentage change on portfolio revenue or CAC'
         },
         confidence: {
           type: 'string',
@@ -426,6 +430,61 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
     }
   },
   {
+    name: 'update_recommendation',
+    description: 'Update a recommendation you already made during THIS analysis run. Use when new data changes your assessment — for example, after exploring deeper you realize a different budget amount or a different entity would be better. This replaces the previous recommendation in-place.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        original_entity_id: {
+          type: 'string',
+          description: 'The entity_id of the recommendation you want to update (from a previous set_budget, set_status, etc. call)'
+        },
+        original_tool: {
+          type: 'string',
+          description: 'The tool name of the original recommendation',
+          enum: ['set_budget', 'set_status', 'set_audience', 'reallocate_budget', 'set_bid', 'set_schedule']
+        },
+        new_parameters: {
+          type: 'object',
+          description: 'The updated parameters. Include ALL fields, not just changed ones — this fully replaces the old recommendation parameters.'
+        },
+        new_reason: {
+          type: 'string',
+          description: 'Updated reason explaining why this change is better than the original recommendation'
+        },
+        new_confidence: {
+          type: 'string',
+          description: 'Updated confidence level',
+          enum: ['low', 'medium', 'high']
+        }
+      },
+      required: ['original_entity_id', 'original_tool', 'new_parameters', 'new_reason']
+    }
+  },
+  {
+    name: 'delete_recommendation',
+    description: 'Delete a recommendation you already made during THIS analysis run. Use when further investigation reveals the recommendation was wrong or unnecessary. This frees up an action slot so you can make a different recommendation instead.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        original_entity_id: {
+          type: 'string',
+          description: 'The entity_id of the recommendation to delete'
+        },
+        original_tool: {
+          type: 'string',
+          description: 'The tool name of the original recommendation',
+          enum: ['set_budget', 'set_status', 'set_audience', 'reallocate_budget', 'set_bid', 'set_schedule']
+        },
+        reason: {
+          type: 'string',
+          description: 'Why this recommendation is being withdrawn'
+        }
+      },
+      required: ['original_entity_id', 'original_tool', 'reason']
+    }
+  },
+  {
     name: 'terminate_analysis',
     description: 'End the analysis loop ONLY after you have already made actionable recommendations (set_budget, set_status, set_audience, set_bid). Do NOT call this after only producing general_insight or exploration — you MUST attempt concrete recommendations first. The only exception is when data is genuinely insufficient for ANY recommendation (e.g. zero spend, no active entities). If you have insights but have not yet made recommendations, keep going — use simulate_change, explore further, and produce actionable recommendations before terminating.',
     input_schema: {
@@ -462,6 +521,16 @@ export function isTerminateAnalysisTool(toolName: string): boolean {
 // Check if tool is a general_insight (for accumulation handling)
 export function isGeneralInsightTool(toolName: string): boolean {
   return toolName === 'general_insight';
+}
+
+// Check if tool is update_recommendation
+export function isUpdateRecommendationTool(toolName: string): boolean {
+  return toolName === 'update_recommendation';
+}
+
+// Check if tool is delete_recommendation
+export function isDeleteRecommendationTool(toolName: string): boolean {
+  return toolName === 'delete_recommendation';
 }
 
 // Format tools for Anthropic API
