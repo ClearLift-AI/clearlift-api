@@ -458,16 +458,6 @@ CREATE INDEX IF NOT EXISTS idx_j_org_converted ON journeys(org_tag, converted);
 CREATE INDEX IF NOT EXISTS idx_j_org_user ON journeys(org_tag, user_id_hash) WHERE user_id_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_j_org_ts ON journeys(org_tag, first_touch_ts DESC);
 
-CREATE TABLE IF NOT EXISTS journey_touchpoints (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  journey_id TEXT NOT NULL,
-  touchpoint_id TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  FOREIGN KEY (journey_id) REFERENCES journeys(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_jt_journey ON journey_touchpoints(journey_id);
-
 CREATE TABLE IF NOT EXISTS journey_analytics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   org_tag TEXT NOT NULL,
@@ -514,26 +504,6 @@ CREATE TABLE attribution_results (
 
 CREATE INDEX idx_ar_org_model ON attribution_results(org_tag, model);
 CREATE INDEX idx_ar_org_period ON attribution_results(org_tag, period_start);
-
--- Pre-computed attribution results from AI_DB
-CREATE TABLE IF NOT EXISTS attribution_model_results (
-  id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL,
-  model TEXT NOT NULL,
-  channel TEXT NOT NULL,
-  attributed_credit REAL NOT NULL,
-  removal_effect REAL,
-  shapley_value REAL,
-  computation_date DATE NOT NULL,
-  conversion_count INTEGER,
-  path_count INTEGER,
-  expires_at DATETIME NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(organization_id, model, channel, computation_date)
-);
-
-CREATE INDEX IF NOT EXISTS idx_attr_results_org_model ON attribution_model_results(organization_id, model, computation_date DESC);
-CREATE INDEX IF NOT EXISTS idx_attr_results_expires ON attribution_model_results(expires_at);
 
 CREATE TABLE channel_transitions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
