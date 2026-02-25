@@ -1126,7 +1126,7 @@ interface MigrationResult {
   orgName: string;
   orgSlug: string;
   orgId: string;
-  sessionToken: string;
+  sessionToken?: string;
   success: boolean;
   error?: string;
 }
@@ -1135,44 +1135,53 @@ async function migrateOneOrg(): Promise<MigrationResult> {
   // Step 2+3: List orgs, select one (re-fetches to show updated ✓ marks)
   const orgInfo = await stepListAndSelectOrg();
 
-  // Step 4: Confirm
-  await stepConfirm(orgInfo);
+  try {
+    // Step 4: Confirm
+    await stepConfirm(orgInfo);
 
-  // Step 4b: Purge if org already exists in target
-  await stepPurgeIfExists(orgInfo);
+    // Step 4b: Purge if org already exists in target
+    await stepPurgeIfExists(orgInfo);
 
-  if (!(orgInfo as any)._skipCopy) {
-    // Step 5: Copy tables
-    stepCopy(orgInfo);
+    if (!(orgInfo as any)._skipCopy) {
+      // Step 5: Copy tables
+      stepCopy(orgInfo);
+    }
+
+    // Step 6: Interactive connector onboarding (runs even for "skip copy" —
+    // user may want to reconfigure settings without re-copied tables)
+    await stepOnboardConnectors(orgInfo);
+
+    // Step 7: Create session token
+    const sessionToken = stepCreateSession(orgInfo);
+
+    // Step 8: Trigger resync
+    await stepTriggerSync(orgInfo, sessionToken);
+
+    // Brief per-org confirmation
+    console.log(`\n  ✓ ${orgInfo.name} (${orgInfo.slug}) migrated successfully.`);
+
+    return {
+      orgName: orgInfo.name,
+      orgSlug: orgInfo.slug,
+      orgId: orgInfo.id,
+      sessionToken,
+      success: true,
+    };
+  } catch (e) {
+    // Re-throw with orgInfo attached so the caller can track the failure
+    (e as any)._orgInfo = orgInfo;
+    throw e;
   }
-
-  // Step 6: Interactive connector onboarding (runs even for "skip copy" —
-  // user may want to reconfigure settings without re-copying tables)
-  await stepOnboardConnectors(orgInfo);
-
-  // Step 7: Create session token
-  const sessionToken = stepCreateSession(orgInfo);
-
-  // Step 8: Trigger resync
-  await stepTriggerSync(orgInfo, sessionToken);
-
-  // Brief per-org confirmation
-  console.log(`\n  ✓ ${orgInfo.name} (${orgInfo.slug}) migrated successfully.`);
-
-  return {
-    orgName: orgInfo.name,
-    orgSlug: orgInfo.slug,
-    orgId: orgInfo.id,
-    sessionToken,
-    success: true,
-  };
 }
 
 function printFinalSummary(results: MigrationResult[]): void {
   console.log('\n' + '='.repeat(60));
   console.log('  Migration Session Complete!');
   console.log('='.repeat(60));
-  console.log(`\n  ${results.length} org(s) migrated:`);
+  const succeeded = results.filter(r => r.success).length;
+  const failed = results.length - succeeded;
+  const summary = failed > 0 ? `${succeeded} succeeded, ${failed} failed` : `${succeeded} org(s) migrated`;
+  console.log(`\n  ${summary}:`);
 
   for (const r of results) {
     const icon = r.success ? '✓' : '✗';
@@ -1218,13 +1227,24 @@ async function main() {
           console.error(`\n  Migration failed: ${msg}`);
           console.error('  If the failure occurred during table copy, the migration is');
           console.error('  partially complete. You can retry — INSERT OR IGNORE skips existing rows.\n');
+          // Track the failure so it appears in the final summary
+          const orgInfo = e._orgInfo as OrgInfo | undefined;
+          if (orgInfo) {
+            results.push({
+              orgName: orgInfo.name,
+              orgSlug: orgInfo.slug,
+              orgId: orgInfo.id,
+              success: false,
+              error: msg.substring(0, 120),
+            });
+          }
         }
         // Don't exit — let user continue with other orgs
       }
 
       keepGoing = await confirm({
         message: 'Migrate another org?',
-        default: results.length === 0, // Default yes if none succeeded yet
+        default: !results.some(r => r.success), // Default yes if none succeeded yet
       });
     }
 
