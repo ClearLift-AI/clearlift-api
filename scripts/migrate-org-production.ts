@@ -1020,8 +1020,9 @@ async function stepTriggerSync(info: OrgInfo, sessionToken: string): Promise<voi
       const body = await resp.json() as any;
 
       if (resp.ok) {
-        syncResults.push({ connectionId: conn.id, platform: conn.platform, status: 'triggered', jobId: body.job_id });
-        log(`  Triggered: ${conn.platform} -> job ${body.job_id?.substring(0, 8)}...`);
+        const jobId = body.data?.job_id || body.job_id;
+        syncResults.push({ connectionId: conn.id, platform: conn.platform, status: 'triggered', jobId });
+        log(`  Triggered: ${conn.platform} -> job ${jobId?.substring(0, 8)}...`);
       } else if (resp.status === 409) {
         syncResults.push({ connectionId: conn.id, platform: conn.platform, status: 'already_syncing' });
         log(`  Already syncing: ${conn.platform} (409)`);
@@ -1086,7 +1087,7 @@ async function stepTriggerSync(info: OrgInfo, sessionToken: string): Promise<voi
     const resp = await fetch(`${currentConfig.apiBase}/v1/analytics/cac/backfill?org_id=${info.id}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ days: 90 }),
+      body: JSON.stringify({ org_id: info.id, days: 90 }),
     });
     if (resp.ok) {
       log('CAC backfill triggered (90 days).');

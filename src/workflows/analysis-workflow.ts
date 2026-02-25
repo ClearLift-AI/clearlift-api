@@ -132,6 +132,76 @@ function summarizeToolInput(toolCall: { name: string; input: any }): string {
   }
 }
 
+/**
+ * Validate spend limits on action recommendations before they are accepted.
+ * Returns { valid: true } if within limits, or { valid: false, violation, details } if breached.
+ */
+function validateSpendLimits(
+  toolName: string,
+  toolInput: any,
+  config: AnalysisWorkflowParams['config'] | undefined,
+  simulationData?: any
+): { valid: boolean; violation?: string; details?: string } {
+  if (!config) return { valid: true };
+
+  const { dailyCapCents, monthlyCapCents, maxCacCents } = config;
+
+  if (toolName === 'set_budget') {
+    const recBudget = toolInput.recommended_budget_cents;
+    if (typeof recBudget !== 'number') return { valid: true };
+
+    if (dailyCapCents && toolInput.budget_type === 'daily' && recBudget > dailyCapCents) {
+      return {
+        valid: false,
+        violation: 'daily_cap_exceeded',
+        details: `Recommended daily budget $${(recBudget / 100).toFixed(2)} exceeds daily cap $${(dailyCapCents / 100).toFixed(2)}. Reduce to at most $${(dailyCapCents / 100).toFixed(2)}. Use update_recommendation to lower the budget or delete_recommendation to withdraw it.`
+      };
+    }
+    if (monthlyCapCents && toolInput.budget_type === 'daily' && recBudget * 30 > monthlyCapCents) {
+      const maxDaily = Math.floor(monthlyCapCents / 30);
+      return {
+        valid: false,
+        violation: 'monthly_cap_exceeded',
+        details: `Recommended daily budget $${(recBudget / 100).toFixed(2)} × 30 days = $${((recBudget * 30) / 100).toFixed(2)}/mo, exceeding monthly cap $${(monthlyCapCents / 100).toFixed(2)}. Max daily: $${(maxDaily / 100).toFixed(2)}. Use update_recommendation to lower the budget or delete_recommendation to withdraw it.`
+      };
+    }
+  }
+
+  if (toolName === 'reallocate_budget') {
+    const amount = toolInput.amount_cents;
+    if (typeof amount !== 'number') return { valid: true };
+
+    if (dailyCapCents && amount > dailyCapCents) {
+      return {
+        valid: false,
+        violation: 'daily_cap_exceeded',
+        details: `Reallocation amount $${(amount / 100).toFixed(2)}/day exceeds daily cap $${(dailyCapCents / 100).toFixed(2)}. Use update_recommendation to lower the amount or delete_recommendation to withdraw it.`
+      };
+    }
+    if (monthlyCapCents && amount * 30 > monthlyCapCents) {
+      const maxDaily = Math.floor(monthlyCapCents / 30);
+      return {
+        valid: false,
+        violation: 'monthly_cap_exceeded',
+        details: `Reallocation amount $${(amount / 100).toFixed(2)}/day × 30 = $${((amount * 30) / 100).toFixed(2)}/mo, exceeding monthly cap $${(monthlyCapCents / 100).toFixed(2)}. Max daily: $${(maxDaily / 100).toFixed(2)}. Use update_recommendation to lower the amount or delete_recommendation to withdraw it.`
+      };
+    }
+  }
+
+  // CAC ceiling check using simulation projected CAC
+  if (maxCacCents && simulationData?.projected_cac_cents) {
+    if (simulationData.projected_cac_cents > maxCacCents) {
+      return {
+        valid: false,
+        violation: 'cac_ceiling_exceeded',
+        details: `Projected CAC $${(simulationData.projected_cac_cents / 100).toFixed(2)} exceeds ceiling $${(maxCacCents / 100).toFixed(2)}. Reduce the budget change or choose a different entity. Use update_recommendation to adjust or delete_recommendation to withdraw it.`
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
 export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowParams> {
   /**
    * Main workflow execution
@@ -223,10 +293,23 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     // Gemini Flash: 1M context, Claude: 200K. Set iteration cap high enough that
     // context exhaustion is always the binding constraint.
     const maxIterations = 1000;
-    // Scale action recommendation slots with account size (more campaigns → more optimizations)
-    const scaledMax = activeCampaignCount >= 20 ? 7
+
+    // Scale action recommendation slots with account size + growth strategy
+    const baseScaledMax = activeCampaignCount >= 20 ? 7
       : activeCampaignCount >= 8 ? 5
       : 3;
+    const baseMinExplore = activeCampaignCount >= 20 ? 7
+      : activeCampaignCount >= 8 ? 5
+      : 3;
+
+    // Growth strategy modifier: lean = less exploring/fewer slots, bold = more
+    const growthMod = (config?.growthStrategy === 'bold') ? 2
+      : (config?.growthStrategy === 'lean') ? -1
+      : 0;
+
+    const scaledMax = Math.max(2, Math.min(10, baseScaledMax + growthMod));
+    const minExplorationTurns = Math.max(2, Math.min(10, baseMinExplore + growthMod));
+
     // Use scaledMax as the baseline. Config override can increase but not decrease below scaledMax,
     // since old configs may have the former hardcoded default (3). Insights are tracked separately
     // and do NOT consume action slots, so no "-1 reserve" is needed.
@@ -234,11 +317,6 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       ? Math.max(config.agentic.maxRecommendations, scaledMax)
       : scaledMax;
     const enableExploration = config?.agentic?.enableExploration !== false;
-
-    // Mandatory exploration phase: block action/simulation tools for the first N turns
-    const minExplorationTurns = activeCampaignCount >= 20 ? 7
-      : activeCampaignCount >= 8 ? 5
-      : 3;
 
     let recommendations: Recommendation[] = [];
     let actionRecommendations: Recommendation[] = [];  // Track action recs separately
@@ -398,7 +476,8 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
           hasInsight,
           simulationCache,  // Pass simulation cache for enforced simulation before recommendations
           agenticClient,
-          minExplorationTurns
+          minExplorationTurns,
+          config
         );
       });
 
@@ -2168,6 +2247,9 @@ Lead with confidence. Include specific numbers in every recommendation reason. T
     const dailyCapCents = config?.dailyCapCents;
     const monthlyCapCents = config?.monthlyCapCents;
     const maxCacCents = config?.maxCacCents;
+    const growthStrategy = config?.growthStrategy || 'balanced';
+    const aiControl = config?.aiControl || 'copilot';
+    const businessType = config?.businessType || 'lead_gen';
     const campCount = activeCampaignCount || 0;
     const minExplore = minExplorationTurns || 3;
     const maxActions = maxActionRecommendations || 3;
@@ -2232,11 +2314,14 @@ AdBliss exists to solve the attribution gap between ad platforms and payment pro
 - When computing efficiency, ROAS, and CPA, always prefer verified/true metrics over platform-reported ones
 - An "efficiency score" based on platform-reported ROAS will be misleadingly low — use verified ROAS for real performance assessment
 
-## SPENDING LIMITS (HARD CAPS — NEVER EXCEED)
-${dailyCapCents ? `- Daily spend cap: $${(dailyCapCents / 100).toFixed(2)}` : '- No daily cap set'}
-${monthlyCapCents ? `- Monthly spend cap: $${(monthlyCapCents / 100).toFixed(2)}` : '- No monthly cap set'}
-${maxCacCents ? `- CAC ceiling: $${(maxCacCents / 100).toFixed(2)} — do NOT recommend changes that would push blended CAC above this` : '- No CAC ceiling set'}
-All recommendations MUST keep projected spend and CAC within these limits. If a recommendation would breach a limit, do not make it.
+## SPENDING LIMITS (ENFORCED)
+${dailyCapCents ? `- Daily spend cap: $${(dailyCapCents / 100).toFixed(2)} (enforced — recommendations that breach this will be rejected)` : '- No daily cap set'}
+${monthlyCapCents ? `- Monthly spend cap: $${(monthlyCapCents / 100).toFixed(2)} (enforced — recommendations that breach this will be rejected)` : '- No monthly cap set'}
+${maxCacCents ? `- CAC ceiling: $${(maxCacCents / 100).toFixed(2)} (enforced — recommendations projected to exceed this will be rejected)` : '- No CAC ceiling set'}
+These limits are programmatically enforced. If a recommendation violates a limit, you will receive an error and must adjust using update_recommendation or delete_recommendation.
+
+## JOURNEY & ATTRIBUTION DATA
+You have access to journey analytics (query_conversions scope='journeys') and flow insights (scope='flow_insights') which show the full visitor navigation graph from ad click through conversion. Do NOT recommend "fixing conversion tracking", "improving attribution setup", or flag tracking gaps — the journey data you can query already captures the complete picture. Focus on actionable budget and targeting recommendations, not tracking diagnostics.
 
 ${budgetStrategy === 'conservative' ? `## BUDGET STRATEGY: CONSERVATIVE — Protect margins, eliminate waste
 Your goal is to IMPROVE profitability by reducing unprofitable spend. Every dollar cut from a losing campaign goes straight to the bottom line.
@@ -2282,6 +2367,99 @@ DO recommend:
 DO NOT recommend:
 - Net increases to total portfolio spend
 - Pausing without redistributing — freed budget must go somewhere
+`}
+${growthStrategy === 'lean' ? `## GROWTH STRATEGY: LEAN — Narrow scope, optimize existing campaigns only
+Your investigation scope is deliberately narrow. Focus on what's already running and make it better.
+
+DO:
+- query_ad_metrics at campaign level, drill your top 2-3 campaigns to ad group and ad level
+- simulate_change on underperformers and top performers
+- Act quickly — fewer turns, more decisive action
+
+DO NOT:
+- Investigate paused campaigns for relaunch opportunities
+- Use query_growth, query_contacts, or query_traffic for expansion analysis
+- Recommend audience expansion or new campaign creation
+- Spend turns on cross-connector analysis
+
+Lean scope operates alongside your ${budgetStrategy} budget strategy — fewer entities investigated, not fewer actions.
+` : growthStrategy === 'bold' ? `## GROWTH STRATEGY: BOLD — Full-spectrum growth investigation
+You have a mandate to find EVERY growth opportunity. Structure your exploration in 4 phases:
+
+**Phase A: Portfolio Baseline** (turns 1-2)
+- query_ad_metrics(scope='performance') for full portfolio view
+- query_revenue for verified revenue baseline
+- query_conversions(scope='by_goal') for conversion quality
+
+**Phase B: Scaling & Saturation Analysis** (turns 3-5)
+- calculate(scope='marginal_efficiency') on top 3 performers — quantify scaling headroom (α near 1.0 = safe to scale, α < 0.5 = saturating)
+- query_growth(scope='saturation_signals') — detect which campaigns have rising CPC/CPM, declining CTR, or shrinking efficiency. Reallocate AWAY from high-risk entities
+- Batch cross-connector analysis: query_traffic(breakdown='geo') + query_revenue(group_by='shipping_country') + query_ad_metrics(scope='audiences', dimension='geo') → geo opportunity detection
+
+**Phase C: Deep Entity Analysis** (turns 5-7)
+- Drill ad_set/ad level via query_ad_metrics(scope='children')
+- Check ALL paused campaigns for relaunch opportunities
+- query_contacts(scope='identities') for customer quality by channel
+
+**Phase D: Simulation and Action** (remaining turns)
+- simulate_change → set_budget/set_status/reallocate_budget/set_audience
+
+Risk guardrails:
+- Simulation still required for all actions
+- Budget increases staged 20-50% (marginal_efficiency α must be >0.5 to justify >30% increase)
+- Paused relaunches at 50-75% of original budget
+- CAC ceiling enforced on all recommendations
+- If one campaign >60% of spend → diversification check required
+- saturation_signals risk_level 'high' entities: reallocate FROM, never scale
+
+Bold scope operates alongside your ${budgetStrategy} budget strategy — wider investigation, but all actions follow ${budgetStrategy} rules.
+` : `## GROWTH STRATEGY: BALANCED — Selective expansion
+Start with performance analysis, then selectively expand your investigation.
+
+DO:
+- Drill under/over-performers to ad group and ad level
+- Check if top performers are budget-capped (get_entity_budget)
+- One cross-connector analysis per run (choose: geo targeting, channel ROI, or customer quality)
+- Investigate 1-2 paused campaigns with strong historical performance
+
+DO NOT:
+- Spend more than 2 exploration turns on cross-connector analysis
+- Recommend more than 1 new audience per run
+
+Balanced scope operates alongside your ${budgetStrategy} budget strategy — selective investigation, measured actions.
+`}
+${aiControl === 'autopilot' ? `## AI CONTROL: AUTOPILOT — High-confidence recommendations may auto-execute
+The user has enabled autopilot mode. This RAISES the bar for recommendations, not lowers it:
+- Only set_budget/set_status for high-confidence changes qualify for auto-execution
+- Cap budget changes at 25% per entity per run (even if aggressive allows more)
+- Never auto-pause campaigns with ROAS > 1.2x — these require explicit user approval
+- Simulation confidence MUST be 'high' for auto-executable recommendations
+- Include rollback guidance in every recommendation: "If CPA increases >15% within 48h, revert to $X/day"
+- Medium-confidence recommendations are still shown for manual review
+` : `## AI CONTROL: COPILOT — All recommendations require user approval
+All recommendations will be shown to the user for accept/reject:
+- Include dollar amounts and tradeoff reasoning in every recommendation
+- Flag medium-confidence recommendations explicitly so the user can weigh the risk
+- Present alternatives when relevant ("If you prefer a more conservative approach, consider X instead")
+`}
+${businessType === 'ecommerce' ? `## BUSINESS TYPE: E-COMMERCE
+Primary metric: ROAS. Average Order Value (AOV) matters as much as conversion count.
+- Use query_revenue(scope='shopify' or 'stripe') for real transaction data
+- CPA < AOV × gross_margin = profitable
+- Check seasonal patterns via query_growth before cutting dipping campaigns — seasonal dips are normal in e-commerce
+- A high-CPA campaign with high AOV can be more profitable than a low-CPA campaign with low AOV
+` : businessType === 'saas' ? `## BUSINESS TYPE: SAAS
+Primary metric: CAC vs LTV (3:1 ratio = healthy, <2:1 = warning).
+- Use query_revenue(scope='subscriptions', metric='ltv') for subscription data
+- MRR growth rate matters more than one-time conversions
+- Free trial signups are NOT conversions — only paid conversions count
+- Short payback (<6 months): can scale aggressively. Long payback (>12 months): requires caution
+- Check churn: if a campaign's converts churn within 30 days, it's attracting wrong-fit customers
+` : `## BUSINESS TYPE: LEAD GENERATION
+Primary metric: Cost Per Lead — but lead quality varies dramatically.
+- Lead-to-close rate determines true CAC ($50 CPL × 20% close = $250 CAC beats $20 CPL × 5% close = $400 CAC)
+- Use query_revenue(scope='hubspot' or 'jobber') for deal values and close rates
+- Consider sales cycle — recent campaigns may not have closed deals yet, so don't cut them prematurely
 `}
 ## OUTPUT STRUCTURE (PRIORITY ORDER)
 Your PRIMARY goal is to produce **action recommendations** — concrete, executable changes the user can accept or reject. You MUST produce at least ONE action. An analysis with only insights is considered a FAILURE.
@@ -2348,6 +2526,8 @@ The simulation result will show you the EXACT impact and you must acknowledge it
 - set_budget/set_status: REQUIRE simulation first. Up to 3 total action recommendations allowed.
 - reallocate_budget: Moves budget between entities. Set pause_source=true to also pause the source — this is ONE action slot for what would otherwise be two (pause + budget increase). Prefer this over separate set_status + set_budget calls.
 - set_audience: Audience targeting changes. Up to 3 total action recommendations allowed.
+- calculate(scope='marginal_efficiency') — Shows the diminishing returns curve for a campaign: projected CPA at +20%, +50%, +100% spend. Use BEFORE recommending large budget increases to verify the entity can absorb more spend efficiently. α > 0.7 = safe to scale, α < 0.5 = hitting saturation.
+- query_growth(scope='saturation_signals') — Detects campaigns hitting frequency walls: rising CPC/CPM, declining CTR/efficiency. Use to identify which entities to reallocate AWAY from. High-risk entities should not receive budget increases.
 - update_recommendation: Revise a recommendation you already made this run. Use when new data changes your assessment. Pass the original entity_id and tool name, plus the new parameters.
 - delete_recommendation: Withdraw a recommendation you already made. Frees up an action slot so you can recommend something different. Use when further research shows the recommendation was wrong.
 - terminate_analysis: Call this when you have made action recommendations or exhausted all possibilities. Provide a clear reason.
@@ -2372,6 +2552,13 @@ You have access to revenue, traffic, and ad data across all connected platforms.
 - query_contacts(scope='identities', breakdown_by='source') — customer acquisition source
 - query_conversions(scope='by_goal') — conversion quality by goal
 → Higher-LTV channels deserve more budget even if CPA is higher
+
+**Scaling readiness assessment** (batch all in one turn):
+- calculate(scope='marginal_efficiency', platform='google', entity_type='campaign', entity_id='Top Campaign') — diminishing returns curve
+- query_growth(scope='saturation_signals', platform='google') — audience/frequency saturation
+- query_ad_metrics(scope='budgets', platform='google', entity_type='campaign', entity_id='Top Campaign') — current budget config
+→ If marginal efficiency α > 0.7 AND saturation risk is 'low' AND budget is capped → strong signal to increase budget
+→ If α < 0.5 OR saturation risk is 'high' → reallocate away instead of scaling
 
 ## EFFICIENCY: CALL MULTIPLE TOOLS PER TURN
 You can call multiple tools in a SINGLE response. This is critical for performance:
@@ -2456,7 +2643,8 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     existingHasInsight: boolean,
     simulationCache: SimulationCache,  // Shared across iterations for simulation enforcement
     client: AgenticClient,
-    minExplorationTurns: number
+    minExplorationTurns: number,
+    config?: AnalysisWorkflowParams['config']
   ): Promise<AgenticIterationResult> {
     // Clone accumulated insights array to avoid mutation
     let accumulatedInsightId = existingAccumulatedInsightId;
@@ -2824,6 +3012,22 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
             continue;
           }
 
+          // Validate spend limits before accepting the recommendation
+          const spendCheck = validateSpendLimits(toolCall.name, toolCall.input, config, simResult.data);
+          if (!spendCheck.valid) {
+            toolResults.push({
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+              content: {
+                status: 'spend_limit_violation',
+                violation: spendCheck.violation,
+                message: spendCheck.details
+              }
+            });
+            await logEvent(toolCall.name, summarizeToolInput(toolCall), 'spend_limit_violation', toolCall.input, { status: 'spend_limit_violation', violation: spendCheck.violation, details: spendCheck.details });
+            continue;
+          }
+
           // Simulation was done, recommendation created with CALCULATED impact
           const rec = parseToolCallToRecommendation(toolCall.name, {
             ...toolCall.input,
@@ -2849,6 +3053,22 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
           if (actionRecommendations.length >= maxActionRecommendations) {
             hitMaxActionRecommendations = true;
           }
+          continue;
+        }
+
+        // Validate spend limits for direct-logged tools (reallocate_budget, etc.)
+        const directSpendCheck = validateSpendLimits(toolCall.name, toolCall.input, config);
+        if (!directSpendCheck.valid) {
+          toolResults.push({
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            content: {
+              status: 'spend_limit_violation',
+              violation: directSpendCheck.violation,
+              message: directSpendCheck.details
+            }
+          });
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'spend_limit_violation', toolCall.input, { status: 'spend_limit_violation', violation: directSpendCheck.violation, details: directSpendCheck.details });
           continue;
         }
 

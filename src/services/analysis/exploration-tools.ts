@@ -11,6 +11,8 @@
  * Uses D1 ANALYTICS_DB for metrics queries
  */
 
+import { fitPowerLaw } from './simulation-service';
+
 // D1Database type from Cloudflare Workers (matches worker-configuration.d.ts)
 type D1Database = {
   prepare(query: string): D1PreparedStatement;
@@ -442,13 +444,13 @@ export const EXPLORATION_TOOLS = {
 
   query_growth: {
     name: 'query_growth',
-    description: 'Query growth and brand metrics. Scopes: "cac" — historical CAC trend with optional AI predictions and baselines; "affiliates" — affiliate/partner program data with referral volume and commission costs; "social" — organic social media performance with post engagement and follower growth; "reviews" — review/reputation data with ratings and sentiment. Common params: days, platform. For "cac": include_predictions, include_baselines. For "affiliates": include_partners, group_by. For "social": include_posts, include_follower_trends. For "reviews": min_rating, include_sentiment.',
+    description: 'Query growth and brand metrics. Scopes: "cac" — historical CAC trend with optional AI predictions and baselines; "affiliates" — affiliate/partner program data with referral volume and commission costs; "social" — organic social media performance with post engagement and follower growth; "reviews" — review/reputation data with ratings and sentiment; "saturation_signals" — detect campaigns hitting frequency walls via CPC/CPM/CTR/efficiency trends over 60 days. Requires: platform, entity_type (campaign/ad_group/adset). Common params: days, platform. For "cac": include_predictions, include_baselines. For "affiliates": include_partners, group_by. For "social": include_posts, include_follower_trends. For "reviews": min_rating, include_sentiment.',
     input_schema: {
       type: 'object' as const,
       properties: {
         scope: {
           type: 'string',
-          enum: ['cac', 'affiliates', 'social', 'reviews'],
+          enum: ['cac', 'affiliates', 'social', 'reviews', 'saturation_signals'],
           description: 'Which growth metric to query'
         },
         days: {
@@ -494,6 +496,11 @@ export const EXPLORATION_TOOLS = {
         group_by: {
           type: 'string',
           description: 'For "affiliates" scope: day/partner/status/conversion_type'
+        },
+        entity_type: {
+          type: 'string',
+          enum: ['campaign', 'ad_group', 'adset'],
+          description: 'For "saturation_signals" scope: entity level to analyze'
         }
       },
       required: ['scope']
@@ -502,13 +509,13 @@ export const EXPLORATION_TOOLS = {
 
   calculate: {
     name: 'calculate',
-    description: 'Perform calculations for analysis. Scopes: "budget_change" — calculate new budget after percentage change (use before recommending budget changes); "pct_change" — calculate percentage change between two values; "spend_vs_revenue" — compare ad spend against actual revenue with true ROAS; "compare_entities" — compare performance metrics across multiple entities. For "budget_change": current_budget_cents, percentage_change. For "pct_change": old_value, new_value. For "spend_vs_revenue": days, platforms, breakdown_by. For "compare_entities": platform, entity_type, entity_ids, metrics, days.',
+    description: 'Perform calculations for analysis. Scopes: "budget_change" — calculate new budget after percentage change (use before recommending budget changes); "pct_change" — calculate percentage change between two values; "spend_vs_revenue" — compare ad spend against actual revenue with true ROAS; "compare_entities" — compare performance metrics across multiple entities; "marginal_efficiency" — project CPA at different spend levels using diminishing returns model (power-law fit on 90-day history). Requires: platform, entity_type, entity_id, days. For "budget_change": current_budget_cents, percentage_change. For "pct_change": old_value, new_value. For "spend_vs_revenue": days, platforms, breakdown_by. For "compare_entities": platform, entity_type, entity_ids, metrics, days.',
     input_schema: {
       type: 'object' as const,
       properties: {
         scope: {
           type: 'string',
-          enum: ['budget_change', 'pct_change', 'spend_vs_revenue', 'compare_entities'],
+          enum: ['budget_change', 'pct_change', 'spend_vs_revenue', 'compare_entities', 'marginal_efficiency'],
           description: 'Which calculation to perform'
         },
         current_budget_cents: {
@@ -545,12 +552,16 @@ export const EXPLORATION_TOOLS = {
         },
         platform: {
           type: 'string',
-          description: 'For "compare_entities" scope: the ad platform'
+          description: 'For "compare_entities"/"marginal_efficiency" scope: the ad platform'
         },
         entity_type: {
           type: 'string',
           enum: ['ad', 'adset', 'campaign'],
-          description: 'For "compare_entities" scope: type of entities to compare'
+          description: 'For "compare_entities"/"marginal_efficiency" scope: type of entities to compare or analyze'
+        },
+        entity_id: {
+          type: 'string',
+          description: 'For "marginal_efficiency" scope: entity name or ID to analyze'
         },
         entity_ids: {
           type: 'array',
@@ -708,6 +719,7 @@ export async function getExplorationToolsForOrg(
       affiliates: (types) => types.has('affiliate'),
       social: (types) => types.has('social'),
       reviews: (types) => types.has('reviews'),
+      saturation_signals: (types) => types.has('ad_platform'),
     },
     // calculate always included, list_active_connectors always included, query_unified_data always included
   };
@@ -1003,6 +1015,19 @@ interface ListActiveConnectorsInput {
   include_data_stats?: boolean;
 }
 
+interface MarginalEfficiencyInput {
+  platform: string;
+  entity_type: string;
+  entity_id: string;
+  days?: number;
+}
+
+interface SaturationSignalsInput {
+  platform: string;
+  entity_type?: string;
+  days?: number;
+}
+
 /**
  * Exploration Tool Executor
  * Uses D1 ANALYTICS_DB for all queries
@@ -1090,6 +1115,7 @@ export class ExplorationToolExecutor {
             case 'affiliates': return await this.queryAffiliateMetrics(input as QueryAffiliateMetricsInput, orgId);
             case 'social': return await this.querySocialMetrics(input as QuerySocialMetricsInput, orgId);
             case 'reviews': return await this.queryReviews(input as QueryReviewsInput, orgId);
+            case 'saturation_signals': return await this.getSaturationSignals(input as SaturationSignalsInput, orgId);
             default: return { success: false, error: `Unknown scope for query_growth: ${input.scope}` };
           }
         case 'calculate':
@@ -1098,6 +1124,7 @@ export class ExplorationToolExecutor {
             case 'pct_change': return this.calculatePercentageChange(input as CalculatePercentageChangeInput);
             case 'spend_vs_revenue': return await this.compareSpendToRevenue(input as CompareSpendToRevenueInput, orgId);
             case 'compare_entities': return await this.compareEntities(input as CompareEntitiesInput, orgId);
+            case 'marginal_efficiency': return await this.getMarginalEfficiency(input as MarginalEfficiencyInput, orgId);
             default: return { success: false, error: `Unknown scope for calculate: ${input.scope}` };
           }
         case 'query_unified_data':
@@ -5426,6 +5453,328 @@ export class ExplorationToolExecutor {
         return { success: true, data: { note: `${categoryName} tables not yet created`, summary: { total_events: 0 } } };
       }
       return { success: false, error: msg };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MARGINAL EFFICIENCY (calculate scope)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async getMarginalEfficiency(
+    input: MarginalEfficiencyInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { platform, entity_type, days = 90 } = input;
+    let { entity_id } = input;
+
+    if (!platform || !entity_type || !entity_id) {
+      return { success: false, error: 'marginal_efficiency requires platform, entity_type, and entity_id' };
+    }
+
+    try {
+      // Resolve entity name to external ID
+      const resolved = await this.resolveEntityId(entity_id, entity_type, platform, orgId);
+      const entityName = resolved?.name || entity_id;
+      if (resolved) entity_id = resolved.externalId;
+
+      // Get daily metrics history
+      const { query, params } = this.buildUnifiedMetricsQuery(platform, entity_type, entity_id, days, orgId);
+      const result = await this.db.prepare(query).bind(...params).all<{
+        metric_date: string;
+        spend_cents: number;
+        conversions: number;
+      }>();
+      const history = result.results || [];
+
+      if (history.length < 7) {
+        return {
+          success: true,
+          data: {
+            entity_name: entityName,
+            error: 'Insufficient data',
+            note: `Only ${history.length} days of data. Need at least 7 days with spend > 0 and conversions > 0 for power-law fit.`
+          }
+        };
+      }
+
+      // Fit power-law model
+      const model = fitPowerLaw(history);
+      const confidence = model.r_squared > 0.8 ? 'high' : model.r_squared > 0.6 ? 'medium' : 'low';
+
+      // Current totals
+      const totalSpend = history.reduce((s, d) => s + d.spend_cents, 0);
+      const totalConversions = history.reduce((s, d) => s + d.conversions, 0);
+      const avgDailySpend = totalSpend / history.length;
+      const currentCpa = totalConversions > 0 ? Math.round(totalSpend / totalConversions) : 0;
+
+      // Project at 5 spend levels
+      const levels = [
+        { label: '-20%', multiplier: 0.8 },
+        { label: 'current', multiplier: 1.0 },
+        { label: '+20%', multiplier: 1.2 },
+        { label: '+50%', multiplier: 1.5 },
+        { label: '+100%', multiplier: 2.0 },
+      ];
+
+      const projections = levels.map(({ label, multiplier }) => {
+        const newDailySpend = avgDailySpend * multiplier;
+        const totalConvAtNew = model.k > 0
+          ? model.k * Math.pow(newDailySpend, model.alpha) * history.length
+          : totalConversions * multiplier;
+        const totalSpendAtNew = newDailySpend * history.length;
+        const cpa = totalConvAtNew > 0 ? Math.round(totalSpendAtNew / totalConvAtNew) : 0;
+
+        // Marginal CPA: cost of incremental conversions vs current
+        let marginalCpa = 0;
+        if (multiplier > 1.0 && model.k > 0) {
+          const currentConvModel = model.k * Math.pow(avgDailySpend, model.alpha) * history.length;
+          const marginalConversions = totalConvAtNew - currentConvModel;
+          const marginalSpend = totalSpendAtNew - (avgDailySpend * history.length);
+          marginalCpa = marginalConversions > 0 ? Math.round(marginalSpend / marginalConversions) : 0;
+        }
+
+        return {
+          label,
+          spend_cents: Math.round(totalSpendAtNew),
+          total_conversions: Math.round(totalConvAtNew * 10) / 10,
+          cpa_cents: cpa,
+          marginal_cpa_cents: marginalCpa
+        };
+      });
+
+      // Scaling signal summary
+      const convAt150 = model.k > 0
+        ? model.k * Math.pow(avgDailySpend * 1.5, model.alpha) * history.length
+        : totalConversions * 1.5;
+      const convPctIncrease = totalConversions > 0
+        ? Math.round(((convAt150 / totalConversions) - 1) * 100)
+        : 0;
+
+      const scalingSignal = model.k === 0
+        ? 'Insufficient data for power-law fit — using linear approximation.'
+        : `α=${model.alpha.toFixed(2)}: ${model.alpha >= 0.85 ? 'near-linear returns — safe to scale' : model.alpha >= 0.6 ? 'moderate diminishing returns' : 'heavy diminishing returns — near saturation'}. +50% spend → +${convPctIncrease}% conversions.`;
+
+      return {
+        success: true,
+        data: {
+          entity_name: entityName,
+          current_spend_cents: totalSpend,
+          current_conversions: totalConversions,
+          current_cpa_cents: currentCpa,
+          curve: { k: model.k, alpha: model.alpha, r_squared: model.r_squared, data_points: history.length },
+          confidence,
+          projections,
+          scaling_signal: scalingSignal
+        }
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Marginal efficiency calculation failed' };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SATURATION SIGNALS (query_growth scope)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async getSaturationSignals(
+    input: SaturationSignalsInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { platform, entity_type = 'campaign', days = 60 } = input;
+
+    if (!platform) {
+      return { success: false, error: 'saturation_signals requires platform' };
+    }
+
+    const normalizedEntityType = entity_type === 'adset' ? 'ad_group' : entity_type;
+
+    try {
+      const dateFrom = new Date();
+      dateFrom.setDate(dateFrom.getDate() - days);
+      const dateFromStr = dateFrom.toISOString().split('T')[0];
+
+      // Get all entity metrics for this platform over the period
+      const sql = `
+        SELECT
+          entity_ref,
+          metric_date,
+          spend_cents,
+          impressions,
+          clicks,
+          conversions,
+          cpc_cents,
+          cpm_cents,
+          CASE WHEN impressions > 0 THEN CAST(clicks AS REAL) / impressions * 100 ELSE 0 END as ctr
+        FROM ad_metrics
+        WHERE organization_id = ?
+          AND platform = ?
+          AND entity_type = ?
+          AND metric_date >= ?
+        ORDER BY entity_ref, metric_date DESC
+      `;
+
+      const result = await this.db.prepare(sql)
+        .bind(orgId, platform, normalizedEntityType, dateFromStr)
+        .all<{
+          entity_ref: string;
+          metric_date: string;
+          spend_cents: number;
+          impressions: number;
+          clicks: number;
+          conversions: number;
+          cpc_cents: number;
+          cpm_cents: number;
+          ctr: number;
+        }>();
+
+      const rows = result.results || [];
+      if (rows.length === 0) {
+        return { success: true, data: { entities: [], summary: 'No ad metrics data found for this platform and entity type.' } };
+      }
+
+      // Group by entity
+      const byEntity = new Map<string, typeof rows>();
+      for (const row of rows) {
+        if (!byEntity.has(row.entity_ref)) byEntity.set(row.entity_ref, []);
+        byEntity.get(row.entity_ref)!.push(row);
+      }
+
+      // Resolve entity names
+      const entityNames = new Map<string, string>();
+      for (const entityRef of byEntity.keys()) {
+        const resolved = await this.resolveEntityId(entityRef, entity_type, platform, orgId);
+        entityNames.set(entityRef, resolved?.name || entityRef);
+      }
+
+      const entities: Array<{
+        entity_ref: string;
+        entity_name: string;
+        risk_level: 'high' | 'medium' | 'low';
+        signals: {
+          cpc_trend_pct: number;
+          cpm_trend_pct: number;
+          ctr_cliff_detected: boolean;
+          ctr_change_pct: number;
+          impression_momentum: number;
+          efficiency_trend_pct: number;
+        };
+        current_spend_cents: number;
+        current_conversions: number;
+        recommendation: string;
+      }> = [];
+
+      for (const [entityRef, entityRows] of byEntity.entries()) {
+        // Need at least 7 days of data
+        if (entityRows.length < 7) continue;
+
+        // Sort by date descending (already sorted but ensure)
+        entityRows.sort((a, b) => b.metric_date.localeCompare(a.metric_date));
+
+        const last7 = entityRows.slice(0, 7);
+        const prior7 = entityRows.slice(7, 14);
+
+        if (prior7.length < 7) continue; // Need 2 weeks minimum
+
+        // Compute WoW metrics
+        const avg = (arr: typeof rows, field: 'cpc_cents' | 'cpm_cents' | 'ctr' | 'spend_cents' | 'conversions' | 'impressions') =>
+          arr.reduce((s, r) => s + (r[field] || 0), 0) / arr.length;
+
+        const sum = (arr: typeof rows, field: 'spend_cents' | 'conversions' | 'impressions') =>
+          arr.reduce((s, r) => s + (r[field] || 0), 0);
+
+        const avgCpcLast = avg(last7, 'cpc_cents');
+        const avgCpcPrior = avg(prior7, 'cpc_cents');
+        const cpcTrend = avgCpcPrior > 0 ? ((avgCpcLast - avgCpcPrior) / avgCpcPrior) * 100 : 0;
+
+        const avgCpmLast = avg(last7, 'cpm_cents');
+        const avgCpmPrior = avg(prior7, 'cpm_cents');
+        const cpmTrend = avgCpmPrior > 0 ? ((avgCpmLast - avgCpmPrior) / avgCpmPrior) * 100 : 0;
+
+        const avgCtrLast = avg(last7, 'ctr');
+        const avgCtrPrior = avg(prior7, 'ctr');
+        const ctrChange = avgCtrPrior > 0 ? ((avgCtrLast - avgCtrPrior) / avgCtrPrior) * 100 : 0;
+
+        // CTR cliff detection: check if CTR was stable for 14+ days then dropped >25% WoW
+        const allCtr = entityRows.slice(0, Math.min(entityRows.length, 21)).map(r => r.ctr);
+        const stableCtr = allCtr.slice(7); // days 8-21
+        const ctrMean = stableCtr.length > 0 ? stableCtr.reduce((a, b) => a + b, 0) / stableCtr.length : 0;
+        const ctrStdDev = stableCtr.length > 1
+          ? Math.sqrt(stableCtr.reduce((acc, v) => acc + (v - ctrMean) ** 2, 0) / (stableCtr.length - 1))
+          : 0;
+        const ctrStable = ctrMean > 0 && stableCtr.length >= 7 && (ctrStdDev / ctrMean) < 0.10;
+        const ctrCliff = ctrStable && ctrChange < -25;
+
+        // Impression momentum: last 7d vs 30d normalized rate
+        const imp7 = sum(last7, 'impressions');
+        const imp30 = sum(entityRows.slice(0, Math.min(entityRows.length, 30)), 'impressions');
+        const days30 = Math.min(entityRows.length, 30);
+        const impressionMomentum = (imp30 > 0 && days30 > 0) ? (imp7 / 7) / (imp30 / days30) : 1.0;
+
+        // Efficiency trend (conversions/spend)
+        const spendLast = sum(last7, 'spend_cents');
+        const convLast = sum(last7, 'conversions');
+        const spendPrior = sum(prior7, 'spend_cents');
+        const convPrior = sum(prior7, 'conversions');
+        const effLast = spendLast > 0 ? convLast / spendLast : 0;
+        const effPrior = spendPrior > 0 ? convPrior / spendPrior : 0;
+        const effTrend = effPrior > 0 ? ((effLast - effPrior) / effPrior) * 100 : 0;
+
+        // Risk classification
+        let riskLevel: 'high' | 'medium' | 'low' = 'low';
+        if ((cpcTrend > 20 && (ctrCliff || effTrend < -15)) || (effTrend < -25)) {
+          riskLevel = 'high';
+        } else if (cpcTrend > 10 || effTrend < -10) {
+          riskLevel = 'medium';
+        }
+
+        // Build recommendation string
+        const signals: string[] = [];
+        if (cpcTrend > 15) signals.push(`CPC +${Math.round(cpcTrend)}%`);
+        if (ctrCliff) signals.push(`CTR dropped ${Math.round(Math.abs(ctrChange))}%`);
+        if (effTrend < -10) signals.push(`efficiency ${Math.round(effTrend)}%`);
+        if (impressionMomentum < 0.7) signals.push('declining reach');
+
+        let recommendation = '';
+        if (riskLevel === 'high') {
+          recommendation = `Audience saturating — ${signals.join(', ')}. Consider pausing or refreshing creative.`;
+        } else if (riskLevel === 'medium') {
+          recommendation = `Early saturation signs — ${signals.join(', ')}. Monitor closely.`;
+        } else {
+          recommendation = 'Metrics stable — no saturation signals detected.';
+        }
+
+        entities.push({
+          entity_ref: entityRef,
+          entity_name: entityNames.get(entityRef) || entityRef,
+          risk_level: riskLevel,
+          signals: {
+            cpc_trend_pct: Math.round(cpcTrend * 10) / 10,
+            cpm_trend_pct: Math.round(cpmTrend * 10) / 10,
+            ctr_cliff_detected: ctrCliff,
+            ctr_change_pct: Math.round(ctrChange * 10) / 10,
+            impression_momentum: Math.round(impressionMomentum * 100) / 100,
+            efficiency_trend_pct: Math.round(effTrend * 10) / 10,
+          },
+          current_spend_cents: spendLast,
+          current_conversions: convLast,
+          recommendation,
+        });
+      }
+
+      // Sort by risk level (high first)
+      const riskOrder = { high: 0, medium: 1, low: 2 };
+      entities.sort((a, b) => riskOrder[a.risk_level] - riskOrder[b.risk_level]);
+
+      const highRisk = entities.filter(e => e.risk_level === 'high');
+      const summary = highRisk.length > 0
+        ? `${highRisk.length} of ${entities.length} ${entity_type}s show high saturation risk. Top candidate for reallocation: ${highRisk[0].entity_name}.`
+        : entities.some(e => e.risk_level === 'medium')
+          ? `No high-risk entities. ${entities.filter(e => e.risk_level === 'medium').length} of ${entities.length} show medium saturation signals.`
+          : `All ${entities.length} ${entity_type}s show stable metrics — no saturation detected.`;
+
+      return { success: true, data: { entities, summary } };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Saturation signals query failed' };
     }
   }
 }
