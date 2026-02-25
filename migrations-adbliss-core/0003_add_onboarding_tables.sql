@@ -1,7 +1,8 @@
 -- Missing from consolidated schema: onboarding tables
 -- These were in the old migrations/0004_onboarding.sql but missed during consolidation
+-- Uses IF NOT EXISTS because staging/production already have these from old migrations
 
-CREATE TABLE onboarding_progress (
+CREATE TABLE IF NOT EXISTS onboarding_progress (
   user_id TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL,
   current_step TEXT NOT NULL DEFAULT 'welcome',
@@ -19,10 +20,10 @@ CREATE TABLE onboarding_progress (
   FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_onboarding_progress_org ON onboarding_progress(organization_id);
-CREATE INDEX idx_onboarding_progress_step ON onboarding_progress(current_step);
+CREATE INDEX IF NOT EXISTS idx_onboarding_progress_org ON onboarding_progress(organization_id);
+CREATE INDEX IF NOT EXISTS idx_onboarding_progress_step ON onboarding_progress(current_step);
 
-CREATE TABLE onboarding_steps (
+CREATE TABLE IF NOT EXISTS onboarding_steps (
   id TEXT PRIMARY KEY,
   step_name TEXT UNIQUE NOT NULL,
   display_name TEXT NOT NULL,
