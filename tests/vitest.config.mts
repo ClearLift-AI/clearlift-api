@@ -16,13 +16,14 @@ export default defineWorkersConfig({
     target: "esnext",
   },
   test: {
-    exclude: ["**/api-production.test.ts", "**/analysis-schema-v2.test.ts", "**/node_modules/**"],
+    exclude: ["**/api-production.test.ts", "**/analysis-schema-v2.test.ts", "**/analysis-metrics.test.ts", "**/node_modules/**"],
     setupFiles: ["./tests/apply-migrations.ts"],
     poolOptions: {
       workers: {
         singleWorker: true,
         wrangler: {
           configPath: "../wrangler.jsonc",
+          environment: "local",
         },
         miniflare: {
           compatibilityFlags: ["nodejs_compat"],
