@@ -24,12 +24,12 @@ ClearLift API Worker - A Cloudflare Workers-based API that serves as the authent
 
 #### D1 Databases
 
-**Current local architecture (Feb 2026 consolidation):** 2 databases, 91 tables total.
+**Current local architecture (Feb 2026 consolidation):** 2 databases, 94 tables total.
 
 | Binding | Database Name | Migrations Dir | Purpose | Status |
 |---------|--------------|----------------|---------|--------|
-| `DB` | adbliss-core | `migrations-core/` | Core operational + AI engine (51 tables: auth, orgs, connections, settings, admin, audit, AI tables merged from former AI_DB) | ✅ Active |
-| `ANALYTICS_DB` | adbliss-analytics-0 | `migrations-analytics-v2/` | Connectors, ad platforms, events/identity, webhooks, journeys, attribution, conversions, metrics (40 tables) | ✅ Active |
+| `DB` | adbliss-core | `migrations-adbliss-core/` | Core operational + AI engine (53 tables: auth, orgs, connections, settings, admin, audit, AI tables merged from former AI_DB) | ✅ Active |
+| `ANALYTICS_DB` | adbliss-analytics-0 | `migrations-adbliss-analytics/` | Connectors, ad platforms, events/identity, webhooks, journeys, attribution, conversions, metrics (41 tables) | ✅ Active |
 | `AI_DB` | clearlift-ai | `migrations-ai/` | ⚠️ **MERGED INTO DB (Feb 2026)** — AI tables now in adbliss-core. Binding remains for production until cutover. | 🔄 Legacy |
 | `SHARD_0-3` | clearlift-shard-{0-3} | `shard-migrations/` | ⚠️ **REMOVED (Feb 2026)** — Shard system removed. Bindings remain in production wrangler.jsonc only. | ❌ Removed |
 
@@ -80,7 +80,7 @@ ANALYTICS_DB provides pre-aggregated analytics (sub-millisecond queries). See da
 - `src/services/analysis/metrics-fetcher.ts` - AI metrics fetching
 - `src/services/analysis/simulation-service.ts` - Budget simulation
 - `src/services/analysis/exploration-tools.ts` - AI exploration
-- `src/index.ts` - CAC history backfill cron
+- `src/index.ts` - Stale job cleanup cron (CAC backfill + aggregation moved to clearlift-cron Feb 2026)
 
 **Deprecated tables (legacy daily metrics - no longer written or read):**
 - `google_campaign_daily_metrics`, `facebook_campaign_daily_metrics`, `tiktok_campaign_daily_metrics`
@@ -141,7 +141,7 @@ npx wrangler d1 migrations apply SHARD_3 --env "" --remote
 
 ## Database Schema
 
-### Main Database (DB) - `migrations-core/` (local) / `migrations/` (production pre-cutover)
+### Main Database (DB) - `migrations-adbliss-core/` (local) / `migrations/` (production pre-cutover)
 
 Core operational tables:
 
@@ -265,8 +265,8 @@ npm install
 npx wrangler dev --env local --port 8787
 
 # Apply D1 migrations locally (2 databases — NO AI_DB or shards locally)
-npx wrangler d1 migrations apply DB --local --env local           # adbliss-core (51 tables)
-npx wrangler d1 migrations apply ANALYTICS_DB --local --env local # adbliss-analytics-0 (40 tables)
+npx wrangler d1 migrations apply DB --local --env local           # adbliss-core (41 tables)
+npx wrangler d1 migrations apply ANALYTICS_DB --local --env local # adbliss-analytics-0 (33 tables)
 
 # Apply D1 migrations to production (LEGACY: includes AI_DB until cutover)
 npx wrangler d1 migrations apply DB --env "" --remote           # Main database
@@ -315,8 +315,8 @@ npx wrangler dev --port 8787
 | Feature | `--env local` | Default |
 |---------|---------------|---------|
 | Secrets | Plain strings from `.dev.vars` | Secrets Store bindings |
-| D1 (DB) | Local SQLite in `.wrangler/state/` (adbliss-core, 52 tables) | Local SQLite |
-| D1 (ANALYTICS_DB) | Local SQLite in `.wrangler/state/` (adbliss-analytics-0, 40 tables) | Local SQLite |
+| D1 (DB) | Local SQLite in `.wrangler/state/` (adbliss-core, 53 tables) | Local SQLite |
+| D1 (ANALYTICS_DB) | Local SQLite in `.wrangler/state/` (adbliss-analytics-0, 41 tables) | Local SQLite |
 | D1 (AI_DB) | ⚠️ Not used locally (merged into DB) | Not used locally |
 | Best for | Local development | Pre-deploy testing |
 
@@ -342,8 +342,8 @@ APP_BASE_URL=https://app-local.clearlift.ai
 
 | Database | Local State | Production State | Notes |
 |----------|-------------|------------------|-------|
-| `DB` | `.wrangler/state/` SQLite — `migrations-core/` (51 tables) | Cloudflare D1 `8e55bba7-...` — `migrations/` | Local uses new consolidated schema; prod uses old schema until cutover |
-| `ANALYTICS_DB` | `.wrangler/state/` SQLite — `migrations-analytics-v2/` (40 tables) | Cloudflare D1 `a69beb57-...` — `migrations-analytics/` | Local uses new consolidated schema; prod uses old schema until cutover |
+| `DB` | `.wrangler/state/` SQLite — `migrations-adbliss-core/` (53 tables) | Cloudflare D1 `8e55bba7-...` — `migrations/` | Local uses new consolidated schema; prod uses old schema until cutover |
+| `ANALYTICS_DB` | `.wrangler/state/` SQLite — `migrations-adbliss-analytics/` (41 tables) | Cloudflare D1 `a69beb57-...` — `migrations-analytics/` | Local uses new consolidated schema; prod uses old schema until cutover |
 | `AI_DB` | ⚠️ **Not used locally** (merged into DB) | Cloudflare D1 `3fb300f4-...` — `migrations-ai/` | Production only until cutover |
 | `SHARD_0-3` | ⚠️ **Not used locally** (removed) | Cloudflare D1 (3 migrations each) | Production only until cutover, then removed |
 
@@ -1060,3 +1060,68 @@ The Flow Builder now uses `ConnectorRegistryContext` instead of the deprecated `
 - Dynamic connector discovery from the API
 - SSR fallback with 25+ FALLBACK_CONNECTORS
 - Grouped dropdown UI (Connected / Available to Connect / Coming Soon)
+
+---
+
+## D1 Consolidation Migration (Feb 2026)
+
+### Status: In Progress
+
+Migration from 4 old databases → 2 consolidated databases:
+- Old: `DB` (clearlift-db-prod) + `AI_DB` (clearlift-ai-prod) + `ANALYTICS_DB` (clearlift-analytics-prod) + `SHARD_0-3`
+- New: `DB` (adbliss-core) + `ANALYTICS_DB` (adbliss-analytics-0)
+
+### Migration Script
+
+**File:** `scripts/migrate-org-production.ts`
+
+```bash
+# List all production orgs
+npx tsx scripts/migrate-org-production.ts --list
+
+# Dry run for selected orgs
+npx tsx scripts/migrate-org-production.ts --orgs bandago,unagi --dry-run
+
+# Execute migration (copies auth + OAuth tokens + settings only)
+npx tsx scripts/migrate-org-production.ts --orgs bandago,unagi
+
+# Verify row counts
+npx tsx scripts/migrate-org-production.ts --orgs bandago,unagi --verify-only
+
+# After cutover: trigger connector resyncs + CAC backfill
+npx tsx scripts/migrate-org-production.ts --orgs bandago,unagi --trigger-sync --api-token <token>
+
+# Staging dress rehearsal
+npx tsx scripts/migrate-org-production.ts --orgs <slug> --env staging --dry-run
+```
+
+### What Gets Copied (Tier 1 — ~16 tables per org)
+
+Auth, OAuth tokens, org settings, dashboard config, tracking domains/links, script hashes, webhook endpoints, consent configs. These are irreplaceable — encrypted OAuth tokens cannot be re-created.
+
+### What Re-syncs Automatically
+
+All ANALYTICS_DB tables rebuild from connector syncs (30-day backfill). CAC, attribution, and identity recompute via clearlift-cron pipelines.
+
+### Cron Ownership (Feb 2026)
+
+| Cron | Owner | Notes |
+|------|-------|-------|
+| Daily aggregation (`0 5 * * *`) | **clearlift-cron** | Removed from API worker |
+| Periodic sync (`0 */6 * * *`) | **clearlift-cron** | Removed from API worker |
+| Stale job cleanup (`*/15 * * * *`) | **API worker** | Kept — retries stuck jobs, token expiry checks, webhook retries |
+| Hourly analytics pipeline | **clearlift-cron** | CAC + attribution inline |
+| Daily identity pipeline (3 AM) | **clearlift-cron** | Identity extraction → conversion linking |
+
+### Cutover Checklist
+
+- [ ] Create new D1 databases (`adbliss-core` + `adbliss-analytics-0`)
+- [ ] Add temporary bindings (`DB_NEW`, `ANALYTICS_DB_NEW`) to wrangler.jsonc
+- [ ] Apply migrations to new databases
+- [ ] Run migration script for selected orgs
+- [ ] Verify with `--verify-only`
+- [ ] Swap DB/ANALYTICS_DB database IDs in both wrangler configs (API + queue consumer)
+- [ ] Deploy both workers simultaneously
+- [ ] Run `--trigger-sync` to resync connectors
+- [ ] Wait for crons to recompute CAC, attribution, identity
+- [ ] 30 days later: delete old databases
