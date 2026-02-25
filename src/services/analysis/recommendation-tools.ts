@@ -12,7 +12,9 @@ export interface ToolPropertyDef {
   type: string;
   description: string;
   enum?: string[];
-  items?: { type: string };
+  items?: { type: string; properties?: Record<string, ToolPropertyDef>; required?: string[] };
+  minItems?: number;
+  maxItems?: number;
 }
 
 export interface RecommendationTool {
