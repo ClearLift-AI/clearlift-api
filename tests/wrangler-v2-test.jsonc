@@ -11,13 +11,13 @@
       "binding": "ADBLISS_DB",
       "database_name": "adbliss-core-test",
       "database_id": "00000000-0000-0000-0000-000000000011",
-      "migrations_dir": "../migrations-core"
+      "migrations_dir": "../migrations-adbliss-core"
     },
     {
       "binding": "ADBLISS_ANALYTICS_DB",
       "database_name": "adbliss-analytics-test",
       "database_id": "00000000-0000-0000-0000-000000000012",
-      "migrations_dir": "../migrations-analytics-v2"
+      "migrations_dir": "../migrations-adbliss-analytics"
     }
   ]
 }

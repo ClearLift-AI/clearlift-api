@@ -5,38 +5,11 @@
 # DO NOT commit .dev.vars to git (it's in .gitignore)
 # =============================================================================
 #
-# ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  ⚠️  WARNING: .dev.vars OVERRIDES wrangler.jsonc variables!              ║
-# ║                                                                           ║
-# ║  If SUPABASE_URL below points to production, you WILL query production   ║
-# ║  data even when running with --env local!                                 ║
-# ║                                                                           ║
-# ║  For TRUE local-only development:                                         ║
-# ║  1. Start local Supabase: cd ../clearlift-cron && supabase start          ║
-# ║  2. Comment out SUPABASE_URL below (uses wrangler.jsonc default)          ║
-# ║  3. Run: npx wrangler dev --env local --port 8787                         ║
-# ╚═══════════════════════════════════════════════════════════════════════════╝
-#
 # =============================================================================
 
 # Encryption key for OAuth token encryption/decryption (32-byte base64)
 # Generate with: openssl rand -base64 32
 ENCRYPTION_KEY=YOUR_32_BYTE_BASE64_KEY_HERE
-
-# =============================================================================
-# SUPABASE CREDENTIALS
-# =============================================================================
-# Get from: https://app.supabase.com/project/_/settings/api
-# Note: Uses new key naming convention (publishable_key, secret_key)
-#
-# ⚠️  CAUTION: Setting SUPABASE_URL here overrides wrangler.jsonc!
-#     - For local-only: Comment out SUPABASE_URL (uses 127.0.0.1:54321)
-#     - For local API + prod data: Use production URL below
-#
-# SUPABASE_URL=http://127.0.0.1:54321    # Local Supabase (recommended)
-SUPABASE_URL=https://your-project.supabase.co  # Production (queries real data!)
-SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_KEY
-SUPABASE_SECRET_KEY=sb_secret_YOUR_KEY
 
 # =============================================================================
 # R2 SQL ACCESS

@@ -2,8 +2,8 @@
  * Schema V2 validation for Analysis Workflow SQL queries.
  *
  * Runs every SQL query used by the analysis workflow, exploration tools,
- * and metrics fetcher against the V2 consolidated schema (migrations-core +
- * migrations-analytics-v2) to catch column/table mismatches before production.
+ * and metrics fetcher against the V2 consolidated schema (migrations-adbliss-core +
+ * migrations-adbliss-analytics) to catch column/table mismatches before production.
  *
  * These tests don't validate data correctness — they validate that the SQL
  * compiles and references real columns. A "no such column" error here means

@@ -5,10 +5,10 @@ import {
 } from "@cloudflare/vitest-pool-workers/config";
 
 // Adbliss consolidated schema migrations
-const corePath = path.join(__dirname, "..", "migrations-core");
+const corePath = path.join(__dirname, "..", "migrations-adbliss-core");
 const coreMigrations = await readD1Migrations(corePath);
 
-const analyticsPath = path.join(__dirname, "..", "migrations-analytics-v2");
+const analyticsPath = path.join(__dirname, "..", "migrations-adbliss-analytics");
 const analyticsMigrations = await readD1Migrations(analyticsPath);
 
 export default defineWorkersConfig({
@@ -25,7 +25,7 @@ export default defineWorkersConfig({
           configPath: "../tests/wrangler-v2-test.jsonc",
         },
         miniflare: {
-          compatibilityFlags: ["experimental", "nodejs_compat"],
+          compatibilityFlags: ["nodejs_compat"],
           bindings: {
             ADBLISS_CORE_MIGRATIONS: coreMigrations,
             ADBLISS_ANALYTICS_MIGRATIONS: analyticsMigrations,
