@@ -394,6 +394,56 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
     }
   },
   {
+    name: 'compound_action',
+    description: 'Execute a multi-step strategy as a single action. Use when multiple changes must happen together for the strategy to work. Counts as ONE action slot instead of burning 3-5 separate slots.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        strategy: {
+          type: 'string',
+          description: 'scale_and_protect: increase budget on winner + tighten audience or add negatives on related underperformer. portfolio_rebalance: pause N underperformers + redistribute their combined budget across M winners proportional to efficiency. test_and_learn: reduce budget on saturating entity + allocate freed budget to a paused/new entity as a controlled test.',
+          enum: ['scale_and_protect', 'portfolio_rebalance', 'test_and_learn']
+        },
+        platform: {
+          type: 'string',
+          description: 'The ad platform',
+          enum: ['facebook', 'google', 'tiktok']
+        },
+        actions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              tool: { type: 'string', description: 'The sub-action tool', enum: ['set_budget', 'set_status', 'set_audience', 'set_bid'] },
+              entity_type: { type: 'string', description: 'Entity type', enum: ['campaign', 'ad_set', 'ad_group', 'ad'] },
+              entity_id: { type: 'string', description: 'Entity ID' },
+              entity_name: { type: 'string', description: 'Entity name for display' },
+              parameters: { type: 'object', description: 'Parameters for the sub-action tool' }
+            },
+            required: ['tool', 'entity_id', 'entity_name', 'parameters']
+          },
+          description: 'Ordered list of sub-actions (2-5). Each references an existing tool.',
+          minItems: 2,
+          maxItems: 5
+        },
+        reason: {
+          type: 'string',
+          description: 'Brief explanation of the compound strategy and its projected impact'
+        },
+        predicted_impact: {
+          type: 'number',
+          description: 'Expected overall impact as percentage change (e.g., -15 for 15% CAC reduction)'
+        },
+        confidence: {
+          type: 'string',
+          description: 'Confidence level',
+          enum: ['low', 'medium', 'high']
+        }
+      },
+      required: ['strategy', 'platform', 'actions', 'reason', 'confidence']
+    }
+  },
+  {
     name: 'general_insight',
     description: 'FALLBACK ONLY — use this for observations that genuinely cannot be expressed as set_budget, set_status, set_audience, or reallocate_budget. Examples: data quality gaps, missing tracking setup, cross-platform attribution issues. Do NOT use this for underperforming campaigns/ads — use set_status to recommend pausing those instead. Do NOT use this as a substitute for action tools. Multiple calls accumulate into a single document and do NOT count toward your action limit.',
     input_schema: {
@@ -442,7 +492,7 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
         original_tool: {
           type: 'string',
           description: 'The tool name of the original recommendation',
-          enum: ['set_budget', 'set_status', 'set_audience', 'reallocate_budget', 'set_bid', 'set_schedule']
+          enum: ['set_budget', 'set_status', 'set_audience', 'reallocate_budget', 'set_bid', 'set_schedule', 'compound_action']
         },
         new_parameters: {
           type: 'object',
@@ -474,7 +524,7 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
         original_tool: {
           type: 'string',
           description: 'The tool name of the original recommendation',
-          enum: ['set_budget', 'set_status', 'set_audience', 'reallocate_budget', 'set_bid', 'set_schedule']
+          enum: ['set_budget', 'set_status', 'set_audience', 'reallocate_budget', 'set_bid', 'set_schedule', 'compound_action']
         },
         reason: {
           type: 'string',
@@ -511,6 +561,11 @@ export const RECOMMENDATION_TOOLS: RecommendationTool[] = [
 // Check if a tool name is a recommendation tool
 export function isRecommendationTool(toolName: string): boolean {
   return RECOMMENDATION_TOOLS.some(t => t.name === toolName);
+}
+
+// Check if tool is a compound_action (counts as one action slot)
+export function isCompoundActionTool(toolName: string): boolean {
+  return toolName === 'compound_action';
 }
 
 // Check if tool is the terminate_analysis control tool
@@ -569,6 +624,22 @@ export function parseToolCallToRecommendation(
   toolName: string,
   toolInput: Record<string, any>
 ): Recommendation {
+  // Handle compound_action — use first sub-action's entity as the primary entity
+  if (toolName === 'compound_action') {
+    const firstAction = toolInput.actions?.[0];
+    return {
+      tool: toolName,
+      platform: toolInput.platform,
+      entity_type: firstAction?.entity_type || 'campaign',
+      entity_id: firstAction?.entity_id || toolInput.strategy,
+      entity_name: `${toolInput.strategy}: ${(toolInput.actions || []).map((a: any) => a.entity_name).join(' + ')}`,
+      parameters: toolInput,
+      reason: toolInput.reason,
+      predicted_impact: toolInput.predicted_impact || null,
+      confidence: toolInput.confidence || 'medium'
+    };
+  }
+
   // Handle general_insight specially - it doesn't have platform/entity fields
   if (toolName === 'general_insight') {
     return {
