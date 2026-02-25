@@ -119,6 +119,11 @@ const TIMEFRAME_DAYS: Record<string, number> = {
 
 let currentConfig: EnvConfig;
 
+/** Thrown when user declines to proceed with current org — not an error, just skip. */
+class OrgSkippedError extends Error {
+  constructor(reason: string) { super(reason); this.name = 'OrgSkippedError'; }
+}
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -576,8 +581,7 @@ async function stepConfirm(info: OrgInfo): Promise<void> {
   });
 
   if (!proceed) {
-    console.log('Aborted.');
-    process.exit(0);
+    throw new OrgSkippedError('User declined confirmation');
   }
 }
 
@@ -614,8 +618,7 @@ async function stepPurgeIfExists(info: OrgInfo): Promise<void> {
   });
 
   if (action === 'abort') {
-    console.log('Aborted.');
-    process.exit(0);
+    throw new OrgSkippedError('User aborted purge decision');
   }
 
   if (action === 'skip') {
@@ -636,8 +639,7 @@ async function stepPurgeIfExists(info: OrgInfo): Promise<void> {
   });
 
   if (!confirmPurge) {
-    console.log('Aborted purge.');
-    process.exit(0);
+    throw new OrgSkippedError('User declined purge confirmation');
   }
 
   log('\nPurging existing org data (reverse FK order)...');
@@ -1202,10 +1204,14 @@ async function main() {
         const result = await migrateOneOrg();
         results.push(result);
       } catch (e: any) {
-        const msg = e.message || String(e);
-        console.error(`\n  ✗ Migration failed: ${msg}`);
-        console.error('  If the failure occurred during table copy, the migration is');
-        console.error('  partially complete. You can retry — INSERT OR IGNORE skips existing rows.\n');
+        if (e instanceof OrgSkippedError) {
+          console.log(`\n  Skipped: ${e.message}`);
+        } else {
+          const msg = e.message || String(e);
+          console.error(`\n  Migration failed: ${msg}`);
+          console.error('  If the failure occurred during table copy, the migration is');
+          console.error('  partially complete. You can retry — INSERT OR IGNORE skips existing rows.\n');
+        }
         // Don't exit — let user continue with other orgs
       }
 
