@@ -1374,26 +1374,49 @@ export class TriggerAllPipelines extends OpenAPIRoute {
     const triggered: string[] = [];
     const skipped: string[] = [];
 
+    // Query actual date range of connector_events for this org.
+    // Migration imports historical data (e.g. 2024) so the default 30-day window misses it.
+    let convAggStartDate = startDate;
+    try {
+      const dateRange = await c.env.ANALYTICS_DB.prepare(
+        `SELECT MIN(transacted_at) as earliest FROM connector_events WHERE organization_id = ?`
+      ).bind(orgId).first<{ earliest: string | null }>();
+      if (dateRange?.earliest) {
+        const earliest = dateRange.earliest.split('T')[0];
+        if (earliest < convAggStartDate) {
+          convAggStartDate = earliest;
+        }
+      }
+    } catch {
+      // Non-fatal — fall back to days-based window
+    }
+
     try {
       // 1. Conversion aggregation (cascades → linking → CAC refresh)
+      // Uses actual data range to cover historical imports
       await c.env.SYNC_QUEUE.send({
         job_type: 'conversion_aggregation',
         job_id: crypto.randomUUID(),
         organization_id: orgId,
+        start_date: convAggStartDate,
+        end_date: endDate,
         attribution_window_hours: days * 24,
         created_at: now.toISOString(),
       });
       triggered.push('conversion_aggregation');
 
-      // 2. Events sync (needs org_tag)
+      // 2. Events sync (needs org_tag) — uses SyncJobMessage format (platform: 'events')
+      // NOT a job_type message. The queue consumer routes this via the platform discriminator.
       if (orgTag) {
         await c.env.SYNC_QUEUE.send({
-          job_type: 'events_sync',
           job_id: crypto.randomUUID(),
+          connection_id: 'events-' + orgTag,
           organization_id: orgId,
-          org_tag: orgTag,
+          platform: 'events',
+          account_id: orgTag,
+          job_type: 'incremental',
           sync_window: { start: `${startDate}T00:00:00Z`, end: `${endDate}T23:59:59Z` },
-          created_at: now.toISOString(),
+          metadata: { retry_count: 0, created_at: now.toISOString(), priority: 'normal' },
         });
         triggered.push('events_sync');
       } else {
@@ -1442,7 +1465,17 @@ export class TriggerAllPipelines extends OpenAPIRoute {
         skipped.push('probabilistic_attribution (no org_tag)');
       }
 
-      // 6. CAC refresh (immediate)
+      // 6. Conversion linking (explicit trigger — also cascades from identity extraction,
+      // but firing separately ensures it runs even if identity extraction finds 0 results)
+      await c.env.SYNC_QUEUE.send({
+        job_type: 'conversion_linking',
+        organization_id: orgId,
+        trigger: 'migration',
+        created_at: now.toISOString(),
+      });
+      triggered.push('conversion_linking');
+
+      // 7. CAC refresh (immediate)
       await c.env.SYNC_QUEUE.send({
         job_type: 'cac_refresh',
         organization_id: orgId,

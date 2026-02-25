@@ -118,6 +118,29 @@ const PRESERVED_SETTINGS_KEYS: Record<string, string[]> = {
   shopify: ['shop_domain'],
 };
 
+/**
+ * Default conversion_events per platform — derived from connector_configs.events_schema.
+ * Applied when migrating old connections that don't have conversion_events configured.
+ *
+ * Shape matches ConversionEventDef: { event_type, status[], label? }
+ * These match the `default_status` values from each connector's events_schema.
+ */
+const DEFAULT_CONVERSION_EVENTS: Record<string, Array<{ event_type: string; status: string[]; label?: string }>> = {
+  stripe: [
+    { event_type: 'checkout_session', status: ['succeeded'], label: 'Checkout completed' },
+  ],
+  shopify: [
+    { event_type: 'order', status: ['paid', 'partially_paid'], label: 'Paid order' },
+  ],
+  jobber: [
+    { event_type: 'job', status: ['completed'], label: 'Completed job' },
+    { event_type: 'invoice', status: ['paid'], label: 'Paid invoice' },
+  ],
+  hubspot: [
+    { event_type: 'deal', status: ['closedwon'], label: 'Closed-won deal' },
+  ],
+};
+
 // Timeframe options for connector sync
 const TIMEFRAME_OPTIONS = [
   { name: 'All time (730 days) — recommended for initial migration', value: 'all_time' },
@@ -700,6 +723,12 @@ function purgeOrgData(info: OrgInfo): void {
       { table: 'connector_sync_status', where: orgIdWhere },
       { table: 'handoff_patterns', where: orgIdWhere },
       { table: 'handoff_observations', where: orgIdWhere },
+      { table: 'attribution_model_results', where: orgIdWhere },
+      { table: 'campaign_period_summary', where: orgIdWhere },
+      { table: 'journey_touchpoints', where: orgIdWhere },
+      { table: 'org_daily_summary', where: orgIdWhere },
+      { table: 'org_timeseries', where: orgIdWhere },
+      { table: 'platform_comparison', where: orgIdWhere },
       // org_tag-scoped tables (only purge if tag exists)
       ...(orgTagWhere ? [
         { table: 'customer_identities', where: orgTagWhere },
@@ -959,10 +988,10 @@ async function stepOnboardConnectors(info: OrgInfo): Promise<void> {
       const syncMode = await select({
         message: '  Stripe sync mode?',
         choices: [
-          { name: 'Charges (one-time payments)', value: 'charges' },
-          { name: 'Subscriptions (recurring)', value: 'subscriptions' },
+          { name: 'Checkout Sessions (recommended — unified payments + subscriptions)', value: 'checkout_sessions' },
+          { name: 'Charges (legacy — for merchants not using Stripe Checkout)', value: 'charges' },
         ],
-        default: oldSettings.sync_mode || 'charges',
+        default: oldSettings.sync_mode || 'checkout_sessions',
       });
       newSettings.sync_mode = syncMode;
       newSettings.lookback_days = TIMEFRAME_DAYS[timeframe] || 60;
@@ -993,6 +1022,20 @@ async function stepOnboardConnectors(info: OrgInfo): Promise<void> {
           if (oldSettings[key] !== undefined) {
             newSettings[key] = oldSettings[key];
           }
+        }
+      }
+    } else {
+      // No conversion config exists — apply sensible defaults for known revenue connectors
+      const defaults = DEFAULT_CONVERSION_EVENTS[conn.platform];
+      if (defaults) {
+        console.log(`    No conversion_events configured. Platform default: ${defaults.map(d => `${d.event_type}[${d.status.join(',')}]`).join(', ')}`);
+        const applyDefaults = await confirm({
+          message: `    Apply default conversion events for ${conn.platform}? (required for conversions/CAC pipeline)`,
+          default: true,
+        });
+        if (applyDefaults) {
+          newSettings.conversion_events = defaults;
+          log(`    Applied default conversion_events for ${conn.platform}`);
         }
       }
     }
@@ -1058,15 +1101,18 @@ function stepCreateSession(info: OrgInfo): string {
  * NOTE: The staging API runs on Cloudflare Workers — it has direct queue access
  * to send all these messages. The migration script calls it via HTTP.
  */
-async function triggerDownstreamPipelines(info: OrgInfo, headers: Record<string, string>): Promise<void> {
+async function triggerDownstreamPipelines(info: OrgInfo, headers: Record<string, string>, lookbackDays: number = 30): Promise<void> {
   log('\nTriggering ALL downstream pipelines...');
+
+  // Clamp to API max of 90 days — the endpoint validates days: z.number().min(1).max(90)
+  const days = Math.min(lookbackDays, 90);
 
   // 1. Fire all pipelines via single API endpoint (queues 6 messages to SYNC_QUEUE)
   try {
     const resp = await fetch(`${currentConfig.apiBase}/v1/workers/run-all-pipelines/trigger?org_id=${info.id}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ days: 30 }),
+      body: JSON.stringify({ days }),
     });
     if (resp.ok) {
       const body = await resp.json() as any;
@@ -1335,9 +1381,9 @@ function batchOnboardConnectors(info: OrgInfo): void {
       dedup_window_hours: 24,
     };
 
-    // Stripe: preserve sync_mode or default to charges
+    // Stripe: preserve sync_mode or default to checkout_sessions
     if (conn.platform === 'stripe') {
-      newSettings.sync_mode = oldSettings.sync_mode || 'charges';
+      newSettings.sync_mode = oldSettings.sync_mode || 'checkout_sessions';
       newSettings.lookback_days = 730;
       newSettings.auto_sync = true;
       delete newSettings.aggregation_mode;
@@ -1350,10 +1396,20 @@ function batchOnboardConnectors(info: OrgInfo): void {
       newSettings.accountSelection = oldSettings.accountSelection;
     }
 
-    // Preserve conversion config (critical for pipeline)
-    for (const key of ['conversion_events', 'conversion_pages', 'pre_conversion_pages'] as const) {
-      if (oldSettings[key] !== undefined) {
-        newSettings[key] = oldSettings[key];
+    // Preserve conversion config if it exists, otherwise apply platform defaults
+    const hasConvConfig = ['conversion_events', 'conversion_pages', 'pre_conversion_pages'].some(k => oldSettings[k]);
+    if (hasConvConfig) {
+      for (const key of ['conversion_events', 'conversion_pages', 'pre_conversion_pages'] as const) {
+        if (oldSettings[key] !== undefined) {
+          newSettings[key] = oldSettings[key];
+        }
+      }
+    } else {
+      // Auto-apply default conversion events for known revenue connectors
+      const defaults = DEFAULT_CONVERSION_EVENTS[conn.platform];
+      if (defaults) {
+        newSettings.conversion_events = defaults;
+        log(`    [batch] Applied default conversion_events for ${conn.platform}: ${defaults.map(d => d.event_type).join(', ')}`);
       }
     }
 
@@ -1409,14 +1465,15 @@ async function batchMigrateOrg(slug: string): Promise<MigrationResult> {
     // Create session token
     const sessionToken = stepCreateSession(info);
 
-    // Trigger resync (non-interactive: always trigger, no polling)
+    // Trigger resync for connectors + downstream pipelines
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${sessionToken}`,
+      'X-Organization-Id': info.id,
+    };
+
     if (info.connections.length > 0) {
       log(`\nTriggering resync for ${info.connections.length} connector(s)...`);
-      const headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${sessionToken}`,
-        'X-Organization-Id': info.id,
-      };
 
       for (const conn of info.connections) {
         try {
@@ -1435,10 +1492,11 @@ async function batchMigrateOrg(slug: string): Promise<MigrationResult> {
           log(`  ERROR: ${conn.platform}: ${e.message?.substring(0, 60)}`);
         }
       }
-
-      // Trigger downstream pipelines (aggregation → linking → CAC, attribution)
-      await triggerDownstreamPipelines(info, headers);
     }
+
+    // Always trigger downstream pipelines — even orgs with only tag tracking need
+    // identity extraction, probabilistic attribution, events sync, and CAC refresh
+    await triggerDownstreamPipelines(info, headers, 90);
 
     log(`  Done: ${info.name}`);
     return { orgName: info.name, orgSlug: info.slug, orgId: info.id, sessionToken, success: true };
