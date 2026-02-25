@@ -2,7 +2,7 @@
 /**
  * Interactive D1 Migration Wizard
  *
- * Copies 5 auth/identity tables from production → staging/production adbliss
+ * Copies org-scoped tables from production → staging/production adbliss
  * databases, interactively configures connector settings, triggers resync,
  * and provides dashboard login credentials.
  *
@@ -14,7 +14,7 @@
  *   2. List all orgs from PRODUCTION DB
  *   3. Select an org to migrate
  *   4. Confirm migration plan
- *   5. Copy 5 tables (FK order, paginated)
+ *   5. Copy tables (FK order, paginated)
  *   6. Interactive connector onboarding per connection
  *   7. Create session token for dashboard login
  *   8. Trigger resync + poll completion
@@ -77,16 +77,23 @@ const ENV_CONFIG: Record<string, EnvConfig> = {
 };
 
 // Tables to copy in FK order (3 phases)
-// NOT copied: onboarding_progress (staging has different steps/flow),
-//             terms_acceptance (legal state shouldn't carry across envs)
+// NOT copied: terms_acceptance (legal state shouldn't carry across envs — users re-accept),
+//             sessions / password_reset_tokens / email_verification_tokens / oauth_states (transient auth),
+//             waitlist / rate_limits (system-level, not org-scoped),
+//             sync_jobs / active_shopify_workflows (transient job state — recreated on resync),
+//             connector_configs (seeded globally, not per-org),
+//             admin_* / audit_logs / auth_audit_logs / data_access_logs / security_events (admin/audit),
+//             ai_decisions / analysis_logs / analysis_summaries / analysis_jobs / analysis_events / cac_* (AI engine — regenerated)
 const MIGRATION_TABLES = [
   // Phase 1: Identity (FK roots)
-  'users', 'organizations', 'organization_members', 'platform_connections', 'org_tag_mappings',
+  'users', 'organizations', 'organization_members', 'invitations', 'platform_connections', 'org_tag_mappings',
   // Phase 2: Org config (FK → organizations)
   'ai_optimization_settings', 'dashboard_layouts', 'tracking_domains', 'script_hashes',
   'webhook_endpoints', 'org_tracking_configs', 'tracking_links',
   // Phase 3: Connection config (FK → platform_connections)
   'connector_filter_rules',
+  // Phase 4: Pipeline state (keyed by org_tag — avoids unnecessary re-processing)
+  'event_sync_watermarks', 'active_event_workflows',
 ] as const;
 
 // Platform-specific settings keys that must be preserved from old settings
@@ -574,7 +581,7 @@ async function stepConfirm(info: OrgInfo): Promise<void> {
 }
 
 // ============================================================================
-// STEP 5: COPY 5 TABLES
+// STEP 5: COPY TABLES
 // ============================================================================
 
 function stepCopy(info: OrgInfo): void {
@@ -600,10 +607,13 @@ function stepCopy(info: OrgInfo): void {
   // 3. Organization members
   track(pullTable(currentConfig.sourceDb, targetDb, 'organization_members', orgWhere));
 
-  // 4. Platform connections (encrypted OAuth tokens — irreplaceable)
+  // 4. Invitations (pending team invites)
+  track(pullTable(currentConfig.sourceDb, targetDb, 'invitations', orgWhere));
+
+  // 5. Platform connections (encrypted OAuth tokens — irreplaceable)
   track(pullTable(currentConfig.sourceDb, targetDb, 'platform_connections', orgWhere));
 
-  // 5. Org tag mappings
+  // 6. Org tag mappings
   track(pullTable(currentConfig.sourceDb, targetDb, 'org_tag_mappings', orgWhere));
 
   // ---- Phase 2: Org-level config (FK → organizations) ----
@@ -626,6 +636,13 @@ function stepCopy(info: OrgInfo): void {
   if (connectionIds.length > 0) {
     const connIdList = connectionIds.map(id => `'${id}'`).join(', ');
     track(pullTable(currentConfig.sourceDb, targetDb, 'connector_filter_rules', `connection_id IN (${connIdList})`, 'connector_filter_rules'));
+  }
+
+  // ---- Phase 4: Pipeline state (keyed by org_tag — avoids unnecessary re-processing) ----
+
+  if (info.tag) {
+    track(pullTable(currentConfig.sourceDb, targetDb, 'event_sync_watermarks', `org_tag = '${info.tag}'`, 'event_sync_watermarks (by org_tag)'));
+    track(pullTable(currentConfig.sourceDb, targetDb, 'active_event_workflows', `org_tag = '${info.tag}'`, 'active_event_workflows (by org_tag)'));
   }
 
   log(`\nCopy complete: ${totalRows} total rows across ${tablesCopied} tables.`);
@@ -727,16 +744,26 @@ async function stepOnboardConnectors(info: OrgInfo): Promise<void> {
       delete newSettings.emit_events;
     }
 
-    if (conn.platform === 'shopify' || conn.platform === 'jobber') {
-      const hasConvEvents = oldSettings.conversion_events;
-      if (hasConvEvents) {
-        console.log(`    Current conversion_events: ${JSON.stringify(hasConvEvents)}`);
-        const keepConvEvents = await confirm({
-          message: '    Keep existing conversion_events config?',
-          default: true,
-        });
-        if (keepConvEvents) {
-          newSettings.conversion_events = hasConvEvents;
+    // 6d2: Preserve conversion config for ALL connector types
+    // conversion_events, conversion_pages, and pre_conversion_pages drive the
+    // entire conversion + attribution pipeline. Losing them silently breaks CAC.
+    const CONVERSION_CONFIG_KEYS = ['conversion_events', 'conversion_pages', 'pre_conversion_pages'] as const;
+    const hasAnyConvConfig = CONVERSION_CONFIG_KEYS.some(k => oldSettings[k]);
+    if (hasAnyConvConfig) {
+      const convConfigSummary = CONVERSION_CONFIG_KEYS
+        .filter(k => oldSettings[k])
+        .map(k => `${k}: ${JSON.stringify(oldSettings[k])}`)
+        .join('\n      ');
+      console.log(`    Current conversion config:\n      ${convConfigSummary}`);
+      const keepConvConfig = await confirm({
+        message: '    Keep existing conversion config (conversion_events, conversion_pages, pre_conversion_pages)?',
+        default: true,
+      });
+      if (keepConvConfig) {
+        for (const key of CONVERSION_CONFIG_KEYS) {
+          if (oldSettings[key] !== undefined) {
+            newSettings[key] = oldSettings[key];
+          }
         }
       }
     }
@@ -958,7 +985,7 @@ async function main() {
     // Step 4: Confirm
     await stepConfirm(orgInfo);
 
-    // Step 5: Copy 5 tables
+    // Step 5: Copy tables
     stepCopy(orgInfo);
 
     // Step 6: Interactive connector onboarding

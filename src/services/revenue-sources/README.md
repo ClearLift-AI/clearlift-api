@@ -238,7 +238,7 @@ Users can toggle sources on/off in Settings → AI & Automation → Conversion S
 
 To add support for new platforms:
 
-1. Add the connector config seed to `migrations-analytics-v2` (events_schema JSON)
+1. Add the connector config seed to `migrations-adbliss-analytics` (events_schema JSON)
 2. Implement the sync workflow in clearlift-cron (writes to `connector_events`)
 3. Create the revenue source provider (as shown above — queries `connector_events WHERE source_platform = '...'`)
 4. Add the import to `providers.ts`

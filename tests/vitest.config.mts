@@ -13,11 +13,11 @@ const analyticsMigrations = await readD1Migrations(analyticsPath);
 const aiPath = path.join(__dirname, "..", "migrations-ai");
 const aiMigrations = await readD1Migrations(aiPath);
 
-// V2 consolidated schema (migrations-core + migrations-analytics-v2)
-const coreV2Path = path.join(__dirname, "..", "migrations-core");
+// V2 consolidated schema (migrations-adbliss-core + migrations-adbliss-analytics)
+const coreV2Path = path.join(__dirname, "..", "migrations-adbliss-core");
 const coreV2Migrations = await readD1Migrations(coreV2Path);
 
-const analyticsV2Path = path.join(__dirname, "..", "migrations-analytics-v2");
+const analyticsV2Path = path.join(__dirname, "..", "migrations-adbliss-analytics");
 const analyticsV2Migrations = await readD1Migrations(analyticsV2Path);
 
 export default defineWorkersConfig({
@@ -34,7 +34,7 @@ export default defineWorkersConfig({
           configPath: "../wrangler.jsonc",
         },
         miniflare: {
-          compatibilityFlags: ["experimental", "nodejs_compat"],
+          compatibilityFlags: ["nodejs_compat"],
           bindings: {
             MIGRATIONS: migrations,
             ANALYTICS_MIGRATIONS: analyticsMigrations,
@@ -52,13 +52,5 @@ export default defineWorkersConfig({
         isolatedStorage: false,
       },
     },
-    server: {
-      deps: {
-        inline: [
-          "@supabase/postgrest-js",
-          "@supabase/supabase-js"
-        ]
-      }
-    }
   },
 });

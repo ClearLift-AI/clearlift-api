@@ -446,18 +446,8 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
           redirectUri
         );
       }
-      case 'salesforce': {
-        const clientId = await getSecret(c.env.SALESFORCE_CLIENT_ID);
-        const clientSecret = await getSecret(c.env.SALESFORCE_CLIENT_SECRET);
-        if (!clientId || !clientSecret) {
-          throw new Error('Salesforce OAuth credentials not configured');
-        }
-        return new SalesforceOAuthProvider(
-          clientId,
-          clientSecret,
-          redirectUri
-        );
-      }
+      case 'salesforce':
+        throw new Error('Salesforce connector not yet implemented');
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -822,18 +812,8 @@ export class HandleOAuthCallback extends OpenAPIRoute {
           redirectUri
         );
       }
-      case 'salesforce': {
-        const clientId = await getSecret(c.env.SALESFORCE_CLIENT_ID);
-        const clientSecret = await getSecret(c.env.SALESFORCE_CLIENT_SECRET);
-        if (!clientId || !clientSecret) {
-          throw new Error('Salesforce OAuth credentials not configured');
-        }
-        return new SalesforceOAuthProvider(
-          clientId,
-          clientSecret,
-          redirectUri
-        );
-      }
+      case 'salesforce':
+        throw new Error('Salesforce connector not yet implemented');
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -2288,10 +2268,14 @@ export class TriggerResync extends OpenAPIRoute {
       const jobId = crypto.randomUUID();
       const now = new Date().toISOString();
 
-      // Calculate sync window (last 30 days)
+      // Calculate sync window from connection settings (falls back to 60 days)
+      const settings = connection.settings ? JSON.parse(connection.settings) : {};
+      const syncConfig = settings.sync_config;
+      const TIMEFRAME_DAYS: Record<string, number> = { '7_days': 7, '60_days': 60, 'all_time': 730 };
+      const days = syncConfig?.timeframe ? (TIMEFRAME_DAYS[syncConfig.timeframe] || 60) : 60;
       const endDate = new Date();
       const startDate = new Date();
-      startDate.setDate(startDate.getDate() - 30);
+      startDate.setDate(startDate.getDate() - days);
 
       await c.env.DB.prepare(`
         INSERT INTO sync_jobs (
