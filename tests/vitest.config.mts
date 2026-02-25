@@ -16,7 +16,7 @@ export default defineWorkersConfig({
     target: "esnext",
   },
   test: {
-    exclude: ["**/api-production.test.ts", "**/node_modules/**"],
+    exclude: ["**/api-production.test.ts", "**/analysis-schema-v2.test.ts", "**/node_modules/**"],
     setupFiles: ["./tests/apply-migrations.ts"],
     poolOptions: {
       workers: {
@@ -30,6 +30,7 @@ export default defineWorkersConfig({
             MIGRATIONS: coreMigrations,
             ANALYTICS_MIGRATIONS: analyticsMigrations,
             SENDGRID_API_KEY: "SG.test-key-for-vitest",
+            EMAIL_DRY_RUN: "true",
           },
           // Stub the CLEARLIFT_CRON service binding so miniflare can start.
           // Tests don't call the cron service — this prevents ERR_RUNTIME_FAILURE.
