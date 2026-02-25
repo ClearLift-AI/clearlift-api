@@ -581,6 +581,163 @@ async function stepConfirm(info: OrgInfo): Promise<void> {
 }
 
 // ============================================================================
+// STEP 4b: PURGE EXISTING ORG (if already migrated)
+// ============================================================================
+
+async function stepPurgeIfExists(info: OrgInfo): Promise<void> {
+  const envFlag = currentConfig.wranglerEnv;
+  const targetDb = currentConfig.targetDb;
+  const targetAnalyticsDb = currentConfig.targetAnalyticsDb;
+
+  // Check if org already exists in target
+  let orgExists = false;
+  try {
+    const result = parseD1Results(
+      exec(`npx wrangler d1 execute ${targetDb} --remote ${envFlag} --command "SELECT id FROM organizations WHERE id = '${info.id}'" --json`, { timeout: 15000 })
+    );
+    orgExists = result.length > 0;
+  } catch { /* table may not exist */ }
+
+  if (!orgExists) return;
+
+  console.log(`\n  ⚠  Org "${info.name}" already exists in ${currentConfig.label}.`);
+
+  const action = await select({
+    message: 'How do you want to handle the existing data?',
+    choices: [
+      { name: 'Purge and re-migrate (clean slate — deletes all org data from target, then copies fresh from prod)', value: 'purge' },
+      { name: 'Skip copy, just resync (keep existing data, skip to connector onboarding + resync)', value: 'skip' },
+      { name: 'Overlay (INSERT OR IGNORE — add missing rows, keep existing)', value: 'overlay' },
+      { name: 'Abort', value: 'abort' },
+    ],
+  });
+
+  if (action === 'abort') {
+    console.log('Aborted.');
+    process.exit(0);
+  }
+
+  if (action === 'skip') {
+    // Set a flag so main() skips stepCopy and stepOnboardConnectors
+    (info as any)._skipCopy = true;
+    return;
+  }
+
+  if (action === 'overlay') {
+    // Default behavior — INSERT OR IGNORE handles it
+    return;
+  }
+
+  // === PURGE ===
+  const confirmPurge = await confirm({
+    message: `DELETE all data for "${info.name}" from ${currentConfig.label}? This cannot be undone.`,
+    default: false,
+  });
+
+  if (!confirmPurge) {
+    console.log('Aborted purge.');
+    process.exit(0);
+  }
+
+  log('\nPurging existing org data (reverse FK order)...');
+
+  const orgId = info.id;
+  const orgWhere = `organization_id = '${orgId}'`;
+
+  // Phase 1: Connection-level data (deepest FK deps)
+  const connIds = info.connections.map(c => c.id);
+  if (connIds.length > 0) {
+    const connIdList = connIds.map(id => `'${id}'`).join(', ');
+    log('  Purging connector_filter_rules...');
+    execTarget(targetDb, `DELETE FROM connector_filter_rules WHERE connection_id IN (${connIdList})`);
+  }
+
+  // Phase 2: Pipeline state (by org_tag)
+  if (info.tag) {
+    for (const table of ['event_sync_watermarks', 'active_event_workflows', 'tracking_links']) {
+      log(`  Purging ${table}...`);
+      try {
+        execTarget(targetDb, `DELETE FROM ${table} WHERE org_tag = '${info.tag}'`);
+      } catch { /* table may not exist */ }
+    }
+  }
+
+  // Phase 3: Org-scoped config tables (reverse of copy order)
+  const orgScopedTables = [
+    'org_tracking_configs', 'webhook_endpoints', 'script_hashes',
+    'tracking_domains', 'dashboard_layouts', 'ai_optimization_settings',
+    'onboarding_progress',
+  ];
+
+  for (const table of orgScopedTables) {
+    log(`  Purging ${table}...`);
+    try {
+      const whereCol = table === 'ai_optimization_settings' ? `org_id = '${orgId}'` : orgWhere;
+      execTarget(targetDb, `DELETE FROM ${table} WHERE ${whereCol}`);
+    } catch { /* table may not exist */ }
+  }
+
+  // Phase 4: Org tag mappings, platform connections, invitations
+  for (const table of ['org_tag_mappings', 'platform_connections', 'invitations']) {
+    log(`  Purging ${table}...`);
+    try { execTarget(targetDb, `DELETE FROM ${table} WHERE ${orgWhere}`); } catch {}
+  }
+
+  // Phase 5: Organization members
+  log('  Purging organization_members...');
+  try { execTarget(targetDb, `DELETE FROM organization_members WHERE ${orgWhere}`); } catch {}
+
+  // Phase 6: Analytics DB — identity + pipeline data
+  if (info.tag) {
+    const analyticsOrgTables = [
+      'identity_mappings', 'identity_merges',
+      'connector_events', 'conversions', 'ad_metrics', 'customer_identities',
+      'attribution_results', 'cac_history', 'conversion_daily_summary',
+      'funnel_transitions', 'hourly_metrics',
+    ];
+
+    for (const table of analyticsOrgTables) {
+      log(`  Purging ${table} (analytics)...`);
+      try {
+        // Analytics tables use org_tag or organization_id depending on table
+        execTarget(targetAnalyticsDb, `DELETE FROM ${table} WHERE organization_id = '${orgId}'`);
+      } catch {
+        try {
+          execTarget(targetAnalyticsDb, `DELETE FROM ${table} WHERE org_tag = '${info.tag}'`);
+        } catch { /* table may not exist or wrong column */ }
+      }
+    }
+  }
+
+  // Phase 7: Sessions for all member users
+  for (const uid of info.memberUserIds) {
+    log(`  Purging sessions for user ${uid.substring(0, 8)}...`);
+    try { execTarget(targetDb, `DELETE FROM sessions WHERE user_id = '${uid}'`); } catch {}
+  }
+
+  // Phase 8: Organization itself
+  log('  Purging organization...');
+  try { execTarget(targetDb, `DELETE FROM organizations WHERE id = '${orgId}'`); } catch {}
+
+  // Phase 9: Users (only if they have no other org memberships in target)
+  for (const uid of info.memberUserIds) {
+    try {
+      const otherMemberships = parseD1Results(
+        exec(`npx wrangler d1 execute ${targetDb} --remote ${envFlag} --command "SELECT COUNT(*) as c FROM organization_members WHERE user_id = '${uid}'" --json`, { timeout: 15000 })
+      );
+      if ((otherMemberships[0]?.c || 0) === 0) {
+        log(`  Purging user ${uid.substring(0, 8)}... (no other org memberships)`);
+        execTarget(targetDb, `DELETE FROM users WHERE id = '${uid}'`);
+      } else {
+        log(`  Keeping user ${uid.substring(0, 8)}... (member of other orgs)`);
+      }
+    } catch {}
+  }
+
+  log('\nPurge complete. Proceeding with fresh copy...');
+}
+
+// ============================================================================
 // STEP 5: COPY TABLES
 // ============================================================================
 
@@ -926,10 +1083,10 @@ async function stepTriggerSync(info: OrgInfo, sessionToken: string): Promise<voi
   // CAC backfill
   log('\nTriggering CAC backfill...');
   try {
-    const resp = await fetch(`${currentConfig.apiBase}/v1/analytics/cac/backfill`, {
+    const resp = await fetch(`${currentConfig.apiBase}/v1/analytics/cac/backfill?org_id=${info.id}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ org_id: info.id, days: 90 }),
+      body: JSON.stringify({ days: 90 }),
     });
     if (resp.ok) {
       log('CAC backfill triggered (90 days).');
@@ -985,11 +1142,16 @@ async function main() {
     // Step 4: Confirm
     await stepConfirm(orgInfo);
 
-    // Step 5: Copy tables
-    stepCopy(orgInfo);
+    // Step 4b: Purge if org already exists in target
+    await stepPurgeIfExists(orgInfo);
 
-    // Step 6: Interactive connector onboarding
-    await stepOnboardConnectors(orgInfo);
+    if (!(orgInfo as any)._skipCopy) {
+      // Step 5: Copy tables
+      stepCopy(orgInfo);
+
+      // Step 6: Interactive connector onboarding
+      await stepOnboardConnectors(orgInfo);
+    }
 
     // Step 7: Create session token
     const sessionToken = stepCreateSession(orgInfo);
