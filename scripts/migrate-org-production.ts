@@ -447,6 +447,7 @@ function discoverOrg(slug: string): OrgInfo {
   const connections = querySourceProd(currentConfig.sourceDb,
     `SELECT id, platform, account_id, account_name, sync_status, settings FROM platform_connections WHERE organization_id = '${orgId}'`
   );
+  connections.forEach((c: any) => assertSqlSafe(c.id, 'connection_id'));
 
   return { id: orgId, slug: org.slug, name: org.name, tag, memberUserIds, primaryUserId, connections };
 }
@@ -624,7 +625,7 @@ async function stepPurgeIfExists(info: OrgInfo): Promise<void> {
   }
 
   if (action === 'skip') {
-    // Set a flag so main() skips stepCopy and stepOnboardConnectors
+    // Set a flag so main() skips stepCopy (onboarding still runs)
     (info as any)._skipCopy = true;
     return;
   }
@@ -693,7 +694,8 @@ async function stepPurgeIfExists(info: OrgInfo): Promise<void> {
   try { execTarget(targetDb, `DELETE FROM organization_members WHERE ${orgWhere}`); } catch {}
 
   // Phase 6: Analytics DB — identity + pipeline data
-  if (info.tag) {
+  // Most analytics tables use organization_id; some use org_tag. Try both.
+  {
     const analyticsOrgTables = [
       'identity_mappings', 'identity_merges',
       'connector_events', 'conversions', 'ad_metrics', 'customer_identities',
@@ -704,12 +706,13 @@ async function stepPurgeIfExists(info: OrgInfo): Promise<void> {
     for (const table of analyticsOrgTables) {
       log(`  Purging ${table} (analytics)...`);
       try {
-        // Analytics tables use org_tag or organization_id depending on table
         execTarget(targetAnalyticsDb, `DELETE FROM ${table} WHERE organization_id = '${orgId}'`);
       } catch {
-        try {
-          execTarget(targetAnalyticsDb, `DELETE FROM ${table} WHERE org_tag = '${info.tag}'`);
-        } catch { /* table may not exist or wrong column */ }
+        if (info.tag) {
+          try {
+            execTarget(targetAnalyticsDb, `DELETE FROM ${table} WHERE org_tag = '${info.tag}'`);
+          } catch { /* table may not exist or wrong column */ }
+        }
       }
     }
   }
