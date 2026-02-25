@@ -292,6 +292,22 @@ export async function executeRecommendationWithSimulation(
         return 'change_bid';
       case 'set_schedule':
         return 'change_schedule';
+      case 'compound_action': {
+        // Find the primary sub-action (first set_budget or largest budget change)
+        const actions = input.actions || [];
+        const budgetAction = actions.find((a: any) => a.tool === 'set_budget');
+        if (budgetAction) {
+          const p = budgetAction.parameters || {};
+          return p.recommended_budget_cents > (p.current_budget_cents || 0)
+            ? 'increase_budget'
+            : 'decrease_budget';
+        }
+        const statusAction = actions.find((a: any) => a.tool === 'set_status');
+        if (statusAction) {
+          return statusAction.parameters?.recommended_status === 'PAUSED' ? 'pause' : 'enable';
+        }
+        return 'pause'; // fallback
+      }
       default:
         return null; // Tool doesn't require simulation
     }
@@ -307,7 +323,10 @@ export async function executeRecommendationWithSimulation(
     };
   }
 
-  const entityId = toolInput.entity_id;
+  // For compound_action, extract entity_id from the primary sub-action
+  const entityId = toolName === 'compound_action'
+    ? (toolInput.actions?.[0]?.entity_id || toolInput.entity_id)
+    : toolInput.entity_id;
   const simKey = getSimulationKey(action, entityId);
   const existingSimulation = context.simulationCache.simulations.get(simKey);
 
@@ -597,7 +616,8 @@ export function requiresSimulation(toolName: string): boolean {
     'reallocate_budget',
     'set_audience',
     'set_bid',
-    'set_schedule'
+    'set_schedule',
+    'compound_action'
   ];
   return toolsRequiringSimulation.includes(toolName);
 }

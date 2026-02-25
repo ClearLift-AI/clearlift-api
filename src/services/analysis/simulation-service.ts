@@ -98,6 +98,8 @@ export interface EntityMetrics {
   clicks: number;
   ctr: number;
   cpc_cents: number;
+  conversionSource?: 'verified' | 'platform';
+  verified_revenue_cents?: number;
 }
 
 export interface EntityState {
@@ -1331,7 +1333,49 @@ RESULT:
       const activeEntities = (activeResult.results || []) as EntityMetrics[];
       const pausedEntities = (pausedResult.results || []) as EntityMetrics[];
 
-      return [...activeEntities, ...pausedEntities];
+      const allEntities = [...activeEntities, ...pausedEntities];
+
+      // Overlay verified conversions from unified conversions table (ANALYTICS_DB)
+      // This replaces platform-reported conversions with first-party verified data
+      // where available (Stripe/Shopify/Jobber attribution)
+      try {
+        const verifiedQuery = `
+          SELECT
+            attributed_campaign_id as entity_ref,
+            COUNT(*) as verified_conversions,
+            SUM(value_cents) as verified_revenue_cents
+          FROM conversions
+          WHERE organization_id = ?
+            AND conversion_timestamp >= datetime('now', '-' || ? || ' days')
+            AND attributed_campaign_id IS NOT NULL
+          GROUP BY attributed_campaign_id
+        `;
+        const verifiedResult = await this.analyticsDb.prepare(verifiedQuery)
+          .bind(this.orgId, days)
+          .all<{ entity_ref: string; verified_conversions: number; verified_revenue_cents: number }>();
+        const verifiedMap = new Map(
+          (verifiedResult.results || []).map(r => [r.entity_ref, r])
+        );
+
+        for (const entity of allEntities) {
+          const verified = verifiedMap.get(entity.id);
+          if (verified && verified.verified_conversions > 0) {
+            entity.conversions = verified.verified_conversions;
+            entity.conversionSource = 'verified';
+            entity.verified_revenue_cents = verified.verified_revenue_cents || 0;
+          } else {
+            entity.conversionSource = 'platform';
+          }
+        }
+      } catch (err) {
+        // Non-critical: fall back to platform-reported conversions
+        structuredLog('WARN', 'Failed to overlay verified conversions on portfolio', { service: 'simulation', org_id: this.orgId, error: err instanceof Error ? err.message : String(err) });
+        for (const entity of allEntities) {
+          entity.conversionSource = 'platform';
+        }
+      }
+
+      return allEntities;
     } catch (err) {
       structuredLog('ERROR', 'Error fetching portfolio metrics', { service: 'simulation', org_id: this.orgId, error: err instanceof Error ? err.message : String(err) });
       return [];
@@ -1365,7 +1409,40 @@ RESULT:
       const result = await this.analyticsDb.prepare(query)
         .bind(this.orgId, entityId, unifiedEntityType, days)
         .all();
-      return (result.results || []) as HistoricalDataPoint[];
+      const history = (result.results || []) as HistoricalDataPoint[];
+
+      // Overlay verified conversions per day from unified conversions table
+      try {
+        const verifiedDailyQuery = `
+          SELECT
+            DATE(conversion_timestamp) as date,
+            COUNT(*) as verified_conversions
+          FROM conversions
+          WHERE organization_id = ?
+            AND attributed_campaign_id = ?
+            AND conversion_timestamp >= datetime('now', '-' || ? || ' days')
+          GROUP BY DATE(conversion_timestamp)
+        `;
+        const verifiedResult = await this.analyticsDb.prepare(verifiedDailyQuery)
+          .bind(this.orgId, entityId, days)
+          .all<{ date: string; verified_conversions: number }>();
+        const verifiedByDate = new Map(
+          (verifiedResult.results || []).map(r => [r.date, r.verified_conversions])
+        );
+
+        // Replace platform conversions with verified where available
+        for (const day of history) {
+          const verified = verifiedByDate.get(day.date);
+          if (verified !== undefined && verified > 0) {
+            day.conversions = verified;
+          }
+        }
+      } catch (err) {
+        // Non-critical: fall back to platform-reported
+        structuredLog('WARN', 'Failed to overlay verified conversions on entity history', { service: 'simulation', org_id: this.orgId, error: err instanceof Error ? err.message : String(err) });
+      }
+
+      return history;
     } catch (err) {
       structuredLog('ERROR', 'Error fetching entity history', { service: 'simulation', org_id: this.orgId, error: err instanceof Error ? err.message : String(err) });
       return [];

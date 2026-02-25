@@ -633,6 +633,35 @@ export const EXPLORATION_TOOLS = {
       },
       required: ['connector_type', 'days']
     }
+  },
+
+  manage_watchlist: {
+    name: 'manage_watchlist',
+    description: 'Read or write to your persistent watchlist. Items survive between analysis runs. Use to track entities that need follow-up, note seasonal patterns, or flag recent changes to verify later. Max 2 active items per org.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'add', 'resolve'],
+          description: 'list: show all active watchlist items. add: create a new watch item. resolve: mark an item as resolved (you verified the outcome).'
+        },
+        entity_ref: { type: 'string', description: 'For "add": entity reference ID' },
+        entity_name: { type: 'string', description: 'For "add": entity name for display' },
+        platform: { type: 'string', description: 'For "add": ad platform' },
+        entity_type: { type: 'string', description: 'For "add": entity type (campaign, ad_group, ad)' },
+        watch_type: {
+          type: 'string',
+          enum: ['monitor_performance', 'check_back', 'budget_change_followup', 'seasonal_note', 'custom'],
+          description: 'For "add": type of watch'
+        },
+        note: { type: 'string', description: 'For "add": what to watch for and why' },
+        review_after: { type: 'string', description: 'For "add": ISO date (YYYY-MM-DD) when this should be reviewed' },
+        watchlist_id: { type: 'string', description: 'For "resolve": ID of the item to resolve' },
+        resolution_note: { type: 'string', description: 'For "resolve": what you found when checking back' }
+      },
+      required: ['action']
+    }
   }
 };
 
@@ -721,7 +750,7 @@ export async function getExplorationToolsForOrg(
       reviews: (types) => types.has('reviews'),
       saturation_signals: (types) => types.has('ad_platform'),
     },
-    // calculate always included, list_active_connectors always included, query_unified_data always included
+    // calculate, list_active_connectors, query_unified_data, manage_watchlist — always included (no scope filter)
   };
 
   const allTools = getExplorationTools();
@@ -1131,6 +1160,8 @@ export class ExplorationToolExecutor {
           return await this.queryUnifiedData(input as QueryUnifiedDataInput, orgId);
         case 'list_active_connectors':
           return await this.listActiveConnectors(input as ListActiveConnectorsInput, orgId);
+        case 'manage_watchlist':
+          return await this.manageWatchlist(input, orgId);
         default:
           return { success: false, error: `Unknown exploration tool: ${toolName}` };
       }
@@ -5495,6 +5526,36 @@ export class ExplorationToolExecutor {
       }>();
       const history = result.results || [];
 
+      // Overlay verified conversions from unified conversions table
+      // entity_id here is the external/resolved ID which maps to attributed_campaign_id
+      try {
+        const verifiedQuery = `
+          SELECT
+            DATE(conversion_timestamp) as date,
+            COUNT(*) as verified_conversions
+          FROM conversions
+          WHERE organization_id = ?
+            AND attributed_campaign_id = ?
+            AND conversion_timestamp >= datetime('now', '-' || ? || ' days')
+          GROUP BY DATE(conversion_timestamp)
+        `;
+        const verifiedResult = await this.db.prepare(verifiedQuery)
+          .bind(orgId, entity_id, days)
+          .all<{ date: string; verified_conversions: number }>();
+        const verifiedByDate = new Map(
+          (verifiedResult.results || []).map(r => [r.date, r.verified_conversions])
+        );
+
+        for (const day of history) {
+          const verified = verifiedByDate.get(day.metric_date);
+          if (verified !== undefined && verified > 0) {
+            day.conversions = verified;
+          }
+        }
+      } catch {
+        // Non-critical: fall back to platform-reported conversions for power-law fit
+      }
+
       if (history.length < 7) {
         return {
           success: true,
@@ -5784,6 +5845,129 @@ export class ExplorationToolExecutor {
       return { success: true, data: { entities, summary } };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Saturation signals query failed' };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // WATCHLIST (persistent cross-run memory)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async manageWatchlist(
+    input: Record<string, any>,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    if (!this.coreDb) {
+      return { success: false, error: 'Watchlist requires core database access (DB binding)' };
+    }
+
+    const { action } = input;
+
+    try {
+      switch (action) {
+        case 'list': {
+          // Auto-expire stale items (review_after > 7 days past due)
+          await this.coreDb.prepare(`
+            UPDATE analysis_watchlist
+            SET status = 'expired', updated_at = datetime('now')
+            WHERE organization_id = ? AND status = 'active'
+              AND review_after IS NOT NULL
+              AND review_after < date('now', '-7 days')
+          `).bind(orgId).run();
+
+          const items = await this.coreDb.prepare(`
+            SELECT id, entity_ref, entity_name, platform, entity_type,
+                   watch_type, note, review_after, created_at
+            FROM analysis_watchlist
+            WHERE organization_id = ? AND status = 'active'
+            ORDER BY review_after ASC NULLS LAST
+            LIMIT 2
+          `).bind(orgId).all();
+
+          return {
+            success: true,
+            data: {
+              items: items.results || [],
+              count: (items.results || []).length,
+              note: (items.results || []).length === 0
+                ? 'Watchlist is empty. Use add action to flag entities for follow-up.'
+                : undefined
+            }
+          };
+        }
+
+        case 'add': {
+          if (!input.note || !input.watch_type) {
+            return { success: false, error: 'add requires watch_type and note' };
+          }
+
+          // Check hard limit: max 2 active items per org
+          const countResult = await this.coreDb.prepare(`
+            SELECT COUNT(*) as cnt FROM analysis_watchlist
+            WHERE organization_id = ? AND status = 'active'
+          `).bind(orgId).first<{ cnt: number }>();
+
+          if (countResult && countResult.cnt >= 2) {
+            return {
+              success: false,
+              error: `Watchlist full (${countResult.cnt}/2 active items). Resolve an existing item first using manage_watchlist(action='resolve', watchlist_id=...).`
+            };
+          }
+
+          const id = crypto.randomUUID().replace(/-/g, '').substring(0, 32);
+          await this.coreDb.prepare(`
+            INSERT INTO analysis_watchlist (id, organization_id, entity_ref, entity_name, platform, entity_type, watch_type, note, review_after, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+          `).bind(
+            id, orgId,
+            input.entity_ref || null,
+            input.entity_name || null,
+            input.platform || null,
+            input.entity_type || null,
+            input.watch_type,
+            input.note,
+            input.review_after || null
+          ).run();
+
+          return {
+            success: true,
+            data: {
+              id,
+              message: `Watchlist item created. Will appear in your next analysis run.${input.review_after ? ` Review scheduled for ${input.review_after}.` : ''}`
+            }
+          };
+        }
+
+        case 'resolve': {
+          if (!input.watchlist_id) {
+            return { success: false, error: 'resolve requires watchlist_id' };
+          }
+
+          const updated = await this.coreDb.prepare(`
+            UPDATE analysis_watchlist
+            SET status = 'resolved', updated_at = datetime('now'),
+                note = note || ' [RESOLVED: ' || ? || ']'
+            WHERE id = ? AND organization_id = ? AND status = 'active'
+          `).bind(
+            input.resolution_note || 'Resolved',
+            input.watchlist_id,
+            orgId
+          ).run();
+
+          if (!updated.meta?.changes) {
+            return { success: false, error: `No active watchlist item found with id=${input.watchlist_id}` };
+          }
+
+          return {
+            success: true,
+            data: { message: 'Watchlist item resolved. Slot freed for new items.' }
+          };
+        }
+
+        default:
+          return { success: false, error: `Unknown watchlist action: ${action}. Use list, add, or resolve.` };
+      }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Watchlist operation failed' };
     }
   }
 }

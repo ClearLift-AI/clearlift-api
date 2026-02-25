@@ -350,13 +350,27 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       // Fetch recent recommendation history
       const recentRecs = await this.getRecentRecommendations(orgId);
 
+      // Fetch active watchlist items for cross-run memory
+      let watchlistItems: Array<{ id: string; entity_ref: string; entity_name: string; platform: string; entity_type: string; watch_type: string; note: string; review_after: string | null; created_at: string }> = [];
+      try {
+        const wlResult = await this.env.DB.prepare(`
+          SELECT id, entity_ref, entity_name, platform, entity_type,
+                 watch_type, note, review_after, created_at
+          FROM analysis_watchlist
+          WHERE organization_id = ? AND status = 'active'
+          ORDER BY review_after ASC NULLS LAST
+          LIMIT 2
+        `).bind(orgId).all();
+        watchlistItems = (wlResult.results || []) as typeof watchlistItems;
+      } catch { /* watchlist table may not exist yet — non-critical */ }
+
       // Build initial messages
       const contextPrompt = this.buildAgenticContextPrompt(crossPlatformSummary, platformSummaries, additionalContext, activeCampaignCount, maxActionRecommendations);
 
       return {
         recentRecs,
         contextPrompt,
-        systemPrompt: this.buildAgenticSystemPrompt(days, customInstructions, recentRecs, config, activeCampaignCount, minExplorationTurns, maxActionRecommendations)
+        systemPrompt: this.buildAgenticSystemPrompt(days, customInstructions, recentRecs, config, activeCampaignCount, minExplorationTurns, maxActionRecommendations, watchlistItems)
       };
     });
 
@@ -2241,7 +2255,8 @@ Lead with confidence. Include specific numbers in every recommendation reason. T
     config?: AnalysisWorkflowParams['config'],
     activeCampaignCount?: number,
     minExplorationTurns?: number,
-    maxActionRecommendations?: number
+    maxActionRecommendations?: number,
+    watchlistItems?: Array<{ id: string; entity_ref: string; entity_name: string; platform: string; entity_type: string; watch_type: string; note: string; review_after: string | null; created_at: string }>
   ): string {
     const budgetStrategy = config?.budgetStrategy || 'moderate';
     const dailyCapCents = config?.dailyCapCents;
@@ -2254,7 +2269,24 @@ Lead with confidence. Include specific numbers in every recommendation reason. T
     const minExplore = minExplorationTurns || 3;
     const maxActions = maxActionRecommendations || 3;
 
+    // Temporal context — gives agent awareness of date, day of week, month position
+    const now = new Date();
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayOfWeek = dayNames[now.getUTCDay()];
+    const dayOfMonth = now.getUTCDate();
+    const daysInMonth = new Date(now.getUTCFullYear(), now.getUTCMonth() + 1, 0).getDate();
+    const isWeekend = now.getUTCDay() === 0 || now.getUTCDay() === 6;
+    const isMonthEnd = dayOfMonth >= daysInMonth - 3;
+    const isMonthStart = dayOfMonth <= 3;
+
+    const temporalSection = `## CURRENT DATE & TIMING
+Today: ${now.toISOString().split('T')[0]} (${dayOfWeek})
+${isWeekend ? 'WEEKEND — B2B traffic typically lower, B2C may spike. Weight recent weekday data for business decisions.\n' : ''}${isMonthEnd ? 'MONTH END — Review monthly cap pacing. If underspent, consider temporary budget increases on top performers. If overspent, throttle.\n' : ''}${isMonthStart ? 'MONTH START — Monthly budgets reset. Good time for strategic reallocations.\n' : ''}When analyzing trends, account for day-of-week patterns. A campaign dipping on Saturday is not necessarily declining.
+When setting review_after dates on watchlist items, use this date as reference.`;
+
     let systemPrompt = `You are an expert digital advertising strategist analyzing a portfolio of ${campCount} active campaigns. Your job is to find non-obvious optimizations that make the client MORE money. Surface-level observations are not valuable — dig into ad groups AND ADS to find hidden opportunities.
+
+${temporalSection}
 
 ## EXECUTION PHASES (MANDATORY)
 
@@ -2528,6 +2560,9 @@ The simulation result will show you the EXACT impact and you must acknowledge it
 - set_audience: Audience targeting changes. Up to 3 total action recommendations allowed.
 - calculate(scope='marginal_efficiency') — Shows the diminishing returns curve for a campaign: projected CPA at +20%, +50%, +100% spend. Use BEFORE recommending large budget increases to verify the entity can absorb more spend efficiently. α > 0.7 = safe to scale, α < 0.5 = hitting saturation.
 - query_growth(scope='saturation_signals') — Detects campaigns hitting frequency walls: rising CPC/CPM, declining CTR/efficiency. Use to identify which entities to reallocate AWAY from. High-risk entities should not receive budget increases.
+- compound_action(strategy='scale_and_protect') — Scale a winner while protecting against cannibalization. Use when increasing budget on Campaign A while tightening Campaign B's audience or adding negatives. Counts as 1 action slot.
+- compound_action(strategy='portfolio_rebalance') — Pause 2-4 underperformers and redistribute their budget to 1-3 winners proportional to efficiency. Use when multiple entities need simultaneous changes. Counts as 1 action slot.
+- compound_action(strategy='test_and_learn') — Reduce saturating entity's budget and allocate freed spend to a paused/new entity as a controlled test. Use when marginal_efficiency shows α < 0.5 on the source. Counts as 1 action slot.
 - update_recommendation: Revise a recommendation you already made this run. Use when new data changes your assessment. Pass the original entity_id and tool name, plus the new parameters.
 - delete_recommendation: Withdraw a recommendation you already made. Frees up an action slot so you can recommend something different. Use when further research shows the recommendation was wrong.
 - terminate_analysis: Call this when you have made action recommendations or exhausted all possibilities. Provide a clear reason.
@@ -2621,6 +2656,21 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
       }
     }
 
+    // Add watchlist section (cross-run memory)
+    if (watchlistItems && watchlistItems.length > 0) {
+      systemPrompt += '\n\n## WATCHLIST (from previous runs)';
+      systemPrompt += '\nItems you flagged for follow-up. Review due items FIRST — check if the predicted outcome materialized.';
+      systemPrompt += '\n\n| Entity | Type | Note | Review After |';
+      systemPrompt += '\n|--------|------|------|-------------|';
+      for (const item of watchlistItems) {
+        const entityLabel = item.entity_name
+          ? `${item.entity_name}${item.platform ? ` (${item.platform})` : ''}`
+          : (item.entity_ref || 'general');
+        systemPrompt += `\n| ${entityLabel} | ${item.watch_type} | ${item.note} | ${item.review_after || 'anytime'} |`;
+      }
+      systemPrompt += '\n\nAfter reviewing a due item, use manage_watchlist(action=\'resolve\') to clear it. You may add new items for changes you recommend today (max 2 active at a time — resolve old items first).';
+    }
+
     return systemPrompt;
   }
 
@@ -2666,8 +2716,8 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     if (iteration <= minExplorationTurns) {
       const blockedTools = new Set([
         'simulate_change', 'set_budget', 'set_status', 'set_audience',
-        'set_bid', 'set_schedule', 'reallocate_budget', 'terminate_analysis',
-        'general_insight'
+        'set_bid', 'set_schedule', 'reallocate_budget', 'compound_action',
+        'terminate_analysis', 'general_insight'
       ]);
       filteredTools = tools.filter(t => !blockedTools.has(t.name));
     }
