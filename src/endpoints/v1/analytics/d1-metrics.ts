@@ -665,7 +665,8 @@ export class GetD1PageFlow extends OpenAPIRoute {
           const r2sql = new R2SQLAdapter(
             c.env.CLOUDFLARE_ACCOUNT_ID || '',
             c.env.R2_BUCKET_NAME || 'clearlift-events-lake',
-            r2ApiToken
+            r2ApiToken,
+            c.env.R2_SQL_TABLE || 'clearlift.event_data_v5'
           );
           const transitions = await this.reconstructPageFlowFromR2(r2sql, orgTag, periodStart, periodEnd || new Date().toISOString().slice(0, 10), limit || 50);
           // Only return R2 results if we got data — otherwise fall through to D1
