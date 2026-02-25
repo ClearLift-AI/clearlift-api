@@ -692,161 +692,19 @@ openapi.post("/v1/webhooks/endpoints", auth, requireOrg, CreateWebhookEndpoint);
 openapi.delete("/v1/webhooks/endpoints/:id", auth, requireOrg, DeleteWebhookEndpoint);
 openapi.get("/v1/webhooks/events", auth, requireOrg, GetWebhookEvents);
 
-// Import aggregation service for scheduled tasks
-import { AggregationService } from './services/aggregation-service';
-
 // Export the Hono app with scheduled handler
 export default {
   fetch: app.fetch,
 
-  // Scheduled handler for cron jobs
+  // Scheduled handler — only stale job cleanup remains
+  // Daily aggregation + periodic sync moved to clearlift-cron (Feb 2026)
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     console.log(`[Cron] Triggered at ${new Date(event.scheduledTime).toISOString()}, cron: ${event.cron}`);
-
-    // Daily aggregation cron (runs at 5 AM UTC)
-    if (event.cron === '0 5 * * *') {
-      console.log('[Cron] Running daily aggregation...');
-
-      // All data now lives in ANALYTICS_DB
-      const shards = [env.ANALYTICS_DB];
-
-      if (shards.length === 0) {
-        structuredLog('ERROR', 'ANALYTICS_DB not configured', { endpoint: 'cron', step: 'daily_aggregation' });
-        return;
-      }
-
-      const aggregator = new AggregationService(shards, env.ANALYTICS_DB);
-      const result = await aggregator.runFullAggregation();
-
-      console.log(`[Cron] Aggregation completed: ${result.success ? 'SUCCESS' : 'FAILED'}`);
-      console.log(`[Cron] Total duration: ${result.totalDuration_ms}ms`);
-      console.log(`[Cron] Shards processed: ${result.shards.length}`);
-
-      if (result.errors.length > 0) {
-        structuredLog('ERROR', `Aggregation errors: ${result.errors.join(', ')}`, { endpoint: 'cron', step: 'daily_aggregation', errors: result.errors });
-      }
-
-      // Log summary per shard
-      for (const shard of result.shards) {
-        console.log(`[Cron] Shard ${shard.shardId}: ${shard.success ? 'OK' : 'FAILED'} (${shard.duration_ms}ms)`);
-      }
-
-      // Run CAC history backfill for all orgs (populates cac_history table)
-      console.log('[Cron] Running CAC history backfill...');
-      await this.backfillCACHistoryForAllOrgs(env);
-    }
-
-    // Periodic platform sync cron (runs every 6 hours)
-    if (event.cron === '0 */6 * * *') {
-      console.log('[Cron] Running periodic platform sync...');
-      await this.syncAllActiveConnections(env);
-    }
 
     // Stale job cleanup cron (runs every 15 minutes)
     if (event.cron === '*/15 * * * *') {
       console.log('[Cron] Running stale job cleanup...');
       await this.cleanupStaleJobs(env);
-    }
-  },
-
-  // Periodic sync: create incremental sync jobs for all active platform connections
-  async syncAllActiveConnections(env: Env): Promise<void> {
-    const SYNC_LOOKBACK_DAYS = 7; // 7-day lookback catches retroactive platform data corrections
-    const SYNC_PLATFORMS = ['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot'];
-
-    try {
-      // Get all active connections for syncable platforms
-      const connections = await env.DB.prepare(`
-        SELECT pc.id, pc.platform, pc.account_id, pc.organization_id
-        FROM platform_connections pc
-        WHERE pc.is_active = 1
-          AND pc.platform IN (${SYNC_PLATFORMS.map(() => '?').join(',')})
-      `).bind(...SYNC_PLATFORMS).all<{
-        id: string;
-        platform: string;
-        account_id: string;
-        organization_id: string;
-      }>();
-
-      const allConnections = connections.results || [];
-      if (allConnections.length === 0) {
-        console.log('[Cron] No active connections to sync');
-        return;
-      }
-
-      console.log(`[Cron] Found ${allConnections.length} active connections to sync`);
-
-      // Check for existing pending/running jobs to avoid duplicates
-      const existingJobs = await env.DB.prepare(`
-        SELECT connection_id FROM sync_jobs
-        WHERE status IN ('pending', 'running')
-          AND created_at > datetime('now', '-6 hours')
-      `).all<{ connection_id: string }>();
-
-      const busyConnections = new Set((existingJobs.results || []).map(j => j.connection_id));
-
-      const now = new Date();
-      const startDate = new Date(now.getTime() - SYNC_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
-      let queued = 0;
-      let skipped = 0;
-
-      for (const conn of allConnections) {
-        if (busyConnections.has(conn.id)) {
-          skipped++;
-          continue;
-        }
-
-        const jobId = crypto.randomUUID();
-        const syncWindow = {
-          type: 'incremental',
-          start: startDate.toISOString(),
-          end: now.toISOString()
-        };
-
-        try {
-          // Create sync job record
-          await env.DB.prepare(`
-            INSERT INTO sync_jobs (id, organization_id, connection_id, status, job_type, metadata, created_at, updated_at)
-            VALUES (?, ?, ?, 'pending', 'incremental', ?, datetime('now'), datetime('now'))
-          `).bind(
-            jobId,
-            conn.organization_id,
-            conn.id,
-            JSON.stringify({
-              platform: conn.platform,
-              account_id: conn.account_id,
-              sync_window: syncWindow,
-              created_by: 'periodic_cron',
-              retry_count: 0
-            })
-          ).run();
-
-          // Send to queue
-          await env.SYNC_QUEUE.send({
-            job_id: jobId,
-            connection_id: conn.id,
-            organization_id: conn.organization_id,
-            platform: conn.platform,
-            account_id: conn.account_id,
-            sync_window: syncWindow,
-            job_type: 'incremental',
-            metadata: { created_at: now.toISOString(), created_by: 'periodic_cron', retry_count: 0 }
-          });
-
-          queued++;
-        } catch (err) {
-          structuredLog('ERROR', `Failed to queue periodic sync for connection ${conn.id}`, {
-            endpoint: 'cron', step: 'periodic_sync', connection_id: conn.id,
-            platform: conn.platform, error: err instanceof Error ? err.message : String(err)
-          });
-        }
-      }
-
-      console.log(`[Cron] Periodic sync: queued ${queued}, skipped ${skipped} (already running)`);
-    } catch (err) {
-      structuredLog('ERROR', 'Error during periodic platform sync', {
-        endpoint: 'cron', step: 'periodic_sync', error: err instanceof Error ? err.message : String(err)
-      });
     }
   },
 
@@ -857,7 +715,7 @@ export default {
     const FAIL_THRESHOLD_HOURS = 2;      // Jobs pending > 2 hours are failed
 
     try {
-      // Find stale pending jobs (> 30 minutes old, < 2 hours old)
+      // Find stale pending jobs (> 10 minutes old, < 2 hours old)
       const staleJobs = await env.DB.prepare(`
         SELECT
           sj.id, sj.connection_id, sj.organization_id, sj.job_type, sj.metadata,
@@ -1125,140 +983,6 @@ export default {
       }
     } catch (err) {
       structuredLog('ERROR', 'Error during webhook event retry sweep', { endpoint: 'cron', step: 'webhook_retry', error: err instanceof Error ? err.message : String(err) });
-    }
-  },
-
-  // Backfill CAC history for all organizations from ad_metrics + conversions
-  async backfillCACHistoryForAllOrgs(env: Env): Promise<void> {
-    const DAYS_TO_BACKFILL = 30;
-
-    try {
-      // Get all unique org IDs from unified ad_metrics table
-      const orgsResult = await env.ANALYTICS_DB.prepare(`
-        SELECT DISTINCT organization_id
-        FROM ad_metrics
-        WHERE entity_type = 'campaign'
-          AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
-      `).all<{ organization_id: string }>();
-
-      const orgs = orgsResult.results || [];
-      console.log(`[Cron] Found ${orgs.length} orgs with campaign metrics for CAC backfill`);
-
-      let totalRowsInserted = 0;
-
-      for (const org of orgs) {
-        try {
-          const orgId = org.organization_id;
-
-          // Check for connections with conversion_events configured (non-empty array)
-          const connectionsResult = await env.DB.prepare(`
-            SELECT id, platform, settings FROM platform_connections
-            WHERE organization_id = ? AND is_active = 1
-              AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
-          `).bind(orgId).all<{ id: string; platform: string; settings: string }>();
-          const convConnections = connectionsResult.results || [];
-          const hasGoals = convConnections.length > 0;
-          const macroGoals = convConnections.map(c => ({ id: c.id, name: c.platform }));
-
-          // Query daily spend and conversions from unified ad_metrics
-          const metricsResult = await env.ANALYTICS_DB.prepare(`
-            SELECT
-              metric_date as date,
-              SUM(spend_cents) as spend_cents,
-              SUM(conversions) as conversions
-            FROM ad_metrics
-            WHERE organization_id = ?
-              AND entity_type = 'campaign'
-              AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
-            GROUP BY metric_date
-            ORDER BY metric_date ASC
-          `).bind(orgId).all<{
-            date: string;
-            spend_cents: number;
-            conversions: number;
-          }>();
-
-          // Build platform map
-          const platformMap = new Map<string, { spend_cents: number; conversions: number }>();
-          for (const row of metricsResult.results || []) {
-            platformMap.set(row.date, { spend_cents: row.spend_cents, conversions: row.conversions });
-          }
-
-          // If connections with conversion config exist, fetch unified conversions
-          let goalMap = new Map<string, { conversions: number; revenue_cents: number }>();
-          if (hasGoals) {
-            const goalResult = await env.ANALYTICS_DB.prepare(`
-              SELECT
-                DATE(conversion_timestamp) as date,
-                COUNT(*) as conversions,
-                SUM(value_cents) as revenue_cents
-              FROM conversions
-              WHERE organization_id = ?
-                AND DATE(conversion_timestamp) >= date('now', '-${DAYS_TO_BACKFILL} days')
-              GROUP BY DATE(conversion_timestamp)
-            `).bind(orgId).all<{
-              date: string;
-              conversions: number;
-              revenue_cents: number;
-            }>();
-
-            for (const row of goalResult.results || []) {
-              goalMap.set(row.date, { conversions: row.conversions, revenue_cents: row.revenue_cents || 0 });
-            }
-          }
-
-          // Merge dates from both sources
-          const allDates = new Set([...platformMap.keys(), ...goalMap.keys()]);
-          const goalIdsJson = hasGoals ? JSON.stringify(macroGoals.map(g => g.id)) : null;
-
-          for (const date of [...allDates].sort()) {
-            const platform = platformMap.get(date) || { spend_cents: 0, conversions: 0 };
-            const goal = goalMap.get(date);
-
-            const useGoals = hasGoals && goal && goal.conversions > 0;
-            const primaryConversions = useGoals ? goal.conversions : platform.conversions;
-            const conversionSource = useGoals ? 'goal' : 'platform';
-
-            if (platform.spend_cents === 0 && primaryConversions === 0) continue;
-
-            const cacCents = primaryConversions > 0 ? Math.round(platform.spend_cents / primaryConversions) : 0;
-
-            await env.ANALYTICS_DB.prepare(`
-              INSERT INTO cac_history (
-                organization_id, date, spend_cents, conversions, revenue_cents, cac_cents,
-                conversions_goal, conversions_platform, conversion_source, goal_ids, revenue_goal_cents
-              )
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON CONFLICT(organization_id, date)
-              DO UPDATE SET
-                spend_cents = excluded.spend_cents,
-                conversions = excluded.conversions,
-                revenue_cents = excluded.revenue_cents,
-                cac_cents = excluded.cac_cents,
-                conversions_goal = excluded.conversions_goal,
-                conversions_platform = excluded.conversions_platform,
-                conversion_source = excluded.conversion_source,
-                goal_ids = excluded.goal_ids,
-                revenue_goal_cents = excluded.revenue_goal_cents,
-                created_at = datetime('now')
-            `).bind(
-              orgId, date, platform.spend_cents, primaryConversions,
-              goal?.revenue_cents || 0, cacCents,
-              goal?.conversions || 0, platform.conversions,
-              conversionSource, goalIdsJson, goal?.revenue_cents || 0
-            ).run();
-
-            totalRowsInserted++;
-          }
-        } catch (orgErr) {
-          structuredLog('ERROR', `Error backfilling CAC for org ${org.organization_id}`, { endpoint: 'cron', step: 'cac_backfill', org_id: org.organization_id, error: orgErr instanceof Error ? orgErr.message : String(orgErr) });
-          // Continue with other orgs
-        }
-      }
-
-      console.log(`[Cron] CAC history backfill completed: ${totalRowsInserted} rows upserted across ${orgs.length} orgs`);
-    } catch (err) {
-      structuredLog('ERROR', 'Error during CAC history backfill', { endpoint: 'cron', step: 'cac_backfill', error: err instanceof Error ? err.message : String(err) });
     }
   }
 };
