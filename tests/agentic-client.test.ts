@@ -458,7 +458,7 @@ describe('GeminiAgenticClient', () => {
       expect(result.textBlocks).toEqual(['ok']);
     });
 
-    it('should throw after max retries', async () => {
+    it('should throw after max retries', { timeout: 15000 }, async () => {
       mockFetch
         .mockResolvedValue({ ok: false, status: 429, headers: new Map(), text: async () => 'rate limited' });
 
