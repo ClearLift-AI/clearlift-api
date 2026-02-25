@@ -1043,38 +1043,48 @@ function stepCreateSession(info: OrgInfo): string {
 // ============================================================================
 
 /**
- * After connector resyncs complete, trigger the full pipeline cascade:
- *   1. Conversion aggregation → linking → CAC refresh (via resync-all endpoint)
- *   2. Recalculation pipeline (aggregation cascade for conversion data)
- *   3. CAC backfill (historical CAC data)
+ * After connector resyncs complete, trigger ALL downstream pipelines for the org.
  *
- * The hourly cron (once deployed with schedule) will also trigger:
- *   - HourlyAnalyticsWorkflow (chains: AI recs → CAC refresh → probabilistic attribution)
- *   - Identity extraction + conversion linking (daily)
+ * Calls POST /v1/workers/run-all-pipelines/trigger which queues:
+ *   1. Conversion aggregation (→ cascades to linking → CAC refresh)
+ *   2. Events sync (R2 datalake → D1)
+ *   3. Click extraction (email clicks → tracked_clicks + connector_events)
+ *   4. Identity extraction (→ cascades to conversion linking)
+ *   5. Probabilistic attribution (page flow graph + Markov/Shapley models)
+ *   6. CAC refresh (immediate recalculation)
  *
- * For immediate results, we explicitly trigger the recalculation and CAC endpoints.
+ * Also triggers CAC backfill separately (historical daily CAC, not just current).
+ *
+ * NOTE: The staging API runs on Cloudflare Workers — it has direct queue access
+ * to send all these messages. The migration script calls it via HTTP.
  */
 async function triggerDownstreamPipelines(info: OrgInfo, headers: Record<string, string>): Promise<void> {
-  log('\nTriggering downstream pipelines...');
+  log('\nTriggering ALL downstream pipelines...');
 
-  // 1. Recalculation cascade: conversion aggregation → linking → CAC refresh
+  // 1. Fire all pipelines via single API endpoint (queues 6 messages to SYNC_QUEUE)
   try {
-    const resp = await fetch(`${currentConfig.apiBase}/v1/workers/recalculate/trigger?org_id=${info.id}`, {
+    const resp = await fetch(`${currentConfig.apiBase}/v1/workers/run-all-pipelines/trigger?org_id=${info.id}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ days: 90 }),
+      body: JSON.stringify({ days: 30 }),
     });
     if (resp.ok) {
-      log('  Recalculation pipeline queued (aggregation → linking → CAC).');
+      const body = await resp.json() as any;
+      const triggered = body.data?.pipelines_triggered || [];
+      const skipped = body.data?.pipelines_skipped || [];
+      log(`  Pipelines triggered: ${triggered.join(', ')}`);
+      if (skipped.length > 0) {
+        log(`  Pipelines skipped: ${skipped.join(', ')}`);
+      }
     } else {
       const body = await resp.text();
-      log(`  Recalculation failed (${resp.status}): ${body.substring(0, 100)}`);
+      log(`  run-all-pipelines failed (${resp.status}): ${body.substring(0, 150)}`);
     }
   } catch (e: any) {
-    log(`  Recalculation error: ${e.message?.substring(0, 80)}`);
+    log(`  run-all-pipelines error: ${e.message?.substring(0, 80)}`);
   }
 
-  // 2. CAC backfill (historical daily CAC)
+  // 2. CAC backfill (historical daily CAC — separate from the immediate CAC refresh above)
   try {
     const resp = await fetch(`${currentConfig.apiBase}/v1/analytics/cac/backfill?org_id=${info.id}`, {
       method: 'POST',
@@ -1091,28 +1101,7 @@ async function triggerDownstreamPipelines(info: OrgInfo, headers: Record<string,
     log(`  CAC backfill error: ${e.message?.substring(0, 80)}`);
   }
 
-  // 3. Trigger resync-all (platform syncs + aggregation cascade, if not already triggered above)
-  //    This endpoint also handles skip_platform_sync mode for just the cascade
-  try {
-    const resp = await fetch(`${currentConfig.apiBase}/v1/workers/resync-all/trigger?org_id=${info.id}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ days: 30, skip_platform_sync: true }),
-    });
-    if (resp.ok) {
-      log('  Full pipeline cascade queued (resync-all).');
-    } else if ((resp.status as number) === 429) {
-      log('  Resync-all already in progress (429 — expected if resyncs were just triggered).');
-    } else {
-      const body = await resp.text();
-      log(`  Resync-all failed (${resp.status}): ${body.substring(0, 100)}`);
-    }
-  } catch (e: any) {
-    log(`  Resync-all error: ${e.message?.substring(0, 80)}`);
-  }
-
-  log('  Downstream pipelines triggered. Probabilistic attribution + page flow');
-  log('  will run on the next hourly cron cycle (*/1 * * * * on staging).');
+  log('  All pipelines queued — data will populate as workflows complete.');
 }
 
 // ============================================================================

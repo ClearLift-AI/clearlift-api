@@ -1299,3 +1299,179 @@ export class TriggerResyncAll extends OpenAPIRoute {
     }
   }
 }
+
+/**
+ * POST /v1/workers/run-all-pipelines/trigger - Fire ALL downstream pipelines for an org
+ *
+ * Used by migration script after copying auth+config to immediately populate
+ * all analytics data. Sends queue messages for every pipeline:
+ *
+ *   1. Conversion aggregation (→ cascades to linking → CAC refresh)
+ *   2. Events sync (R2 datalake → D1)
+ *   3. Click extraction (email click → tracked_clicks + connector_events)
+ *   4. Identity extraction (→ cascades to conversion linking)
+ *   5. Probabilistic attribution (page flow + Markov/Shapley)
+ *   6. CAC refresh (immediate, not historical backfill)
+ *
+ * Platform syncs are NOT included — those are triggered separately via per-connection resync.
+ */
+export class TriggerAllPipelines extends OpenAPIRoute {
+  public schema = {
+    tags: ["Workers"],
+    summary: "Trigger all downstream pipelines for an organization",
+    description: "Fires every analytics pipeline for an org: aggregation, events sync, click extraction, identity extraction, probabilistic attribution, and CAC refresh. Used after migration or data issues.",
+    operationId: "trigger-all-pipelines",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+      }),
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              days: z.number().min(1).max(90).default(30).describe("Lookback window in days"),
+            })
+          }
+        }
+      }
+    },
+    responses: {
+      "200": {
+        description: "All pipelines triggered",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                message: z.string(),
+                pipelines_triggered: z.array(z.string()),
+                pipelines_skipped: z.array(z.string()),
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { days } = data.body;
+
+    const now = new Date();
+    const startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const endDate = now.toISOString().split('T')[0];
+
+    // Look up org_tag
+    const tagMapping = await c.env.DB.prepare(
+      `SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1`
+    ).bind(orgId).first<{ short_tag: string }>();
+
+    const orgTag = tagMapping?.short_tag;
+
+    const triggered: string[] = [];
+    const skipped: string[] = [];
+
+    try {
+      // 1. Conversion aggregation (cascades → linking → CAC refresh)
+      await c.env.SYNC_QUEUE.send({
+        job_type: 'conversion_aggregation',
+        job_id: crypto.randomUUID(),
+        organization_id: orgId,
+        attribution_window_hours: days * 24,
+        created_at: now.toISOString(),
+      });
+      triggered.push('conversion_aggregation');
+
+      // 2. Events sync (needs org_tag)
+      if (orgTag) {
+        await c.env.SYNC_QUEUE.send({
+          job_type: 'events_sync',
+          job_id: crypto.randomUUID(),
+          organization_id: orgId,
+          org_tag: orgTag,
+          sync_window: { start: `${startDate}T00:00:00Z`, end: `${endDate}T23:59:59Z` },
+          created_at: now.toISOString(),
+        });
+        triggered.push('events_sync');
+      } else {
+        skipped.push('events_sync (no org_tag)');
+      }
+
+      // 3. Click extraction
+      await c.env.SYNC_QUEUE.send({
+        job_type: 'click_extraction',
+        organization_id: orgId,
+        days_back: days,
+        match_conversions: true,
+        created_at: now.toISOString(),
+      });
+      triggered.push('click_extraction');
+
+      // 4. Identity extraction (cascades → conversion linking)
+      if (orgTag) {
+        await c.env.SYNC_QUEUE.send({
+          job_type: 'identity_extraction',
+          organization_id: orgId,
+          org_tag: orgTag,
+          start_date: startDate,
+          end_date: endDate,
+          lookback_days: days,
+          created_at: now.toISOString(),
+        });
+        triggered.push('identity_extraction');
+      } else {
+        skipped.push('identity_extraction (no org_tag)');
+      }
+
+      // 5. Probabilistic attribution (page flow + Markov/Shapley)
+      if (orgTag) {
+        await c.env.SYNC_QUEUE.send({
+          job_type: 'probabilistic_attribution',
+          organization_id: orgId,
+          org_tag: orgTag,
+          start_date: startDate,
+          end_date: endDate,
+          lookback_days: days,
+          created_at: now.toISOString(),
+        });
+        triggered.push('probabilistic_attribution');
+      } else {
+        skipped.push('probabilistic_attribution (no org_tag)');
+      }
+
+      // 6. CAC refresh (immediate)
+      await c.env.SYNC_QUEUE.send({
+        job_type: 'cac_refresh',
+        organization_id: orgId,
+        trigger: 'migration',
+        created_at: now.toISOString(),
+      });
+      triggered.push('cac_refresh');
+
+      structuredLog('INFO', `All pipelines triggered for org ${orgId}`, {
+        endpoint: 'workers',
+        step: 'trigger_all_pipelines',
+        org_id: orgId,
+        org_tag: orgTag || 'none',
+        triggered: triggered.length,
+        skipped: skipped.length,
+      });
+
+      return success(c, {
+        message: `${triggered.length} pipelines triggered, ${skipped.length} skipped`,
+        pipelines_triggered: triggered,
+        pipelines_skipped: skipped,
+      });
+    } catch (err) {
+      structuredLog('ERROR', 'Trigger all pipelines error', {
+        endpoint: 'workers',
+        step: 'trigger_all_pipelines',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue pipeline jobs", 500);
+    }
+  }
+}
