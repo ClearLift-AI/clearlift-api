@@ -2463,10 +2463,18 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // Determine which platforms to query
-      const platformsToQuery = platforms.includes('all')
-        ? ['facebook', 'google', 'tiktok']
-        : platforms.filter(p => p !== 'all');
+      // Determine which platforms to query — use actually connected platforms, not hardcoded list
+      let platformsToQuery: string[];
+      if (platforms.includes('all')) {
+        // Query ad_metrics for distinct platforms that have data for this org
+        const activePlatforms = await this.db.prepare(`
+          SELECT DISTINCT platform FROM ad_metrics
+          WHERE organization_id = ? AND metric_date >= ?
+        `).bind(orgId, startStr).all<{ platform: string }>();
+        platformsToQuery = (activePlatforms.results || []).map(r => r.platform);
+      } else {
+        platformsToQuery = platforms.filter(p => p !== 'all');
+      }
 
       // Fetch platform-reported metrics (spend, conversions, conversion value)
       const platformData = await Promise.all(
@@ -2486,10 +2494,11 @@ export class ExplorationToolExecutor {
               SUM(conversion_value_cents) as conversion_value_cents
             FROM ${tableInfo.table}
             WHERE organization_id = ?
+              AND platform = ?
               AND metric_date >= ?
               AND metric_date <= ?
           `;
-          const result = await this.db.prepare(sql).bind(orgId, startStr, endStr).first<{
+          const result = await this.db.prepare(sql).bind(orgId, platform, startStr, endStr).first<{
             spend_cents: number | null;
             conversions: number | null;
             conversion_value_cents: number | null;
