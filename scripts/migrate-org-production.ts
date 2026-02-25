@@ -10,7 +10,7 @@
  *   npx tsx scripts/migrate-org-production.ts
  *
  * The wizard guides you through:
- *   1. Select environment (staging / production)
+ *   1. Select environment (staging / production) — once per session
  *   2. List all orgs from PRODUCTION DB
  *   3. Select an org to migrate
  *   4. Confirm migration plan
@@ -18,7 +18,8 @@
  *   6. Interactive connector onboarding per connection
  *   7. Create session token for dashboard login
  *   8. Trigger resync + poll completion
- *   9. Print chrome console commands for login
+ *   9. Ask "Migrate another org?" → loop back to step 2
+ *  10. Print combined summary with login commands for all migrated orgs
  *
  * Prerequisites:
  *   1. New databases created (adbliss-core-staging / adbliss-analytics-staging)
@@ -1107,71 +1108,126 @@ async function stepTriggerSync(info: OrgInfo, sessionToken: string): Promise<voi
   }
 }
 
+// stepComplete removed — replaced by printFinalSummary in multi-org main loop
+
 // ============================================================================
-// STEP 9: PRINT LOGIN COMMANDS
+// MAIN — supports multiple orgs in a single session
 // ============================================================================
 
-function stepComplete(info: OrgInfo, sessionToken: string): void {
+interface MigrationResult {
+  orgName: string;
+  orgSlug: string;
+  orgId: string;
+  sessionToken: string;
+  success: boolean;
+  error?: string;
+}
+
+async function migrateOneOrg(): Promise<MigrationResult> {
+  // Step 2+3: List orgs, select one (re-fetches to show updated ✓ marks)
+  const orgInfo = await stepListAndSelectOrg();
+
+  // Step 4: Confirm
+  await stepConfirm(orgInfo);
+
+  // Step 4b: Purge if org already exists in target
+  await stepPurgeIfExists(orgInfo);
+
+  if (!(orgInfo as any)._skipCopy) {
+    // Step 5: Copy tables
+    stepCopy(orgInfo);
+
+    // Step 6: Interactive connector onboarding
+    await stepOnboardConnectors(orgInfo);
+  }
+
+  // Step 7: Create session token
+  const sessionToken = stepCreateSession(orgInfo);
+
+  // Step 8: Trigger resync
+  await stepTriggerSync(orgInfo, sessionToken);
+
+  // Brief per-org confirmation
+  console.log(`\n  ✓ ${orgInfo.name} (${orgInfo.slug}) migrated successfully.`);
+
+  return {
+    orgName: orgInfo.name,
+    orgSlug: orgInfo.slug,
+    orgId: orgInfo.id,
+    sessionToken,
+    success: true,
+  };
+}
+
+function printFinalSummary(results: MigrationResult[]): void {
   console.log('\n' + '='.repeat(60));
-  console.log('  Migration Complete!');
+  console.log('  Migration Session Complete!');
   console.log('='.repeat(60));
-  console.log(`\n  Org: ${info.name} (${info.slug})`);
-  console.log(`  Dashboard: ${currentConfig.dashboardUrl}`);
-  console.log('\n  Paste these in Chrome DevTools console to login:\n');
-  console.log(`    localStorage.setItem('adbliss_session', '${sessionToken}');`);
-  console.log(`    localStorage.setItem('adbliss_current_org', '${info.id}');`);
-  console.log(`    location.reload();`);
-  console.log('\n  Session expires in 30 days. Treat this token as a credential.');
+  console.log(`\n  ${results.length} org(s) migrated:`);
+
+  for (const r of results) {
+    const icon = r.success ? '✓' : '✗';
+    console.log(`    ${icon} ${r.orgName} (${r.orgSlug})${r.error ? ` — ${r.error}` : ''}`);
+  }
+
+  console.log(`\n  Dashboard: ${currentConfig.dashboardUrl}`);
+  console.log('\n  Paste in Chrome DevTools console to login as each org:\n');
+
+  for (const r of results) {
+    if (!r.success) continue;
+    console.log(`  // --- ${r.orgName} (${r.orgSlug}) ---`);
+    console.log(`  localStorage.setItem('adbliss_session', '${r.sessionToken}');`);
+    console.log(`  localStorage.setItem('adbliss_current_org', '${r.orgId}');`);
+    console.log(`  location.reload();\n`);
+  }
+
+  console.log('  Sessions expire in 30 days. Treat these tokens as credentials.');
   console.log('  Downstream workflows (identity, attribution) will fire on next cron cycle.');
   console.log();
 }
-
-// ============================================================================
-// MAIN
-// ============================================================================
 
 async function main() {
   if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
   try {
-    // Step 1: Select environment
+    // Step 1: Select environment (once per session)
     await stepSelectEnvironment();
 
-    // Step 2+3: List orgs, select one
-    const orgInfo = await stepListAndSelectOrg();
+    const results: MigrationResult[] = [];
 
-    // Step 4: Confirm
-    await stepConfirm(orgInfo);
+    // Loop: migrate orgs until user is done
+    let keepGoing = true;
+    while (keepGoing) {
+      try {
+        const result = await migrateOneOrg();
+        results.push(result);
+      } catch (e: any) {
+        const msg = e.message || String(e);
+        console.error(`\n  ✗ Migration failed: ${msg}`);
+        console.error('  If the failure occurred during table copy, the migration is');
+        console.error('  partially complete. You can retry — INSERT OR IGNORE skips existing rows.\n');
+        // Don't exit — let user continue with other orgs
+      }
 
-    // Step 4b: Purge if org already exists in target
-    await stepPurgeIfExists(orgInfo);
-
-    if (!(orgInfo as any)._skipCopy) {
-      // Step 5: Copy tables
-      stepCopy(orgInfo);
-
-      // Step 6: Interactive connector onboarding
-      await stepOnboardConnectors(orgInfo);
+      keepGoing = await confirm({
+        message: 'Migrate another org?',
+        default: results.length === 0, // Default yes if none succeeded yet
+      });
     }
 
-    // Step 7: Create session token
-    const sessionToken = stepCreateSession(orgInfo);
-
-    // Step 8: Trigger resync
-    await stepTriggerSync(orgInfo, sessionToken);
-
-    // Step 9: Print login commands
-    stepComplete(orgInfo, sessionToken);
+    // Final summary with all login commands
+    if (results.length > 0) {
+      printFinalSummary(results);
+    } else {
+      console.log('\nNo orgs migrated.');
+    }
   } finally {
     try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch {}
   }
 }
 
 main().catch(e => {
-  console.error('\nMigration failed:', e.message || e);
-  console.error('\nIf the failure occurred during table copy (step 5), the migration is');
-  console.error('partially complete. Re-run the wizard to continue — INSERT OR IGNORE');
-  console.error('ensures already-copied rows are safely skipped.');
+  console.error('\nMigration session failed:', e.message || e);
   try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch {}
   process.exit(1);
 });
