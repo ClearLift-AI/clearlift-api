@@ -90,7 +90,7 @@ const MIGRATION_TABLES = [
   'users', 'organizations', 'organization_members', 'invitations', 'platform_connections', 'org_tag_mappings',
   // Phase 2: Org config (FK → organizations)
   'ai_optimization_settings', 'dashboard_layouts', 'tracking_domains', 'script_hashes',
-  'webhook_endpoints', 'org_tracking_configs', 'tracking_links',
+  'webhook_endpoints', 'org_tracking_configs', 'onboarding_progress', 'tracking_links',
   // Phase 3: Connection config (FK → platform_connections)
   'connector_filter_rules',
   // Phase 4: Pipeline state (keyed by org_tag — avoids unnecessary re-processing)
@@ -294,12 +294,14 @@ function importBatch(binding: string, table: string, columns: string[], rows: an
   fs.writeFileSync(tmpFile, statements.join('\n'));
 
   const envFlag = currentConfig.wranglerEnv;
-  exec(
-    `npx wrangler d1 execute ${binding} --remote ${envFlag} --file "${tmpFile}"`,
-    { timeout: 120000 }
-  );
-
-  try { fs.unlinkSync(tmpFile); } catch {}
+  try {
+    exec(
+      `npx wrangler d1 execute ${binding} --remote ${envFlag} --file "${tmpFile}"`,
+      { timeout: 120000 }
+    );
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
 }
 
 // ============================================================================
@@ -784,6 +786,7 @@ function stepCopy(info: OrgInfo): void {
   track(pullTable(currentConfig.sourceDb, targetDb, 'script_hashes', orgWhere));
   track(pullTable(currentConfig.sourceDb, targetDb, 'webhook_endpoints', orgWhere));
   track(pullTable(currentConfig.sourceDb, targetDb, 'org_tracking_configs', orgWhere));
+  track(pullTable(currentConfig.sourceDb, targetDb, 'onboarding_progress', orgWhere));
 
   // Tracking links use org_tag, not organization_id
   if (info.tag) {
@@ -1138,10 +1141,11 @@ async function migrateOneOrg(): Promise<MigrationResult> {
   if (!(orgInfo as any)._skipCopy) {
     // Step 5: Copy tables
     stepCopy(orgInfo);
-
-    // Step 6: Interactive connector onboarding
-    await stepOnboardConnectors(orgInfo);
   }
+
+  // Step 6: Interactive connector onboarding (runs even for "skip copy" —
+  // user may want to reconfigure settings without re-copying tables)
+  await stepOnboardConnectors(orgInfo);
 
   // Step 7: Create session token
   const sessionToken = stepCreateSession(orgInfo);
