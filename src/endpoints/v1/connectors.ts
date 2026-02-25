@@ -2273,13 +2273,14 @@ export class TriggerResync extends OpenAPIRoute {
         ) VALUES (?, ?, ?, 'pending', ?, ?)
       `).bind(jobId, connection_id, connection.organization_id, now, now).run();
 
-      // Enqueue sync job
+      // Enqueue sync job (manual=true bypasses hourly dedup in queue consumer)
       await c.env.SYNC_QUEUE.send({
         job_id: jobId,
         connection_id: connection.id,
         organization_id: connection.organization_id,
         platform: connection.platform,
         account_id: connection.account_id,
+        metadata: { manual: true },
         sync_window: {
           start: startDate.toISOString(),
           end: endDate.toISOString()
