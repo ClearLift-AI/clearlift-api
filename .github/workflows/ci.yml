@@ -60,12 +60,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           npx wrangler d1 migrations apply DB --env staging --remote
-          npx wrangler d1 migrations apply AI_DB --env staging --remote
           npx wrangler d1 migrations apply ANALYTICS_DB --env staging --remote
-          npx wrangler d1 migrations apply SHARD_0 --env staging --remote
-          npx wrangler d1 migrations apply SHARD_1 --env staging --remote
-          npx wrangler d1 migrations apply SHARD_2 --env staging --remote
-          npx wrangler d1 migrations apply SHARD_3 --env staging --remote
 
       - name: Deploy to Cloudflare (staging)
         env:
