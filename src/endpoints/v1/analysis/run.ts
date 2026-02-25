@@ -94,6 +94,9 @@ export class RunAnalysis extends OpenAPIRoute {
         daily_cap_cents,
         monthly_cap_cents,
         max_cac_cents,
+        growth_strategy,
+        ai_control,
+        business_type,
         llm_default_provider,
         llm_claude_model,
         llm_gemini_model,
@@ -106,6 +109,9 @@ export class RunAnalysis extends OpenAPIRoute {
       daily_cap_cents: number | null;
       monthly_cap_cents: number | null;
       max_cac_cents: number | null;
+      growth_strategy: string | null;
+      ai_control: string | null;
+      business_type: string | null;
       llm_default_provider: string | null;
       llm_claude_model: string | null;
       llm_gemini_model: string | null;
@@ -130,6 +136,9 @@ export class RunAnalysis extends OpenAPIRoute {
       dailyCapCents: settings?.daily_cap_cents || null,
       monthlyCapCents: settings?.monthly_cap_cents || null,
       maxCacCents: settings?.max_cac_cents || null,
+      growthStrategy: (settings?.growth_strategy || 'balanced') as 'lean' | 'balanced' | 'bold',
+      aiControl: (settings?.ai_control || 'copilot') as 'copilot' | 'autopilot',
+      businessType: (settings?.business_type || 'lead_gen') as 'ecommerce' | 'lead_gen' | 'saas',
     };
 
     const jobs = new JobManager(c.env.DB);

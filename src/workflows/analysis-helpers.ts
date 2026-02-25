@@ -165,6 +165,9 @@ export interface AnalysisWorkflowParams {
     dailyCapCents?: number | null;
     monthlyCapCents?: number | null;
     maxCacCents?: number | null;
+    growthStrategy?: 'lean' | 'balanced' | 'bold';
+    aiControl?: 'copilot' | 'autopilot';
+    businessType?: 'ecommerce' | 'lead_gen' | 'saas';
   };
 }
 

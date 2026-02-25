@@ -141,13 +141,56 @@ export interface SimulationResult {
   };
 }
 
-interface HistoricalDataPoint {
+export interface HistoricalDataPoint {
   date: string;
   spend_cents: number;
   conversions: number;
   impressions?: number;
   clicks?: number;
   hour?: number;
+}
+
+/**
+ * Fit a power-law model: conv = k · spend^α via OLS in log-space.
+ * Exported for reuse by exploration tools (marginal efficiency).
+ */
+export function fitPowerLaw(history: Array<{ spend_cents: number; conversions: number }>): { k: number; alpha: number; r_squared: number } {
+  const valid = history.filter(d => d.conversions > 0 && d.spend_cents > 0);
+
+  if (valid.length < 7) {
+    return { k: 0, alpha: 0.7, r_squared: 0 };
+  }
+
+  const logSpend = valid.map(d => Math.log(d.spend_cents));
+  const logConv = valid.map(d => Math.log(d.conversions));
+  const n = valid.length;
+
+  const sumX = logSpend.reduce((a, b) => a + b, 0);
+  const sumY = logConv.reduce((a, b) => a + b, 0);
+  const sumXY = logSpend.reduce((acc, x, i) => acc + x * logConv[i], 0);
+  const sumX2 = logSpend.reduce((acc, x) => acc + x * x, 0);
+
+  const denom = n * sumX2 - sumX * sumX;
+  if (Math.abs(denom) < 1e-12) {
+    return { k: 0, alpha: 0.7, r_squared: 0 };
+  }
+
+  const rawAlpha = (n * sumXY - sumX * sumY) / denom;
+  const alpha = Math.max(0.3, Math.min(1.0, rawAlpha));
+
+  const meanX = sumX / n;
+  const meanY = sumY / n;
+  const logK = meanY - alpha * meanX;
+  const k = Math.exp(logK);
+
+  const ssTotal = logConv.reduce((acc, y) => acc + (y - meanY) ** 2, 0);
+  const ssResidual = logConv.reduce((acc, y, i) => {
+    const predicted = logK + alpha * logSpend[i];
+    return acc + (y - predicted) ** 2;
+  }, 0);
+  const r_squared = ssTotal > 0 ? Math.max(0, 1 - ssResidual / ssTotal) : 0;
+
+  return { k, alpha, r_squared };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1118,60 +1161,7 @@ RESULT:
   }
 
   private fitPowerLaw(history: HistoricalDataPoint[]): { k: number; alpha: number; r_squared: number } {
-    // Power law model:  conv = k · spend^α
-    // In log-space:     ln(conv) = ln(k) + α · ln(spend)
-    // This is ordinary least squares on (ln(spend), ln(conv)).
-
-    const valid = history.filter(d => d.conversions > 0 && d.spend_cents > 0);
-
-    if (valid.length < 7) {
-      return { k: 0, alpha: 0.7, r_squared: 0 };
-    }
-
-    const logSpend = valid.map(d => Math.log(d.spend_cents));
-    const logConv = valid.map(d => Math.log(d.conversions));
-    const n = valid.length;
-
-    // OLS for ln(conv) = β₀ + β₁ · ln(spend)
-    //   β₁ = (n·Σxy − Σx·Σy) / (n·Σx² − (Σx)²)
-    //   β₀ = ȳ − β₁·x̄
-    const sumX = logSpend.reduce((a, b) => a + b, 0);
-    const sumY = logConv.reduce((a, b) => a + b, 0);
-    const sumXY = logSpend.reduce((acc, x, i) => acc + x * logConv[i], 0);
-    const sumX2 = logSpend.reduce((acc, x) => acc + x * x, 0);
-
-    const denom = n * sumX2 - sumX * sumX;
-    if (Math.abs(denom) < 1e-12) {
-      // Degenerate case: all spend values identical → no slope estimable
-      return { k: 0, alpha: 0.7, r_squared: 0 };
-    }
-
-    const rawAlpha = (n * sumXY - sumX * sumY) / denom;
-
-    // Clamp α ∈ [0.3, 1.0].
-    //   α < 0.3 implies pathological super-diminishing returns (likely noise).
-    //   α > 1.0 implies increasing returns to scale (violates the model assumption).
-    const alpha = Math.max(0.3, Math.min(1.0, rawAlpha));
-
-    // Refit intercept for the clamped α via least-squares on the constrained model:
-    //   ln(conv) = ln(k) + α_clamped · ln(spend)
-    //   ln(k) = ȳ − α_clamped · x̄
-    // This minimises Σ(yᵢ − ln(k) − α · xᵢ)² w.r.t. ln(k) given fixed α.
-    const meanX = sumX / n;
-    const meanY = sumY / n;
-    const logK = meanY - alpha * meanX;
-    const k = Math.exp(logK);
-
-    // Recompute R² for the CLAMPED model, not the unclamped one.
-    // R² = 1 − SS_res / SS_tot, where residuals use the clamped (α, ln(k)).
-    const ssTotal = logConv.reduce((acc, y) => acc + (y - meanY) ** 2, 0);
-    const ssResidual = logConv.reduce((acc, y, i) => {
-      const predicted = logK + alpha * logSpend[i];
-      return acc + (y - predicted) ** 2;
-    }, 0);
-    const r_squared = ssTotal > 0 ? Math.max(0, 1 - ssResidual / ssTotal) : 0;
-
-    return { k, alpha, r_squared };
+    return fitPowerLaw(history);
   }
 
   private buildBudgetAssumptions(model: any, dataPoints: number, changePercent: number): string[] {

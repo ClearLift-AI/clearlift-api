@@ -242,7 +242,9 @@ The simulation results will be automatically attached.`,
         simulated_cac: result.simulated_state.blended_cac_cents / 100,
         cac_change_percent: cacChange,
         conversion_change_percent: convChange,
-        confidence: result.confidence
+        confidence: result.confidence,
+        projected_cac_cents: result.simulated_state.blended_cac_cents,
+        projected_total_spend_cents: result.simulated_state.total_spend_cents
       }
     };
   } catch (err) {
@@ -472,7 +474,9 @@ The user will see the mathematical explanation when reviewing.`,
     data: {
       recommendation_id: recId,
       calculated_impact: sim.simulated_state.cac_change_percent,
-      confidence: sim.confidence
+      confidence: sim.confidence,
+      projected_cac_cents: sim.simulated_state.blended_cac_cents,
+      projected_total_spend_cents: sim.simulated_state.total_spend_cents
     }
   };
 }
