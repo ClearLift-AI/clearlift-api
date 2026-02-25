@@ -2047,15 +2047,8 @@ export class GetConnectorSettings extends OpenAPIRoute {
         return error(c, "FORBIDDEN", "No access to this connection", 403);
       }
 
-      // Parse settings if they exist
-      let settings = null;
-      if (connection.settings) {
-        try {
-          settings = JSON.parse(connection.settings);
-        } catch (e) {
-          structuredLog('ERROR', 'Failed to parse connection settings', { endpoint: 'connectors', step: 'get_connector_settings', error: e instanceof Error ? e.message : String(e) });
-        }
-      }
+      // getConnection() already parses settings JSON
+      const settings = connection.settings || null;
 
       const response: any = {
         connection_id: connection.id,
@@ -2178,12 +2171,8 @@ export class UpdateConnectorSettings extends OpenAPIRoute {
       }
 
       // Merge with existing settings (preserve platform-specific settings)
-      let existingSettings: Record<string, any> = {};
-      if (connection.settings) {
-        try {
-          existingSettings = JSON.parse(connection.settings);
-        } catch {}
-      }
+      // getConnection() already parses settings JSON
+      const existingSettings: Record<string, any> = (connection.settings as any) || {};
       const mergedSettings = { ...existingSettings, ...settings };
 
       // Update connection settings
@@ -2269,7 +2258,8 @@ export class TriggerResync extends OpenAPIRoute {
       const now = new Date().toISOString();
 
       // Calculate sync window from connection settings (falls back to 60 days)
-      const settings = connection.settings ? JSON.parse(connection.settings) : {};
+      // Note: getConnection() already parses settings JSON, so no need to JSON.parse again
+      const settings = connection.settings || {};
       const syncConfig = settings.sync_config;
       const TIMEFRAME_DAYS: Record<string, number> = { '7_days': 7, '60_days': 60, 'all_time': 730 };
       const days = syncConfig?.timeframe ? (TIMEFRAME_DAYS[syncConfig.timeframe] || 60) : 60;
@@ -2302,7 +2292,7 @@ export class TriggerResync extends OpenAPIRoute {
       });
     } catch (err: any) {
       structuredLog('ERROR', 'TriggerResync error', { endpoint: 'connectors', step: 'trigger_resync', error: err instanceof Error ? err.message : String(err) });
-      return error(c, "INTERNAL_ERROR", `Failed to trigger resync: ${err.message}`, 500);
+      return error(c, "INTERNAL_ERROR", `Failed to trigger resync: ${err instanceof Error ? err.message : String(err)}`, 500);
     }
   }
 }

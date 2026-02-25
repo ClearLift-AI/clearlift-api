@@ -1083,10 +1083,10 @@ async function stepTriggerSync(info: OrgInfo, sessionToken: string): Promise<voi
   // CAC backfill
   log('\nTriggering CAC backfill...');
   try {
-    const resp = await fetch(`${currentConfig.apiBase}/v1/analytics/cac/backfill`, {
+    const resp = await fetch(`${currentConfig.apiBase}/v1/analytics/cac/backfill?org_id=${info.id}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ org_id: info.id, days: 90 }),
+      body: JSON.stringify({ days: 90 }),
     });
     if (resp.ok) {
       log('CAC backfill triggered (90 days).');
