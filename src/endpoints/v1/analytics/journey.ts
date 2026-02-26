@@ -376,7 +376,6 @@ Returns the complete journey for an identified user, including:
     const totalConnectorRevenue = connectorConversions.reduce((sum, c) => sum + c.amount, 0);
 
     // Query journeys from D1 ANALYTICS_DB for this user's anonymous_ids
-    const orgTag = tagMapping.short_tag;
     let userJourneys: Array<{
       id: string;
       channel_path: string;
@@ -404,9 +403,9 @@ Returns the complete journey for an identified user, including:
           SELECT id, channel_path, path_length, first_touch_ts, last_touch_ts,
                  converted, conversion_value_cents, time_to_conversion_hours
           FROM journeys
-          WHERE org_tag = ? AND anonymous_id IN (${placeholders})
+          WHERE organization_id = ? AND anonymous_id IN (${placeholders})
         `;
-        const params: any[] = [orgTag, ...anonymousIds];
+        const params: any[] = [orgId, ...anonymousIds];
 
         if (dateFrom) {
           journeyQuery += ` AND first_touch_ts >= ?`;
@@ -442,12 +441,12 @@ Returns the complete journey for an identified user, including:
                  NULL as session_id
           FROM conversions c
           JOIN journeys j ON c.id = j.conversion_id
-          WHERE j.org_tag = ? AND j.anonymous_id IN (${placeholders})
+          WHERE j.organization_id = ? AND j.anonymous_id IN (${placeholders})
           ORDER BY c.conversion_timestamp DESC
           LIMIT 50
         `;
         const tagResult = await analyticsDb.prepare(tagConvQuery)
-          .bind(orgTag, ...anonymousIds)
+          .bind(orgId, ...anonymousIds)
           .all();
         tagConversions = (tagResult.results || []) as Array<{
           event_id: string;
@@ -699,7 +698,6 @@ export class GetJourneysOverview extends OpenAPIRoute {
       });
     }
 
-    const orgTag = tagMapping.short_tag;
     const analyticsDb = c.env.ANALYTICS_DB;
 
     // Get identity mappings count from ANALYTICS_DB (identity tables moved from DB)
@@ -717,9 +715,9 @@ export class GetJourneysOverview extends OpenAPIRoute {
             COALESCE(SUM(sessions), 0) as sessions,
             COALESCE(SUM(users), 0) as users
           FROM daily_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND date >= ? AND date <= ?
-        `).bind(orgTag, dateFrom, dateTo).first() as { sessions: number; users: number } | null;
+        `).bind(orgId, dateFrom, dateTo).first() as { sessions: number; users: number } | null;
       } catch (err) {
         structuredLog('WARN', 'Failed to query daily_metrics', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }
@@ -764,9 +762,9 @@ export class GetJourneysOverview extends OpenAPIRoute {
             COUNT(*) as total_journeys,
             SUM(CASE WHEN converted = 1 THEN 1 ELSE 0 END) as converted_journeys
           FROM journeys
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND first_touch_ts >= ? AND first_touch_ts <= ?
-        `).bind(orgTag, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).first() as {
+        `).bind(orgId, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).first() as {
           avg_path_length: number;
           avg_time_to_convert: number;
           avg_sessions_to_convert: number;
@@ -789,12 +787,12 @@ export class GetJourneysOverview extends OpenAPIRoute {
             SUM(CASE WHEN converted = 1 THEN 1 ELSE 0 END) as conversions,
             COALESCE(SUM(conversion_value_cents), 0) as revenue_cents
           FROM journeys
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND first_touch_ts >= ? AND first_touch_ts <= ?
           GROUP BY channel_path
           ORDER BY journeys DESC
           LIMIT 10
-        `).bind(orgTag, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
+        `).bind(orgId, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
           results: Array<{ path: string; journeys: number; conversions: number; revenue_cents: number }>
         };
 
@@ -831,13 +829,13 @@ export class GetJourneysOverview extends OpenAPIRoute {
             COUNT(*) as conversions,
             COALESCE(SUM(conversion_value_cents), 0) as revenue_cents
           FROM journeys
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND converted = 1
             AND first_touch_ts >= ? AND first_touch_ts <= ?
           GROUP BY channel_path
           ORDER BY conversions DESC
           LIMIT 10
-        `).bind(orgTag, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
+        `).bind(orgId, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
           results: Array<{ path: string; conversions: number; revenue_cents: number }>
         };
 
@@ -871,12 +869,12 @@ export class GetJourneysOverview extends OpenAPIRoute {
             COUNT(*) as total,
             CAST(SUM(CASE WHEN converted = 1 THEN 1 ELSE 0 END) AS REAL) / COUNT(*) * 100 as conversion_rate
           FROM journeys
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND first_touch_ts >= ? AND first_touch_ts <= ?
           GROUP BY path_length
           ORDER BY path_length ASC
           LIMIT 20
-        `).bind(orgTag, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
+        `).bind(orgId, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
           results: Array<{ path_length: number; conversions: number; conversion_rate: number }>
         };
 

@@ -166,8 +166,8 @@ class OrgSkippedError extends Error {
 // ============================================================================
 
 function assertSqlSafe(val: string, label: string): void {
-  if (!/^[a-zA-Z0-9_\-]+$/.test(val)) {
-    throw new Error(`${label} contains unsafe characters: ${val.substring(0, 50)}`);
+  if (!/^[a-zA-Z0-9_\-\.@]+$/.test(val)) {
+    throw new Error(`${label} contains unsafe characters: ${val.substring(0, 80)}`);
   }
 }
 

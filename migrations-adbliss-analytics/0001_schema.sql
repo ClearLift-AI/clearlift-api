@@ -249,7 +249,8 @@ CREATE INDEX idx_facebook_pages_page_id ON facebook_pages(page_id);
 
 CREATE TABLE IF NOT EXISTS touchpoints (
   id TEXT PRIMARY KEY,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  org_tag TEXT,
   anonymous_id TEXT NOT NULL,
   user_id_hash TEXT,
   session_id TEXT,
@@ -291,20 +292,21 @@ CREATE TABLE IF NOT EXISTS touchpoints (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_tp_org_ts ON touchpoints(org_tag, touchpoint_ts DESC);
-CREATE INDEX IF NOT EXISTS idx_tp_org_anon ON touchpoints(org_tag, anonymous_id);
-CREATE INDEX IF NOT EXISTS idx_tp_org_user ON touchpoints(org_tag, user_id_hash) WHERE user_id_hash IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_tp_org_session ON touchpoints(org_tag, session_id);
-CREATE INDEX IF NOT EXISTS idx_tp_org_channel ON touchpoints(org_tag, channel_group);
-CREATE INDEX IF NOT EXISTS idx_tp_conversion ON touchpoints(org_tag, conversion_id) WHERE conversion_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tp_org_ts ON touchpoints(organization_id, touchpoint_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_tp_org_anon ON touchpoints(organization_id, anonymous_id);
+CREATE INDEX IF NOT EXISTS idx_tp_org_user ON touchpoints(organization_id, user_id_hash) WHERE user_id_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tp_org_session ON touchpoints(organization_id, session_id);
+CREATE INDEX IF NOT EXISTS idx_tp_org_channel ON touchpoints(organization_id, channel_group);
+CREATE INDEX IF NOT EXISTS idx_tp_conversion ON touchpoints(organization_id, conversion_id) WHERE conversion_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tp_org_tag ON touchpoints(org_tag) WHERE org_tag IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tp_gclid ON touchpoints(gclid) WHERE gclid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tp_fbclid ON touchpoints(fbclid) WHERE fbclid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tp_ttclid ON touchpoints(ttclid) WHERE ttclid IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS customer_identities (
   id TEXT PRIMARY KEY,
-  organization_id TEXT,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  org_tag TEXT,
   anonymous_id TEXT NOT NULL,
   user_id_hash TEXT,
   email_hash TEXT,
@@ -327,7 +329,6 @@ CREATE TABLE IF NOT EXISTS customer_identities (
   known_devices TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
-  -- Added by migration 0034
   phone_hash TEXT,
   canonical_user_id TEXT,
   hubspot_contact_id TEXT,
@@ -336,13 +337,14 @@ CREATE TABLE IF NOT EXISTS customer_identities (
   merged_into_id TEXT,
   merged_at TEXT,
   is_canonical INTEGER DEFAULT 1,
-  UNIQUE(org_tag, anonymous_id)
+  UNIQUE(organization_id, anonymous_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_ci_org ON customer_identities(org_tag);
-CREATE INDEX IF NOT EXISTS idx_ci_org_user ON customer_identities(org_tag, user_id_hash) WHERE user_id_hash IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_ci_org_email ON customer_identities(org_tag, email_hash) WHERE email_hash IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_ci_phone_hash ON customer_identities(org_tag, phone_hash) WHERE phone_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ci_org ON customer_identities(organization_id);
+CREATE INDEX IF NOT EXISTS idx_ci_org_user ON customer_identities(organization_id, user_id_hash) WHERE user_id_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ci_org_email ON customer_identities(organization_id, email_hash) WHERE email_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ci_phone_hash ON customer_identities(organization_id, phone_hash) WHERE phone_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ci_org_tag ON customer_identities(org_tag) WHERE org_tag IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ci_canonical ON customer_identities(canonical_user_id) WHERE canonical_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ci_hubspot ON customer_identities(hubspot_contact_id) WHERE hubspot_contact_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ci_salesforce ON customer_identities(salesforce_contact_id) WHERE salesforce_contact_id IS NOT NULL;
@@ -438,7 +440,8 @@ CREATE INDEX idx_webhook_events_unified_type ON webhook_events(organization_id, 
 
 CREATE TABLE IF NOT EXISTS journeys (
   id TEXT PRIMARY KEY,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  org_tag TEXT,
   user_id_hash TEXT,
   anonymous_id TEXT NOT NULL,
   channel_path TEXT NOT NULL,
@@ -453,14 +456,15 @@ CREATE TABLE IF NOT EXISTS journeys (
   computed_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_j_org ON journeys(org_tag);
-CREATE INDEX IF NOT EXISTS idx_j_org_converted ON journeys(org_tag, converted);
-CREATE INDEX IF NOT EXISTS idx_j_org_user ON journeys(org_tag, user_id_hash) WHERE user_id_hash IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_j_org_ts ON journeys(org_tag, first_touch_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_j_org ON journeys(organization_id);
+CREATE INDEX IF NOT EXISTS idx_j_org_converted ON journeys(organization_id, converted);
+CREATE INDEX IF NOT EXISTS idx_j_org_user ON journeys(organization_id, user_id_hash) WHERE user_id_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_j_org_ts ON journeys(organization_id, first_touch_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_j_org_tag ON journeys(org_tag) WHERE org_tag IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS journey_analytics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
   channel_distribution TEXT NOT NULL,
   entry_channels TEXT NOT NULL,
   exit_channels TEXT NOT NULL,
@@ -479,16 +483,16 @@ CREATE TABLE IF NOT EXISTS journey_analytics (
   period_end TEXT NOT NULL,
   computed_at TEXT DEFAULT (datetime('now')),
   created_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(org_tag, period_start, period_end)
+  UNIQUE(organization_id, period_start, period_end)
 );
 
-CREATE INDEX IF NOT EXISTS idx_journey_analytics_org ON journey_analytics(org_tag);
-CREATE INDEX IF NOT EXISTS idx_journey_analytics_period ON journey_analytics(org_tag, period_start DESC, period_end DESC);
-CREATE INDEX IF NOT EXISTS idx_journey_analytics_quality ON journey_analytics(org_tag, data_quality_level);
+CREATE INDEX IF NOT EXISTS idx_journey_analytics_org ON journey_analytics(organization_id);
+CREATE INDEX IF NOT EXISTS idx_journey_analytics_period ON journey_analytics(organization_id, period_start DESC, period_end DESC);
+CREATE INDEX IF NOT EXISTS idx_journey_analytics_quality ON journey_analytics(organization_id, data_quality_level);
 
 CREATE TABLE attribution_results (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
   model TEXT NOT NULL,
   channel TEXT NOT NULL,
   credit REAL NOT NULL,
@@ -499,15 +503,15 @@ CREATE TABLE attribution_results (
   period_start TEXT NOT NULL,
   period_end TEXT NOT NULL,
   computed_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(org_tag, model, channel, period_start)
+  UNIQUE(organization_id, model, channel, period_start)
 );
 
-CREATE INDEX idx_ar_org_model ON attribution_results(org_tag, model);
-CREATE INDEX idx_ar_org_period ON attribution_results(org_tag, period_start);
+CREATE INDEX idx_ar_org_model ON attribution_results(organization_id, model);
+CREATE INDEX idx_ar_org_period ON attribution_results(organization_id, period_start);
 
 CREATE TABLE channel_transitions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
   from_channel TEXT NOT NULL,
   to_channel TEXT NOT NULL,
   transition_count INTEGER NOT NULL DEFAULT 0,
@@ -516,18 +520,19 @@ CREATE TABLE channel_transitions (
   period_start TEXT NOT NULL,
   period_end TEXT NOT NULL,
   computed_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(org_tag, from_channel, to_channel, period_start)
+  UNIQUE(organization_id, from_channel, to_channel, period_start)
 );
 
-CREATE INDEX idx_ct_org ON channel_transitions(org_tag);
-CREATE INDEX idx_ct_org_from_channel ON channel_transitions(org_tag, from_channel);
-CREATE INDEX idx_ct_org_period ON channel_transitions(org_tag, period_start);
-CREATE INDEX idx_ct_org_period_from ON channel_transitions(org_tag, period_start, from_channel);
-CREATE INDEX idx_ct_org_to_channel ON channel_transitions(org_tag, to_channel);
+CREATE INDEX idx_ct_org ON channel_transitions(organization_id);
+CREATE INDEX idx_ct_org_from_channel ON channel_transitions(organization_id, from_channel);
+CREATE INDEX idx_ct_org_period ON channel_transitions(organization_id, period_start);
+CREATE INDEX idx_ct_org_period_from ON channel_transitions(organization_id, period_start, from_channel);
+CREATE INDEX idx_ct_org_to_channel ON channel_transitions(organization_id, to_channel);
 
 CREATE TABLE funnel_transitions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  org_tag TEXT,
   from_type TEXT NOT NULL,
   from_id TEXT NOT NULL,
   from_name TEXT,
@@ -544,13 +549,14 @@ CREATE TABLE funnel_transitions (
   period_start TEXT NOT NULL,
   period_end TEXT NOT NULL,
   computed_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(org_tag, from_type, from_id, to_type, to_id, period_start)
+  UNIQUE(organization_id, from_type, from_id, to_type, to_id, period_start)
 );
 
-CREATE INDEX idx_ft_org ON funnel_transitions(org_tag);
-CREATE INDEX idx_ft_org_from ON funnel_transitions(org_tag, from_type, from_id);
-CREATE INDEX idx_ft_org_period ON funnel_transitions(org_tag, period_start);
-CREATE INDEX idx_ft_org_to ON funnel_transitions(org_tag, to_type, to_id);
+CREATE INDEX idx_ft_org ON funnel_transitions(organization_id);
+CREATE INDEX idx_ft_org_from ON funnel_transitions(organization_id, from_type, from_id);
+CREATE INDEX idx_ft_org_period ON funnel_transitions(organization_id, period_start);
+CREATE INDEX idx_ft_org_to ON funnel_transitions(organization_id, to_type, to_id);
+CREATE INDEX idx_ft_org_tag ON funnel_transitions(org_tag) WHERE org_tag IS NOT NULL;
 
 -- ============================================================================
 -- CONVERSIONS (5 tables)
@@ -687,7 +693,8 @@ CREATE INDEX idx_cva_org_created ON conversion_value_allocations(organization_id
 
 CREATE TABLE IF NOT EXISTS hourly_metrics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  org_tag TEXT,
   hour TEXT NOT NULL,
   total_events INTEGER DEFAULT 0,
   page_views INTEGER DEFAULT 0,
@@ -703,14 +710,16 @@ CREATE TABLE IF NOT EXISTS hourly_metrics (
   by_device TEXT,
   by_page TEXT,
   created_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(org_tag, hour)
+  UNIQUE(organization_id, hour)
 );
 
-CREATE INDEX IF NOT EXISTS idx_hm_org_hour ON hourly_metrics(org_tag, hour DESC);
+CREATE INDEX IF NOT EXISTS idx_hm_org_hour ON hourly_metrics(organization_id, hour DESC);
+CREATE INDEX IF NOT EXISTS idx_hm_org_tag ON hourly_metrics(org_tag) WHERE org_tag IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS daily_metrics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  org_tag TEXT,
   date TEXT NOT NULL,
   total_events INTEGER DEFAULT 0,
   page_views INTEGER DEFAULT 0,
@@ -732,14 +741,16 @@ CREATE TABLE IF NOT EXISTS daily_metrics (
   by_utm_source TEXT,
   by_utm_campaign TEXT,
   created_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(org_tag, date)
+  UNIQUE(organization_id, date)
 );
 
-CREATE INDEX IF NOT EXISTS idx_dm_org_date ON daily_metrics(org_tag, date DESC);
+CREATE INDEX IF NOT EXISTS idx_dm_org_date ON daily_metrics(organization_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_dm_org_tag ON daily_metrics(org_tag) WHERE org_tag IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS utm_performance (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  org_tag TEXT,
   date TEXT NOT NULL,
   utm_source TEXT,
   utm_medium TEXT,
@@ -755,12 +766,13 @@ CREATE TABLE IF NOT EXISTS utm_performance (
   avg_session_duration_seconds INTEGER,
   bounce_rate REAL,
   created_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(org_tag, date, utm_source, utm_medium, utm_campaign)
+  UNIQUE(organization_id, date, utm_source, utm_medium, utm_campaign)
 );
 
-CREATE INDEX IF NOT EXISTS idx_utm_org_date ON utm_performance(org_tag, date DESC);
-CREATE INDEX IF NOT EXISTS idx_utm_org_source ON utm_performance(org_tag, utm_source);
-CREATE INDEX IF NOT EXISTS idx_utm_org_campaign ON utm_performance(org_tag, utm_campaign);
+CREATE INDEX IF NOT EXISTS idx_utm_org_date ON utm_performance(organization_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_utm_org_source ON utm_performance(organization_id, utm_source);
+CREATE INDEX IF NOT EXISTS idx_utm_org_campaign ON utm_performance(organization_id, utm_campaign);
+CREATE INDEX IF NOT EXISTS idx_utm_org_tag ON utm_performance(org_tag) WHERE org_tag IS NOT NULL;
 
 CREATE TABLE cac_history (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -788,7 +800,7 @@ CREATE INDEX idx_cac_history_org_date ON cac_history(organization_id, date DESC)
 
 CREATE TABLE sync_watermarks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_tag TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
   sync_type TEXT NOT NULL,
   last_synced_ts TEXT NOT NULL,
   last_ingest_ts TEXT,
@@ -796,28 +808,28 @@ CREATE TABLE sync_watermarks (
   status TEXT DEFAULT 'success',
   error_message TEXT,
   updated_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(org_tag, sync_type)
+  UNIQUE(organization_id, sync_type)
 );
 
-CREATE INDEX idx_sw_org ON sync_watermarks(org_tag);
+CREATE INDEX idx_sw_org ON sync_watermarks(organization_id);
 
 CREATE TABLE domain_claims (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   organization_id TEXT NOT NULL,
-  org_tag TEXT NOT NULL,
+  org_tag TEXT,
   domain_pattern TEXT NOT NULL,
   is_active INTEGER DEFAULT 1,
   claimed_at TEXT DEFAULT (datetime('now')),
   released_at TEXT,
   verified INTEGER DEFAULT 0,
   verification_token TEXT,
-  UNIQUE(domain_pattern, org_tag)
+  UNIQUE(domain_pattern, organization_id)
 );
 
-CREATE INDEX idx_dc_active ON domain_claims(is_active, org_tag);
+CREATE INDEX idx_dc_active ON domain_claims(is_active, organization_id);
 CREATE INDEX idx_dc_domain ON domain_claims(domain_pattern);
 CREATE INDEX idx_dc_org ON domain_claims(organization_id);
-CREATE INDEX idx_dc_tag ON domain_claims(org_tag);
+CREATE INDEX idx_dc_tag ON domain_claims(org_tag) WHERE org_tag IS NOT NULL;
 
 CREATE TABLE tracked_clicks (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

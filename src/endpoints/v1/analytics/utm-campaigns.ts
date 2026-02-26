@@ -111,27 +111,6 @@ Fetches aggregated UTM campaign performance data including:
       });
     }
 
-    // Get org_tag for querying analytics
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!tagMapping) {
-      return success(c, {
-        campaigns: [],
-        summary: {
-          total_sessions: 0,
-          total_users: 0,
-          total_page_views: 0,
-          total_conversions: 0,
-          total_revenue_cents: 0,
-          avg_conversion_rate: 0,
-          avg_bounce_rate: 0,
-        },
-        sources: [],
-      });
-    }
-
     if (!c.env.ANALYTICS_DB) {
       return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
@@ -154,10 +133,10 @@ Fetches aggregated UTM campaign performance data including:
           AVG(bounce_rate) as bounce_rate,
           AVG(avg_session_duration_seconds) as avg_session_duration_seconds
         FROM utm_performance
-        WHERE org_tag = ?
+        WHERE organization_id = ?
         AND date >= ? AND date <= ?
       `;
-      const params: any[] = [tagMapping.short_tag, dateFrom, dateTo];
+      const params: any[] = [orgId, dateFrom, dateTo];
 
       if (utmSourceFilter) {
         sql += ' AND utm_source = ?';
@@ -175,9 +154,9 @@ Fetches aggregated UTM campaign performance data including:
       const sourcesResult = await c.env.ANALYTICS_DB.prepare(`
         SELECT DISTINCT utm_source
         FROM utm_performance
-        WHERE org_tag = ? AND date >= ? AND date <= ? AND utm_source IS NOT NULL
+        WHERE organization_id = ? AND date >= ? AND date <= ? AND utm_source IS NOT NULL
         ORDER BY utm_source
-      `).bind(tagMapping.short_tag, dateFrom, dateTo).all<{ utm_source: string }>();
+      `).bind(orgId, dateFrom, dateTo).all<{ utm_source: string }>();
       const uniqueSources = (sourcesResult.results || []).map(r => r.utm_source);
 
       // Transform to response format
@@ -334,25 +313,6 @@ Fetches daily UTM traffic metrics as a time series:
       });
     }
 
-    // Get org_tag for querying analytics
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!tagMapping) {
-      return success(c, {
-        time_series: [],
-        summary: {
-          total_sessions: 0,
-          total_users: 0,
-          total_conversions: 0,
-          total_revenue_cents: 0,
-          avg_conversion_rate: 0,
-          sources: [],
-        },
-      });
-    }
-
     if (!c.env.ANALYTICS_DB) {
       return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
     }
@@ -368,11 +328,11 @@ Fetches daily UTM traffic metrics as a time series:
           SUM(conversions) as conversions,
           SUM(revenue_cents) as conversion_value_cents
         FROM utm_performance
-        WHERE org_tag = ?
+        WHERE organization_id = ?
         AND date >= ? AND date <= ?
         GROUP BY date, utm_source
         ORDER BY date ASC
-      `).bind(tagMapping.short_tag, dateFrom, dateTo).all<any>();
+      `).bind(orgId, dateFrom, dateTo).all<any>();
 
       const records = result.results || [];
 

@@ -1730,21 +1730,15 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     let additionalContext = summary;
 
     try {
-      const orgTagRow = await this.env.DB.prepare(
-        'SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1'
-      ).bind(orgId).first<{ short_tag: string }>();
-      const orgTag = orgTagRow?.short_tag;
-
-      if (orgTag) {
         // Journey analytics
         try {
           const journey = await this.env.ANALYTICS_DB.prepare(`
             SELECT total_sessions, converting_sessions, conversion_rate,
                    avg_path_length, channel_distribution
             FROM journey_analytics
-            WHERE org_tag = ?
+            WHERE organization_id = ?
             ORDER BY computed_at DESC LIMIT 1
-          `).bind(orgTag).first<{
+          `).bind(orgId).first<{
             total_sessions: number;
             converting_sessions: number;
             conversion_rate: number;
@@ -1777,10 +1771,10 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
                    SUM(conversions) as conversions,
                    SUM(revenue_cents) as revenue_cents
             FROM funnel_transitions
-            WHERE org_tag = ? AND from_type = 'page_url' AND conversions > 0
+            WHERE organization_id = ? AND from_type = 'page_url' AND conversions > 0
               AND period_start >= date('now', '-' || ? || ' days')
             GROUP BY to_id ORDER BY conversions DESC LIMIT 5
-          `).bind(orgTag, days).all<{
+          `).bind(orgId, days).all<{
             page: string; visitors: number; conversions: number; revenue_cents: number;
           }>();
 
@@ -1793,14 +1787,14 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
                      MAX(visitors_at_from) as daily_visitors,
                      SUM(visitors_transitioned) as daily_leaving
               FROM funnel_transitions
-              WHERE org_tag = ? AND from_type = 'page_url' AND to_type = 'page_url'
+              WHERE organization_id = ? AND from_type = 'page_url' AND to_type = 'page_url'
                 AND period_start >= date('now', '-' || ? || ' days')
               GROUP BY from_id, period_start
             ) GROUP BY from_id
             HAVING entering >= 10
             ORDER BY CAST(entering - leaving AS REAL) / entering DESC
             LIMIT 5
-          `).bind(orgTag, days).all<{
+          `).bind(orgId, days).all<{
             page: string; entering: number; leaving: number;
           }>();
 
@@ -1833,9 +1827,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
             SELECT SUM(sessions) as sessions, SUM(users) as users,
                    SUM(conversions) as conversions, SUM(revenue_cents) as revenue_cents
             FROM daily_metrics
-            WHERE org_tag = ?
+            WHERE organization_id = ?
               AND date >= date('now', '-' || ? || ' days')
-          `).bind(orgTag, days).first<{
+          `).bind(orgId, days).first<{
             sessions: number | null; users: number | null; conversions: number | null; revenue_cents: number | null;
           }>();
 
@@ -1852,7 +1846,6 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
             additionalContext += '\n';
           }
         } catch { /* daily_metrics may not exist */ }
-      }
 
       // CAC trend
       try {

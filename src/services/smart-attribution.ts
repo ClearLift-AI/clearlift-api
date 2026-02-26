@@ -265,14 +265,14 @@ export class SmartAttributionService {
       funnelData,
     ] = await Promise.all([
       this.getPlatformMetrics(orgId, startDate, endDate),
-      orgTag ? this.getUtmPerformance(orgTag, startDate, endDate) : Promise.resolve([]),
+      this.getUtmPerformance(orgId, startDate, endDate),
       this.getConnectorRevenue(orgId, startDate, endDate),
-      orgTag ? this.getDailyUtmPerformance(orgTag, startDate, endDate) : Promise.resolve([]),
+      this.getDailyUtmPerformance(orgId, startDate, endDate),
       this.getDailyConnectorRevenue(orgId, startDate, endDate),
       this.getDailyPlatformMetrics(orgId, startDate, endDate),
       this.getClickIdStats(orgId, startDate, endDate),
       this.getClickLevelAttribution(orgId, startDate, endDate),
-      orgTag ? this.getFunnelPositionData(orgId, orgTag, startDate, endDate) : Promise.resolve([]),
+      this.getFunnelPositionData(orgId, startDate, endDate),
     ]);
 
     console.log(`[SmartAttribution] Data sources: platforms=${platformMetrics.length}, utm=${utmPerformance.length}, connectors=${connectorRevenue.length}, clickLevel=${clickLevelAttribution.length}, funnelSteps=${funnelData.length}`);
@@ -400,11 +400,10 @@ export class SmartAttributionService {
 
   /**
    * Get UTM performance from D1 utm_performance table
-   * Note: Uses org_tag, not organization_id
    * Includes DIRECT traffic (null/empty utm_source) as a separate channel
    */
   private async getUtmPerformance(
-    orgTag: string,
+    orgId: string,
     startDate: string,
     endDate: string
   ): Promise<UtmPerformance[]> {
@@ -421,7 +420,7 @@ export class SmartAttributionService {
           SUM(conversions) as conversions,
           SUM(revenue_cents) / 100.0 as revenue
         FROM utm_performance
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND date >= ?
           AND date <= ?
           AND utm_source IS NOT NULL
@@ -429,7 +428,7 @@ export class SmartAttributionService {
         GROUP BY utm_source, utm_medium, utm_campaign
         ORDER BY SUM(sessions) DESC
         LIMIT 100
-      `).bind(orgTag, startDate, endDate).all<{
+      `).bind(orgId, startDate, endDate).all<{
         utm_source: string;
         utm_medium: string | null;
         utm_campaign: string | null;
@@ -460,11 +459,11 @@ export class SmartAttributionService {
           SUM(conversions) as conversions,
           SUM(revenue_cents) / 100.0 as revenue
         FROM utm_performance
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND date >= ?
           AND date <= ?
           AND (utm_source IS NULL OR utm_source = '')
-      `).bind(orgTag, startDate, endDate).first<{
+      `).bind(orgId, startDate, endDate).first<{
         sessions: number;
         conversions: number;
         revenue: number;
@@ -541,7 +540,6 @@ export class SmartAttributionService {
    */
   private async getFunnelPositionData(
     orgId: string,
-    orgTag: string,
     startDate: string,
     endDate: string
   ): Promise<FunnelPositionData[]> {
@@ -566,8 +564,8 @@ export class SmartAttributionService {
       // Get channel distribution from daily_metrics
       const channelResult = await this.analyticsDb.prepare(`
         SELECT by_channel FROM daily_metrics
-        WHERE org_tag = ? AND date >= ? AND date <= ?
-      `).bind(orgTag, startDate.split('T')[0], endDate.split('T')[0]).all<{ by_channel: string | null }>();
+        WHERE organization_id = ? AND date >= ? AND date <= ?
+      `).bind(orgId, startDate.split('T')[0], endDate.split('T')[0]).all<{ by_channel: string | null }>();
 
       const channelDistribution: Record<string, number> = {};
       let totalChannelEvents = 0;
@@ -1488,7 +1486,7 @@ export class SmartAttributionService {
    * Get daily UTM performance grouped by date and source
    */
   private async getDailyUtmPerformance(
-    orgTag: string,
+    orgId: string,
     startDate: string,
     endDate: string
   ): Promise<DailyUtmPerformance[]> {
@@ -1505,12 +1503,12 @@ export class SmartAttributionService {
           SUM(conversions) as conversions,
           SUM(revenue_cents) / 100.0 as revenue
         FROM utm_performance
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND date >= ?
           AND date <= ?
         GROUP BY date, utm_source, utm_medium
         ORDER BY date, sessions DESC
-      `).bind(orgTag, startDate, endDate).all<{
+      `).bind(orgId, startDate, endDate).all<{
         date: string;
         utm_source: string | null;
         utm_medium: string | null;

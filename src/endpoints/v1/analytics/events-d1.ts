@@ -88,16 +88,6 @@ export class GetEventsD1 extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    // Get org_tag from mapping
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
-    const orgTag = orgTagMapping.short_tag;
     const analyticsDb = c.env.ANALYTICS_DB;
 
     if (!analyticsDb) {
@@ -121,9 +111,9 @@ export class GetEventsD1 extends OpenAPIRoute {
             COALESCE(SUM(conversions), 0) as conversions,
             COALESCE(SUM(revenue_cents), 0) as revenue_cents
           FROM hourly_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND hour >= datetime('now', '-' || ? || ' days')
-        `).bind(orgTag, days).first(),
+        `).bind(orgId, days).first(),
 
         // 2. Time series from hourly_metrics
         analyticsDb.prepare(`
@@ -136,10 +126,10 @@ export class GetEventsD1 extends OpenAPIRoute {
             by_channel,
             by_device
           FROM hourly_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND hour >= datetime('now', '-' || ? || ' days')
           ORDER BY hour ASC
-        `).bind(orgTag, days).all(),
+        `).bind(orgId, days).all(),
 
         // 3. UTM performance
         analyticsDb.prepare(`
@@ -152,12 +142,12 @@ export class GetEventsD1 extends OpenAPIRoute {
             SUM(conversions) as conversions,
             SUM(revenue_cents) as revenue_cents
           FROM utm_performance
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND date >= date('now', '-' || ? || ' days')
           GROUP BY utm_source, utm_medium, utm_campaign
           ORDER BY sessions DESC
           LIMIT 50
-        `).bind(orgTag, days).all()
+        `).bind(orgId, days).all()
       ]);
 
       // Aggregate channel and device data from time series

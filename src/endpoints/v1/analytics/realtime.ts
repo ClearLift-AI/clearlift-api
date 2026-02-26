@@ -59,15 +59,6 @@ export class GetRealtimeSummary extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    // Get org_tag from mapping
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first() as { short_tag: string } | null;
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
@@ -84,9 +75,9 @@ export class GetRealtimeSummary extends OpenAPIRoute {
           COALESCE(SUM(revenue_cents), 0) as revenue_cents,
           COALESCE(SUM(page_views), 0) as page_views
         FROM hourly_metrics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND hour >= datetime('now', '-' || ? || ' hours')
-      `).bind(orgTagMapping.short_tag, hours).first() as {
+      `).bind(orgId, hours).first() as {
         total_events: number;
         sessions: number;
         users: number;
@@ -162,14 +153,6 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first() as { short_tag: string } | null;
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
@@ -192,10 +175,10 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
           page_views,
           conversions
         FROM hourly_metrics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND hour >= datetime('now', '-' || ? || ' hours')
         ORDER BY hour ASC
-      `).bind(orgTagMapping.short_tag, hours).all();
+      `).bind(orgId, hours).all();
 
       return success(c, ((result.results || []) as unknown as TimeSeriesRow[]).map((row: TimeSeriesRow) => ({
         bucket: row.bucket,
@@ -263,14 +246,6 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       return error(c, "MISSING_DIMENSION", "Dimension parameter is required", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first() as { short_tag: string } | null;
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
@@ -281,10 +256,10 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       if (dimension === 'channel' || dimension === 'utm_source') {
         const result = await analyticsDb.prepare(`
           SELECT by_channel FROM hourly_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND hour >= datetime('now', '-' || ? || ' hours')
             AND by_channel IS NOT NULL
-        `).bind(orgTagMapping.short_tag, hours).all();
+        `).bind(orgId, hours).all();
 
         // Aggregate the JSON data
         const aggregated: Record<string, { events: number; sessions: number; conversions: number; revenue: number }> = {};
@@ -321,10 +296,10 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       if (dimension === 'device') {
         const result = await analyticsDb.prepare(`
           SELECT by_device FROM hourly_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND hour >= datetime('now', '-' || ? || ' hours')
             AND by_device IS NOT NULL
-        `).bind(orgTagMapping.short_tag, hours).all();
+        `).bind(orgId, hours).all();
 
         const aggregated: Record<string, { events: number; sessions: number; conversions: number; revenue: number }> = {};
 
@@ -362,10 +337,10 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       if (dimension === 'page') {
         const result = await analyticsDb.prepare(`
           SELECT by_page FROM hourly_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND hour >= datetime('now', '-' || ? || ' hours')
             AND by_page IS NOT NULL
-        `).bind(orgTagMapping.short_tag, hours).all();
+        `).bind(orgId, hours).all();
 
         const aggregated: Record<string, { events: number; sessions: number; conversions: number; revenue: number }> = {};
 
@@ -455,14 +430,6 @@ export class GetRealtimeEvents extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first() as { short_tag: string } | null;
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
@@ -476,11 +443,11 @@ export class GetRealtimeEvents extends OpenAPIRoute {
           by_page,
           by_device
         FROM hourly_metrics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND by_page IS NOT NULL
         ORDER BY hour DESC
         LIMIT 10
-      `).bind(orgTagMapping.short_tag).all();
+      `).bind(orgId).all();
 
       // Expand by_page into individual "events" for the live feed
       const events: Array<{
@@ -585,14 +552,6 @@ export class GetRealtimeEventTypes extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first() as { short_tag: string } | null;
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
@@ -609,9 +568,9 @@ export class GetRealtimeEventTypes extends OpenAPIRoute {
           COALESCE(SUM(conversions), 0) as conversions,
           COALESCE(SUM(revenue_cents), 0) as revenue_cents
         FROM hourly_metrics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND hour >= datetime('now', '-' || ? || ' hours')
-      `).bind(orgTagMapping.short_tag, hours).first() as {
+      `).bind(orgId, hours).first() as {
         page_views: number;
         clicks: number;
         form_submits: number;

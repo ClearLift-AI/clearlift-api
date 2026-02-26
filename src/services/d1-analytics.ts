@@ -14,7 +14,7 @@ import { structuredLog } from '../utils/structured-logger';
  * Hourly metrics row from D1
  */
 export interface HourlyMetricRow {
-  org_tag: string;
+  organization_id: string;
   hour: string;
   total_events: number;
   page_views: number;
@@ -34,7 +34,7 @@ export interface HourlyMetricRow {
  * Daily metrics row from D1
  */
 export interface DailyMetricRow {
-  org_tag: string;
+  organization_id: string;
   date: string;
   total_events: number;
   page_views: number;
@@ -61,7 +61,7 @@ export interface DailyMetricRow {
  * UTM performance row from D1
  */
 export interface UTMPerformanceRow {
-  org_tag: string;
+  organization_id: string;
   date: string;
   utm_source: string;
   utm_medium: string;
@@ -81,7 +81,7 @@ export interface UTMPerformanceRow {
  */
 export interface JourneyRow {
   id: string;
-  org_tag: string;
+  organization_id: string;
   anonymous_id: string;
   channel_path: string;
   path_length: number;
@@ -95,7 +95,7 @@ export interface JourneyRow {
  * Attribution result row from D1
  */
 export interface AttributionResultRow {
-  org_tag: string;
+  organization_id: string;
   model: string;
   channel: string;
   credit: number;
@@ -226,16 +226,16 @@ export class D1AnalyticsService {
   /**
    * Get hourly metrics for an org
    */
-  async getHourlyMetrics(orgTag: string, startDate: string, endDate: string): Promise<HourlyMetricRow[]> {
+  async getHourlyMetrics(orgId: string, startDate: string, endDate: string): Promise<HourlyMetricRow[]> {
     const result = await this.session.prepare(`
       SELECT *
       FROM hourly_metrics
-      WHERE org_tag = ?
+      WHERE organization_id = ?
         AND hour >= ?
         AND hour <= ?
       ORDER BY hour DESC
       LIMIT 10000
-    `).bind(orgTag, startDate, endDate).all<HourlyMetricRow>();
+    `).bind(orgId, startDate, endDate).all<HourlyMetricRow>();
 
     return result.results;
   }
@@ -243,16 +243,16 @@ export class D1AnalyticsService {
   /**
    * Get daily metrics for an org
    */
-  async getDailyMetrics(orgTag: string, startDate: string, endDate: string): Promise<DailyMetricRow[]> {
+  async getDailyMetrics(orgId: string, startDate: string, endDate: string): Promise<DailyMetricRow[]> {
     const result = await this.session.prepare(`
       SELECT *
       FROM daily_metrics
-      WHERE org_tag = ?
+      WHERE organization_id = ?
         AND date >= ?
         AND date <= ?
       ORDER BY date DESC
       LIMIT 1000
-    `).bind(orgTag, startDate, endDate).all<DailyMetricRow>();
+    `).bind(orgId, startDate, endDate).all<DailyMetricRow>();
 
     return result.results;
   }
@@ -260,16 +260,16 @@ export class D1AnalyticsService {
   /**
    * Get UTM performance for an org
    */
-  async getUTMPerformance(orgTag: string, startDate: string, endDate: string): Promise<UTMPerformanceRow[]> {
+  async getUTMPerformance(orgId: string, startDate: string, endDate: string): Promise<UTMPerformanceRow[]> {
     const result = await this.session.prepare(`
       SELECT *
       FROM utm_performance
-      WHERE org_tag = ?
+      WHERE organization_id = ?
         AND date >= ?
         AND date <= ?
       ORDER BY date DESC, sessions DESC
       LIMIT 5000
-    `).bind(orgTag, startDate, endDate).all<UTMPerformanceRow>();
+    `).bind(orgId, startDate, endDate).all<UTMPerformanceRow>();
 
     return result.results;
   }
@@ -277,11 +277,11 @@ export class D1AnalyticsService {
   /**
    * Get journeys for an org
    */
-  async getJourneys(orgTag: string, limit: number = 100, convertedOnly: boolean = false): Promise<JourneyRow[]> {
+  async getJourneys(orgId: string, limit: number = 100, convertedOnly: boolean = false): Promise<JourneyRow[]> {
     let query = `
       SELECT *
       FROM journeys
-      WHERE org_tag = ?
+      WHERE organization_id = ?
     `;
 
     if (convertedOnly) {
@@ -291,7 +291,7 @@ export class D1AnalyticsService {
     query += ` ORDER BY first_touch_ts DESC LIMIT ?`;
 
     const result = await this.session.prepare(query)
-      .bind(orgTag, limit)
+      .bind(orgId, limit)
       .all<JourneyRow>();
 
     return result.results;
@@ -301,7 +301,7 @@ export class D1AnalyticsService {
    * Get attribution results for an org
    */
   async getAttributionResults(
-    orgTag: string,
+    orgId: string,
     model?: string,
     periodStart?: string,
     periodEnd?: string
@@ -309,9 +309,9 @@ export class D1AnalyticsService {
     let query = `
       SELECT *
       FROM attribution_results
-      WHERE org_tag = ?
+      WHERE organization_id = ?
     `;
-    const params: unknown[] = [orgTag];
+    const params: unknown[] = [orgId];
 
     if (model) {
       query += ` AND model = ?`;
@@ -340,7 +340,7 @@ export class D1AnalyticsService {
   /**
    * Get analytics summary for dashboard overview
    */
-  async getAnalyticsSummary(orgTag: string, days: number = 7): Promise<{
+  async getAnalyticsSummary(orgId: string, days: number = 7): Promise<{
     totalEvents: number;
     totalSessions: number;
     totalUsers: number;
@@ -354,7 +354,7 @@ export class D1AnalyticsService {
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     // Get daily metrics summary
-    const dailyMetrics = await this.getDailyMetrics(orgTag, startDate, endDate);
+    const dailyMetrics = await this.getDailyMetrics(orgId, startDate, endDate);
 
     // Aggregate totals
     let totalEvents = 0;
@@ -386,7 +386,7 @@ export class D1AnalyticsService {
     }
 
     // Get UTM campaign summary
-    const utmPerf = await this.getUTMPerformance(orgTag, startDate, endDate);
+    const utmPerf = await this.getUTMPerformance(orgId, startDate, endDate);
     const campaignAgg: Record<string, { sessions: number; revenue: number }> = {};
     for (const utm of utmPerf) {
       const campaign = utm.utm_campaign || 'none';
@@ -425,7 +425,7 @@ export class D1AnalyticsService {
    * Returns Markov transition matrix with probabilities
    */
   async getChannelTransitions(
-    orgTag: string,
+    orgId: string,
     options: {
       periodStart?: string;
       periodEnd?: string;
@@ -442,9 +442,9 @@ export class D1AnalyticsService {
     let query = `
       SELECT from_channel, to_channel, probability, transition_count
       FROM channel_transitions
-      WHERE org_tag = ?
+      WHERE organization_id = ?
     `;
-    const params: unknown[] = [orgTag];
+    const params: unknown[] = [orgId];
 
     // Use overlap semantics for batch-computed periods
     if (options.periodStart) {
@@ -506,7 +506,7 @@ export class D1AnalyticsService {
    * @see clearlift-api/.../d1-metrics.ts                  — GetD1PageFlow endpoint + R2 fallback
    */
   async getPageFlowTransitions(
-    orgTag: string,
+    orgId: string,
     options: {
       periodStart?: string;
       periodEnd?: string;
@@ -537,7 +537,7 @@ export class D1AnalyticsService {
         SUM(conversions) as conversions,
         SUM(revenue_cents) as revenue_cents
       FROM funnel_transitions
-      WHERE org_tag = ?
+      WHERE organization_id = ?
         AND (
           (from_type = 'page_url' AND to_type = 'page_url')
           OR (from_type = 'source' AND to_type = 'page_url')
@@ -547,7 +547,7 @@ export class D1AnalyticsService {
           OR (from_type = 'referrer' AND to_type = 'page')
         )
     `;
-    const params: unknown[] = [orgTag];
+    const params: unknown[] = [orgId];
 
     // Use overlap semantics: include rows whose period overlaps the requested range
     if (options.periodStart) {
