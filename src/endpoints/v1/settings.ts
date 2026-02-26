@@ -347,8 +347,8 @@ export class GetAIDecisions extends OpenAPIRoute {
       query += ` AND status = ?`;
       bindings.push(data.query.status);
     } else {
-      // Default to pending only
-      query += ` AND status = 'pending' AND expires_at > datetime('now')`;
+      // Default to pending only (expires_at check removed — Workflow Date bug caused premature expiry)
+      query += ` AND status = 'pending'`;
     }
 
     // Filter by confidence if provided
@@ -431,10 +431,8 @@ export class AcceptAIDecision extends OpenAPIRoute {
       return error(c, "INVALID_STATUS", `Decision is ${decision.status}, not pending`, 400);
     }
 
-    if (new Date(decision.expires_at) < new Date()) {
-      await c.env.DB.prepare(`UPDATE ai_decisions SET status = 'expired' WHERE id = ?`).bind(decision.id).run();
-      return error(c, "EXPIRED", "Decision has expired", 400);
-    }
+    // Expiry check removed — Cloudflare Workflows Date bug caused expires_at to be set
+    // to ~current time instead of +7 days. Decisions are cleaned up by the next analysis run.
 
     // Pre-validate platform connection BEFORE marking as approved
     // This prevents the bad state where a decision is "approved" but can't execute
