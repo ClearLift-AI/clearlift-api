@@ -85,7 +85,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment:
       name: production
-      url: https://api.clearlift.ai
+      url: https://api.adbliss.io
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -116,9 +116,9 @@ jobs:
       - name: Verify Deployment
         run: |
           sleep 15
-          API_STATUS=$(curl -s https://api.clearlift.ai/v1/health | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['status'])" 2>/dev/null || echo "failed")
+          API_STATUS=$(curl -s https://api.adbliss.io/v1/health | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['status'])" 2>/dev/null || echo "failed")
           if [ "$API_STATUS" != "healthy" ]; then
-            echo "api.clearlift.ai health: $API_STATUS"
+            echo "api.adbliss.io health: $API_STATUS"
             exit 1
           fi
-          echo "api.clearlift.ai -> healthy"
+          echo "api.adbliss.io -> healthy"
