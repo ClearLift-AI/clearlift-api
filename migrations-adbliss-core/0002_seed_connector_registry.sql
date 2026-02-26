@@ -52,7 +52,7 @@ INSERT OR REPLACE INTO connector_configs (
 );
 
 -- Stripe (payments)
--- Sync writer: charge (succeeded/pending/failed), subscription (active/trialing/past_due/canceled/incomplete)
+-- Sync writer: checkout_session (succeeded/pending), charge (succeeded/pending/failed) [legacy]
 INSERT OR REPLACE INTO connector_configs (
   id, provider, name, auth_type, is_active, connector_type, category,
   description, icon_name, icon_color, sort_order,
@@ -62,16 +62,16 @@ INSERT OR REPLACE INTO connector_configs (
   has_actual_value, value_field, permissions_description, platform_id
 ) VALUES (
   'stripe-001', 'stripe', 'Stripe', 'api_key', TRUE, 'payments', 'commerce',
-  'Track payments, subscriptions, and revenue from Stripe',
+  'Track payments, subscriptions, and revenue from Stripe Checkout',
   'SiStripe', '#635BFF', 40,
   TRUE, TRUE, TRUE, FALSE,
   json('[
-    {"id":"charge","name":"Payment","description":"Successful charges (one-time and recurring)","fields":["amount","currency","customer_email","billing_reason"],"statuses":["succeeded","pending","failed"],"default_status":["succeeded"]},
-    {"id":"subscription","name":"New Subscription","description":"New subscriber created (counts once at creation, regardless of later status changes)","fields":["amount","currency","customer_email","plan_interval"],"statuses":["created"],"default_status":["created"]}
+    {"id":"checkout_session","name":"Checkout Session","description":"Completed checkout (one-time payments and subscriptions via Stripe Checkout)","fields":["amount","currency","customer_email","mode","success_url"],"statuses":["succeeded","pending"],"default_status":["succeeded"]},
+    {"id":"charge","name":"Direct Payment (Legacy)","description":"API-created charges not using Checkout (for merchants with custom integrations)","fields":["amount","currency","customer_email","billing_reason"],"statuses":["succeeded","pending","failed"],"default_status":["succeeded"]}
   ]'),
   'bg-purple-50', 'border-purple-200', 'text-purple-700',
   TRUE, 'conversion_value',
-  'Read access to charges, customers, and subscriptions',
+  'Read access to checkout sessions, charges, and customers',
   'stripe'
 );
 

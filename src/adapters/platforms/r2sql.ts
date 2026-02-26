@@ -144,7 +144,7 @@ export class R2SQLAdapter {
   private readonly token: string;
   private readonly tableName: string;
 
-  constructor(accountId: string, bucketName: string, token: string, tableName: string = "clearlift.event_data_v4_1") {
+  constructor(accountId: string, bucketName: string, token: string, tableName: string = "clearlift.event_data_v5") {
     this.accountId = accountId;
     this.bucketName = bucketName;
     this.token = token;

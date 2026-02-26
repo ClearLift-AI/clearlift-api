@@ -96,7 +96,8 @@ export class GetEvents extends OpenAPIRoute {
       const r2sql = new R2SQLAdapter(
         c.env.CLOUDFLARE_ACCOUNT_ID || '',
         c.env.R2_BUCKET_NAME || 'clearlift-events-lake',
-        r2ApiToken
+        r2ApiToken,
+        c.env.R2_SQL_TABLE || 'clearlift.event_data_v5'
       );
 
       // Query events from R2 SQL

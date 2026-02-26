@@ -4001,25 +4001,22 @@ export class ExplorationToolExecutor {
         }
       }
 
-      // 4. Check events/tag (daily_metrics uses org_tag, not organization_id)
+      // 4. Check events/tag
       if (!connector_type || connector_type === 'all') {
         try {
-          const orgTag = await this.resolveOrgTag(orgId);
-          if (orgTag) {
-            const eventsResult = await this.db.prepare(`
-              SELECT COUNT(*) as count, MAX(date) as last_date
-              FROM daily_metrics
-              WHERE org_tag = ?
-            `).bind(orgTag).first<{ count: number; last_date: string | null }>();
+          const eventsResult = await this.db.prepare(`
+            SELECT COUNT(*) as count, MAX(date) as last_date
+            FROM daily_metrics
+            WHERE organization_id = ?
+          `).bind(orgId).first<{ count: number; last_date: string | null }>();
 
-            if (eventsResult && eventsResult.count > 0) {
-              connectors.push({
-                type: 'events',
-                platform: 'clearlift_tag',
-                has_data: true,
-                ...(include_data_stats ? { record_count: eventsResult.count, last_sync: eventsResult.last_date || undefined } : {})
-              });
-            }
+          if (eventsResult && eventsResult.count > 0) {
+            connectors.push({
+              type: 'events',
+              platform: 'clearlift_tag',
+              has_data: true,
+              ...(include_data_stats ? { record_count: eventsResult.count, last_sync: eventsResult.last_date || undefined } : {})
+            });
           }
         } catch { /* table doesn't exist */ }
       }
@@ -4061,20 +4058,6 @@ export class ExplorationToolExecutor {
   // ADVANCED ANALYTICS TOOL EXECUTORS
   // ========================================================================
 
-  /**
-   * Resolve org_tag from org_tag_mappings for a given organization
-   */
-  private async resolveOrgTag(orgId: string): Promise<string | null> {
-    try {
-      const db = this.coreDb || this.db;
-      const row = await db.prepare(
-        'SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1'
-      ).bind(orgId).first<{ short_tag: string }>();
-      return row?.short_tag || null;
-    } catch {
-      return null;
-    }
-  }
 
   /**
    * Query journey/funnel analytics: channel distribution, paths, transitions
@@ -4086,20 +4069,15 @@ export class ExplorationToolExecutor {
     const { include_paths = true, include_transitions = false, top_n = 10 } = input;
 
     try {
-      const orgTag = await this.resolveOrgTag(orgId);
-      if (!orgTag) {
-        return { success: true, data: { note: 'No org_tag configured — journey analytics unavailable', sessions: 0 } };
-      }
-
       const row = await this.db.prepare(`
         SELECT total_sessions, converting_sessions, conversion_rate,
                avg_path_length, channel_distribution, common_paths, transition_matrix,
                computed_at
         FROM journey_analytics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
         ORDER BY computed_at DESC
         LIMIT 1
-      `).bind(orgTag).first<{
+      `).bind(orgId).first<{
         total_sessions: number;
         converting_sessions: number;
         conversion_rate: number;
@@ -4158,19 +4136,14 @@ export class ExplorationToolExecutor {
     const { goal_id } = input;
 
     try {
-      const orgTag = await this.resolveOrgTag(orgId);
-      if (!orgTag) {
-        return { success: true, data: { note: 'No org_tag configured — flow insights unavailable', stages: [] } };
-      }
-
       // Get latest journey analytics
       const journey = await this.db.prepare(`
         SELECT total_sessions, converting_sessions, channel_distribution, computed_at
         FROM journey_analytics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
         ORDER BY computed_at DESC
         LIMIT 1
-      `).bind(orgTag).first<{
+      `).bind(orgId).first<{
         total_sessions: number;
         converting_sessions: number;
         channel_distribution: string | null;
@@ -4219,13 +4192,13 @@ export class ExplorationToolExecutor {
                SUM(conversions) as conversions,
                SUM(revenue_cents) as revenue_cents
         FROM funnel_transitions
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND from_type = 'page_url' AND to_type = 'page_url'
           AND period_start >= date('now', '-' || ? || ' days')
         GROUP BY to_id
         ORDER BY visitors DESC
         LIMIT 20
-      `).bind(orgTag, days).all<{
+      `).bind(orgId, days).all<{
         page: string;
         visitors: number;
         conversions: number;
@@ -4237,12 +4210,12 @@ export class ExplorationToolExecutor {
                SUM(visitors_transitioned) as visitors,
                SUM(conversions) as conversions
         FROM funnel_transitions
-        WHERE org_tag = ? AND from_type IN ('source','referrer') AND to_type = 'page_url'
+        WHERE organization_id = ? AND from_type IN ('source','referrer') AND to_type = 'page_url'
           AND period_start >= date('now', '-' || ? || ' days')
         GROUP BY from_id, from_type
         ORDER BY visitors DESC
         LIMIT 10
-      `).bind(orgTag, days).all<{
+      `).bind(orgId, days).all<{
         source: string;
         from_type: string;
         visitors: number;
@@ -4491,11 +4464,6 @@ export class ExplorationToolExecutor {
     const { hours = 24, breakdown } = input;
 
     try {
-      const orgTag = await this.resolveOrgTag(orgId);
-      if (!orgTag) {
-        return { success: true, data: { note: 'No org_tag configured — traffic data unavailable', sessions: 0 } };
-      }
-
       // Try hourly_metrics first for recent data
       let rows: Array<{
         hour?: string;
@@ -4516,10 +4484,10 @@ export class ExplorationToolExecutor {
           SELECT hour, sessions, users, page_views, conversions, revenue_cents,
                  by_channel, by_device, by_geo, by_utm_source
           FROM hourly_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND hour >= datetime('now', '-${Math.min(hours, 168)} hours')
           ORDER BY hour DESC
-        `).bind(orgTag).all<any>();
+        `).bind(orgId).all<any>();
         rows = hourlyResult.results || [];
       } catch {
         // hourly_metrics may not exist, fall back to daily_metrics
@@ -4533,10 +4501,10 @@ export class ExplorationToolExecutor {
             SELECT date, sessions, users, page_views, conversions, revenue_cents,
                    by_channel, by_device, by_geo, by_utm_source
             FROM daily_metrics
-            WHERE org_tag = ?
+            WHERE organization_id = ?
               AND date >= date('now', '-${dailyDays} days')
             ORDER BY date DESC
-          `).bind(orgTag).all<any>();
+          `).bind(orgId).all<any>();
           rows = dailyResult.results || [];
         } catch {
           return { success: true, data: { note: 'Traffic metrics tables not yet created', sessions: 0 } };

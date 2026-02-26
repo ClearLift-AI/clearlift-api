@@ -336,6 +336,18 @@ OAUTH_CALLBACK_BASE=https://local.clearlift.ai
 APP_BASE_URL=https://app-local.clearlift.ai
 ```
 
+### Canonical Org Identifier (Feb 2026 Consolidation)
+
+**`organization_id` (UUID) is the canonical org identifier on ALL tables in both DB and ANALYTICS_DB.**
+
+- Every table uses `organization_id TEXT NOT NULL` as the org column
+- `org_tag` (short string like `unagi`, `bandago`) exists as an optional indexed column on some
+  ANALYTICS_DB tables for debugging — it is NEVER used in primary keys or UNIQUE constraints
+- The tag pipeline (clearlift-events) embeds `org_tag` in the JS snippet. Cron workflows resolve
+  `org_tag` → `organization_id` via `org_tag_mappings` (in DB) at write time.
+- API endpoints receive `organization_id` from auth context — no org_tag resolution needed for
+  ANALYTICS_DB queries.
+
 ### D1 Local vs Production Isolation
 
 **Local dev (`wrangler dev`) ALWAYS uses local SQLite emulation — it NEVER hits production D1**, even though `database_id` values in `wrangler.jsonc` match production. Miniflare creates SQLite files in `.wrangler/state/v3/d1/miniflare-D1DatabaseObject/`.

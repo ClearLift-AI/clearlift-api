@@ -73,17 +73,9 @@ export class GetD1MetricsSummary extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured - this endpoint is only available in dev environment", 400);
     }
 
-    // Get org_tag
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
 
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const summary = await analyticsService.getAnalyticsSummary(orgTagMapping.short_tag, cappedDays);
+    const summary = await analyticsService.getAnalyticsSummary(orgId, cappedDays);
 
     return success(c, summary);
   }
@@ -147,16 +139,8 @@ export class GetD1DailyMetrics extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const metrics = await analyticsService.getDailyMetrics(orgTagMapping.short_tag, startDate, endDate);
+    const metrics = await analyticsService.getDailyMetrics(orgId, startDate, endDate);
 
     // Transform to API format
     const data = metrics.map(m => ({
@@ -230,16 +214,8 @@ export class GetD1HourlyMetrics extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const metrics = await analyticsService.getHourlyMetrics(orgTagMapping.short_tag, startDate, endDate);
+    const metrics = await analyticsService.getHourlyMetrics(orgId, startDate, endDate);
 
     const data = metrics.map(m => ({
       hour: m.hour,
@@ -310,16 +286,8 @@ export class GetD1UTMPerformance extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const metrics = await analyticsService.getUTMPerformance(orgTagMapping.short_tag, startDate, endDate);
+    const metrics = await analyticsService.getUTMPerformance(orgId, startDate, endDate);
 
     const data = metrics.map(m => ({
       date: m.date,
@@ -391,20 +359,12 @@ export class GetD1Attribution extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     // Map API model names to DB model names (markov_chain → markov, shapley_value → shapley)
     const dbModel = model === 'markov_chain' ? 'markov' : model === 'shapley_value' ? 'shapley' : model;
 
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
     const results = await analyticsService.getAttributionResults(
-      orgTagMapping.short_tag,
+      orgId,
       dbModel,
       periodStart,
       periodEnd
@@ -475,16 +435,8 @@ export class GetD1Journeys extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const journeys = await analyticsService.getJourneys(orgTagMapping.short_tag, limit, convertedOnly);
+    const journeys = await analyticsService.getJourneys(orgId, limit, convertedOnly);
 
     const data = journeys.map(j => ({
       id: j.id,
@@ -553,16 +505,8 @@ export class GetD1ChannelTransitions extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const transitions = await analyticsService.getChannelTransitions(orgTagMapping.short_tag, {
+    const transitions = await analyticsService.getChannelTransitions(orgId, {
       periodStart,
       periodEnd,
       fromChannel,
@@ -639,15 +583,11 @@ export class GetD1PageFlow extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
+    // Resolve org_tag for R2 SQL fallback (R2 indexes by org_tag, not organization_id)
     const orgTagMapping = await c.env.DB.prepare(`
       SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
     `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
-    const orgTag = orgTagMapping.short_tag;
+    const orgTag = orgTagMapping?.short_tag || '';
 
     // Check if request extends beyond D1's 30-day hot window (use 32 days to avoid
     // edge cases where default "last 30 days" range lands 31 days ago)
@@ -665,7 +605,8 @@ export class GetD1PageFlow extends OpenAPIRoute {
           const r2sql = new R2SQLAdapter(
             c.env.CLOUDFLARE_ACCOUNT_ID || '',
             c.env.R2_BUCKET_NAME || 'clearlift-events-lake',
-            r2ApiToken
+            r2ApiToken,
+            c.env.R2_SQL_TABLE || 'clearlift.event_data_v5'
           );
           const transitions = await this.reconstructPageFlowFromR2(r2sql, orgTag, periodStart, periodEnd || new Date().toISOString().slice(0, 10), limit || 50);
           // Only return R2 results if we got data — otherwise fall through to D1
@@ -683,7 +624,7 @@ export class GetD1PageFlow extends OpenAPIRoute {
 
     // D1 hot path: aggregated daily rows
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const transitions = await analyticsService.getPageFlowTransitions(orgTag, {
+    const transitions = await analyticsService.getPageFlowTransitions(orgId, {
       periodStart,
       periodEnd,
       limit

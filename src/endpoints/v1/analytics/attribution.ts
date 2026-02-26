@@ -61,9 +61,9 @@ async function checkSetupStatus(
     try {
       const utmCheck = await analyticsDb.prepare(`
         SELECT 1 FROM utm_performance
-        WHERE org_tag = ? AND date >= ? AND date <= ?
+        WHERE organization_id = ? AND date >= ? AND date <= ?
         LIMIT 1
-      `).bind(tagMapping.short_tag, dateRange.start, dateRange.end).first();
+      `).bind(orgId, dateRange.start, dateRange.end).first();
       hasUtmData = !!utmCheck;
     } catch {
       // Table might not exist yet
@@ -1025,30 +1025,24 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     }
 
     // See SHARED_CODE.md §19.9 — Pre-computed attribution results
-    // Query tag mapping directly (setupStatus.shortTag may be null if checkSetupStatus failed due to schema differences)
-    const orgTagRow = setupStatus.shortTag
-      ? { short_tag: setupStatus.shortTag }
-      : await c.env.DB.prepare(`SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1`).bind(orgId).first<{ short_tag: string }>();
-    const orgShortTag = orgTagRow?.short_tag;
-
-    if (orgShortTag && requestedModel !== 'platform') {
+    if (requestedModel !== 'platform') {
       const cronModelName = apiToDbModel(requestedModel);
 
       try {
         const latestPeriod = await analyticsDb.prepare(`
           SELECT period_start FROM attribution_results
-          WHERE org_tag = ? AND model = ?
+          WHERE organization_id = ? AND model = ?
           ORDER BY period_start DESC LIMIT 1
-        `).bind(orgShortTag, cronModelName).first() as { period_start: string } | null;
+        `).bind(orgId, cronModelName).first() as { period_start: string } | null;
 
         if (latestPeriod) {
           const precomputed = await analyticsDb.prepare(`
             SELECT channel, credit, conversions, revenue_cents, removal_effect, shapley_value,
                    period_start, period_end
             FROM attribution_results
-            WHERE org_tag = ? AND model = ? AND period_start = ?
+            WHERE organization_id = ? AND model = ? AND period_start = ?
             ORDER BY credit DESC
-          `).bind(orgShortTag, cronModelName, latestPeriod.period_start).all();
+          `).bind(orgId, cronModelName, latestPeriod.period_start).all();
 
           const rows = (precomputed.results || []) as Array<{
             channel: string; credit: number; conversions: number; revenue_cents: number;
@@ -1321,11 +1315,6 @@ export class GetAttributionComparison extends OpenAPIRoute {
       return error(c, "NOT_FOUND", "Organization not found", 404);
     }
 
-    // Get org_tag for D1 analytics queries
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
     // Get ANALYTICS_DB binding
     const analyticsDb = c.env.ANALYTICS_DB;
 
@@ -1342,36 +1331,34 @@ export class GetAttributionComparison extends OpenAPIRoute {
 
     const dbModels = models.map(apiToDbModel);
 
-    if (tagMapping?.short_tag) {
-      try {
-        // Query attribution results — use only the latest period per model to avoid duplicates
-        const modelsPlaceholder = dbModels.map(() => '?').join(',');
-        const attrResult = await analyticsDb.prepare(`
-          SELECT ar.model, ar.channel, ar.credit, ar.conversions, ar.revenue_cents, ar.removal_effect, ar.shapley_value
-          FROM attribution_results ar
-          INNER JOIN (
-            SELECT model, MAX(period_start) as latest_start
-            FROM attribution_results
-            WHERE org_tag = ? AND model IN (${modelsPlaceholder})
-            GROUP BY model
-          ) latest ON ar.model = latest.model AND ar.period_start = latest.latest_start
-          WHERE ar.org_tag = ?
-            AND ar.model IN (${modelsPlaceholder})
-          ORDER BY ar.model, ar.credit DESC
-        `).bind(tagMapping.short_tag, ...dbModels, tagMapping.short_tag, ...dbModels).all();
-        attributionResults = (attrResult.results || []) as Array<{
-          model: string;
-          channel: string;
-          credit: number;
-          conversions: number;
-          revenue_cents: number;
-          removal_effect: number | null;
-          shapley_value: number | null;
-        }>;
-        console.log(`[Attribution Compare] Found ${attributionResults.length} results from attribution_results table`);
-      } catch (err) {
-        structuredLog('WARN', 'Failed to query attribution_results', { endpoint: 'attribution', step: 'compare', error: err instanceof Error ? err.message : String(err) });
-      }
+    try {
+      // Query attribution results — use only the latest period per model to avoid duplicates
+      const modelsPlaceholder = dbModels.map(() => '?').join(',');
+      const attrResult = await analyticsDb.prepare(`
+        SELECT ar.model, ar.channel, ar.credit, ar.conversions, ar.revenue_cents, ar.removal_effect, ar.shapley_value
+        FROM attribution_results ar
+        INNER JOIN (
+          SELECT model, MAX(period_start) as latest_start
+          FROM attribution_results
+          WHERE organization_id = ? AND model IN (${modelsPlaceholder})
+          GROUP BY model
+        ) latest ON ar.model = latest.model AND ar.period_start = latest.latest_start
+        WHERE ar.organization_id = ?
+          AND ar.model IN (${modelsPlaceholder})
+        ORDER BY ar.model, ar.credit DESC
+      `).bind(orgId, ...dbModels, orgId, ...dbModels).all();
+      attributionResults = (attrResult.results || []) as Array<{
+        model: string;
+        channel: string;
+        credit: number;
+        conversions: number;
+        revenue_cents: number;
+        removal_effect: number | null;
+        shapley_value: number | null;
+      }>;
+      console.log(`[Attribution Compare] Found ${attributionResults.length} results from attribution_results table`);
+    } catch (err) {
+      structuredLog('WARN', 'Failed to query attribution_results', { endpoint: 'attribution', step: 'compare', error: err instanceof Error ? err.message : String(err) });
     }
 
     // If we have D1 attribution results, use them
@@ -1507,68 +1494,61 @@ export class GetComputedAttribution extends OpenAPIRoute {
     const cronModelName = apiToDbModel(model);
     const analyticsDb = c.env.ANALYTICS_DB;
 
-    // Resolve org_tag
-    const tagMapping = await c.env.DB.prepare(
-      `SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1`
-    ).bind(orgId).first<{ short_tag: string }>();
+    try {
+      // Get the most recent period only
+      const latestPeriod = await analyticsDb.prepare(`
+        SELECT period_start FROM attribution_results
+        WHERE organization_id = ? AND model = ?
+        ORDER BY period_start DESC LIMIT 1
+      `).bind(orgId, cronModelName).first();
 
-    if (tagMapping?.short_tag) {
-      try {
-        // Get the most recent period only
-        const latestPeriod = await analyticsDb.prepare(`
-          SELECT period_start FROM attribution_results
-          WHERE org_tag = ? AND model = ?
-          ORDER BY period_start DESC LIMIT 1
-        `).bind(tagMapping.short_tag, cronModelName).first();
+      if (!latestPeriod) throw new Error('no results');
 
-        if (!latestPeriod) throw new Error('no results');
+      const cronResults = await analyticsDb.prepare(`
+        SELECT channel, credit, removal_effect, shapley_value,
+               period_start, conversions
+        FROM attribution_results
+        WHERE organization_id = ?
+          AND model = ?
+          AND period_start = ?
+        ORDER BY credit DESC
+      `).bind(orgId, cronModelName, latestPeriod.period_start).all();
 
-        const cronResults = await analyticsDb.prepare(`
-          SELECT channel, credit, removal_effect, shapley_value,
-                 period_start, conversions
-          FROM attribution_results
-          WHERE org_tag = ?
-            AND model = ?
-            AND period_start = ?
-          ORDER BY credit DESC
-        `).bind(tagMapping.short_tag, cronModelName, latestPeriod.period_start).all();
+      const rows = (cronResults.results || []) as Array<{
+        channel: string;
+        credit: number;
+        removal_effect: number | null;
+        shapley_value: number | null;
+        period_start: string;
+        conversions: number;
+      }>;
 
-        const rows = (cronResults.results || []) as Array<{
-          channel: string;
-          credit: number;
-          removal_effect: number | null;
-          shapley_value: number | null;
-          period_start: string;
-          conversions: number;
-        }>;
+      if (rows.length > 0) {
+        const first = rows[0];
+        const totalConversions = rows.reduce((s: number, r: { conversions: number }) => s + (r.conversions || 0), 0);
 
-        if (rows.length > 0) {
-          const first = rows[0];
-          const totalConversions = rows.reduce((s: number, r: { conversions: number }) => s + (r.conversions || 0), 0);
+        // Count journeys used in this attribution period
+        const pathCountResult = await analyticsDb.prepare(
+          `SELECT COUNT(*) as cnt FROM journeys WHERE organization_id = ? AND computed_at >= ?`
+        ).bind(orgId, first.period_start).first<{ cnt: number }>();
 
-          // Count journeys used in this attribution period
-          const pathCountResult = await analyticsDb.prepare(
-            `SELECT COUNT(*) as cnt FROM journeys WHERE org_tag = ? AND computed_at >= ?`
-          ).bind(tagMapping.short_tag, first.period_start).first<{ cnt: number }>();
-
-          return success(c, {
-            model,
-            computation_date: first.period_start,
-            attributions: rows.map((r: { channel: string; credit: number; removal_effect: number | null; shapley_value: number | null }) => ({
-              channel: r.channel,
-              attributed_credit: r.credit,
-              removal_effect: r.removal_effect,
-              shapley_value: r.shapley_value
-            })),
-            metadata: {
-              conversion_count: Math.round(totalConversions),
-              path_count: pathCountResult?.cnt || 0
-            }
-          });
-        }
-      } catch (err) {
-        structuredLog('WARN', 'ANALYTICS_DB attribution query failed', { endpoint: 'attribution', step: 'get_computed', error: err instanceof Error ? err.message : String(err) });
+        return success(c, {
+          model,
+          computation_date: first.period_start,
+          attributions: rows.map((r: { channel: string; credit: number; removal_effect: number | null; shapley_value: number | null }) => ({
+            channel: r.channel,
+            attributed_credit: r.credit,
+            removal_effect: r.removal_effect,
+            shapley_value: r.shapley_value
+          })),
+          metadata: {
+            conversion_count: Math.round(totalConversions),
+            path_count: pathCountResult?.cnt || 0
+          }
+        });
       }
+    } catch (err) {
+      structuredLog('WARN', 'ANALYTICS_DB attribution query failed', { endpoint: 'attribution', step: 'get_computed', error: err instanceof Error ? err.message : String(err) });
     }
 
     return error(c, "NO_RESULTS", `No ${model} results available. Attribution data is computed automatically by the daily pipeline.`, 404);
@@ -2060,15 +2040,6 @@ Run probabilistic attribution first to generate this data.
     const data = await this.getValidatedData<typeof this.schema>();
     const orgId = c.get("org_id" as any) || data.query.org_id;
 
-    // Get org tag
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!tagMapping?.short_tag) {
-      return error(c, "NO_TAG_CONFIGURED", "Organization has no tracking tag configured", 400);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "DATABASE_ERROR", "ANALYTICS_DB not configured", 500);
@@ -2084,10 +2055,10 @@ Run probabilistic attribution first to generate this data.
         total_conversions, matched_conversions,
         period_start, period_end, computed_at
       FROM journey_analytics
-      WHERE org_tag = ?
+      WHERE organization_id = ?
     `;
 
-    const params: any[] = [tagMapping.short_tag];
+    const params: any[] = [orgId];
 
     if (data.query.period_start && data.query.period_end) {
       query += ` AND period_start = ? AND period_end = ?`;
@@ -2218,22 +2189,12 @@ are actually return visitors influenced by earlier marketing.
     const dateTo = data.query.date_to;
     const lookbackHours = data.query.lookback_hours || 168; // 7 days default
 
-    // Get org_tag
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!tagMapping?.short_tag) {
-      return error(c, "NO_TRACKING_TAG", "Organization does not have a tracking tag configured", 400);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "DATABASE_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
     // Query touchpoints table to find direct sessions and their prior touchpoints
-    // Uses org_tag (not organization_id) and channel_group (not touchpoint_source)
     const result = await analyticsDb.prepare(`
       WITH direct_sessions AS (
         SELECT DISTINCT
@@ -2241,7 +2202,7 @@ are actually return visitors influenced by earlier marketing.
           t.anonymous_id,
           t.touchpoint_ts
         FROM touchpoints t
-        WHERE t.org_tag = ?
+        WHERE t.organization_id = ?
           AND t.channel_group = 'direct'
           AND DATE(t.touchpoint_ts) >= ?
           AND DATE(t.touchpoint_ts) <= ?
@@ -2253,7 +2214,7 @@ are actually return visitors influenced by earlier marketing.
           (
             SELECT jt.channel_group
             FROM touchpoints jt
-            WHERE jt.org_tag = ?
+            WHERE jt.organization_id = ?
               AND jt.anonymous_id = ds.anonymous_id
               AND jt.channel_group != 'direct'
               AND jt.touchpoint_ts < ds.touchpoint_ts
@@ -2271,7 +2232,7 @@ are actually return visitors influenced by earlier marketing.
         COUNT(DISTINCT CASE WHEN assisted_by IS NOT NULL THEN session_id END) as count_by_channel
       FROM prior_touches
       GROUP BY assisted_by
-    `).bind(tagMapping.short_tag, dateFrom, dateTo, tagMapping.short_tag, lookbackHours).all();
+    `).bind(orgId, dateFrom, dateTo, orgId, lookbackHours).all();
 
     const stats = {
       total_direct_sessions: 0,
@@ -2359,24 +2320,15 @@ export class GetPipelineStatus extends OpenAPIRoute {
   async handle(c: AppContext) {
     const orgId = c.get("org_id" as any) as string;
 
-    // Resolve org_tag
-    const tagMapping = await c.env.DB.prepare(
-      `SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1`
-    ).bind(orgId).first<{ short_tag: string }>();
-
-    if (!tagMapping?.short_tag) {
-      return success(c, { pipelines: [] });
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
 
     try {
       const watermarks = await analyticsDb.prepare(`
         SELECT sync_type, last_synced_ts, records_synced, status, error_message, updated_at
         FROM sync_watermarks
-        WHERE org_tag = ?
+        WHERE organization_id = ?
         ORDER BY sync_type
-      `).bind(tagMapping.short_tag).all<{
+      `).bind(orgId).all<{
         sync_type: string;
         last_synced_ts: string | null;
         records_synced: number;

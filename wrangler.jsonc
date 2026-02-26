@@ -14,7 +14,7 @@
   "vars": {
     "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
     "R2_BUCKET_NAME": "clearlift-db",
-    "R2_SQL_TABLE": "clearlift.event_data_v4_1",
+    "R2_SQL_TABLE": "clearlift.event_data_v5",
     "USE_D1_ANALYTICS": "true",
     "OAUTH_CALLBACK_BASE": "https://api.adbliss.io",
     "APP_BASE_URL": "https://app.adbliss.io",
@@ -221,7 +221,7 @@
       "vars": {
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
         "R2_BUCKET_NAME": "clearlift-db",
-        "R2_SQL_TABLE": "clearlift.event_data_v4_1",
+        "R2_SQL_TABLE": "clearlift.event_data_v5",
         "USE_D1_ANALYTICS": "true"
       },
       "d1_databases": [
@@ -273,7 +273,7 @@
       "vars": {
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
         "R2_BUCKET_NAME": "clearlift-db",
-        "R2_SQL_TABLE": "clearlift.event_data_v4_1",
+        "R2_SQL_TABLE": "clearlift.event_data_v5",
         "USE_D1_ANALYTICS": "true"
       },
       "kv_namespaces": [
@@ -448,8 +448,8 @@
       "routes": [{ "pattern": "api-dev.clearlift.ai/*", "zone_name": "clearlift.ai" }],
       "vars": {
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
-        "R2_BUCKET_NAME": "clearlift-db-staging",
-        "R2_SQL_TABLE": "clearlift.event_data_v5_staging",
+        "R2_BUCKET_NAME": "clearlift-db",
+        "R2_SQL_TABLE": "clearlift.event_data_v5",
         "USE_D1_ANALYTICS": "true",
         "OAUTH_CALLBACK_BASE": "https://api-dev.clearlift.ai",
         "APP_BASE_URL": "https://dev.clearlift.ai",

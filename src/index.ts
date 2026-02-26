@@ -205,6 +205,7 @@ import {
   TriggerEventsSync,
   TriggerRecalculation,
   TriggerResyncAll,
+  TriggerAllPipelines,
   GetD1Stats
 } from "./endpoints/v1/workers";
 import {
@@ -639,6 +640,7 @@ openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
 openapi.post("/v1/workers/events-sync/trigger", auth, TriggerEventsSync);
 openapi.post("/v1/workers/recalculate/trigger", auth, requireOrg, TriggerRecalculation);
 openapi.post("/v1/workers/resync-all/trigger", auth, requireOrg, requireOrgAdmin, TriggerResyncAll);
+openapi.post("/v1/workers/run-all-pipelines/trigger", auth, requireOrg, TriggerAllPipelines);
 
 // Settings endpoints
 openapi.get("/v1/settings/matrix", auth, requireOrg, GetMatrixSettings);
