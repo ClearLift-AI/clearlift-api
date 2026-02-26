@@ -457,9 +457,9 @@ If these numbers don't support your recommendation, do NOT proceed.`,
   const recommendation: Recommendation = {
     tool: toolName,
     platform: toolInput.platform || context.platform || 'unknown',
-    entity_type: toolInput.entity_type || 'campaign',
-    entity_id: toolInput.entity_id || toolInput.campaign_id || 'unknown',
-    entity_name: toolInput.entity_name || sim.current_state.entity.name || 'unknown',
+    entity_type: toolInput.entity_type || toolInput.from_entity_type || 'campaign',
+    entity_id: toolInput.entity_id || toolInput.from_entity_id || toolInput.campaign_id || 'unknown',
+    entity_name: toolInput.entity_name || toolInput.from_entity_name || sim.current_state.entity.name || 'unknown',
     parameters: {
       ...toolInput,
       // Override any guessed impact with calculated value
