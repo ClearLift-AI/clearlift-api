@@ -3063,8 +3063,8 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     if (existing) return;
 
     const id = crypto.randomUUID().replace(/-/g, '');
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
+    // Use explicit arithmetic — Cloudflare Workflows may freeze Date objects for replay determinism
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     // Build current_state from the LLM's tool input parameters
     const currentState: Record<string, any> = {};
@@ -3117,8 +3117,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     analysisRunId: string
   ): Promise<string> {
     const id = crypto.randomUUID().replace(/-/g, '');
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     await this.env.DB.prepare(`
       INSERT INTO ai_decisions (
