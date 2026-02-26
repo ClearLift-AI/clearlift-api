@@ -691,13 +691,9 @@ function purgeOrgData(info: OrgInfo): void {
   log('  Purging organization_members...');
   try { execTarget(targetDb, `DELETE FROM organization_members WHERE ${orgWhere}`); } catch {}
 
-  // Phase 6: Analytics DB — ALL org-scoped tables with explicit column mapping.
-  // Uses deterministic col→value mapping instead of try/catch fallback, because
-  // DELETE with wrong column succeeds with 0 rows (doesn't throw) when the table
-  // has both organization_id and org_tag columns.
+  // Phase 6: Analytics DB — ALL org-scoped tables use organization_id.
   {
     const orgIdWhere = `organization_id = '${orgId}'`;
-    const orgTagWhere = info.tag ? `org_tag = '${info.tag}'` : null;
 
     const analyticsOrgTables: Array<{ table: string; where: string }> = [
       // organization_id-scoped tables
@@ -729,20 +725,18 @@ function purgeOrgData(info: OrgInfo): void {
       { table: 'org_daily_summary', where: orgIdWhere },
       { table: 'org_timeseries', where: orgIdWhere },
       { table: 'platform_comparison', where: orgIdWhere },
-      // org_tag-scoped tables (only purge if tag exists)
-      ...(orgTagWhere ? [
-        { table: 'customer_identities', where: orgTagWhere },
-        { table: 'touchpoints', where: orgTagWhere },
-        { table: 'attribution_results', where: orgTagWhere },
-        { table: 'journeys', where: orgTagWhere },
-        { table: 'journey_analytics', where: orgTagWhere },
-        { table: 'channel_transitions', where: orgTagWhere },
-        { table: 'funnel_transitions', where: orgTagWhere },
-        { table: 'hourly_metrics', where: orgTagWhere },
-        { table: 'daily_metrics', where: orgTagWhere },
-        { table: 'utm_performance', where: orgTagWhere },
-        { table: 'sync_watermarks', where: orgTagWhere },
-      ] : []),
+      // These tables were migrated to organization_id (Feb 2026 consolidation)
+      { table: 'customer_identities', where: orgIdWhere },
+      { table: 'touchpoints', where: orgIdWhere },
+      { table: 'attribution_results', where: orgIdWhere },
+      { table: 'journeys', where: orgIdWhere },
+      { table: 'journey_analytics', where: orgIdWhere },
+      { table: 'channel_transitions', where: orgIdWhere },
+      { table: 'funnel_transitions', where: orgIdWhere },
+      { table: 'hourly_metrics', where: orgIdWhere },
+      { table: 'daily_metrics', where: orgIdWhere },
+      { table: 'utm_performance', where: orgIdWhere },
+      { table: 'sync_watermarks', where: orgIdWhere },
     ];
 
     for (const { table, where } of analyticsOrgTables) {
