@@ -3,7 +3,7 @@ import { Hono } from "hono";
 
 // Middleware
 import { corsMiddleware } from "./middleware/cors";
-import { auth, requireOrg, requireOrgAdmin, requireOrgOwner } from "./middleware/auth";
+import { auth, requireOrg, requireOrgAdmin, requireOrgOwner, requireSuperAdmin } from "./middleware/auth";
 import { errorHandler } from "./middleware/errorHandler";
 import { auditMiddleware } from "./middleware/audit";
 import { rateLimitMiddleware } from "./middleware/rateLimit";
@@ -678,7 +678,7 @@ openapi.post("/v1/settings/ai-decisions/:decision_id/rate", auth, requireOrg, Ra
 
 
 // AI Analysis endpoints (hierarchical insights)
-openapi.post("/v1/analysis/run", auth, requireOrg, RunAnalysis);
+openapi.post("/v1/analysis/run", auth, requireOrg, requireSuperAdmin, RunAnalysis);
 openapi.get("/v1/analysis/status/:job_id", auth, requireOrg, GetAnalysisStatus);
 openapi.get("/v1/analysis/latest", auth, requireOrg, GetLatestAnalysis);
 openapi.get("/v1/analysis/entity/:level/:entity_id", auth, requireOrg, GetEntityAnalysis);
