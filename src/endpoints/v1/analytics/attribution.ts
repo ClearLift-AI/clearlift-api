@@ -24,7 +24,6 @@ import {
 // Import from providers to ensure all revenue sources are registered
 import { getCombinedRevenueByDateRange, CombinedRevenueResult } from "../../../services/revenue-sources/providers";
 import { AD_PLATFORM_IDS, ACTIVE_REVENUE_PLATFORM_IDS } from "../../../config/platforms";
-import { getShardDbForOrg } from "../../../services/shard-router";
 
 /** Map API model names (markov_chain, shapley_value) to DB model names (markov, shapley). */
 const apiToDbModel = (m: string) => m === 'markov_chain' ? 'markov' : m === 'shapley_value' ? 'shapley' : m;
@@ -62,9 +61,9 @@ async function checkSetupStatus(
     try {
       const utmCheck = await analyticsDb.prepare(`
         SELECT 1 FROM utm_performance
-        WHERE org_tag = ? AND date >= ? AND date <= ?
+        WHERE organization_id = ? AND date >= ? AND date <= ?
         LIMIT 1
-      `).bind(tagMapping.short_tag, dateRange.start, dateRange.end).first();
+      `).bind(orgId, dateRange.start, dateRange.end).first();
       hasUtmData = !!utmCheck;
     } catch {
       // Table might not exist yet
@@ -267,6 +266,7 @@ interface TriggerConfig {
   page_pattern?: string;
   revenue_min?: number;
   custom_event?: string;
+  status_filter?: string;
 }
 
 interface ConversionGoal {
@@ -295,26 +295,41 @@ interface EventFilter {
   is_active: boolean;
 }
 
-// Helper: Query conversion goals from D1
+// Helper: Query conversion config from platform_connections settings
 async function getConversionGoals(db: D1Database, orgId: string): Promise<ConversionGoal[]> {
   const result = await db.prepare(`
-    SELECT id, name, type, trigger_config, default_value_cents,
-           is_primary, include_in_path, priority
-    FROM conversion_goals
-    WHERE organization_id = ?
-    ORDER BY priority ASC
+    SELECT id, platform, settings
+    FROM platform_connections
+    WHERE organization_id = ? AND is_active = 1
+      AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
   `).bind(orgId).all();
 
-  return (result.results || []).map(row => ({
-    id: row.id as string,
-    name: row.name as string,
-    type: row.type as 'conversion' | 'micro_conversion' | 'engagement',
-    trigger_config: JSON.parse(row.trigger_config as string || '{}'),
-    default_value_cents: row.default_value_cents as number,
-    is_primary: Boolean(row.is_primary),
-    include_in_path: Boolean(row.include_in_path),
-    priority: row.priority as number,
-  }));
+  const goals: ConversionGoal[] = [];
+  for (const row of result.results || []) {
+    try {
+      const settings = JSON.parse(row.settings as string || '{}');
+      const conversionEvents = settings.conversion_events || [];
+      for (const evt of conversionEvents) {
+        goals.push({
+          id: `${row.id}_${evt.event_type || 'default'}`,
+          name: row.platform as string,
+          type: 'conversion',
+          trigger_config: {
+            event_type: evt.event_type,
+            page_pattern: evt.page_pattern,
+            status_filter: evt.status_filter,
+          },
+          default_value_cents: evt.default_value_cents || 0,
+          is_primary: true,
+          include_in_path: true,
+          priority: 0,
+        });
+      }
+    } catch {
+      // Skip connections with unparseable settings
+    }
+  }
+  return goals;
 }
 
 // Helper: Check if an event matches a conversion goal
@@ -648,7 +663,7 @@ interface DataQualityInfo {
  * Helper: Build platform fallback attributions from D1 ANALYTICS_DB
  */
 async function buildPlatformFallbackD1(
-  shardDb: D1Database,
+  analyticsDb: D1Database,
   mainDb: D1Database,
   orgId: string,
   dateRange: { start: string; end: string }
@@ -677,9 +692,9 @@ async function buildPlatformFallbackD1(
     let totalConversions = 0;
     let totalRevenue = 0;
 
-    // Use unified ad_metrics table (shard table)
+    // Use unified ad_metrics table
     try {
-      const metricsResult = await shardDb.prepare(`
+      const metricsResult = await analyticsDb.prepare(`
         SELECT
           m.platform,
           m.entity_ref,
@@ -938,10 +953,8 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
 
     console.log(`[Attribution] Request: orgId=${orgId}, dateFrom=${dateFrom}, dateTo=${dateTo}, model=${query.model}`);
 
-    // Get ANALYTICS_DB binding (with fallback to DB for backwards compat)
+    // Get ANALYTICS_DB binding
     const analyticsDb = c.env.ANALYTICS_DB;
-    // Shard DB for ad_metrics/ad_campaigns queries
-    const shardDb = await getShardDbForOrg(c.env, orgId);
     const dateRange = { start: dateFrom, end: dateTo };
 
     // Check setup status for guidance (non-blocking - failures shouldn't break attribution)
@@ -1012,30 +1025,24 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
     }
 
     // See SHARED_CODE.md §19.9 — Pre-computed attribution results
-    // Query tag mapping directly (setupStatus.shortTag may be null if checkSetupStatus failed due to schema differences)
-    const orgTagRow = setupStatus.shortTag
-      ? { short_tag: setupStatus.shortTag }
-      : await c.env.DB.prepare(`SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1`).bind(orgId).first<{ short_tag: string }>();
-    const orgShortTag = orgTagRow?.short_tag;
-
-    if (orgShortTag && requestedModel !== 'platform') {
+    if (requestedModel !== 'platform') {
       const cronModelName = apiToDbModel(requestedModel);
 
       try {
         const latestPeriod = await analyticsDb.prepare(`
           SELECT period_start FROM attribution_results
-          WHERE org_tag = ? AND model = ?
+          WHERE organization_id = ? AND model = ?
           ORDER BY period_start DESC LIMIT 1
-        `).bind(orgShortTag, cronModelName).first() as { period_start: string } | null;
+        `).bind(orgId, cronModelName).first() as { period_start: string } | null;
 
         if (latestPeriod) {
           const precomputed = await analyticsDb.prepare(`
             SELECT channel, credit, conversions, revenue_cents, removal_effect, shapley_value,
                    period_start, period_end
             FROM attribution_results
-            WHERE org_tag = ? AND model = ? AND period_start = ?
+            WHERE organization_id = ? AND model = ? AND period_start = ?
             ORDER BY credit DESC
-          `).bind(orgShortTag, cronModelName, latestPeriod.period_start).all();
+          `).bind(orgId, cronModelName, latestPeriod.period_start).all();
 
           const rows = (precomputed.results || []) as Array<{
             channel: string; credit: number; conversions: number; revenue_cents: number;
@@ -1133,7 +1140,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
           if (conversionSource === 'all') {
             // Get ad platform data too and merge
             const adPlatformData = await buildPlatformFallbackD1(
-              shardDb,
+              analyticsDb,
               c.env.DB,
               orgId,
               dateRange
@@ -1151,7 +1158,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
           console.log(`[Attribution] No connector conversions found, falling back to ad platforms`);
           warnings.push('no_connector_conversions');
           attributionData = await buildPlatformFallbackD1(
-            shardDb,
+            analyticsDb,
             c.env.DB,
             orgId,
             dateRange
@@ -1165,7 +1172,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
         structuredLog('ERROR', 'Error querying revenue sources', { endpoint: 'attribution', step: 'revenue_sources', error: err instanceof Error ? err.message : String(err) });
         // Fall back to ad platforms on error, but surface the issue
         attributionData = await buildPlatformFallbackD1(
-          shardDb,
+          analyticsDb,
           c.env.DB,
           orgId,
           dateRange
@@ -1181,7 +1188,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       // Use ad platform data directly
       console.log(`[Attribution] Using D1 ad platform data`);
       attributionData = await buildPlatformFallbackD1(
-        shardDb,
+        analyticsDb,
         c.env.DB,
         orgId,
         dateRange
@@ -1194,7 +1201,7 @@ When enabled, links anonymous sessions to identified users for accurate cross-de
       console.log(`[Attribution] Tag source requested but events table not available, falling back to ad platforms`);
       warnings.push('no_events');
       attributionData = await buildPlatformFallbackD1(
-        shardDb,
+        analyticsDb,
         c.env.DB,
         orgId,
         dateRange
@@ -1308,15 +1315,8 @@ export class GetAttributionComparison extends OpenAPIRoute {
       return error(c, "NOT_FOUND", "Organization not found", 404);
     }
 
-    // Get org_tag for D1 analytics queries
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
     // Get ANALYTICS_DB binding
     const analyticsDb = c.env.ANALYTICS_DB;
-    // Shard DB for ad_metrics/ad_campaigns queries
-    const shardDb = await getShardDbForOrg(c.env, orgId);
 
     // Query attribution_results from D1 ANALYTICS_DB
     let attributionResults: Array<{
@@ -1331,36 +1331,34 @@ export class GetAttributionComparison extends OpenAPIRoute {
 
     const dbModels = models.map(apiToDbModel);
 
-    if (tagMapping?.short_tag) {
-      try {
-        // Query attribution results — use only the latest period per model to avoid duplicates
-        const modelsPlaceholder = dbModels.map(() => '?').join(',');
-        const attrResult = await analyticsDb.prepare(`
-          SELECT ar.model, ar.channel, ar.credit, ar.conversions, ar.revenue_cents, ar.removal_effect, ar.shapley_value
-          FROM attribution_results ar
-          INNER JOIN (
-            SELECT model, MAX(period_start) as latest_start
-            FROM attribution_results
-            WHERE org_tag = ? AND model IN (${modelsPlaceholder})
-            GROUP BY model
-          ) latest ON ar.model = latest.model AND ar.period_start = latest.latest_start
-          WHERE ar.org_tag = ?
-            AND ar.model IN (${modelsPlaceholder})
-          ORDER BY ar.model, ar.credit DESC
-        `).bind(tagMapping.short_tag, ...dbModels, tagMapping.short_tag, ...dbModels).all();
-        attributionResults = (attrResult.results || []) as Array<{
-          model: string;
-          channel: string;
-          credit: number;
-          conversions: number;
-          revenue_cents: number;
-          removal_effect: number | null;
-          shapley_value: number | null;
-        }>;
-        console.log(`[Attribution Compare] Found ${attributionResults.length} results from attribution_results table`);
-      } catch (err) {
-        structuredLog('WARN', 'Failed to query attribution_results', { endpoint: 'attribution', step: 'compare', error: err instanceof Error ? err.message : String(err) });
-      }
+    try {
+      // Query attribution results — use only the latest period per model to avoid duplicates
+      const modelsPlaceholder = dbModels.map(() => '?').join(',');
+      const attrResult = await analyticsDb.prepare(`
+        SELECT ar.model, ar.channel, ar.credit, ar.conversions, ar.revenue_cents, ar.removal_effect, ar.shapley_value
+        FROM attribution_results ar
+        INNER JOIN (
+          SELECT model, MAX(period_start) as latest_start
+          FROM attribution_results
+          WHERE organization_id = ? AND model IN (${modelsPlaceholder})
+          GROUP BY model
+        ) latest ON ar.model = latest.model AND ar.period_start = latest.latest_start
+        WHERE ar.organization_id = ?
+          AND ar.model IN (${modelsPlaceholder})
+        ORDER BY ar.model, ar.credit DESC
+      `).bind(orgId, ...dbModels, orgId, ...dbModels).all();
+      attributionResults = (attrResult.results || []) as Array<{
+        model: string;
+        channel: string;
+        credit: number;
+        conversions: number;
+        revenue_cents: number;
+        removal_effect: number | null;
+        shapley_value: number | null;
+      }>;
+      console.log(`[Attribution Compare] Found ${attributionResults.length} results from attribution_results table`);
+    } catch (err) {
+      structuredLog('WARN', 'Failed to query attribution_results', { endpoint: 'attribution', step: 'compare', error: err instanceof Error ? err.message : String(err) });
     }
 
     // If we have D1 attribution results, use them
@@ -1413,7 +1411,7 @@ export class GetAttributionComparison extends OpenAPIRoute {
     console.log(`[Attribution Compare] No D1 attribution data, falling back to platform data`);
 
     const fallback = await buildPlatformFallbackD1(
-      shardDb,
+      analyticsDb,
       c.env.DB,
       orgId,
       { start: dateFrom, end: dateTo }
@@ -1440,156 +1438,6 @@ export class GetAttributionComparison extends OpenAPIRoute {
   }
 }
 
-/**
- * POST /v1/analytics/attribution/run
- *
- * Trigger Markov Chain and Shapley Value attribution workflow.
- * These models are compute-intensive and run as a background workflow.
- */
-export class RunAttributionAnalysis extends OpenAPIRoute {
-  schema = {
-    tags: ["Analytics"],
-    summary: "Run attribution analysis workflow",
-    description: "Trigger Markov Chain and Shapley Value attribution calculation. Returns a job ID to poll for completion.",
-    security: [{ bearerAuth: [] }],
-    request: {
-      query: z.object({
-        org_id: z.string().describe("Organization ID"),
-        days: z.coerce.number().optional().default(30).describe("Days of data to analyze")
-      })
-    },
-    responses: {
-      "200": {
-        description: "Analysis job started",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                job_id: z.string(),
-                status: z.enum(['pending', 'running', 'completed', 'failed'])
-              })
-            })
-          }
-        }
-      }
-    }
-  };
-
-  async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-
-    const orgId = c.get("org_id" as any) || data.query.org_id;
-    const days = data.query.days || 30;
-    const jobId = crypto.randomUUID().replace(/-/g, '');
-
-    // Create job record
-    await c.env.AI_DB.prepare(`
-      INSERT INTO analysis_jobs (id, organization_id, type, status, created_at)
-      VALUES (?, ?, 'attribution', 'pending', datetime('now'))
-    `).bind(jobId, orgId).run();
-
-    // Start the workflow
-    try {
-      const workflow = (c.env as any).ATTRIBUTION_WORKFLOW;
-      if (!workflow) {
-        return error(c, "WORKFLOW_NOT_CONFIGURED", "Attribution workflow not configured", 500);
-      }
-
-      await workflow.create({
-        id: jobId,
-        params: { orgId, jobId, days }
-      });
-
-      console.log(`[Attribution] Started workflow ${jobId} for org ${orgId} (${days} days)`);
-
-      return success(c, {
-        job_id: jobId,
-        status: 'pending'
-      });
-    } catch (err: any) {
-      // Update job status to failed
-      await c.env.AI_DB.prepare(`
-        UPDATE analysis_jobs SET status = 'failed', result = ?
-        WHERE id = ?
-      `).bind(JSON.stringify({ error: err.message }), jobId).run();
-
-      structuredLog('ERROR', 'Failed to start attribution workflow', { endpoint: 'attribution', step: 'start_workflow', error: err instanceof Error ? err.message : String(err) });
-      return error(c, "WORKFLOW_START_FAILED", `Failed to start attribution analysis: ${err.message}`, 500);
-    }
-  }
-}
-
-/**
- * GET /v1/analytics/attribution/status/:job_id
- *
- * Get the status of an attribution analysis job.
- */
-export class GetAttributionJobStatus extends OpenAPIRoute {
-  schema = {
-    tags: ["Analytics"],
-    summary: "Get attribution job status",
-    description: "Check the status of an attribution analysis workflow",
-    security: [{ bearerAuth: [] }],
-    request: {
-      params: z.object({
-        job_id: z.string().describe("Job ID from run endpoint")
-      }),
-      query: z.object({
-        org_id: z.string().describe("Organization ID")
-      })
-    },
-    responses: {
-      "200": {
-        description: "Job status",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                job_id: z.string(),
-                status: z.enum(['pending', 'running', 'completed', 'failed']),
-                result: z.any().optional(),
-                created_at: z.string(),
-                completed_at: z.string().nullable()
-              })
-            })
-          }
-        }
-      }
-    }
-  };
-
-  async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-
-    const orgId = c.get("org_id" as any) || data.query.org_id;
-
-    const job = await c.env.AI_DB.prepare(`
-      SELECT id, status, result, created_at, completed_at
-      FROM analysis_jobs
-      WHERE id = ? AND organization_id = ? AND type = 'attribution'
-    `).bind(data.params.job_id, orgId).first<{
-      id: string;
-      status: string;
-      result: string | null;
-      created_at: string;
-      completed_at: string | null;
-    }>();
-
-    if (!job) {
-      return error(c, "JOB_NOT_FOUND", "Job not found", 404);
-    }
-
-    return success(c, {
-      job_id: job.id,
-      status: job.status,
-      result: job.result ? JSON.parse(job.result) : null,
-      created_at: job.created_at,
-      completed_at: job.completed_at
-    });
-  }
-}
 
 /**
  * GET /v1/analytics/attribution/computed
@@ -1642,113 +1490,68 @@ export class GetComputedAttribution extends OpenAPIRoute {
     const orgId = c.get("org_id" as any) || data.query.org_id;
     const model = data.query.model;
 
-    // Try AI_DB first (from API-triggered attribution workflow)
-    const results = await c.env.AI_DB.prepare(`
-      SELECT channel, attributed_credit, removal_effect, shapley_value,
-             computation_date, conversion_count, path_count
-      FROM attribution_model_results
-      WHERE organization_id = ?
-        AND model = ?
-        AND expires_at > datetime('now')
-      ORDER BY computation_date DESC
-    `).bind(orgId, model).all<{
-      channel: string;
-      attributed_credit: number;
-      removal_effect: number | null;
-      shapley_value: number | null;
-      computation_date: string;
-      conversion_count: number;
-      path_count: number;
-    }>();
-
-    if (results.results && results.results.length > 0) {
-      const first = results.results[0];
-      return success(c, {
-        model,
-        computation_date: first.computation_date,
-        attributions: results.results.map(r => ({
-          channel: r.channel,
-          attributed_credit: r.attributed_credit,
-          removal_effect: r.removal_effect,
-          shapley_value: r.shapley_value
-        })),
-        metadata: {
-          conversion_count: first.conversion_count,
-          path_count: first.path_count
-        }
-      });
-    }
-
-    // Fallback: try ANALYTICS_DB (from daily cron probabilistic attribution workflow)
     // The cron uses short model names: 'markov' / 'shapley'
     const cronModelName = apiToDbModel(model);
     const analyticsDb = c.env.ANALYTICS_DB;
 
-    // Resolve org_tag
-    const tagMapping = await c.env.DB.prepare(
-      `SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1`
-    ).bind(orgId).first<{ short_tag: string }>();
+    try {
+      // Get the most recent period only
+      const latestPeriod = await analyticsDb.prepare(`
+        SELECT period_start FROM attribution_results
+        WHERE organization_id = ? AND model = ?
+        ORDER BY period_start DESC LIMIT 1
+      `).bind(orgId, cronModelName).first();
 
-    if (tagMapping?.short_tag) {
-      try {
-        // Get the most recent period only
-        const latestPeriod = await analyticsDb.prepare(`
-          SELECT period_start FROM attribution_results
-          WHERE org_tag = ? AND model = ?
-          ORDER BY period_start DESC LIMIT 1
-        `).bind(tagMapping.short_tag, cronModelName).first();
+      if (!latestPeriod) throw new Error('no results');
 
-        if (!latestPeriod) throw new Error('no results');
+      const cronResults = await analyticsDb.prepare(`
+        SELECT channel, credit, removal_effect, shapley_value,
+               period_start, conversions
+        FROM attribution_results
+        WHERE organization_id = ?
+          AND model = ?
+          AND period_start = ?
+        ORDER BY credit DESC
+      `).bind(orgId, cronModelName, latestPeriod.period_start).all();
 
-        const cronResults = await analyticsDb.prepare(`
-          SELECT channel, credit, removal_effect, shapley_value,
-                 period_start, conversions
-          FROM attribution_results
-          WHERE org_tag = ?
-            AND model = ?
-            AND period_start = ?
-          ORDER BY credit DESC
-        `).bind(tagMapping.short_tag, cronModelName, latestPeriod.period_start).all();
+      const rows = (cronResults.results || []) as Array<{
+        channel: string;
+        credit: number;
+        removal_effect: number | null;
+        shapley_value: number | null;
+        period_start: string;
+        conversions: number;
+      }>;
 
-        const rows = (cronResults.results || []) as Array<{
-          channel: string;
-          credit: number;
-          removal_effect: number | null;
-          shapley_value: number | null;
-          period_start: string;
-          conversions: number;
-        }>;
+      if (rows.length > 0) {
+        const first = rows[0];
+        const totalConversions = rows.reduce((s: number, r: { conversions: number }) => s + (r.conversions || 0), 0);
 
-        if (rows.length > 0) {
-          const first = rows[0];
-          const totalConversions = rows.reduce((s: number, r: { conversions: number }) => s + (r.conversions || 0), 0);
+        // Count journeys used in this attribution period
+        const pathCountResult = await analyticsDb.prepare(
+          `SELECT COUNT(*) as cnt FROM journeys WHERE organization_id = ? AND computed_at >= ?`
+        ).bind(orgId, first.period_start).first<{ cnt: number }>();
 
-          // Count journeys used in this attribution period
-          const pathCountResult = await analyticsDb.prepare(
-            `SELECT COUNT(*) as cnt FROM journeys WHERE org_tag = ? AND computed_at >= ?`
-          ).bind(tagMapping.short_tag, first.period_start).first<{ cnt: number }>();
-
-          return success(c, {
-            model,
-            computation_date: first.period_start,
-            attributions: rows.map((r: { channel: string; credit: number; removal_effect: number | null; shapley_value: number | null }) => ({
-              channel: r.channel,
-              attributed_credit: r.credit,
-              removal_effect: r.removal_effect,
-              shapley_value: r.shapley_value
-            })),
-            metadata: {
-              conversion_count: Math.round(totalConversions),
-              path_count: pathCountResult?.cnt || 0
-            }
-          });
-        }
-      } catch (err) {
-        structuredLog('WARN', 'Fallback to ANALYTICS_DB failed', { endpoint: 'attribution', step: 'get_computed', error: err instanceof Error ? err.message : String(err) });
+        return success(c, {
+          model,
+          computation_date: first.period_start,
+          attributions: rows.map((r: { channel: string; credit: number; removal_effect: number | null; shapley_value: number | null }) => ({
+            channel: r.channel,
+            attributed_credit: r.credit,
+            removal_effect: r.removal_effect,
+            shapley_value: r.shapley_value
+          })),
+          metadata: {
+            conversion_count: Math.round(totalConversions),
+            path_count: pathCountResult?.cnt || 0
+          }
+        });
       }
+    } catch (err) {
+      structuredLog('WARN', 'ANALYTICS_DB attribution query failed', { endpoint: 'attribution', step: 'get_computed', error: err instanceof Error ? err.message : String(err) });
     }
 
-    return error(c, "NO_RESULTS", `No ${model} results available. Run attribution analysis first.`, 404);
+    return error(c, "NO_RESULTS", `No ${model} results available. Attribution data is computed automatically by the daily pipeline.`, 404);
   }
 }
 
@@ -1865,13 +1668,11 @@ Works even without click tracking or event data.
     const dateTo = query.date_to;
 
     const analyticsDb = c.env.ANALYTICS_DB;
-    // Shard DB for ad_metrics queries
-    const shardDb = await getShardDbForOrg(c.env, orgId);
 
-    // 1. Query ad platform data (ad_metrics is a shard table)
-    const adPlatformData = await this.getAdPlatformData(shardDb, c.env.DB, orgId, dateFrom, dateTo);
+    // 1. Query ad platform data
+    const adPlatformData = await this.getAdPlatformData(analyticsDb, c.env.DB, orgId, dateFrom, dateTo);
 
-    // 2. Query connector revenue (Stripe, Shopify, etc. — non-shard tables)
+    // 2. Query connector revenue (Stripe, Shopify, etc.)
     const connectorData = await this.getConnectorData(analyticsDb, orgId, dateFrom, dateTo);
 
     // 3. Calculate spend gap
@@ -1992,21 +1793,24 @@ Works even without click tracking or event data.
     let minDate: string | null = null;
     let maxDate: string | null = null;
 
-    // Query Stripe charges
+    // Query connector_events for all revenue sources
     try {
-      const stripeResult = await analyticsDb.prepare(`
+      const connectorResult = await analyticsDb.prepare(`
         SELECT
-          SUM(amount_cents) / 100.0 as revenue,
+          source_platform,
+          SUM(value_cents) / 100.0 as revenue,
           COUNT(*) as transactions,
-          COUNT(DISTINCT customer_id) as unique_customers,
-          MIN(DATE(stripe_created_at)) as min_date,
-          MAX(DATE(stripe_created_at)) as max_date
-        FROM stripe_charges
+          COUNT(DISTINCT customer_external_id) as unique_customers,
+          MIN(DATE(transacted_at)) as min_date,
+          MAX(DATE(transacted_at)) as max_date
+        FROM connector_events
         WHERE organization_id = ?
-          AND status = 'succeeded'
-          AND DATE(stripe_created_at) >= ?
-          AND DATE(stripe_created_at) <= ?
-      `).bind(orgId, dateFrom, dateTo).first<{
+          AND transacted_at >= ?
+          AND transacted_at <= ?
+          AND value_cents > 0
+        GROUP BY source_platform
+      `).bind(orgId, dateFrom, dateTo).all<{
+        source_platform: string;
         revenue: number;
         transactions: number;
         unique_customers: number;
@@ -2014,65 +1818,26 @@ Works even without click tracking or event data.
         max_date: string;
       }>();
 
-      if (stripeResult && stripeResult.revenue) {
+      for (const row of connectorResult.results || []) {
         bySource.push({
-          source: 'stripe',
-          revenue: stripeResult.revenue || 0,
-          transactions: stripeResult.transactions || 0
+          source: row.source_platform,
+          revenue: row.revenue || 0,
+          transactions: row.transactions || 0
         });
 
-        totalRevenue += stripeResult.revenue || 0;
-        totalTransactions += stripeResult.transactions || 0;
-        uniqueCustomers += stripeResult.unique_customers || 0;
+        totalRevenue += row.revenue || 0;
+        totalTransactions += row.transactions || 0;
+        uniqueCustomers += row.unique_customers || 0;
 
-        if (stripeResult.min_date) minDate = stripeResult.min_date;
-        if (stripeResult.max_date) maxDate = stripeResult.max_date;
-      }
-    } catch (err) {
-      structuredLog('WARN', 'Failed to query Stripe', { endpoint: 'attribution', step: 'blended_stripe', error: err instanceof Error ? err.message : String(err) });
-    }
-
-    // Query Shopify orders (if table exists)
-    try {
-      const shopifyResult = await analyticsDb.prepare(`
-        SELECT
-          SUM(total_price_cents) / 100.0 as revenue,
-          COUNT(*) as transactions,
-          COUNT(DISTINCT customer_id) as unique_customers,
-          MIN(DATE(shopify_created_at)) as min_date,
-          MAX(DATE(shopify_created_at)) as max_date
-        FROM shopify_orders
-        WHERE organization_id = ?
-          AND DATE(shopify_created_at) >= ?
-          AND DATE(shopify_created_at) <= ?
-      `).bind(orgId, dateFrom, dateTo).first<{
-        revenue: number;
-        transactions: number;
-        unique_customers: number;
-        min_date: string;
-        max_date: string;
-      }>();
-
-      if (shopifyResult && shopifyResult.revenue) {
-        bySource.push({
-          source: 'shopify',
-          revenue: shopifyResult.revenue || 0,
-          transactions: shopifyResult.transactions || 0
-        });
-
-        totalRevenue += shopifyResult.revenue || 0;
-        totalTransactions += shopifyResult.transactions || 0;
-        uniqueCustomers += shopifyResult.unique_customers || 0;
-
-        if (shopifyResult.min_date && (!minDate || shopifyResult.min_date < minDate)) {
-          minDate = shopifyResult.min_date;
+        if (row.min_date && (!minDate || row.min_date < minDate)) {
+          minDate = row.min_date;
         }
-        if (shopifyResult.max_date && (!maxDate || shopifyResult.max_date > maxDate)) {
-          maxDate = shopifyResult.max_date;
+        if (row.max_date && (!maxDate || row.max_date > maxDate)) {
+          maxDate = row.max_date;
         }
       }
     } catch (err) {
-      // Table might not exist
+      structuredLog('WARN', 'Failed to query connector_events', { endpoint: 'attribution', step: 'blended_connectors', error: err instanceof Error ? err.message : String(err) });
     }
 
     return {
@@ -2197,231 +1962,6 @@ Works even without click tracking or event data.
   }
 }
 
-/**
- * POST /v1/analytics/attribution/probabilistic/run
- *
- * Run probabilistic attribution using Stripe conversions + tag events.
- * This workflow matches Stripe charges to tag events for multi-touch attribution
- * WITHOUT requiring ad platform data.
- *
- * Supports multiple conversion sources:
- * - 'stripe': Use Stripe charges as conversions
- * - 'tag': Use tag goal_id events as conversions
- * - 'all': Use both (default)
- *
- * Matching strategies (in priority order):
- * 1. Direct tag: Tag conversions already know their journey
- * 2. Identity match: Hash of Stripe customer_email matches tag user_id_hash
- * 3. Time proximity: Sessions with engagement within conversion window
- */
-export class RunProbabilisticAttribution extends OpenAPIRoute {
-  schema = {
-    tags: ["Analytics"],
-    summary: "Run probabilistic attribution",
-    description: `
-Trigger probabilistic attribution using Stripe + tag data.
-Matches Stripe conversions to tag events for multi-touch attribution.
-Returns a job ID to poll for completion.
-
-**Conversion Sources:**
-- \`stripe\`: Use Stripe charges as ground truth conversions
-- \`tag\`: Use tag events with goal_id as conversions
-- \`all\`: Use both (default)
-
-**No ad platform data required** - perfect for orgs with Stripe but no ad spend data.
-    `.trim(),
-    security: [{ bearerAuth: [] }],
-    request: {
-      query: z.object({
-        org_id: z.string().describe("Organization ID"),
-        days: z.coerce.number().optional().default(7).describe("Days of data to analyze"),
-        lookback_days: z.coerce.number().optional().default(30).describe("Days to look back for touchpoints"),
-        conversion_window_hours: z.coerce.number().optional().default(24).describe("Hours before conversion to look for touchpoints"),
-        conversion_sources: z.string().optional().default('all').describe("Comma-separated: stripe,tag,all")
-      })
-    },
-    responses: {
-      "200": {
-        description: "Analysis job started",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                job_id: z.string(),
-                status: z.enum(['pending', 'running', 'completed', 'failed'])
-              })
-            })
-          }
-        }
-      }
-    }
-  };
-
-  async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-
-    const orgId = c.get("org_id" as any) || data.query.org_id;
-    const days = data.query.days || 7;
-    const lookbackDays = data.query.lookback_days || 30;
-    const conversionWindowHours = data.query.conversion_window_hours || 24;
-    const conversionSources = (data.query.conversion_sources || 'all').split(',').map(s => s.trim()) as any[];
-
-    const jobId = crypto.randomUUID().replace(/-/g, '');
-
-    // Get org tag for R2 SQL queries
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!tagMapping?.short_tag) {
-      return error(c, "NO_TAG_CONFIGURED", "Organization has no tracking tag configured", 400);
-    }
-
-    // Calculate date range
-    const endDate = new Date().toISOString().split('T')[0];
-    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-    // Create job record (days is required, status defaults to 'pending', current_level tracks job type)
-    await c.env.AI_DB.prepare(`
-      INSERT INTO analysis_jobs (id, organization_id, days, status, current_level, created_at)
-      VALUES (?, ?, ?, 'pending', 'probabilistic_attribution', datetime('now'))
-    `).bind(jobId, orgId, days).run();
-
-    // Trigger the workflow via service binding to queue-consumer
-    try {
-      const cronService = (c.env as any).CLEARLIFT_CRON;
-      if (!cronService) {
-        return error(c, "SERVICE_NOT_CONFIGURED", "CLEARLIFT_CRON service binding not configured", 500);
-      }
-
-      const response = await cronService.fetch('https://internal/workflows/probabilistic-attribution', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'CF-Worker': 'true'
-        },
-        body: JSON.stringify({
-          org_id: orgId,
-          org_tag: tagMapping.short_tag,
-          start_date: startDate,
-          end_date: endDate,
-          lookback_days: lookbackDays,
-          conversion_window_hours: conversionWindowHours,
-          conversion_sources: conversionSources,
-          job_id: jobId
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({})) as any;
-        throw new Error(errorData.error || `Workflow trigger failed: ${response.status}`);
-      }
-
-      console.log(`[ProbabilisticAttribution] Started job ${jobId} for org ${orgId} (${tagMapping.short_tag})`);
-
-      return success(c, {
-        job_id: jobId,
-        status: 'pending',
-        config: {
-          org_tag: tagMapping.short_tag,
-          start_date: startDate,
-          end_date: endDate,
-          lookback_days: lookbackDays,
-          conversion_window_hours: conversionWindowHours,
-          conversion_sources: conversionSources
-        }
-      });
-
-    } catch (err: any) {
-      // Update job status to failed
-      await c.env.AI_DB.prepare(`
-        UPDATE analysis_jobs SET status = 'failed', error_message = ?
-        WHERE id = ?
-      `).bind(err.message, jobId).run();
-
-      structuredLog('ERROR', 'Failed to start probabilistic attribution workflow', { endpoint: 'attribution', step: 'probabilistic_workflow', error: err instanceof Error ? err.message : String(err) });
-      return error(c, "WORKFLOW_START_FAILED", `Failed to start probabilistic attribution: ${err.message}`, 500);
-    }
-  }
-}
-
-/**
- * GET /v1/analytics/attribution/probabilistic/status/:job_id
- *
- * Get the status of a probabilistic attribution job.
- */
-export class GetProbabilisticAttributionStatus extends OpenAPIRoute {
-  schema = {
-    tags: ["Analytics"],
-    summary: "Get probabilistic attribution job status",
-    description: "Check the status of a probabilistic attribution workflow",
-    security: [{ bearerAuth: [] }],
-    request: {
-      params: z.object({
-        job_id: z.string().describe("Job ID from run endpoint")
-      }),
-      query: z.object({
-        org_id: z.string().describe("Organization ID")
-      })
-    },
-    responses: {
-      "200": {
-        description: "Job status",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.object({
-                job_id: z.string(),
-                status: z.enum(['pending', 'running', 'completed', 'failed']),
-                result: z.any().optional(),
-                created_at: z.string(),
-                completed_at: z.string().nullable()
-              })
-            })
-          }
-        }
-      }
-    }
-  };
-
-  async handle(c: AppContext) {
-    const data = await this.getValidatedData<typeof this.schema>();
-
-    const orgId = c.get("org_id" as any) || data.query.org_id;
-
-    const job = await c.env.AI_DB.prepare(`
-      SELECT id, status, error_message, created_at, completed_at, processed_entities, total_entities
-      FROM analysis_jobs
-      WHERE id = ? AND organization_id = ? AND current_level = 'probabilistic_attribution'
-    `).bind(data.params.job_id, orgId).first<{
-      id: string;
-      status: string;
-      error_message: string | null;
-      created_at: string;
-      completed_at: string | null;
-      processed_entities: number | null;
-      total_entities: number | null;
-    }>();
-
-    if (!job) {
-      return error(c, "JOB_NOT_FOUND", "Job not found", 404);
-    }
-
-    return success(c, {
-      job_id: job.id,
-      status: job.status,
-      error: job.error_message,
-      progress: job.total_entities ? {
-        processed: job.processed_entities || 0,
-        total: job.total_entities
-      } : null,
-      created_at: job.created_at,
-      completed_at: job.completed_at
-    });
-  }
-}
 
 /**
  * GET /v1/analytics/attribution/journey-analytics
@@ -2500,15 +2040,6 @@ Run probabilistic attribution first to generate this data.
     const data = await this.getValidatedData<typeof this.schema>();
     const orgId = c.get("org_id" as any) || data.query.org_id;
 
-    // Get org tag
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!tagMapping?.short_tag) {
-      return error(c, "NO_TAG_CONFIGURED", "Organization has no tracking tag configured", 400);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "DATABASE_ERROR", "ANALYTICS_DB not configured", 500);
@@ -2524,10 +2055,10 @@ Run probabilistic attribution first to generate this data.
         total_conversions, matched_conversions,
         period_start, period_end, computed_at
       FROM journey_analytics
-      WHERE org_tag = ?
+      WHERE organization_id = ?
     `;
 
-    const params: any[] = [tagMapping.short_tag];
+    const params: any[] = [orgId];
 
     if (data.query.period_start && data.query.period_end) {
       query += ` AND period_start = ? AND period_end = ?`;
@@ -2658,46 +2189,37 @@ are actually return visitors influenced by earlier marketing.
     const dateTo = data.query.date_to;
     const lookbackHours = data.query.lookback_hours || 168; // 7 days default
 
-    // Get org_tag
-    const tagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!tagMapping?.short_tag) {
-      return error(c, "NO_TRACKING_TAG", "Organization does not have a tracking tag configured", 400);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "DATABASE_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    // Query to find direct sessions and their prior touchpoints
+    // Query touchpoints table to find direct sessions and their prior touchpoints
     const result = await analyticsDb.prepare(`
       WITH direct_sessions AS (
         SELECT DISTINCT
           t.session_id,
           t.anonymous_id,
-          t.touchpoint_timestamp
-        FROM journey_touchpoints t
+          t.touchpoint_ts
+        FROM touchpoints t
         WHERE t.organization_id = ?
-          AND t.touchpoint_source = 'direct'
-          AND DATE(t.touchpoint_timestamp) >= ?
-          AND DATE(t.touchpoint_timestamp) <= ?
+          AND t.channel_group = 'direct'
+          AND DATE(t.touchpoint_ts) >= ?
+          AND DATE(t.touchpoint_ts) <= ?
       ),
       prior_touches AS (
         SELECT
           ds.session_id,
           ds.anonymous_id,
           (
-            SELECT jt.touchpoint_source
-            FROM journey_touchpoints jt
+            SELECT jt.channel_group
+            FROM touchpoints jt
             WHERE jt.organization_id = ?
               AND jt.anonymous_id = ds.anonymous_id
-              AND jt.touchpoint_source != 'direct'
-              AND jt.touchpoint_timestamp < ds.touchpoint_timestamp
-              AND jt.touchpoint_timestamp >= datetime(ds.touchpoint_timestamp, '-' || ? || ' hours')
-            ORDER BY jt.touchpoint_timestamp DESC
+              AND jt.channel_group != 'direct'
+              AND jt.touchpoint_ts < ds.touchpoint_ts
+              AND jt.touchpoint_ts >= datetime(ds.touchpoint_ts, '-' || ? || ' hours')
+            ORDER BY jt.touchpoint_ts DESC
             LIMIT 1
           ) as assisted_by
         FROM direct_sessions ds
@@ -2752,5 +2274,92 @@ are actually return visitors influenced by earlier marketing.
         end: dateTo
       }
     });
+  }
+}
+
+/**
+ * GET /v1/analytics/pipeline-status
+ *
+ * Returns the status of automated data pipelines from sync_watermarks.
+ * Replaces the manual "Run" buttons — pipelines now run automatically.
+ */
+export class GetPipelineStatus extends OpenAPIRoute {
+  schema = {
+    tags: ["Analytics"],
+    summary: "Get data pipeline status",
+    description: "Returns the status of automated data pipelines (attribution, click extraction, etc.) from sync watermarks.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Pipeline status",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                pipelines: z.array(z.object({
+                  name: z.string(),
+                  sync_type: z.string(),
+                  last_run: z.string().nullable(),
+                  records_processed: z.number(),
+                  status: z.string()
+                }))
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+
+    const analyticsDb = c.env.ANALYTICS_DB;
+
+    try {
+      const watermarks = await analyticsDb.prepare(`
+        SELECT sync_type, last_synced_ts, records_synced, status, error_message, updated_at
+        FROM sync_watermarks
+        WHERE organization_id = ?
+        ORDER BY sync_type
+      `).bind(orgId).all<{
+        sync_type: string;
+        last_synced_ts: string | null;
+        records_synced: number;
+        status: string;
+        error_message: string | null;
+        updated_at: string;
+      }>();
+
+      const PIPELINE_NAMES: Record<string, string> = {
+        aggregations: 'Conversion Aggregation',
+        conversion_linking: 'Conversion Linking',
+        click_extraction: 'Click Extraction',
+        identity_extraction: 'Identity Resolution',
+        probabilistic_attribution: 'Attribution Analysis',
+        page_flow: 'Page Flow Graph',
+        cac_refresh: 'CAC Refresh',
+      };
+
+      const pipelines = (watermarks.results || []).map(w => ({
+        name: PIPELINE_NAMES[w.sync_type] || w.sync_type,
+        sync_type: w.sync_type,
+        last_run: w.last_synced_ts || w.updated_at,
+        records_processed: w.records_synced || 0,
+        status: w.status || 'unknown',
+        error: w.error_message || null,
+      }));
+
+      return success(c, { pipelines });
+    } catch (err) {
+      structuredLog('WARN', 'Failed to query pipeline status', { endpoint: 'pipeline-status', error: err instanceof Error ? err.message : String(err) });
+      return success(c, { pipelines: [] });
+    }
   }
 }

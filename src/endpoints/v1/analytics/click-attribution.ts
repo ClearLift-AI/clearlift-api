@@ -152,16 +152,16 @@ NOTE: Requires conversion_attribution data to be populated in D1.
         GROUP BY ca.click_id_type
       `).bind(orgId, dateFrom, dateTo).all();
 
-      // Query total conversions (including unattributed)
+      // Query total conversions (including unattributed) from connector_events
       const totalConversions = await c.env.ANALYTICS_DB.prepare(`
         SELECT
           COUNT(*) as total_conversions,
-          SUM(amount_cents) as total_revenue_cents
-        FROM stripe_charges
+          COALESCE(SUM(value_cents), 0) as total_revenue_cents
+        FROM connector_events
         WHERE organization_id = ?
-          AND counts_as_conversion = 1
-          AND stripe_created_at >= ?
-          AND stripe_created_at <= ?
+          AND status IN ('succeeded', 'paid', 'completed', 'active')
+          AND transacted_at >= ?
+          AND transacted_at <= ?
       `).bind(orgId, dateFrom, dateTo + 'T23:59:59Z').first();
 
       // Build response

@@ -22,49 +22,36 @@ import { GetEventsHistorical } from "./endpoints/v1/analytics/events-historical"
 import { GetEventsD1 } from "./endpoints/v1/analytics/events-d1";
 import { GetConversions } from "./endpoints/v1/analytics/conversions";
 import { GetStripeAnalytics, GetStripeDailyAggregates } from "./endpoints/v1/analytics/stripe";
-import { GetJobberRevenue, GetJobberInvoices } from "./endpoints/v1/analytics/jobber";
+import { GetJobberRevenue } from "./endpoints/v1/analytics/jobber";
 import { GetUnifiedPlatformData } from "./endpoints/v1/analytics/platforms";
 import {
   GetAttribution,
   GetAttributionComparison,
-  RunAttributionAnalysis,
-  GetAttributionJobStatus,
   GetComputedAttribution,
-  GetBlendedAttribution,
-  RunProbabilisticAttribution,
-  GetProbabilisticAttributionStatus,
   GetJourneyAnalytics,
+  GetPipelineStatus,
   GetAssistedDirectStats
 } from "./endpoints/v1/analytics/attribution";
 import { GetUtmCampaigns, GetUtmTimeSeries } from "./endpoints/v1/analytics/utm-campaigns";
 import { GetClickAttribution } from "./endpoints/v1/analytics/click-attribution";
-import { RunClickExtraction, GetClickExtractionStats } from "./endpoints/v1/analytics/click-extraction";
 import { GetSmartAttribution } from "./endpoints/v1/analytics/smart-attribution";
-import { GetTrackingLinkPerformance } from "./endpoints/v1/analytics/tracking-links";
 import { PostIdentify, PostIdentityMerge, GetIdentityByAnonymousId } from "./endpoints/v1/analytics/identify";
 import { GetUserJourney, GetJourneysOverview } from "./endpoints/v1/analytics/journey";
-import { GetFlowMetrics, GetStageTransitions } from "./endpoints/v1/analytics/flow-metrics";
-import { GetFlowInsights } from "./endpoints/v1/analytics/flow-insights";
-import { GetPageFlow } from "./endpoints/v1/analytics/page-flow";
 import { GetEventsSyncStatus } from "./endpoints/v1/analytics/events-sync";
 import {
   GetD1MetricsSummary,
   GetD1DailyMetrics,
-  GetD1HourlyMetrics,
-  GetD1UTMPerformance,
-  GetD1Attribution,
-  GetD1Journeys,
-  GetD1ChannelTransitions
+  GetD1PageFlow,
+  GetD1UTMPerformance
 } from "./endpoints/v1/analytics/d1-metrics";
 import {
   GetRealtimeSummary,
   GetRealtimeTimeSeries,
   GetRealtimeBreakdown,
   GetRealtimeEvents,
-  GetRealtimeEventTypes,
   GetRealtimeStripe,
   GetRealtimeGoals,
-  GetRealtimeGoalTimeSeries
+  GetRealtimeEventTypes
 } from "./endpoints/v1/analytics/realtime";
 import {
   GetCACTimeline,
@@ -76,7 +63,6 @@ import {
 import {
   GetFacebookCampaigns,
   GetFacebookAdSets,
-  GetFacebookCreatives,
   GetFacebookAds,
   GetFacebookMetrics,
   UpdateFacebookCampaignStatus,
@@ -88,7 +74,7 @@ import {
   GetFacebookPages,
   GetFacebookPageInsights,
   GetFacebookAudienceInsights,
-  GetFacebookActionBreakdown
+  GetFacebookCreatives
 } from "./endpoints/v1/analytics/facebook";
 import {
   GetGoogleCampaigns,
@@ -183,7 +169,8 @@ import {
   ConnectAttentive,
   UpdateAttentiveConfig,
   TriggerAttentiveSync,
-  TestAttentiveConnection
+  TestAttentiveConnection,
+  AttentiveWebhook
 } from "./endpoints/v1/connectors/attentive";
 import {
   ConnectLemonSqueezy,
@@ -218,6 +205,7 @@ import {
   TriggerEventsSync,
   TriggerRecalculation,
   TriggerResyncAll,
+  TriggerAllPipelines,
   GetD1Stats
 } from "./endpoints/v1/workers";
 import {
@@ -253,6 +241,7 @@ import {
   AdminStartImpersonation,
   AdminEndImpersonation
 } from "./endpoints/v1/admin/tasks";
+import { AdminGetAnalysisCosts } from "./endpoints/v1/admin/analysis-costs";
 import {
   GetMatrixSettings,
   UpdateMatrixSettings,
@@ -270,49 +259,11 @@ import {
   GetTermsStatus
 } from "./endpoints/v1/terms";
 import {
-  ListConversionGoals,
-  CreateConversionGoal,
-  UpdateConversionGoal,
-  DeleteConversionGoal
-} from "./endpoints/v1/goals";
-import {
-  GetGoalMetrics,
-  GetGoalConversions
-} from "./endpoints/v1/goal-metrics";
-import {
-  GetGoalHierarchy,
-  CreateGoalRelationship,
-  DeleteGoalRelationship,
-  ComputeGoalValue,
-  RecomputeAllGoalValues,
-  GetGoalTemplates,
-  CreateGoalsFromTemplates,
-  GetGoalConversionStats
-} from "./endpoints/v1/goals/hierarchy";
-import {
-  GetGoalConfig,
-  GoalConfigOptions
-} from "./endpoints/v1/goals/config";
-import {
-  GetFunnelGraph,
-  CreateGoalRelationshipV2,
-  CreateGoalBranch,
-  CreateGoalMerge,
-  GetValidPaths
-} from "./endpoints/v1/goals/graph";
-import {
-  ListGoalGroups,
-  CreateGoalGroup,
-  GetGoalGroupMembers,
-  UpdateGoalGroupMembers,
-  SetDefaultAttributionGroup,
-  DeleteGoalGroup
-} from "./endpoints/v1/goals/groups";
-import {
   RunAnalysis,
   GetAnalysisStatus,
   GetLatestAnalysis,
-  GetEntityAnalysis
+  GetEntityAnalysis,
+  GetAnalysisAudit
 } from "./endpoints/v1/analysis";
 import {
   GetTagConfig,
@@ -462,6 +413,9 @@ openapi.post("/v1/admin/tasks/:id/comments", auth, AdminAddTaskComment);
 openapi.post("/v1/admin/impersonate", auth, AdminStartImpersonation);
 openapi.post("/v1/admin/end-impersonation", auth, AdminEndImpersonation);
 
+// Admin analysis cost tracking
+openapi.get("/v1/admin/analysis/costs", auth, AdminGetAnalysisCosts);
+
 // Authentication endpoints (no auth required)
 openapi.post("/v1/auth/register", Register);
 openapi.post("/v1/auth/login", Login);
@@ -511,27 +465,18 @@ openapi.get("/v1/analytics/events/historical", auth, requireOrg, GetEventsHistor
 openapi.get("/v1/analytics/conversions", auth, requireOrg, GetConversions);
 openapi.get("/v1/analytics/attribution", auth, requireOrg, GetAttribution);
 openapi.get("/v1/analytics/attribution/compare", auth, requireOrg, GetAttributionComparison);
-openapi.post("/v1/analytics/attribution/run", auth, requireOrg, RunAttributionAnalysis);
-openapi.get("/v1/analytics/attribution/status/:job_id", auth, requireOrg, GetAttributionJobStatus);
-openapi.post("/v1/analytics/attribution/probabilistic/run", auth, requireOrg, RunProbabilisticAttribution);
-openapi.get("/v1/analytics/attribution/probabilistic/status/:job_id", auth, requireOrg, GetProbabilisticAttributionStatus);
 openapi.get("/v1/analytics/attribution/journey-analytics", auth, requireOrg, GetJourneyAnalytics);
 openapi.get("/v1/analytics/attribution/computed", auth, requireOrg, GetComputedAttribution);
-openapi.get("/v1/analytics/attribution/blended", auth, requireOrg, GetBlendedAttribution);
 openapi.get("/v1/analytics/attribution/assisted-direct", auth, requireOrg, GetAssistedDirectStats);
 openapi.get("/v1/analytics/smart-attribution", auth, requireOrg, GetSmartAttribution);
 openapi.get("/v1/analytics/stripe", auth, requireOrg, GetStripeAnalytics);
 openapi.get("/v1/analytics/stripe/daily-aggregates", auth, requireOrg, GetStripeDailyAggregates);
 openapi.get("/v1/analytics/jobber/revenue", auth, requireOrg, GetJobberRevenue);
-openapi.get("/v1/analytics/jobber/invoices", auth, requireOrg, GetJobberInvoices);
 openapi.get("/v1/analytics/platforms/unified", auth, requireOrg, GetUnifiedPlatformData);
 openapi.get("/v1/analytics/utm-campaigns", auth, requireOrg, GetUtmCampaigns);
 openapi.get("/v1/analytics/utm-campaigns/time-series", auth, requireOrg, GetUtmTimeSeries);
 openapi.get("/v1/analytics/click-attribution", auth, requireOrg, GetClickAttribution);
-openapi.post("/v1/analytics/click-extraction/run", auth, requireOrg, RunClickExtraction);
-openapi.get("/v1/analytics/click-extraction/stats", auth, requireOrg, GetClickExtractionStats);
-openapi.get("/v1/analytics/tracking-links", auth, requireOrg, GetTrackingLinkPerformance);
-
+openapi.get("/v1/analytics/pipeline-status", auth, requireOrg, GetPipelineStatus);
 // Identity resolution endpoints
 openapi.post("/v1/analytics/identify", PostIdentify); // Internal - uses service binding or API key auth
 openapi.post("/v1/analytics/identify/merge", PostIdentityMerge); // Internal
@@ -541,30 +486,20 @@ openapi.get("/v1/analytics/identity/:anonymousId", auth, requireOrg, GetIdentity
 openapi.get("/v1/analytics/users/:userId/journey", auth, requireOrg, GetUserJourney);
 openapi.get("/v1/analytics/journeys/overview", auth, requireOrg, GetJourneysOverview);
 
-// Flow Builder analytics endpoints
-openapi.get("/v1/analytics/flow/metrics", auth, requireOrg, GetFlowMetrics);
-openapi.get("/v1/analytics/flow/insights", auth, requireOrg, GetFlowInsights);
-openapi.get("/v1/analytics/flow/stage/:stageId/transitions", auth, requireOrg, GetStageTransitions);
-openapi.get("/v1/analytics/flow/pages", auth, requireOrg, GetPageFlow);
-
 // D1 Analytics endpoints (dev environment - pure Cloudflare)
 openapi.get("/v1/analytics/metrics/summary", auth, requireOrg, GetD1MetricsSummary);
 openapi.get("/v1/analytics/metrics/daily", auth, requireOrg, GetD1DailyMetrics);
-openapi.get("/v1/analytics/metrics/hourly", auth, requireOrg, GetD1HourlyMetrics);
+openapi.get("/v1/analytics/metrics/page-flow", auth, requireOrg, GetD1PageFlow);
 openapi.get("/v1/analytics/metrics/utm", auth, requireOrg, GetD1UTMPerformance);
-openapi.get("/v1/analytics/metrics/attribution", auth, requireOrg, GetD1Attribution);
-openapi.get("/v1/analytics/metrics/journeys", auth, requireOrg, GetD1Journeys);
-openapi.get("/v1/analytics/metrics/transitions", auth, requireOrg, GetD1ChannelTransitions);
 
 // Real-time Analytics Engine endpoints (sub-second latency)
 openapi.get("/v1/analytics/realtime/summary", auth, requireOrg, GetRealtimeSummary);
 openapi.get("/v1/analytics/realtime/timeseries", auth, requireOrg, GetRealtimeTimeSeries);
 openapi.get("/v1/analytics/realtime/breakdown", auth, requireOrg, GetRealtimeBreakdown);
 openapi.get("/v1/analytics/realtime/events", auth, requireOrg, GetRealtimeEvents);
-openapi.get("/v1/analytics/realtime/event-types", auth, requireOrg, GetRealtimeEventTypes);
 openapi.get("/v1/analytics/realtime/stripe", auth, requireOrg, GetRealtimeStripe);
 openapi.get("/v1/analytics/realtime/goals", auth, requireOrg, GetRealtimeGoals);
-openapi.get("/v1/analytics/realtime/goals/:id/timeseries", auth, requireOrg, GetRealtimeGoalTimeSeries);
+openapi.get("/v1/analytics/realtime/event-types", auth, requireOrg, GetRealtimeEventTypes);
 
 // CAC Timeline endpoints (truthful predictions based on simulation data)
 openapi.get("/v1/analytics/cac/timeline", auth, requireOrg, GetCACTimeline);
@@ -576,7 +511,6 @@ openapi.post("/v1/analytics/cac/compute-baselines", auth, requireOrg, ComputeCAC
 // Facebook Ads endpoints
 openapi.get("/v1/analytics/facebook/campaigns", auth, requireOrg, GetFacebookCampaigns);
 openapi.get("/v1/analytics/facebook/ad-sets", auth, requireOrg, GetFacebookAdSets);
-openapi.get("/v1/analytics/facebook/creatives", auth, requireOrg, GetFacebookCreatives);
 openapi.get("/v1/analytics/facebook/ads", auth, requireOrg, GetFacebookAds);
 openapi.get("/v1/analytics/facebook/metrics/daily", auth, requireOrg, GetFacebookMetrics);
 openapi.patch("/v1/analytics/facebook/campaigns/:campaign_id/status", auth, requireOrg, requireOrgAdmin, UpdateFacebookCampaignStatus);
@@ -590,9 +524,7 @@ openapi.get("/v1/analytics/facebook/pages", auth, requireOrg, GetFacebookPages);
 openapi.get("/v1/analytics/facebook/pages/:page_id/insights", auth, requireOrg, GetFacebookPageInsights);
 // Facebook Audience Insights (read_insights permission - for Meta App Review)
 openapi.get("/v1/analytics/facebook/audience-insights", auth, requireOrg, GetFacebookAudienceInsights);
-// Facebook action type breakdown (per-pixel-action conversion charting)
-openapi.get("/v1/analytics/facebook/action-breakdown", auth, requireOrg, GetFacebookActionBreakdown);
-
+openapi.get("/v1/analytics/facebook/creatives", auth, requireOrg, GetFacebookCreatives);
 // Google Ads endpoints
 openapi.get("/v1/analytics/google/campaigns", auth, requireOrg, GetGoogleCampaigns);
 openapi.get("/v1/analytics/google/ad-groups", auth, requireOrg, GetGoogleAdGroups);
@@ -647,6 +579,7 @@ openapi.post("/v1/connectors/stripe/:connection_id/sync", auth, TriggerStripeSyn
 openapi.post("/v1/connectors/stripe/:connection_id/test", auth, TestStripeConnection);
 
 // Attentive-specific connector endpoints
+openapi.post("/v1/connectors/attentive/webhook", AttentiveWebhook);  // No auth — HMAC signature validates
 openapi.post("/v1/connectors/attentive/connect", auth, ConnectAttentive);
 openapi.put("/v1/connectors/attentive/:connection_id/config", auth, UpdateAttentiveConfig);
 openapi.post("/v1/connectors/attentive/:connection_id/sync", auth, TriggerAttentiveSync);
@@ -707,6 +640,7 @@ openapi.post("/v1/workers/sync/trigger", auth, TriggerSync);
 openapi.post("/v1/workers/events-sync/trigger", auth, TriggerEventsSync);
 openapi.post("/v1/workers/recalculate/trigger", auth, requireOrg, TriggerRecalculation);
 openapi.post("/v1/workers/resync-all/trigger", auth, requireOrg, requireOrgAdmin, TriggerResyncAll);
+openapi.post("/v1/workers/run-all-pipelines/trigger", auth, requireOrg, TriggerAllPipelines);
 
 // Settings endpoints
 openapi.get("/v1/settings/matrix", auth, requireOrg, GetMatrixSettings);
@@ -738,50 +672,13 @@ openapi.post("/v1/settings/ai-decisions/:decision_id/accept", auth, requireOrg, 
 openapi.post("/v1/settings/ai-decisions/:decision_id/reject", auth, requireOrg, requireOrgAdmin, RejectAIDecision);
 openapi.post("/v1/settings/ai-decisions/:decision_id/rate", auth, requireOrg, RateAIDecision);
 
-// Conversion Goals endpoints
-openapi.get("/v1/goals", auth, requireOrg, ListConversionGoals);
-openapi.post("/v1/goals", auth, requireOrg, requireOrgAdmin, CreateConversionGoal);
-openapi.put("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, UpdateConversionGoal);
-openapi.delete("/v1/goals/:id", auth, requireOrg, requireOrgAdmin, DeleteConversionGoal);
-
-// Goal Config for Tag (public endpoint - no auth required)
-openapi.get("/v1/goals/config", GetGoalConfig);
-openapi.options("/v1/goals/config", GoalConfigOptions);
-
-// Goal Metrics endpoints (D1 data)
-openapi.get("/v1/goals/:id/metrics", auth, requireOrg, GetGoalMetrics);
-openapi.get("/v1/goals/:id/conversions", auth, requireOrg, GetGoalConversions);
-
-// Goal Hierarchy and Value Computation endpoints
-openapi.get("/v1/goals/hierarchy", auth, requireOrg, GetGoalHierarchy);
-openapi.get("/v1/goals/templates", auth, GetGoalTemplates);
-openapi.post("/v1/goals/from-templates", auth, requireOrg, CreateGoalsFromTemplates);
-openapi.post("/v1/goals/relationships", auth, requireOrg, requireOrgAdmin, CreateGoalRelationship);
-openapi.delete("/v1/goals/relationships/:id", auth, requireOrg, requireOrgAdmin, DeleteGoalRelationship);
-openapi.post("/v1/goals/:id/compute-value", auth, requireOrg, ComputeGoalValue);
-openapi.get("/v1/goals/:id/conversion-stats", auth, requireOrg, GetGoalConversionStats);
-openapi.post("/v1/goals/recompute-all", auth, requireOrg, RecomputeAllGoalValues);
-
-// Funnel Graph endpoints (Phase 4: Funnel Branching)
-openapi.get("/v1/goals/graph", auth, requireOrg, GetFunnelGraph);
-openapi.post("/v1/goals/relationships/v2", auth, requireOrg, requireOrgAdmin, CreateGoalRelationshipV2);
-openapi.post("/v1/goals/branch", auth, requireOrg, requireOrgAdmin, CreateGoalBranch);
-openapi.post("/v1/goals/merge", auth, requireOrg, requireOrgAdmin, CreateGoalMerge);
-openapi.get("/v1/goals/paths", auth, requireOrg, GetValidPaths);
-
-// Goal Groups endpoints (Phase 5: Multi-Conversion)
-openapi.get("/v1/goals/groups", auth, requireOrg, ListGoalGroups);
-openapi.post("/v1/goals/groups", auth, requireOrg, requireOrgAdmin, CreateGoalGroup);
-openapi.get("/v1/goals/groups/:id/members", auth, requireOrg, GetGoalGroupMembers);
-openapi.put("/v1/goals/groups/:id/members", auth, requireOrg, requireOrgAdmin, UpdateGoalGroupMembers);
-openapi.post("/v1/goals/groups/:id/default", auth, requireOrg, requireOrgAdmin, SetDefaultAttributionGroup);
-openapi.delete("/v1/goals/groups/:id", auth, requireOrg, requireOrgAdmin, DeleteGoalGroup);
 
 // AI Analysis endpoints (hierarchical insights)
 openapi.post("/v1/analysis/run", auth, requireOrg, RunAnalysis);
 openapi.get("/v1/analysis/status/:job_id", auth, requireOrg, GetAnalysisStatus);
 openapi.get("/v1/analysis/latest", auth, requireOrg, GetLatestAnalysis);
 openapi.get("/v1/analysis/entity/:level/:entity_id", auth, requireOrg, GetEntityAnalysis);
+openapi.get("/v1/analysis/runs/:run_id/audit", auth, requireOrg, GetAnalysisAudit);
 
 // Shopify GDPR mandatory compliance webhooks (no auth - uses HMAC verification)
 // Registered before generic :connector route to ensure exact match takes priority
@@ -797,162 +694,19 @@ openapi.post("/v1/webhooks/endpoints", auth, requireOrg, CreateWebhookEndpoint);
 openapi.delete("/v1/webhooks/endpoints/:id", auth, requireOrg, DeleteWebhookEndpoint);
 openapi.get("/v1/webhooks/events", auth, requireOrg, GetWebhookEvents);
 
-// Import aggregation service for scheduled tasks
-import { AggregationService } from './services/aggregation-service';
-
 // Export the Hono app with scheduled handler
 export default {
   fetch: app.fetch,
 
-  // Scheduled handler for cron jobs
+  // Scheduled handler — only stale job cleanup remains
+  // Daily aggregation + periodic sync moved to clearlift-cron (Feb 2026)
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     console.log(`[Cron] Triggered at ${new Date(event.scheduledTime).toISOString()}, cron: ${event.cron}`);
-
-    // Daily aggregation cron (runs at 5 AM UTC)
-    if (event.cron === '0 5 * * *') {
-      console.log('[Cron] Running daily aggregation...');
-
-      // Build array of shard databases
-      const shards = [env.SHARD_0, env.SHARD_1, env.SHARD_2, env.SHARD_3].filter(Boolean);
-
-      if (shards.length === 0) {
-        structuredLog('ERROR', 'No shard databases configured', { endpoint: 'cron', step: 'daily_aggregation' });
-        return;
-      }
-
-      // Pass ANALYTICS_DB for Stripe aggregation (Stripe data lives in ANALYTICS_DB, not shards)
-      const aggregator = new AggregationService(shards, env.ANALYTICS_DB);
-      const result = await aggregator.runFullAggregation();
-
-      console.log(`[Cron] Aggregation completed: ${result.success ? 'SUCCESS' : 'FAILED'}`);
-      console.log(`[Cron] Total duration: ${result.totalDuration_ms}ms`);
-      console.log(`[Cron] Shards processed: ${result.shards.length}`);
-
-      if (result.errors.length > 0) {
-        structuredLog('ERROR', `Aggregation errors: ${result.errors.join(', ')}`, { endpoint: 'cron', step: 'daily_aggregation', errors: result.errors });
-      }
-
-      // Log summary per shard
-      for (const shard of result.shards) {
-        console.log(`[Cron] Shard ${shard.shardId}: ${shard.success ? 'OK' : 'FAILED'} (${shard.duration_ms}ms)`);
-      }
-
-      // Run CAC history backfill for all orgs (populates cac_history table)
-      console.log('[Cron] Running CAC history backfill...');
-      await this.backfillCACHistoryForAllOrgs(env);
-    }
-
-    // Periodic platform sync cron (runs every 6 hours)
-    if (event.cron === '0 */6 * * *') {
-      console.log('[Cron] Running periodic platform sync...');
-      await this.syncAllActiveConnections(env);
-    }
 
     // Stale job cleanup cron (runs every 15 minutes)
     if (event.cron === '*/15 * * * *') {
       console.log('[Cron] Running stale job cleanup...');
       await this.cleanupStaleJobs(env);
-    }
-  },
-
-  // Periodic sync: create incremental sync jobs for all active platform connections
-  async syncAllActiveConnections(env: Env): Promise<void> {
-    const SYNC_LOOKBACK_DAYS = 7; // 7-day lookback catches retroactive platform data corrections
-    const SYNC_PLATFORMS = ['google', 'facebook', 'tiktok', 'stripe', 'shopify', 'jobber', 'hubspot'];
-
-    try {
-      // Get all active connections for syncable platforms
-      const connections = await env.DB.prepare(`
-        SELECT pc.id, pc.platform, pc.account_id, pc.organization_id
-        FROM platform_connections pc
-        WHERE pc.is_active = 1
-          AND pc.platform IN (${SYNC_PLATFORMS.map(() => '?').join(',')})
-      `).bind(...SYNC_PLATFORMS).all<{
-        id: string;
-        platform: string;
-        account_id: string;
-        organization_id: string;
-      }>();
-
-      const allConnections = connections.results || [];
-      if (allConnections.length === 0) {
-        console.log('[Cron] No active connections to sync');
-        return;
-      }
-
-      console.log(`[Cron] Found ${allConnections.length} active connections to sync`);
-
-      // Check for existing pending/running jobs to avoid duplicates
-      const existingJobs = await env.DB.prepare(`
-        SELECT connection_id FROM sync_jobs
-        WHERE status IN ('pending', 'running')
-          AND created_at > datetime('now', '-6 hours')
-      `).all<{ connection_id: string }>();
-
-      const busyConnections = new Set((existingJobs.results || []).map(j => j.connection_id));
-
-      const now = new Date();
-      const startDate = new Date(now.getTime() - SYNC_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
-      let queued = 0;
-      let skipped = 0;
-
-      for (const conn of allConnections) {
-        if (busyConnections.has(conn.id)) {
-          skipped++;
-          continue;
-        }
-
-        const jobId = crypto.randomUUID();
-        const syncWindow = {
-          type: 'incremental',
-          start: startDate.toISOString(),
-          end: now.toISOString()
-        };
-
-        try {
-          // Create sync job record
-          await env.DB.prepare(`
-            INSERT INTO sync_jobs (id, organization_id, connection_id, status, job_type, metadata, created_at, updated_at)
-            VALUES (?, ?, ?, 'pending', 'incremental', ?, datetime('now'), datetime('now'))
-          `).bind(
-            jobId,
-            conn.organization_id,
-            conn.id,
-            JSON.stringify({
-              platform: conn.platform,
-              account_id: conn.account_id,
-              sync_window: syncWindow,
-              created_by: 'periodic_cron',
-              retry_count: 0
-            })
-          ).run();
-
-          // Send to queue
-          await env.SYNC_QUEUE.send({
-            job_id: jobId,
-            connection_id: conn.id,
-            organization_id: conn.organization_id,
-            platform: conn.platform,
-            account_id: conn.account_id,
-            sync_window: syncWindow,
-            job_type: 'incremental',
-            metadata: { created_at: now.toISOString(), created_by: 'periodic_cron', retry_count: 0 }
-          });
-
-          queued++;
-        } catch (err) {
-          structuredLog('ERROR', `Failed to queue periodic sync for connection ${conn.id}`, {
-            endpoint: 'cron', step: 'periodic_sync', connection_id: conn.id,
-            platform: conn.platform, error: err instanceof Error ? err.message : String(err)
-          });
-        }
-      }
-
-      console.log(`[Cron] Periodic sync: queued ${queued}, skipped ${skipped} (already running)`);
-    } catch (err) {
-      structuredLog('ERROR', 'Error during periodic platform sync', {
-        endpoint: 'cron', step: 'periodic_sync', error: err instanceof Error ? err.message : String(err)
-      });
     }
   },
 
@@ -963,7 +717,7 @@ export default {
     const FAIL_THRESHOLD_HOURS = 2;      // Jobs pending > 2 hours are failed
 
     try {
-      // Find stale pending jobs (> 30 minutes old, < 2 hours old)
+      // Find stale pending jobs (> 10 minutes old, < 2 hours old)
       const staleJobs = await env.DB.prepare(`
         SELECT
           sj.id, sj.connection_id, sj.organization_id, sj.job_type, sj.metadata,
@@ -1170,8 +924,8 @@ export default {
     const MAX_AGE_HOURS = 24;
 
     try {
-      // Find queue_failed webhook events that are less than 24 hours old
-      const failedEvents = await env.DB.prepare(`
+      // Find queue_failed webhook events that are less than 24 hours old (webhook_events in ANALYTICS_DB)
+      const failedEvents = await env.ANALYTICS_DB.prepare(`
         SELECT id, organization_id, connector, event_type, unified_event_type, event_id, attempts
         FROM webhook_events
         WHERE status = 'queue_failed'
@@ -1196,7 +950,7 @@ export default {
       for (const evt of events) {
         if (evt.attempts >= MAX_WEBHOOK_RETRIES) {
           // Exceeded retries — mark as permanently failed
-          await env.DB.prepare(`
+          await env.ANALYTICS_DB.prepare(`
             UPDATE webhook_events
             SET status = 'failed', error_message = 'Queue send failed after ${MAX_WEBHOOK_RETRIES} retry attempts', processed_at = datetime('now')
             WHERE id = ?
@@ -1216,14 +970,14 @@ export default {
           });
 
           // Success — reset to pending so the consumer processes it
-          await env.DB.prepare(`
+          await env.ANALYTICS_DB.prepare(`
             UPDATE webhook_events SET status = 'pending', attempts = attempts + 1, error_message = NULL WHERE id = ?
           `).bind(evt.id).run();
           console.log(`[Cron] Re-queued webhook event ${evt.id} (attempt ${evt.attempts + 1})`);
         } catch (queueErr) {
           // Still failing — increment attempts and leave as queue_failed
           const errMsg = queueErr instanceof Error ? queueErr.message : String(queueErr);
-          await env.DB.prepare(`
+          await env.ANALYTICS_DB.prepare(`
             UPDATE webhook_events SET attempts = attempts + 1, error_message = ? WHERE id = ?
           `).bind(`Queue retry failed: ${errMsg}`, evt.id).run();
           structuredLog('ERROR', `Webhook event ${evt.id} retry failed`, { endpoint: 'cron', step: 'webhook_retry', event_id: evt.id, attempt: evt.attempts + 1, error: errMsg });
@@ -1232,149 +986,8 @@ export default {
     } catch (err) {
       structuredLog('ERROR', 'Error during webhook event retry sweep', { endpoint: 'cron', step: 'webhook_retry', error: err instanceof Error ? err.message : String(err) });
     }
-  },
-
-  // Backfill CAC history for all organizations from ad_metrics + goal_conversions
-  async backfillCACHistoryForAllOrgs(env: Env): Promise<void> {
-    const DAYS_TO_BACKFILL = 30;
-
-    try {
-      // Get all unique org IDs from unified ad_metrics table
-      const orgsResult = await env.ANALYTICS_DB.prepare(`
-        SELECT DISTINCT organization_id
-        FROM ad_metrics
-        WHERE entity_type = 'campaign'
-          AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
-      `).all<{ organization_id: string }>();
-
-      const orgs = orgsResult.results || [];
-      console.log(`[Cron] Found ${orgs.length} orgs with campaign metrics for CAC backfill`);
-
-      let totalRowsInserted = 0;
-
-      for (const org of orgs) {
-        try {
-          const orgId = org.organization_id;
-
-          // Check for macro conversion goals
-          const goalsResult = await env.DB.prepare(`
-            SELECT id, name FROM conversion_goals
-            WHERE organization_id = ? AND is_conversion = 1 AND category = 'macro_conversion'
-          `).bind(orgId).all<{ id: string; name: string }>();
-          const macroGoals = goalsResult.results || [];
-          const hasGoals = macroGoals.length > 0;
-
-          // Query daily spend and conversions from unified ad_metrics
-          const metricsResult = await env.ANALYTICS_DB.prepare(`
-            SELECT
-              metric_date as date,
-              SUM(spend_cents) as spend_cents,
-              SUM(conversions) as conversions
-            FROM ad_metrics
-            WHERE organization_id = ?
-              AND entity_type = 'campaign'
-              AND metric_date >= date('now', '-${DAYS_TO_BACKFILL} days')
-            GROUP BY metric_date
-            ORDER BY metric_date ASC
-          `).bind(orgId).all<{
-            date: string;
-            spend_cents: number;
-            conversions: number;
-          }>();
-
-          // Build platform map
-          const platformMap = new Map<string, { spend_cents: number; conversions: number }>();
-          for (const row of metricsResult.results || []) {
-            platformMap.set(row.date, { spend_cents: row.spend_cents, conversions: row.conversions });
-          }
-
-          // If goals exist, fetch goal-linked conversions (deduplicated)
-          let goalMap = new Map<string, { conversions: number; revenue_cents: number }>();
-          if (hasGoals) {
-            const goalIds = macroGoals.map(g => g.id);
-            const placeholders = goalIds.map(() => '?').join(',');
-
-            const goalResult = await env.ANALYTICS_DB.prepare(`
-              WITH unique_conversions AS (
-                SELECT DISTINCT
-                  COALESCE(conversion_id, id) as unique_id,
-                  DATE(conversion_timestamp) as date,
-                  value_cents
-                FROM goal_conversions
-                WHERE organization_id = ?
-                  AND goal_id IN (${placeholders})
-                  AND DATE(conversion_timestamp) >= date('now', '-${DAYS_TO_BACKFILL} days')
-              )
-              SELECT date, COUNT(*) as conversions, SUM(value_cents) as revenue_cents
-              FROM unique_conversions
-              GROUP BY date
-            `).bind(orgId, ...goalIds).all<{
-              date: string;
-              conversions: number;
-              revenue_cents: number;
-            }>();
-
-            for (const row of goalResult.results || []) {
-              goalMap.set(row.date, { conversions: row.conversions, revenue_cents: row.revenue_cents || 0 });
-            }
-          }
-
-          // Merge dates from both sources
-          const allDates = new Set([...platformMap.keys(), ...goalMap.keys()]);
-          const goalIdsJson = hasGoals ? JSON.stringify(macroGoals.map(g => g.id)) : null;
-
-          for (const date of [...allDates].sort()) {
-            const platform = platformMap.get(date) || { spend_cents: 0, conversions: 0 };
-            const goal = goalMap.get(date);
-
-            const useGoals = hasGoals && goal && goal.conversions > 0;
-            const primaryConversions = useGoals ? goal.conversions : platform.conversions;
-            const conversionSource = useGoals ? 'goal' : 'platform';
-
-            if (platform.spend_cents === 0 && primaryConversions === 0) continue;
-
-            const cacCents = primaryConversions > 0 ? Math.round(platform.spend_cents / primaryConversions) : 0;
-
-            await env.ANALYTICS_DB.prepare(`
-              INSERT INTO cac_history (
-                organization_id, date, spend_cents, conversions, revenue_cents, cac_cents,
-                conversions_goal, conversions_platform, conversion_source, goal_ids, revenue_goal_cents
-              )
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON CONFLICT(organization_id, date)
-              DO UPDATE SET
-                spend_cents = excluded.spend_cents,
-                conversions = excluded.conversions,
-                revenue_cents = excluded.revenue_cents,
-                cac_cents = excluded.cac_cents,
-                conversions_goal = excluded.conversions_goal,
-                conversions_platform = excluded.conversions_platform,
-                conversion_source = excluded.conversion_source,
-                goal_ids = excluded.goal_ids,
-                revenue_goal_cents = excluded.revenue_goal_cents,
-                created_at = datetime('now')
-            `).bind(
-              orgId, date, platform.spend_cents, primaryConversions,
-              goal?.revenue_cents || 0, cacCents,
-              goal?.conversions || 0, platform.conversions,
-              conversionSource, goalIdsJson, goal?.revenue_cents || 0
-            ).run();
-
-            totalRowsInserted++;
-          }
-        } catch (orgErr) {
-          structuredLog('ERROR', `Error backfilling CAC for org ${org.organization_id}`, { endpoint: 'cron', step: 'cac_backfill', org_id: org.organization_id, error: orgErr instanceof Error ? orgErr.message : String(orgErr) });
-          // Continue with other orgs
-        }
-      }
-
-      console.log(`[Cron] CAC history backfill completed: ${totalRowsInserted} rows upserted across ${orgs.length} orgs`);
-    } catch (err) {
-      structuredLog('ERROR', 'Error during CAC history backfill', { endpoint: 'cron', step: 'cac_backfill', error: err instanceof Error ? err.message : String(err) });
-    }
   }
 };
 
 // Export workflow classes for Cloudflare Workflows bindings
 export { AnalysisWorkflow } from './workflows/analysis-workflow';
-export { AttributionWorkflow } from './workflows/attribution-workflow';

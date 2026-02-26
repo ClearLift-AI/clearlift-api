@@ -1,5 +1,5 @@
 {
-  "compatibility_date": "2025-10-30",
+  "compatibility_date": "2025-12-30",
   "compatibility_flags": ["nodejs_compat"],
   "main": "src/index.ts",
   "name": "clearlift-api",
@@ -14,7 +14,7 @@
   "vars": {
     "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
     "R2_BUCKET_NAME": "clearlift-db",
-    "R2_SQL_TABLE": "clearlift.event_data_v4_1",
+    "R2_SQL_TABLE": "clearlift.event_data_v5",
     "USE_D1_ANALYTICS": "true",
     "OAUTH_CALLBACK_BASE": "https://api.adbliss.io",
     "APP_BASE_URL": "https://app.adbliss.io",
@@ -160,7 +160,7 @@
       "database_name": "clearlift-shard-3",
       "database_id": "ff763599-df7b-4041-b766-b574e7b3415b",
       "migrations_dir": "shard-migrations"
-    }
+    },
   ],
 
   // KV namespace for caching hot data (org settings, user profiles)
@@ -193,11 +193,6 @@
       "name": "analysis-workflow",
       "binding": "ANALYSIS_WORKFLOW",
       "class_name": "AnalysisWorkflow"
-    },
-    {
-      "name": "attribution-workflow",
-      "binding": "ATTRIBUTION_WORKFLOW",
-      "class_name": "AttributionWorkflow"
     }
   ],
 
@@ -209,11 +204,9 @@
     }
   ],
 
-  // Cron triggers for scheduled tasks
+  // Cron triggers — only stale job cleanup remains (aggregation + periodic sync moved to clearlift-cron)
   "triggers": {
     "crons": [
-      "0 5 * * *",        // Daily aggregation at 5 AM UTC
-      "0 */6 * * *",      // Periodic platform sync every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
       "*/15 * * * *"      // Stale job cleanup every 15 minutes
     ]
   },
@@ -228,53 +221,24 @@
       "vars": {
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
         "R2_BUCKET_NAME": "clearlift-db",
-        "R2_SQL_TABLE": "clearlift.event_data_v4_1",
+        "R2_SQL_TABLE": "clearlift.event_data_v5",
         "USE_D1_ANALYTICS": "true"
       },
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "clearlift-db-prod",
-          "database_id": "8e55bba7-4b54-4992-b5e5-050611499c18",
-          "migrations_dir": "migrations"
-        },
-        {
-          "binding": "AI_DB",
-          "database_name": "clearlift-ai-prod",
-          "database_id": "3fb300f4-4523-4a29-9efc-955d1684f392",
-          "migrations_dir": "migrations-ai"
+          "database_name": "adbliss-core",
+          "database_id": "00000000-0000-0000-0000-000000000001",
+          "migrations_dir": "migrations-adbliss-core"
         },
         {
           "binding": "ANALYTICS_DB",
-          "database_name": "clearlift-analytics-prod",
-          "database_id": "a69beb57-92c9-489c-8f55-86205b613010",
-          "migrations_dir": "migrations-analytics"
-        },
-        // Platform data shards (for campaign/metrics storage + pre-aggregation)
-        {
-          "binding": "SHARD_0",
-          "database_name": "clearlift-shard-0",
-          "database_id": "432022d1-ea6d-46bf-a8ff-c5cdf2fc76a0",
-          "migrations_dir": "shard-migrations"
-        },
-        {
-          "binding": "SHARD_1",
-          "database_name": "clearlift-shard-1",
-          "database_id": "9aaa370f-3181-4466-a417-c812dfb2a5d6",
-          "migrations_dir": "shard-migrations"
-        },
-        {
-          "binding": "SHARD_2",
-          "database_name": "clearlift-shard-2",
-          "database_id": "698de5dc-3096-4d5f-bb55-d751436848c8",
-          "migrations_dir": "shard-migrations"
-        },
-        {
-          "binding": "SHARD_3",
-          "database_name": "clearlift-shard-3",
-          "database_id": "ff763599-df7b-4041-b766-b574e7b3415b",
-          "migrations_dir": "shard-migrations"
+          "database_name": "adbliss-analytics-0",
+          "database_id": "00000000-0000-0000-0000-000000000002",
+          "migrations_dir": "migrations-adbliss-analytics"
         }
+        // AI_DB: REMOVED (merged into DB)
+        // SHARD_0-3: REMOVED (shard system dormant, all queries use ANALYTICS_DB)
       ],
       "queues": {
         "producers": [
@@ -289,11 +253,6 @@
           "name": "analysis-workflow",
           "binding": "ANALYSIS_WORKFLOW",
           "class_name": "AnalysisWorkflow"
-        },
-        {
-          "name": "attribution-workflow-local",
-          "binding": "ATTRIBUTION_WORKFLOW",
-          "class_name": "AttributionWorkflow"
         }
       ],
       // KV namespace for local caching (emulated by wrangler)
@@ -314,9 +273,15 @@
       "vars": {
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
         "R2_BUCKET_NAME": "clearlift-db",
-        "R2_SQL_TABLE": "clearlift.event_data_v4_1",
+        "R2_SQL_TABLE": "clearlift.event_data_v5",
         "USE_D1_ANALYTICS": "true"
       },
+      "kv_namespaces": [
+        {
+          "binding": "CACHE",
+          "id": "5492358b37c14b7b935de58c8597e73f"
+        }
+      ],
       "d1_databases": [
         {
           "binding": "DB",
@@ -375,11 +340,6 @@
           "name": "analysis-workflow",
           "binding": "ANALYSIS_WORKFLOW",
           "class_name": "AnalysisWorkflow"
-        },
-        {
-          "name": "attribution-workflow",
-          "binding": "ATTRIBUTION_WORKFLOW",
-          "class_name": "AttributionWorkflow"
         }
       ],
       "secrets_store_secrets": [
@@ -488,8 +448,8 @@
       "routes": [{ "pattern": "api-dev.clearlift.ai/*", "zone_name": "clearlift.ai" }],
       "vars": {
         "CLOUDFLARE_ACCOUNT_ID": "133c285e1182ce57a619c802eaf56fb0",
-        "R2_BUCKET_NAME": "clearlift-db-staging",
-        "R2_SQL_TABLE": "clearlift.event_data_v5_staging",
+        "R2_BUCKET_NAME": "clearlift-db",
+        "R2_SQL_TABLE": "clearlift.event_data_v5",
         "USE_D1_ANALYTICS": "true",
         "OAUTH_CALLBACK_BASE": "https://api-dev.clearlift.ai",
         "APP_BASE_URL": "https://dev.clearlift.ai",
@@ -498,25 +458,23 @@
         "EMAIL_DRY_RUN": "true"
       },
       "d1_databases": [
-        { "binding": "DB",           "database_name": "clearlift-db-staging",        "database_id": "81898952-040a-461b-8fa5-e3e9bb2ab5a5",           "migrations_dir": "migrations" },
-        { "binding": "AI_DB",        "database_name": "clearlift-ai-staging",        "database_id": "83f3f38e-07d9-4ef1-ba39-e669d1992b0b",        "migrations_dir": "migrations-ai" },
-        { "binding": "ANALYTICS_DB", "database_name": "clearlift-analytics-staging", "database_id": "85ae3b43-dba7-4f76-a146-eca66fe5be67", "migrations_dir": "migrations-analytics" },
-        { "binding": "SHARD_0",      "database_name": "clearlift-shard-0-staging",   "database_id": "e8880554-29da-4d42-adec-cea3b4d97f8a",      "migrations_dir": "shard-migrations" },
-        { "binding": "SHARD_1",      "database_name": "clearlift-shard-1-staging",   "database_id": "940dc839-c00f-4720-9224-54f756a929cd",      "migrations_dir": "shard-migrations" },
-        { "binding": "SHARD_2",      "database_name": "clearlift-shard-2-staging",   "database_id": "fa657800-6bca-4613-8782-a6b5319bb51f",      "migrations_dir": "shard-migrations" },
-        { "binding": "SHARD_3",      "database_name": "clearlift-shard-3-staging",   "database_id": "3b80668f-3789-462a-9f1c-c2bf1afca6c8",      "migrations_dir": "shard-migrations" }
+        { "binding": "DB",           "database_name": "adbliss-core-staging",      "database_id": "9b76b070-c22c-4cfe-a74b-0e7ff796a821", "migrations_dir": "migrations-adbliss-core" },
+        { "binding": "ANALYTICS_DB", "database_name": "adbliss-analytics-staging", "database_id": "76448094-1790-4347-9bef-f63fb8ad55ee", "migrations_dir": "migrations-adbliss-analytics" }
       ],
       "kv_namespaces": [{ "binding": "CACHE", "id": "4ac9423601984ea1a03f382eba42af93" }],
       "queues": { "producers": [{ "binding": "SYNC_QUEUE", "queue": "sync-jobs-staging" }] },
       "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "clearlift_events_staging" }],
       "workflows": [
-        { "name": "analysis-workflow-staging",    "binding": "ANALYSIS_WORKFLOW",    "class_name": "AnalysisWorkflow" },
-        { "name": "attribution-workflow-staging", "binding": "ATTRIBUTION_WORKFLOW", "class_name": "AttributionWorkflow" }
+        { "name": "analysis-workflow-staging",    "binding": "ANALYSIS_WORKFLOW",    "class_name": "AnalysisWorkflow" }
       ],
       "services": [{ "binding": "CLEARLIFT_CRON", "service": "clearlift-queue-consumer-staging" }],
       "triggers": { "crons": [] },
+      // NOTE: ENCRYPTION_KEY uses production secret (not ENCRYPTION_KEY_STAGING) because staging
+      // receives OAuth tokens copied from production during D1 migration. These tokens were
+      // encrypted with the production key and must be decrypted with the same key.
+      // After migration is validated, consider reverting to ENCRYPTION_KEY_STAGING.
       "secrets_store_secrets": [
-        { "binding": "ENCRYPTION_KEY",            "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "ENCRYPTION_KEY_STAGING" },
+        { "binding": "ENCRYPTION_KEY",            "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "ENCRYPTION_KEY" },
         { "binding": "R2_SQL_TOKEN",              "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "R2_ADMIN_TOKEN" },
         { "binding": "GOOGLE_CLIENT_ID",          "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "GOOGLE_CLIENT_ID" },
         { "binding": "GOOGLE_CLIENT_SECRET",      "store_id": "b97bbcc69dce4f59b1043024f8a68f19", "secret_name": "GOOGLE_CLIENT_SECRET" },

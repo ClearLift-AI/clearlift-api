@@ -9,16 +9,7 @@ import { OpenAPIRoute } from "chanfana";
 import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
-import {
-  EntityTreeBuilder,
-  MetricsFetcher,
-  LLMRouter,
-  PromptManager,
-  AnalysisLogger,
-  JobManager,
-  HierarchicalAnalyzer,
-  AnalysisLevel
-} from "../../../services/analysis";
+import { getEntitySummary } from "../../../services/analysis/analysis-queries";
 
 export class GetEntityAnalysis extends OpenAPIRoute {
   public schema = {
@@ -67,38 +58,7 @@ export class GetEntityAnalysis extends OpenAPIRoute {
 
     const { level, entity_id } = c.req.param();
 
-    // Initialize minimal services using D1
-    if (!c.env.ANALYTICS_DB) {
-      return error(c, "CONFIGURATION_ERROR", "ANALYTICS_DB not configured", 500);
-    }
-
-    const entityTree = new EntityTreeBuilder(c.env.ANALYTICS_DB);
-    const metrics = new MetricsFetcher(c.env.ANALYTICS_DB);
-    const llm = new LLMRouter({
-      anthropicApiKey: "dummy",
-      geminiApiKey: "dummy"
-    });
-    const prompts = new PromptManager(c.env.AI_DB);
-    const logger = new AnalysisLogger(c.env.AI_DB);
-    const jobs = new JobManager(c.env.AI_DB);
-
-    const analyzer = new HierarchicalAnalyzer(
-      entityTree,
-      metrics,
-      llm,
-      prompts,
-      logger,
-      jobs,
-      c.env.AI_DB,
-      c.env.ANALYTICS_DB,
-      "dummy"  // Not used for read-only operations
-    );
-
-    const summary = await analyzer.getEntitySummary(
-      orgId,
-      level as AnalysisLevel,
-      entity_id
-    );
+    const summary = await getEntitySummary(c.env.DB, orgId, level, entity_id);
 
     if (!summary) {
       return success(c, null);

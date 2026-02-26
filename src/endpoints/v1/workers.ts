@@ -825,42 +825,7 @@ export class GetD1Stats extends OpenAPIRoute {
       });
     }
 
-    // Query AI DB (AI_DB)
-    if (c.env.AI_DB) {
-      try {
-        const start = Date.now();
-        const result = await c.env.AI_DB.prepare(`
-          SELECT
-            (SELECT COUNT(*) FROM sqlite_master WHERE type='table') as table_count
-        `).first<{ table_count: number }>();
-        const queryMs = Date.now() - start;
-
-        let sizeBytes = 0;
-        try {
-          const pageCount = await c.env.AI_DB.prepare(`PRAGMA page_count`).first<{ page_count: number }>();
-          const pageSize = await c.env.AI_DB.prepare(`PRAGMA page_size`).first<{ page_size: number }>();
-          if (pageCount?.page_count && pageSize?.page_size) {
-            sizeBytes = pageCount.page_count * pageSize.page_size;
-          }
-        } catch (pragmaErr) {
-          sizeBytes = (result?.table_count || 0) * 1024 * 1024;
-        }
-        totalSizeBytes += sizeBytes;
-
-        databases.push({
-          name: 'AI DB (clearlift-ai-prod)',
-          size_bytes: sizeBytes,
-          size_formatted: formatBytes(sizeBytes),
-          tables: result?.table_count || 0,
-          storage_limit_gb: STORAGE_LIMIT_GB,
-          storage_used_percent: (sizeBytes / STORAGE_LIMIT_BYTES) * 100,
-          last_query_ms: queryMs,
-          status: getStatus((sizeBytes / STORAGE_LIMIT_BYTES) * 100)
-        });
-      } catch (err) {
-        structuredLog('ERROR', 'AI_DB stats error', { endpoint: 'workers', step: 'd1_stats', database: 'AI_DB', error: err instanceof Error ? err.message : String(err) });
-      }
-    }
+    // AI_DB merged into DB — removed duplicate stats block
 
     // Query Analytics DB (ANALYTICS_DB)
     if (c.env.ANALYTICS_DB) {
@@ -1107,8 +1072,8 @@ export class TriggerSync extends OpenAPIRoute {
 export class TriggerRecalculation extends OpenAPIRoute {
   public schema = {
     tags: ["Workers"],
-    summary: "Trigger recalculation after flow/goal changes",
-    description: "Queues a conversion aggregation job that cascades through the full pipeline: aggregation → conversion linking → CAC refresh. Use after flow or goal changes instead of waiting for the 15-minute cron cycle.",
+    summary: "Trigger recalculation after connector config changes",
+    description: "Queues a conversion aggregation job that cascades through the full pipeline: aggregation → conversion linking → CAC refresh. Use after conversion event or connector configuration changes instead of waiting for the 15-minute cron cycle.",
     operationId: "trigger-recalculation",
     security: [{ bearerAuth: [] }],
     request: {
@@ -1331,6 +1296,215 @@ export class TriggerResyncAll extends OpenAPIRoute {
     } catch (err) {
       structuredLog('ERROR', 'Trigger resync-all error', { endpoint: 'workers', step: 'trigger_resync_all', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue resync jobs", 500);
+    }
+  }
+}
+
+/**
+ * POST /v1/workers/run-all-pipelines/trigger - Fire ALL downstream pipelines for an org
+ *
+ * Used by migration script after copying auth+config to immediately populate
+ * all analytics data. Sends queue messages for every pipeline:
+ *
+ *   1. Conversion aggregation (→ cascades to linking → CAC refresh)
+ *   2. Events sync (R2 datalake → D1)
+ *   3. Click extraction (email click → tracked_clicks + connector_events)
+ *   4. Identity extraction (→ cascades to conversion linking)
+ *   5. Probabilistic attribution (page flow + Markov/Shapley)
+ *   6. CAC refresh (immediate, not historical backfill)
+ *
+ * Platform syncs are NOT included — those are triggered separately via per-connection resync.
+ */
+export class TriggerAllPipelines extends OpenAPIRoute {
+  public schema = {
+    tags: ["Workers"],
+    summary: "Trigger all downstream pipelines for an organization",
+    description: "Fires every analytics pipeline for an org: aggregation, events sync, click extraction, identity extraction, probabilistic attribution, and CAC refresh. Used after migration or data issues.",
+    operationId: "trigger-all-pipelines",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+      }),
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              days: z.number().min(1).max(90).default(30).describe("Lookback window in days"),
+            })
+          }
+        }
+      }
+    },
+    responses: {
+      "200": {
+        description: "All pipelines triggered",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                message: z.string(),
+                pipelines_triggered: z.array(z.string()),
+                pipelines_skipped: z.array(z.string()),
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const data = await this.getValidatedData<typeof this.schema>();
+    const { days } = data.body;
+
+    const now = new Date();
+    const startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const endDate = now.toISOString().split('T')[0];
+
+    // Look up org_tag
+    const tagMapping = await c.env.DB.prepare(
+      `SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1`
+    ).bind(orgId).first<{ short_tag: string }>();
+
+    const orgTag = tagMapping?.short_tag;
+
+    const triggered: string[] = [];
+    const skipped: string[] = [];
+
+    // Query actual date range of connector_events for this org.
+    // Migration imports historical data (e.g. 2024) so the default 30-day window misses it.
+    let convAggStartDate = startDate;
+    try {
+      const dateRange = await c.env.ANALYTICS_DB.prepare(
+        `SELECT MIN(transacted_at) as earliest FROM connector_events WHERE organization_id = ?`
+      ).bind(orgId).first<{ earliest: string | null }>();
+      if (dateRange?.earliest) {
+        const earliest = dateRange.earliest.split('T')[0];
+        if (earliest < convAggStartDate) {
+          convAggStartDate = earliest;
+        }
+      }
+    } catch {
+      // Non-fatal — fall back to days-based window
+    }
+
+    try {
+      // 1. Conversion aggregation (cascades → linking → CAC refresh)
+      // Uses actual data range to cover historical imports
+      await c.env.SYNC_QUEUE.send({
+        job_type: 'conversion_aggregation',
+        job_id: crypto.randomUUID(),
+        organization_id: orgId,
+        start_date: convAggStartDate,
+        end_date: endDate,
+        attribution_window_hours: days * 24,
+        created_at: now.toISOString(),
+      });
+      triggered.push('conversion_aggregation');
+
+      // 2. Events sync (needs org_tag) — uses SyncJobMessage format (platform: 'events')
+      // NOT a job_type message. The queue consumer routes this via the platform discriminator.
+      if (orgTag) {
+        await c.env.SYNC_QUEUE.send({
+          job_id: crypto.randomUUID(),
+          connection_id: 'events-' + orgTag,
+          organization_id: orgId,
+          platform: 'events',
+          account_id: orgTag,
+          job_type: 'incremental',
+          sync_window: { start: `${startDate}T00:00:00Z`, end: `${endDate}T23:59:59Z` },
+          metadata: { retry_count: 0, created_at: now.toISOString(), priority: 'normal' },
+        });
+        triggered.push('events_sync');
+      } else {
+        skipped.push('events_sync (no org_tag)');
+      }
+
+      // 3. Click extraction
+      await c.env.SYNC_QUEUE.send({
+        job_type: 'click_extraction',
+        organization_id: orgId,
+        days_back: days,
+        match_conversions: true,
+        created_at: now.toISOString(),
+      });
+      triggered.push('click_extraction');
+
+      // 4. Identity extraction (cascades → conversion linking)
+      if (orgTag) {
+        await c.env.SYNC_QUEUE.send({
+          job_type: 'identity_extraction',
+          organization_id: orgId,
+          org_tag: orgTag,
+          start_date: startDate,
+          end_date: endDate,
+          lookback_days: days,
+          created_at: now.toISOString(),
+        });
+        triggered.push('identity_extraction');
+      } else {
+        skipped.push('identity_extraction (no org_tag)');
+      }
+
+      // 5. Probabilistic attribution (page flow + Markov/Shapley)
+      if (orgTag) {
+        await c.env.SYNC_QUEUE.send({
+          job_type: 'probabilistic_attribution',
+          organization_id: orgId,
+          org_tag: orgTag,
+          start_date: startDate,
+          end_date: endDate,
+          lookback_days: days,
+          created_at: now.toISOString(),
+        });
+        triggered.push('probabilistic_attribution');
+      } else {
+        skipped.push('probabilistic_attribution (no org_tag)');
+      }
+
+      // 6. Conversion linking (explicit trigger — also cascades from identity extraction,
+      // but firing separately ensures it runs even if identity extraction finds 0 results)
+      await c.env.SYNC_QUEUE.send({
+        job_type: 'conversion_linking',
+        organization_id: orgId,
+        trigger: 'migration',
+        created_at: now.toISOString(),
+      });
+      triggered.push('conversion_linking');
+
+      // 7. CAC refresh (immediate)
+      await c.env.SYNC_QUEUE.send({
+        job_type: 'cac_refresh',
+        organization_id: orgId,
+        trigger: 'migration',
+        created_at: now.toISOString(),
+      });
+      triggered.push('cac_refresh');
+
+      structuredLog('INFO', `All pipelines triggered for org ${orgId}`, {
+        endpoint: 'workers',
+        step: 'trigger_all_pipelines',
+        org_id: orgId,
+        org_tag: orgTag || 'none',
+        triggered: triggered.length,
+        skipped: skipped.length,
+      });
+
+      return success(c, {
+        message: `${triggered.length} pipelines triggered, ${skipped.length} skipped`,
+        pipelines_triggered: triggered,
+        pipelines_skipped: skipped,
+      });
+    } catch (err) {
+      structuredLog('ERROR', 'Trigger all pipelines error', {
+        endpoint: 'workers',
+        step: 'trigger_all_pipelines',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return error(c, "QUEUE_ERROR", err instanceof Error ? err.message : "Failed to queue pipeline jobs", 500);
     }
   }
 }

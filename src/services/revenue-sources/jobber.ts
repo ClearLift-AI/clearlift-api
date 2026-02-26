@@ -1,8 +1,8 @@
 /**
  * Jobber Revenue Source Provider
  *
- * Queries jobber_invoices table for conversion and revenue data.
- * A conversion is a paid invoice (status = 'paid' or is_paid = 1).
+ * Queries connector_events table for Jobber conversion and revenue data.
+ * A conversion is an event with source_platform='jobber' and a completed status.
  */
 
 // D1Database is globally available in the Workers environment
@@ -27,30 +27,26 @@ const jobberProvider: RevenueSourceProvider = {
 
   async hasData(db: D1Database, orgId: string): Promise<boolean> {
     const result = await db.prepare(`
-      SELECT 1 FROM jobber_invoices
-      WHERE organization_id = ?
+      SELECT 1 FROM connector_events
+      WHERE organization_id = ? AND source_platform = 'jobber'
       LIMIT 1
     `).bind(orgId).first();
     return !!result;
   },
 
   async getSummary(db: D1Database, orgId: string, hours: number): Promise<RevenueSourceSummary> {
-    // Query invoices paid in the last N hours
-    // Use paid_at if available, otherwise fall back to jobber_created_at
     const result = await db.prepare(`
       SELECT
-        COUNT(*) as total_invoices,
-        SUM(CASE WHEN is_paid = 1 OR status = 'paid' THEN 1 ELSE 0 END) as paid_invoices,
-        SUM(CASE WHEN is_paid = 1 OR status = 'paid' THEN total_cents ELSE 0 END) as total_revenue_cents,
-        COUNT(DISTINCT client_id) as unique_clients
-      FROM jobber_invoices
+        COUNT(*) as total_events,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as paid_invoices,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN value_cents ELSE 0 END) as total_revenue_cents,
+        COUNT(DISTINCT customer_external_id) as unique_clients
+      FROM connector_events
       WHERE organization_id = ?
-        AND (
-          (paid_at IS NOT NULL AND paid_at >= datetime('now', '-' || ? || ' hours'))
-          OR (paid_at IS NULL AND jobber_created_at >= datetime('now', '-' || ? || ' hours'))
-        )
-    `).bind(orgId, hours, hours).first<{
-      total_invoices: number;
+        AND source_platform = 'jobber'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
+    `).bind(orgId, hours).first<{
+      total_events: number;
       paid_invoices: number;
       total_revenue_cents: number;
       unique_clients: number;
@@ -64,21 +60,18 @@ const jobberProvider: RevenueSourceProvider = {
   },
 
   async getTimeSeries(db: D1Database, orgId: string, hours: number): Promise<RevenueSourceTimeSeries[]> {
-    // Group by hour based on paid_at or jobber_created_at
     const result = await db.prepare(`
       SELECT
-        strftime('%Y-%m-%d %H:00:00', COALESCE(paid_at, jobber_created_at)) as bucket,
-        SUM(CASE WHEN is_paid = 1 OR status = 'paid' THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN is_paid = 1 OR status = 'paid' THEN total_cents ELSE 0 END) as revenue_cents
-      FROM jobber_invoices
+        strftime('%Y-%m-%d %H:00:00', transacted_at) as bucket,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as conversions,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN value_cents ELSE 0 END) as revenue_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND (
-          (paid_at IS NOT NULL AND paid_at >= datetime('now', '-' || ? || ' hours'))
-          OR (paid_at IS NULL AND jobber_created_at >= datetime('now', '-' || ? || ' hours'))
-        )
-      GROUP BY strftime('%Y-%m-%d %H:00:00', COALESCE(paid_at, jobber_created_at))
+        AND source_platform = 'jobber'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
+      GROUP BY strftime('%Y-%m-%d %H:00:00', transacted_at)
       ORDER BY bucket ASC
-    `).bind(orgId, hours, hours).all<{
+    `).bind(orgId, hours).all<{
       bucket: string;
       conversions: number;
       revenue_cents: number;
@@ -94,16 +87,17 @@ const jobberProvider: RevenueSourceProvider = {
   async getSummaryByDateRange(db: D1Database, orgId: string, dateRange: DateRange): Promise<RevenueSourceSummary> {
     const result = await db.prepare(`
       SELECT
-        COUNT(*) as total_invoices,
-        SUM(CASE WHEN is_paid = 1 OR status = 'paid' THEN 1 ELSE 0 END) as paid_invoices,
-        SUM(CASE WHEN is_paid = 1 OR status = 'paid' THEN total_cents ELSE 0 END) as total_revenue_cents,
-        COUNT(DISTINCT client_id) as unique_clients
-      FROM jobber_invoices
+        COUNT(*) as total_events,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as paid_invoices,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN value_cents ELSE 0 END) as total_revenue_cents,
+        COUNT(DISTINCT customer_external_id) as unique_clients
+      FROM connector_events
       WHERE organization_id = ?
-        AND date(COALESCE(paid_at, jobber_created_at)) >= ?
-        AND date(COALESCE(paid_at, jobber_created_at)) <= ?
+        AND source_platform = 'jobber'
+        AND DATE(transacted_at) >= ?
+        AND DATE(transacted_at) <= ?
     `).bind(orgId, dateRange.start, dateRange.end).first<{
-      total_invoices: number;
+      total_events: number;
       paid_invoices: number;
       total_revenue_cents: number;
       unique_clients: number;
@@ -119,14 +113,15 @@ const jobberProvider: RevenueSourceProvider = {
   async getTimeSeriesByDateRange(db: D1Database, orgId: string, dateRange: DateRange): Promise<RevenueSourceTimeSeries[]> {
     const result = await db.prepare(`
       SELECT
-        date(COALESCE(paid_at, jobber_created_at)) as bucket,
-        SUM(CASE WHEN is_paid = 1 OR status = 'paid' THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN is_paid = 1 OR status = 'paid' THEN total_cents ELSE 0 END) as revenue_cents
-      FROM jobber_invoices
+        DATE(transacted_at) as bucket,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN 1 ELSE 0 END) as conversions,
+        SUM(CASE WHEN status IN ('paid', 'completed', 'succeeded') THEN value_cents ELSE 0 END) as revenue_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND date(COALESCE(paid_at, jobber_created_at)) >= ?
-        AND date(COALESCE(paid_at, jobber_created_at)) <= ?
-      GROUP BY date(COALESCE(paid_at, jobber_created_at))
+        AND source_platform = 'jobber'
+        AND DATE(transacted_at) >= ?
+        AND DATE(transacted_at) <= ?
+      GROUP BY DATE(transacted_at)
       ORDER BY bucket ASC
     `).bind(orgId, dateRange.start, dateRange.end).all<{
       bucket: string;

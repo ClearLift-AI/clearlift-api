@@ -59,15 +59,6 @@ export class GetRealtimeSummary extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    // Get org_tag from mapping
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first() as { short_tag: string } | null;
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
@@ -84,9 +75,9 @@ export class GetRealtimeSummary extends OpenAPIRoute {
           COALESCE(SUM(revenue_cents), 0) as revenue_cents,
           COALESCE(SUM(page_views), 0) as page_views
         FROM hourly_metrics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND hour >= datetime('now', '-' || ? || ' hours')
-      `).bind(orgTagMapping.short_tag, hours).first() as {
+      `).bind(orgId, hours).first() as {
         total_events: number;
         sessions: number;
         users: number;
@@ -162,14 +153,6 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first() as { short_tag: string } | null;
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
@@ -192,12 +175,12 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
           page_views,
           conversions
         FROM hourly_metrics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND hour >= datetime('now', '-' || ? || ' hours')
         ORDER BY hour ASC
-      `).bind(orgTagMapping.short_tag, hours).all();
+      `).bind(orgId, hours).all();
 
-      return success(c, ((result.results || []) as TimeSeriesRow[]).map((row: TimeSeriesRow) => ({
+      return success(c, ((result.results || []) as unknown as TimeSeriesRow[]).map((row: TimeSeriesRow) => ({
         bucket: row.bucket,
         events: row.events || 0,
         sessions: row.sessions || 0,
@@ -263,14 +246,6 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       return error(c, "MISSING_DIMENSION", "Dimension parameter is required", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first() as { short_tag: string } | null;
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
@@ -281,10 +256,10 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       if (dimension === 'channel' || dimension === 'utm_source') {
         const result = await analyticsDb.prepare(`
           SELECT by_channel FROM hourly_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND hour >= datetime('now', '-' || ? || ' hours')
             AND by_channel IS NOT NULL
-        `).bind(orgTagMapping.short_tag, hours).all();
+        `).bind(orgId, hours).all();
 
         // Aggregate the JSON data
         const aggregated: Record<string, { events: number; sessions: number; conversions: number; revenue: number }> = {};
@@ -321,10 +296,10 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       if (dimension === 'device') {
         const result = await analyticsDb.prepare(`
           SELECT by_device FROM hourly_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND hour >= datetime('now', '-' || ? || ' hours')
             AND by_device IS NOT NULL
-        `).bind(orgTagMapping.short_tag, hours).all();
+        `).bind(orgId, hours).all();
 
         const aggregated: Record<string, { events: number; sessions: number; conversions: number; revenue: number }> = {};
 
@@ -362,10 +337,10 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       if (dimension === 'page') {
         const result = await analyticsDb.prepare(`
           SELECT by_page FROM hourly_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND hour >= datetime('now', '-' || ? || ' hours')
             AND by_page IS NOT NULL
-        `).bind(orgTagMapping.short_tag, hours).all();
+        `).bind(orgId, hours).all();
 
         const aggregated: Record<string, { events: number; sessions: number; conversions: number; revenue: number }> = {};
 
@@ -455,14 +430,6 @@ export class GetRealtimeEvents extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first() as { short_tag: string } | null;
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
@@ -476,11 +443,11 @@ export class GetRealtimeEvents extends OpenAPIRoute {
           by_page,
           by_device
         FROM hourly_metrics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND by_page IS NOT NULL
         ORDER BY hour DESC
         LIMIT 10
-      `).bind(orgTagMapping.short_tag).all();
+      `).bind(orgId).all();
 
       // Expand by_page into individual "events" for the live feed
       const events: Array<{
@@ -585,14 +552,6 @@ export class GetRealtimeEventTypes extends OpenAPIRoute {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first() as { short_tag: string } | null;
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization not configured for analytics", 404);
-    }
-
     const analyticsDb = c.env.ANALYTICS_DB;
     if (!analyticsDb) {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
@@ -609,9 +568,9 @@ export class GetRealtimeEventTypes extends OpenAPIRoute {
           COALESCE(SUM(conversions), 0) as conversions,
           COALESCE(SUM(revenue_cents), 0) as revenue_cents
         FROM hourly_metrics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND hour >= datetime('now', '-' || ? || ' hours')
-      `).bind(orgTagMapping.short_tag, hours).first() as {
+      `).bind(orgId, hours).first() as {
         page_views: number;
         clicks: number;
         form_submits: number;
@@ -739,8 +698,8 @@ export class GetRealtimeStripe extends OpenAPIRoute {
 export class GetRealtimeGoals extends OpenAPIRoute {
   schema = {
     tags: ["Analytics"],
-    summary: "Get real-time metrics for all conversion goals",
-    description: "Returns conversion and revenue metrics for all active goals configured for the organization. Supports goals backed by revenue sources (Stripe, Shopify, Jobber), tag events, or manual logging.",
+    summary: "Get real-time metrics for all conversion sources",
+    description: "Returns conversion and revenue metrics for all active conversion sources configured for the organization. Supports sources backed by revenue connectors (Stripe, Shopify, Jobber), tag events, or manual logging.",
     operationId: "get-realtime-goals",
     security: [{ bearerAuth: [] }],
     request: {
@@ -805,28 +764,126 @@ export class GetRealtimeGoals extends OpenAPIRoute {
     }
 
     try {
-      // Import the goal service
-      const { GoalService } = await import("../../../services/goals");
-      const goalService = new GoalService(c.env.DB, analyticsDb);
+      // Query platform_connections with conversion_events configured (non-empty array)
+      const connectionsResult = await c.env.DB.prepare(`
+        SELECT id, platform, settings
+        FROM platform_connections
+        WHERE organization_id = ? AND is_active = 1
+          AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
+      `).bind(orgId).all<{ id: string; platform: string; settings: string }>();
 
-      // Get all goals or specific goal
-      if (goalIdFilter) {
-        const goal = await goalService.getGoal(orgId, goalIdFilter);
-        if (!goal) {
-          return error(c, "NOT_FOUND", "Goal not found", 404);
-        }
-        const metrics = await goalService.getGoalRealtimeMetrics(orgId, goal, hours);
+      const connections = connectionsResult.results || [];
+
+      if (connections.length === 0) {
         return success(c, {
-          goals: [metrics],
-          primary_goal: goal.is_primary ? metrics : undefined,
-          total_conversions: metrics.conversions,
-          total_revenue: metrics.revenue,
+          goals: [],
+          primary_goal: undefined,
+          total_conversions: 0,
+          total_revenue: 0,
         });
       }
 
-      // Get metrics for all active goals
-      const allMetrics = await goalService.getRealtimeMetrics(orgId, hours);
-      return success(c, allMetrics);
+      const platformDisplayNames: Record<string, string> = {
+        stripe: 'Stripe Payment',
+        shopify: 'Shopify Order',
+        jobber: 'Jobber Invoice',
+        hubspot: 'HubSpot Deal',
+        adbliss_tag: 'Tag Conversion',
+      };
+
+      // For each connection with conversion config, query connector_events in the time window
+      const goals: Array<{
+        goal_id: string;
+        goal_name: string;
+        goal_slug: string;
+        goal_type: string;
+        is_primary: boolean;
+        conversions: number;
+        revenue: number;
+        unique_customers?: number;
+      }> = [];
+
+      let totalConversions = 0;
+      let totalRevenue = 0;
+
+      for (const conn of connections) {
+        // If filtering by goal_id, skip non-matching connections
+        if (goalIdFilter && conn.id !== goalIdFilter) continue;
+
+        // Parse conversion_events config to build proper WHERE filters
+        let settings: { conversion_events?: Array<{ event_type: string; status?: string[]; statuses?: string[]; default_status?: string }> } = {};
+        try { settings = JSON.parse(conn.settings || '{}'); } catch { /* ignore */ }
+        const convEvents = settings.conversion_events || [];
+
+        // Build event_type + status filter conditions from conversion_events config
+        const filterConditions: string[] = [];
+        const filterBinds: string[] = [];
+        for (const ce of convEvents) {
+          // Handle both field names: dashboard writes 'status', some configs use 'statuses'
+          const statuses = ce.statuses || ce.status || (ce.default_status ? [ce.default_status] : []);
+          if (statuses.length > 0) {
+            const placeholders = statuses.map(() => '?').join(', ');
+            filterConditions.push(`(event_type = ? AND status IN (${placeholders}))`);
+            filterBinds.push(ce.event_type, ...statuses);
+          } else {
+            filterConditions.push(`(event_type = ?)`);
+            filterBinds.push(ce.event_type);
+          }
+        }
+
+        // If no valid conversion event configs, skip (shouldn't happen given the JSON length check)
+        if (filterConditions.length === 0) continue;
+
+        const eventFilter = `AND (${filterConditions.join(' OR ')})`;
+
+        const metricsResult = await analyticsDb.prepare(`
+          SELECT
+            COUNT(*) as conversions,
+            COALESCE(SUM(value_cents), 0) as revenue_cents,
+            COUNT(DISTINCT customer_external_id) as unique_customers
+          FROM connector_events
+          WHERE organization_id = ?
+            AND source_platform = ?
+            AND transacted_at >= datetime('now', '-' || ? || ' hours')
+            ${eventFilter}
+        `).bind(orgId, conn.platform, hours, ...filterBinds).first<{
+          conversions: number;
+          revenue_cents: number;
+          unique_customers: number;
+        }>();
+
+        const conversions = metricsResult?.conversions || 0;
+        const revenue = (metricsResult?.revenue_cents || 0) / 100;
+
+        const goalEntry = {
+          goal_id: conn.id,
+          goal_name: platformDisplayNames[conn.platform] || `${conn.platform} Conversion`,
+          goal_slug: conn.platform,
+          goal_type: conn.platform === 'adbliss_tag' ? 'tag_event' : 'revenue_source' as string,
+          is_primary: goals.length === 0, // First connection is primary
+          conversions,
+          revenue,
+          unique_customers: metricsResult?.unique_customers || 0,
+        };
+
+        goals.push(goalEntry);
+        totalConversions += conversions;
+        totalRevenue += revenue;
+      }
+
+      const primaryGoal = goals.find(g => g.is_primary);
+
+      return success(c, {
+        goals,
+        primary_goal: primaryGoal ? {
+          goal_id: primaryGoal.goal_id,
+          goal_name: primaryGoal.goal_name,
+          conversions: primaryGoal.conversions,
+          revenue: primaryGoal.revenue,
+        } : undefined,
+        total_conversions: totalConversions,
+        total_revenue: totalRevenue,
+      });
     } catch (err) {
       structuredLog('ERROR', 'Goals query failed', { endpoint: 'realtime', step: 'goals', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
@@ -834,68 +891,3 @@ export class GetRealtimeGoals extends OpenAPIRoute {
   }
 }
 
-/**
- * GET /v1/analytics/realtime/goals/:id/timeseries
- * Get time series data for a specific goal
- */
-export class GetRealtimeGoalTimeSeries extends OpenAPIRoute {
-  schema = {
-    tags: ["Analytics"],
-    summary: "Get time series for a conversion goal",
-    description: "Returns hourly time series data for a specific goal",
-    operationId: "get-realtime-goal-timeseries",
-    security: [{ bearerAuth: [] }],
-    request: {
-      params: z.object({
-        id: z.string().describe("Goal ID")
-      }),
-      query: z.object({
-        org_id: z.string().optional().describe("Organization ID"),
-        hours: z.coerce.number().int().min(1).max(168).optional().default(24).describe("Hours to look back")
-      })
-    },
-    responses: {
-      "200": {
-        description: "Goal time series data",
-        content: {
-          "application/json": {
-            schema: z.object({
-              success: z.boolean(),
-              data: z.array(z.object({
-                bucket: z.string(),
-                conversions: z.number(),
-                revenue: z.number()
-              }))
-            })
-          }
-        }
-      }
-    }
-  };
-
-  async handle(c: AppContext) {
-    const orgId = c.req.query("org_id") || c.get("org_id");
-    const goalId = c.req.param("id");
-    const hours = parseInt(c.req.query("hours") || "24");
-
-    if (!orgId) {
-      return error(c, "NO_ORGANIZATION", "No organization specified", 400);
-    }
-
-    const analyticsDb = c.env.ANALYTICS_DB;
-    if (!analyticsDb) {
-      return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
-    }
-
-    try {
-      const { GoalService } = await import("../../../services/goals");
-      const goalService = new GoalService(c.env.DB, analyticsDb);
-
-      const timeSeries = await goalService.getGoalTimeSeries(orgId, goalId, hours);
-      return success(c, timeSeries);
-    } catch (err) {
-      structuredLog('ERROR', 'Goal time series query failed', { endpoint: 'realtime', step: 'goal_timeseries', error: err instanceof Error ? err.message : String(err) });
-      return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
-    }
-  }
-}

@@ -14,7 +14,7 @@ import { structuredLog } from '../utils/structured-logger';
  * Hourly metrics row from D1
  */
 export interface HourlyMetricRow {
-  org_tag: string;
+  organization_id: string;
   hour: string;
   total_events: number;
   page_views: number;
@@ -34,7 +34,7 @@ export interface HourlyMetricRow {
  * Daily metrics row from D1
  */
 export interface DailyMetricRow {
-  org_tag: string;
+  organization_id: string;
   date: string;
   total_events: number;
   page_views: number;
@@ -61,7 +61,7 @@ export interface DailyMetricRow {
  * UTM performance row from D1
  */
 export interface UTMPerformanceRow {
-  org_tag: string;
+  organization_id: string;
   date: string;
   utm_source: string;
   utm_medium: string;
@@ -81,7 +81,7 @@ export interface UTMPerformanceRow {
  */
 export interface JourneyRow {
   id: string;
-  org_tag: string;
+  organization_id: string;
   anonymous_id: string;
   channel_path: string;
   path_length: number;
@@ -95,7 +95,7 @@ export interface JourneyRow {
  * Attribution result row from D1
  */
 export interface AttributionResultRow {
-  org_tag: string;
+  organization_id: string;
   model: string;
   channel: string;
   credit: number;
@@ -132,8 +132,8 @@ export interface FacebookCampaignRow {
   campaign_name: string;
   campaign_status: string;
   objective: string | null;
-  daily_budget_cents: number | null;
-  lifetime_budget_cents: number | null;
+  budget_cents: number | null;
+  budget_type: string | null;
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;
@@ -161,7 +161,7 @@ export interface TikTokCampaignRow {
   campaign_name: string;
   campaign_status: string;
   objective: string | null;
-  budget_mode: string | null;
+  budget_type: string | null;
   budget_cents: number | null;
   last_synced_at: string | null;
   created_at: string;
@@ -226,16 +226,16 @@ export class D1AnalyticsService {
   /**
    * Get hourly metrics for an org
    */
-  async getHourlyMetrics(orgTag: string, startDate: string, endDate: string): Promise<HourlyMetricRow[]> {
+  async getHourlyMetrics(orgId: string, startDate: string, endDate: string): Promise<HourlyMetricRow[]> {
     const result = await this.session.prepare(`
       SELECT *
       FROM hourly_metrics
-      WHERE org_tag = ?
+      WHERE organization_id = ?
         AND hour >= ?
         AND hour <= ?
       ORDER BY hour DESC
       LIMIT 10000
-    `).bind(orgTag, startDate, endDate).all<HourlyMetricRow>();
+    `).bind(orgId, startDate, endDate).all<HourlyMetricRow>();
 
     return result.results;
   }
@@ -243,16 +243,16 @@ export class D1AnalyticsService {
   /**
    * Get daily metrics for an org
    */
-  async getDailyMetrics(orgTag: string, startDate: string, endDate: string): Promise<DailyMetricRow[]> {
+  async getDailyMetrics(orgId: string, startDate: string, endDate: string): Promise<DailyMetricRow[]> {
     const result = await this.session.prepare(`
       SELECT *
       FROM daily_metrics
-      WHERE org_tag = ?
+      WHERE organization_id = ?
         AND date >= ?
         AND date <= ?
       ORDER BY date DESC
       LIMIT 1000
-    `).bind(orgTag, startDate, endDate).all<DailyMetricRow>();
+    `).bind(orgId, startDate, endDate).all<DailyMetricRow>();
 
     return result.results;
   }
@@ -260,16 +260,16 @@ export class D1AnalyticsService {
   /**
    * Get UTM performance for an org
    */
-  async getUTMPerformance(orgTag: string, startDate: string, endDate: string): Promise<UTMPerformanceRow[]> {
+  async getUTMPerformance(orgId: string, startDate: string, endDate: string): Promise<UTMPerformanceRow[]> {
     const result = await this.session.prepare(`
       SELECT *
       FROM utm_performance
-      WHERE org_tag = ?
+      WHERE organization_id = ?
         AND date >= ?
         AND date <= ?
       ORDER BY date DESC, sessions DESC
       LIMIT 5000
-    `).bind(orgTag, startDate, endDate).all<UTMPerformanceRow>();
+    `).bind(orgId, startDate, endDate).all<UTMPerformanceRow>();
 
     return result.results;
   }
@@ -277,11 +277,11 @@ export class D1AnalyticsService {
   /**
    * Get journeys for an org
    */
-  async getJourneys(orgTag: string, limit: number = 100, convertedOnly: boolean = false): Promise<JourneyRow[]> {
+  async getJourneys(orgId: string, limit: number = 100, convertedOnly: boolean = false): Promise<JourneyRow[]> {
     let query = `
       SELECT *
       FROM journeys
-      WHERE org_tag = ?
+      WHERE organization_id = ?
     `;
 
     if (convertedOnly) {
@@ -291,7 +291,7 @@ export class D1AnalyticsService {
     query += ` ORDER BY first_touch_ts DESC LIMIT ?`;
 
     const result = await this.session.prepare(query)
-      .bind(orgTag, limit)
+      .bind(orgId, limit)
       .all<JourneyRow>();
 
     return result.results;
@@ -301,7 +301,7 @@ export class D1AnalyticsService {
    * Get attribution results for an org
    */
   async getAttributionResults(
-    orgTag: string,
+    orgId: string,
     model?: string,
     periodStart?: string,
     periodEnd?: string
@@ -309,22 +309,23 @@ export class D1AnalyticsService {
     let query = `
       SELECT *
       FROM attribution_results
-      WHERE org_tag = ?
+      WHERE organization_id = ?
     `;
-    const params: unknown[] = [orgTag];
+    const params: unknown[] = [orgId];
 
     if (model) {
       query += ` AND model = ?`;
       params.push(model);
     }
 
+    // Use overlap semantics for batch-computed periods
     if (periodStart) {
-      query += ` AND period_start >= ?`;
+      query += ` AND period_end >= ?`;
       params.push(periodStart);
     }
 
     if (periodEnd) {
-      query += ` AND period_end <= ?`;
+      query += ` AND period_start <= ?`;
       params.push(periodEnd);
     }
 
@@ -339,21 +340,21 @@ export class D1AnalyticsService {
   /**
    * Get analytics summary for dashboard overview
    */
-  async getAnalyticsSummary(orgTag: string, days: number = 7): Promise<{
+  async getAnalyticsSummary(orgId: string, days: number = 7): Promise<{
     totalEvents: number;
     totalSessions: number;
     totalUsers: number;
     totalConversions: number;
     totalRevenue: number;
     conversionRate: number;
-    topChannels: { channel: string; sessions: number; conversions: number }[];
+    topChannels: { channel: string; sessions: number }[];
     topCampaigns: { campaign: string; sessions: number; revenue: number }[];
   }> {
     const endDate = new Date().toISOString().slice(0, 10);
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     // Get daily metrics summary
-    const dailyMetrics = await this.getDailyMetrics(orgTag, startDate, endDate);
+    const dailyMetrics = await this.getDailyMetrics(orgId, startDate, endDate);
 
     // Aggregate totals
     let totalEvents = 0;
@@ -361,7 +362,7 @@ export class D1AnalyticsService {
     let totalUsers = 0;
     let totalConversions = 0;
     let totalRevenue = 0;
-    const channelAgg: Record<string, { sessions: number; conversions: number }> = {};
+    const channelAgg: Record<string, { sessions: number }> = {};
 
     for (const dm of dailyMetrics) {
       totalEvents += dm.total_events;
@@ -370,12 +371,12 @@ export class D1AnalyticsService {
       totalConversions += dm.conversions;
       totalRevenue += dm.revenue_cents;
 
-      // Parse channel breakdown
+      // Parse channel breakdown (by_channel stores event counts per channel, not conversions)
       try {
         const byChannel = JSON.parse(dm.by_channel || '{}') as Record<string, number>;
         for (const [channel, count] of Object.entries(byChannel)) {
           if (!channelAgg[channel]) {
-            channelAgg[channel] = { sessions: 0, conversions: 0 };
+            channelAgg[channel] = { sessions: 0 };
           }
           channelAgg[channel].sessions += count;
         }
@@ -385,7 +386,7 @@ export class D1AnalyticsService {
     }
 
     // Get UTM campaign summary
-    const utmPerf = await this.getUTMPerformance(orgTag, startDate, endDate);
+    const utmPerf = await this.getUTMPerformance(orgId, startDate, endDate);
     const campaignAgg: Record<string, { sessions: number; revenue: number }> = {};
     for (const utm of utmPerf) {
       const campaign = utm.utm_campaign || 'none';
@@ -413,7 +414,7 @@ export class D1AnalyticsService {
       totalUsers,
       totalConversions,
       totalRevenue: totalRevenue / 100, // Convert cents to dollars
-      conversionRate: totalSessions > 0 ? totalConversions / totalSessions : 0,
+      conversionRate: totalSessions > 0 ? Math.min(totalConversions / totalSessions, 1.0) : 0,
       topChannels,
       topCampaigns
     };
@@ -424,7 +425,7 @@ export class D1AnalyticsService {
    * Returns Markov transition matrix with probabilities
    */
   async getChannelTransitions(
-    orgTag: string,
+    orgId: string,
     options: {
       periodStart?: string;
       periodEnd?: string;
@@ -441,17 +442,18 @@ export class D1AnalyticsService {
     let query = `
       SELECT from_channel, to_channel, probability, transition_count
       FROM channel_transitions
-      WHERE org_tag = ?
+      WHERE organization_id = ?
     `;
-    const params: unknown[] = [orgTag];
+    const params: unknown[] = [orgId];
 
+    // Use overlap semantics for batch-computed periods
     if (options.periodStart) {
-      query += ` AND period_start >= ?`;
+      query += ` AND period_end >= ?`;
       params.push(options.periodStart);
     }
 
     if (options.periodEnd) {
-      query += ` AND period_end <= ?`;
+      query += ` AND period_start <= ?`;
       params.push(options.periodEnd);
     }
 
@@ -478,6 +480,106 @@ export class D1AnalyticsService {
       to_channel: string;
       probability: number;
       transition_count: number;
+    }>();
+
+    return result.results;
+  }
+
+  /**
+   * Get page-to-page flow transitions for the PageFlowChart widget.
+   *
+   * Data architecture (Feb 2026):
+   * - Cron writes daily aggregate rows to funnel_transitions (one row per day per transition)
+   * - This query aggregates across matching days via GROUP BY SUM for the requested date range
+   * - D1 stores 30 days of daily data (rolling window, cleaned up by cron)
+   * - For ranges beyond 30 days, the endpoint handler falls back to R2 SQL reconstruction
+   *
+   * Node types:
+   *   page_url  → page_url   — page-to-page navigation
+   *   source    → page_url   — UTM/ad campaign → landing page
+   *   referrer  → page_url   — organic referrer → landing page
+   *   page_url  → connector  — page → external connector endpoint (Stripe, Shopify, etc.)
+   *   page      → page       — legacy channel-level rows (staging compatibility)
+   *   referrer  → page       — legacy referrer rows (staging compatibility)
+   *
+   * @see clearlift-cron/.../probabilistic-attribution.ts  — populate-page-flow step
+   * @see clearlift-api/.../d1-metrics.ts                  — GetD1PageFlow endpoint + R2 fallback
+   */
+  async getPageFlowTransitions(
+    orgId: string,
+    options: {
+      periodStart?: string;
+      periodEnd?: string;
+      limit?: number;
+    } = {}
+  ): Promise<{
+    from_id: string;
+    from_name: string | null;
+    from_type: string;
+    to_id: string;
+    to_name: string | null;
+    to_type: string;
+    visitors_at_from: number;
+    visitors_transitioned: number;
+    transition_rate: number;
+    conversions: number;
+    revenue_cents: number;
+  }[]> {
+    // Daily aggregate rows: GROUP BY from/to and SUM across matching days
+    // Supports both new page_url/source/referrer types and legacy page/referrer types (staging)
+    let query = `
+      SELECT from_id, from_name, from_type, to_id, to_name, to_type,
+        SUM(visitors_at_from) as visitors_at_from,
+        SUM(visitors_transitioned) as visitors_transitioned,
+        CASE WHEN SUM(visitors_at_from) > 0
+          THEN CAST(SUM(visitors_transitioned) AS REAL) / SUM(visitors_at_from)
+          ELSE 0 END as transition_rate,
+        SUM(conversions) as conversions,
+        SUM(revenue_cents) as revenue_cents
+      FROM funnel_transitions
+      WHERE organization_id = ?
+        AND (
+          (from_type = 'page_url' AND to_type = 'page_url')
+          OR (from_type = 'source' AND to_type = 'page_url')
+          OR (from_type = 'referrer' AND to_type = 'page_url')
+          OR (from_type = 'page_url' AND to_type = 'connector')
+          OR (from_type = 'page' AND to_type = 'page')
+          OR (from_type = 'referrer' AND to_type = 'page')
+        )
+    `;
+    const params: unknown[] = [orgId];
+
+    // Use overlap semantics: include rows whose period overlaps the requested range
+    if (options.periodStart) {
+      query += ` AND period_end >= ?`;
+      params.push(options.periodStart);
+    }
+
+    if (options.periodEnd) {
+      query += ` AND period_start <= ?`;
+      params.push(options.periodEnd);
+    }
+
+    query += ` GROUP BY from_type, from_id, from_name, to_type, to_id, to_name`;
+
+    const limit = options.limit || 50;
+    // Page-URL-level rows rank above legacy channel-level rows
+    query += ` ORDER BY CASE WHEN from_type IN ('page_url', 'source', 'referrer') THEN 0 ELSE 1 END, visitors_transitioned DESC LIMIT ?`;
+    params.push(limit);
+
+    const stmt = this.session.prepare(query);
+    const result = await stmt.bind(...params).all<{
+      from_id: string;
+      from_name: string | null;
+      from_type: string;
+      to_id: string;
+      to_name: string | null;
+      to_type: string;
+      visitors_at_from: number;
+      visitors_transitioned: number;
+      transition_rate: number;
+      conversions: number;
+      revenue_cents: number;
     }>();
 
     return result.results;
@@ -576,7 +678,7 @@ export class D1AnalyticsService {
         impressions: row.impressions || 0,
         clicks: row.clicks || 0,
         spend: (row.spend_cents || 0) / 100,
-        conversions: row.conversions || 0,
+        conversions: Math.round(row.conversions || 0),
         revenue: (row.conversion_value_cents || 0) / 100,
         ctr: row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0,
         cpc: row.clicks > 0 ? (row.spend_cents / row.clicks) / 100 : 0,
@@ -606,7 +708,10 @@ export class D1AnalyticsService {
       WHERE c.organization_id = ? AND c.platform = 'google'
     `).bind(startDate, endDate, orgId).first<PlatformSummary>();
 
-    return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    if (!result) return { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    // Google Ads stores fractional conversions — round for integer display
+    result.conversions = Math.round(result.conversions);
+    return result;
   }
 
   // =============================================================================
@@ -624,7 +729,7 @@ export class D1AnalyticsService {
     let query = `
       SELECT
         id, organization_id, account_id, campaign_id, campaign_name,
-        campaign_status, objective, daily_budget_cents, lifetime_budget_cents,
+        campaign_status, objective, budget_cents, budget_type,
         updated_at as last_synced_at, created_at, updated_at
       FROM ad_campaigns
       WHERE organization_id = ? AND platform = 'facebook'
@@ -696,7 +801,7 @@ export class D1AnalyticsService {
         impressions: row.impressions || 0,
         clicks: row.clicks || 0,
         spend: (row.spend_cents || 0) / 100,
-        conversions: row.conversions || 0,
+        conversions: Math.round(row.conversions || 0),
         revenue: (row.conversion_value_cents || 0) / 100,
         ctr: row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0,
         cpc: row.clicks > 0 ? (row.spend_cents / row.clicks) / 100 : 0,
@@ -726,7 +831,9 @@ export class D1AnalyticsService {
       WHERE c.organization_id = ? AND c.platform = 'facebook'
     `).bind(startDate, endDate, orgId).first<PlatformSummary>();
 
-    return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    if (!result) return { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    result.conversions = Math.round(result.conversions);
+    return result;
   }
 
   // =============================================================================
@@ -744,7 +851,7 @@ export class D1AnalyticsService {
     let query = `
       SELECT
         id, organization_id, account_id as advertiser_id, campaign_id, campaign_name,
-        campaign_status, objective, budget_mode, budget_cents,
+        campaign_status, objective, budget_type, budget_cents,
         updated_at as last_synced_at, created_at, updated_at
       FROM ad_campaigns
       WHERE organization_id = ? AND platform = 'tiktok'
@@ -816,7 +923,7 @@ export class D1AnalyticsService {
         impressions: row.impressions || 0,
         clicks: row.clicks || 0,
         spend: (row.spend_cents || 0) / 100,
-        conversions: row.conversions || 0,
+        conversions: Math.round(row.conversions || 0),
         revenue: (row.conversion_value_cents || 0) / 100,
         ctr: row.impressions > 0 ? (row.clicks / row.impressions) * 100 : 0,
         cpc: row.clicks > 0 ? (row.spend_cents / row.clicks) / 100 : 0,
@@ -846,7 +953,9 @@ export class D1AnalyticsService {
       WHERE c.organization_id = ? AND c.platform = 'tiktok'
     `).bind(startDate, endDate, orgId).first<PlatformSummary>();
 
-    return result || { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    if (!result) return { spend_cents: 0, impressions: 0, clicks: 0, conversions: 0, conversion_value_cents: 0, campaigns: 0 };
+    result.conversions = Math.round(result.conversions);
+    return result;
   }
 
   // =============================================================================
@@ -926,7 +1035,7 @@ export class D1AnalyticsService {
         spend_cents: row.spend_cents,
         impressions: row.impressions,
         clicks: row.clicks,
-        conversions: row.conversions,
+        conversions: Math.round(row.conversions),
         conversion_value_cents: row.conversion_value_cents,
         campaigns: row.campaigns,
       };
@@ -952,6 +1061,8 @@ export class D1AnalyticsService {
 
   /**
    * Get Stripe charges for an organization
+   * Reads from connector_events WHERE source_platform = 'stripe'
+   * Maps connector_events columns to the StripeChargeRow interface
    */
   async getStripeCharges(
     orgId: string,
@@ -961,14 +1072,28 @@ export class D1AnalyticsService {
     options: { status?: string; currency?: string; minAmount?: number; maxAmount?: number; limit?: number; offset?: number } = {}
   ): Promise<StripeChargeRow[]> {
     let query = `
-      SELECT *
-      FROM stripe_charges
+      SELECT
+        id,
+        organization_id,
+        external_id as charge_id,
+        customer_external_id as customer_id,
+        customer_email_hash,
+        value_cents as amount_cents,
+        currency,
+        status,
+        transacted_at as stripe_created_at,
+        metadata,
+        created_at,
+        json_extract(metadata, '$.billing_reason') as billing_reason,
+        json_extract(metadata, '$.has_invoice') as has_invoice,
+        json_extract(metadata, '$.payment_method_type') as payment_method_type
+      FROM connector_events
       WHERE organization_id = ?
-        AND connection_id = ?
-        AND stripe_created_at >= ?
-        AND stripe_created_at <= ?
+        AND source_platform = 'stripe'
+        AND transacted_at >= ?
+        AND transacted_at <= ?
     `;
-    const params: unknown[] = [orgId, connectionId, startDate, endDate + 'T23:59:59Z'];
+    const params: unknown[] = [orgId, startDate, endDate + 'T23:59:59Z'];
 
     if (options.status) {
       query += ` AND status = ?`;
@@ -979,15 +1104,15 @@ export class D1AnalyticsService {
       params.push(options.currency);
     }
     if (options.minAmount !== undefined) {
-      query += ` AND amount_cents >= ?`;
+      query += ` AND value_cents >= ?`;
       params.push(options.minAmount * 100);
     }
     if (options.maxAmount !== undefined) {
-      query += ` AND amount_cents <= ?`;
+      query += ` AND value_cents <= ?`;
       params.push(options.maxAmount * 100);
     }
 
-    query += ` ORDER BY stripe_created_at DESC LIMIT ? OFFSET ?`;
+    query += ` ORDER BY transacted_at DESC LIMIT ? OFFSET ?`;
     params.push(options.limit || 100, options.offset || 0);
 
     const result = await this.session.prepare(query).bind(...params).all<StripeChargeRow>();
@@ -996,6 +1121,7 @@ export class D1AnalyticsService {
 
   /**
    * Get Stripe daily summary for an organization
+   * Aggregated from connector_events WHERE source_platform = 'stripe'
    */
   async getStripeDailySummary(
     orgId: string,
@@ -1003,19 +1129,32 @@ export class D1AnalyticsService {
     endDate: string
   ): Promise<StripeDailySummaryRow[]> {
     const result = await this.session.prepare(`
-      SELECT *
-      FROM stripe_daily_summary
+      SELECT
+        0 as id,
+        organization_id,
+        DATE(transacted_at) as summary_date,
+        COUNT(*) as total_charges,
+        COALESCE(SUM(value_cents), 0) as total_amount_cents,
+        COUNT(*) as successful_charges,
+        0 as failed_charges,
+        0 as refunded_amount_cents,
+        COUNT(DISTINCT customer_external_id) as unique_customers,
+        MIN(created_at) as created_at
+      FROM connector_events
       WHERE organization_id = ?
-        AND summary_date >= ?
-        AND summary_date <= ?
+        AND source_platform = 'stripe'
+        AND transacted_at >= ?
+        AND transacted_at <= ?
+      GROUP BY DATE(transacted_at)
       ORDER BY summary_date DESC
-    `).bind(orgId, startDate, endDate).all<StripeDailySummaryRow>();
+    `).bind(orgId, startDate, endDate + 'T23:59:59Z').all<StripeDailySummaryRow>();
 
     return result.results;
   }
 
   /**
-   * Get Stripe revenue summary for an organization (computed from charges if daily summary missing)
+   * Get Stripe revenue summary for an organization
+   * Reads from connector_events WHERE source_platform = 'stripe'
    */
   async getStripeSummary(
     orgId: string,
@@ -1026,15 +1165,15 @@ export class D1AnalyticsService {
     const result = await this.session.prepare(`
       SELECT
         COUNT(*) as total_transactions,
-        COALESCE(SUM(amount_cents), 0) as total_revenue_cents,
+        COALESCE(SUM(value_cents), 0) as total_revenue_cents,
         COUNT(*) as successful_count,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM stripe_charges
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND connection_id = ?
-        AND stripe_created_at >= ?
-        AND stripe_created_at <= ?
-    `).bind(orgId, connectionId, startDate, endDate + 'T23:59:59Z').first<{
+        AND source_platform = 'stripe'
+        AND transacted_at >= ?
+        AND transacted_at <= ?
+    `).bind(orgId, startDate, endDate + 'T23:59:59Z').first<{
       total_transactions: number;
       total_revenue_cents: number;
       successful_count: number;
@@ -1053,7 +1192,8 @@ export class D1AnalyticsService {
   }
 
   /**
-   * Get Stripe charges with time series aggregation
+   * Get Stripe events with time series aggregation
+   * Reads from connector_events WHERE source_platform = 'stripe'
    */
   async getStripeTimeSeries(
     orgId: string,
@@ -1065,29 +1205,29 @@ export class D1AnalyticsService {
     let dateFormat: string;
     switch (groupBy) {
       case 'week':
-        dateFormat = "strftime('%Y-W%W', stripe_created_at)";
+        dateFormat = "strftime('%Y-W%W', transacted_at)";
         break;
       case 'month':
-        dateFormat = "strftime('%Y-%m', stripe_created_at)";
+        dateFormat = "strftime('%Y-%m', transacted_at)";
         break;
       default:
-        dateFormat = "date(stripe_created_at)";
+        dateFormat = "date(transacted_at)";
     }
 
     const result = await this.session.prepare(`
       SELECT
         ${dateFormat} as date,
-        SUM(amount_cents) as revenue_cents,
+        SUM(value_cents) as revenue_cents,
         COUNT(*) as transactions,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM stripe_charges
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND connection_id = ?
-        AND stripe_created_at >= ?
-        AND stripe_created_at <= ?
+        AND source_platform = 'stripe'
+        AND transacted_at >= ?
+        AND transacted_at <= ?
       GROUP BY ${dateFormat}
       ORDER BY date ASC
-    `).bind(orgId, connectionId, startDate, endDate + 'T23:59:59Z').all<{
+    `).bind(orgId, startDate, endDate + 'T23:59:59Z').all<{
       date: string;
       revenue_cents: number;
       transactions: number;
@@ -1104,7 +1244,7 @@ export class D1AnalyticsService {
 
   /**
    * Get real-time Stripe summary for the last N hours
-   * Used by Real-Time analytics when business_type is 'ecommerce' or 'saas'
+   * Reads from connector_events WHERE source_platform = 'stripe'
    */
   async getStripeRealtimeSummary(
     orgId: string,
@@ -1114,11 +1254,12 @@ export class D1AnalyticsService {
       SELECT
         COUNT(*) as total_charges,
         COUNT(*) as successful_charges,
-        SUM(amount_cents) as total_revenue_cents,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM stripe_charges
+        COALESCE(SUM(value_cents), 0) as total_revenue_cents,
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
+        AND source_platform = 'stripe'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
     `).bind(orgId, hours).first<{
       total_charges: number;
       successful_charges: number;
@@ -1136,6 +1277,7 @@ export class D1AnalyticsService {
 
   /**
    * Get real-time Stripe time series for charts
+   * Reads from connector_events WHERE source_platform = 'stripe'
    */
   async getStripeRealtimeTimeSeries(
     orgId: string,
@@ -1143,13 +1285,14 @@ export class D1AnalyticsService {
   ): Promise<StripeRealtimeTimeSeriesRow[]> {
     const result = await this.session.prepare(`
       SELECT
-        strftime('%Y-%m-%d %H:00:00', stripe_created_at) as bucket,
+        strftime('%Y-%m-%d %H:00:00', transacted_at) as bucket,
         COUNT(*) as conversions,
-        SUM(amount_cents) as revenue_cents
-      FROM stripe_charges
+        COALESCE(SUM(value_cents), 0) as revenue_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND stripe_created_at >= datetime('now', '-' || ? || ' hours')
-      GROUP BY strftime('%Y-%m-%d %H:00:00', stripe_created_at)
+        AND source_platform = 'stripe'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
+      GROUP BY strftime('%Y-%m-%d %H:00:00', transacted_at)
       ORDER BY bucket ASC
     `).bind(orgId, hours).all<{
       bucket: string;
@@ -1166,7 +1309,7 @@ export class D1AnalyticsService {
 
   /**
    * Get real-time Shopify summary for the last N hours
-   * Used by Real-Time analytics when business_type is 'ecommerce'
+   * Reads from connector_events WHERE source_platform = 'shopify'
    */
   async getShopifyRealtimeSummary(
     orgId: string,
@@ -1175,12 +1318,13 @@ export class D1AnalyticsService {
     const result = await this.session.prepare(`
       SELECT
         COUNT(*) as total_orders,
-        SUM(CASE WHEN financial_status = 'paid' THEN 1 ELSE 0 END) as paid_orders,
-        SUM(CASE WHEN financial_status = 'paid' THEN total_price_cents ELSE 0 END) as total_revenue_cents,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM shopify_orders
+        COUNT(*) as paid_orders,
+        COALESCE(SUM(value_cents), 0) as total_revenue_cents,
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND shopify_created_at >= datetime('now', '-' || ? || ' hours')
+        AND source_platform = 'shopify'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
     `).bind(orgId, hours).first<{
       total_orders: number;
       paid_orders: number;
@@ -1198,6 +1342,7 @@ export class D1AnalyticsService {
 
   /**
    * Get real-time Shopify time series for charts
+   * Reads from connector_events WHERE source_platform = 'shopify'
    */
   async getShopifyRealtimeTimeSeries(
     orgId: string,
@@ -1205,13 +1350,14 @@ export class D1AnalyticsService {
   ): Promise<ShopifyRealtimeTimeSeriesRow[]> {
     const result = await this.session.prepare(`
       SELECT
-        strftime('%Y-%m-%d %H:00:00', shopify_created_at) as bucket,
-        SUM(CASE WHEN financial_status = 'paid' THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN financial_status = 'paid' THEN total_price_cents ELSE 0 END) as revenue_cents
-      FROM shopify_orders
+        strftime('%Y-%m-%d %H:00:00', transacted_at) as bucket,
+        COUNT(*) as conversions,
+        COALESCE(SUM(value_cents), 0) as revenue_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND shopify_created_at >= datetime('now', '-' || ? || ' hours')
-      GROUP BY strftime('%Y-%m-%d %H:00:00', shopify_created_at)
+        AND source_platform = 'shopify'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
+      GROUP BY strftime('%Y-%m-%d %H:00:00', transacted_at)
       ORDER BY bucket ASC
     `).bind(orgId, hours).all<{
       bucket: string;
@@ -1286,7 +1432,6 @@ export class D1AnalyticsService {
 export interface StripeChargeRow {
   id: string;
   organization_id: string;
-  connection_id: string;
   charge_id: string;
   customer_id: string | null;
   customer_email_hash: string | null;
@@ -1297,7 +1442,6 @@ export interface StripeChargeRow {
   payment_method_type: string | null;
   stripe_created_at: string;
   metadata: string | null;
-  raw_data: string | null;
   created_at: string;
 }
 

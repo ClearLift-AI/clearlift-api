@@ -734,14 +734,8 @@ export class DeleteAccount extends OpenAPIRoute {
           'sync_jobs',
           'org_tag_mappings',
           'org_tracking_configs',
-          'consent_configurations',
           'ai_optimization_settings',
-          'conversion_goals',
           'tracking_domains',
-          'identity_mappings',
-          'identity_merges',
-          'onboarding_progress',
-          // Note: onboarding_steps is a global reference table with no organization_id
           'invitations',
           'organization_members',
         ];
@@ -763,6 +757,17 @@ export class DeleteAccount extends OpenAPIRoute {
 
         // Execute all org deletions in a single batch
         await c.env.DB.batch(batchStatements);
+
+        // Delete identity tables from ANALYTICS_DB (moved from core DB)
+        const analyticsIdentityStatements: D1PreparedStatement[] = [
+          c.env.ANALYTICS_DB.prepare(`
+            DELETE FROM identity_mappings WHERE organization_id IN (${orgPlaceholders})
+          `).bind(...orgsToDelete),
+          c.env.ANALYTICS_DB.prepare(`
+            DELETE FROM identity_merges WHERE organization_id IN (${orgPlaceholders})
+          `).bind(...orgsToDelete),
+        ];
+        await c.env.ANALYTICS_DB.batch(analyticsIdentityStatements);
       }
 
       // OPTIMIZED: Batch leave multiple orgs

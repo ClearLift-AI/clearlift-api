@@ -75,9 +75,10 @@ const squareProvider: RevenueSourceProvider = {
   meta,
 
   async hasData(db, orgId) {
+    // All connectors use the unified connector_events table
     const result = await db.prepare(`
-      SELECT 1 FROM square_transactions
-      WHERE organization_id = ? LIMIT 1
+      SELECT 1 FROM connector_events
+      WHERE organization_id = ? AND source_platform = 'square' LIMIT 1
     `).bind(orgId).first();
     return !!result;
   },
@@ -85,12 +86,13 @@ const squareProvider: RevenueSourceProvider = {
   async getSummary(db, orgId, hours) {
     const result = await db.prepare(`
       SELECT
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN status = 'completed' THEN amount_cents ELSE 0 END) as revenue_cents,
-        COUNT(DISTINCT customer_id) as unique_customers
-      FROM square_transactions
+        SUM(CASE WHEN status IN ('succeeded', 'paid', 'completed') THEN 1 ELSE 0 END) as conversions,
+        SUM(CASE WHEN status IN ('succeeded', 'paid', 'completed') THEN value_cents ELSE 0 END) as revenue_cents,
+        COUNT(DISTINCT customer_external_id) as unique_customers
+      FROM connector_events
       WHERE organization_id = ?
-        AND created_at >= datetime('now', '-' || ? || ' hours')
+        AND source_platform = 'square'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
     `).bind(orgId, hours).first();
 
     return {
@@ -103,12 +105,13 @@ const squareProvider: RevenueSourceProvider = {
   async getTimeSeries(db, orgId, hours) {
     const result = await db.prepare(`
       SELECT
-        strftime('%Y-%m-%d %H:00:00', created_at) as bucket,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as conversions,
-        SUM(CASE WHEN status = 'completed' THEN amount_cents ELSE 0 END) as revenue_cents
-      FROM square_transactions
+        strftime('%Y-%m-%d %H:00:00', transacted_at) as bucket,
+        SUM(CASE WHEN status IN ('succeeded', 'paid', 'completed') THEN 1 ELSE 0 END) as conversions,
+        SUM(CASE WHEN status IN ('succeeded', 'paid', 'completed') THEN value_cents ELSE 0 END) as revenue_cents
+      FROM connector_events
       WHERE organization_id = ?
-        AND created_at >= datetime('now', '-' || ? || ' hours')
+        AND source_platform = 'square'
+        AND transacted_at >= datetime('now', '-' || ? || ' hours')
       GROUP BY bucket
       ORDER BY bucket ASC
     `).bind(orgId, hours).all();
@@ -208,9 +211,9 @@ const result = await getCombinedRevenue(
 
 | Source | Table | Conversion Criteria | Revenue Field |
 |--------|-------|---------------------|---------------|
-| Stripe | `stripe_charges` | `status = 'succeeded'` | `amount_cents` |
-| Shopify | `shopify_orders` | `financial_status = 'paid'` | `total_price_cents` |
-| Jobber | `jobber_invoices` | `status = 'paid'` or `is_paid = 1` | `total_cents` |
+| Stripe | `connector_events WHERE source_platform='stripe'` | `status IN ('succeeded','paid')` | `value_cents` |
+| Shopify | `connector_events WHERE source_platform='shopify'` | `status IN ('paid','fulfilled')` | `value_cents` |
+| Jobber | `connector_events WHERE source_platform='jobber'` | `status IN ('completed','paid')` | `value_cents` |
 
 ## Settings Integration
 
@@ -235,9 +238,10 @@ Users can toggle sources on/off in Settings → AI & Automation → Conversion S
 
 To add support for new platforms:
 
-1. Create the database migration for the platform's data table
-2. Implement the sync workflow in clearlift-cron
-3. Create the revenue source provider (as shown above)
+1. Add the connector config seed to `migrations-adbliss-analytics` (events_schema JSON)
+2. Implement the sync workflow in clearlift-cron (writes to `connector_events`)
+3. Create the revenue source provider (as shown above — queries `connector_events WHERE source_platform = '...'`)
 4. Add the import to `providers.ts`
 
+All connectors use the unified `connector_events` table — no per-platform tables needed.
 The dashboard will automatically show the new source in Real-Time analytics.

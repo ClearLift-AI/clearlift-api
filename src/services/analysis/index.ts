@@ -1,16 +1,12 @@
 /**
  * Analysis Services
  *
- * Hierarchical AI analysis engine for ad performance insights
+ * AI analysis engine for ad performance insights.
+ * v2 (Feb 2026): Math-first portfolio analysis + agentic recommendations.
  */
 
-// LLM Layer
+// LLM Layer (model constants + types)
 export * from './llm-provider';
-export * from './anthropic-client';
-export * from './gemini-client';
-export * from './llm-router';
-export * from './prompt-manager';
-export * from './analysis-logger';
 
 // Data Layer
 export * from './entity-tree';
@@ -18,9 +14,10 @@ export * from './metrics-fetcher';
 
 // Orchestration
 export * from './job-manager';
-export * from './hierarchical-analyzer';
 
-// Agentic Loop
+// Read-only query helpers
+export * from './analysis-queries';
+
+// Agentic tools (used by analysis-workflow.ts)
 export * from './recommendation-tools';
 export * from './exploration-tools';
-export * from './agentic-loop';

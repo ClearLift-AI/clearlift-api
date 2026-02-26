@@ -12,7 +12,6 @@ import {
   Platform,
   EntityLevel
 } from '../services/analysis/entity-tree';
-import { AnalysisLevel } from '../services/analysis/llm-provider';
 
 /**
  * Serializable version of Entity (no circular refs, no Maps)
@@ -145,81 +144,6 @@ export function deserializeEntityTree(serialized: SerializedEntityTree): EntityT
 }
 
 /**
- * Get all entities at a specific level from serialized tree
- */
-export function getEntitiesAtLevel(
-  serialized: SerializedEntityTree,
-  level: EntityLevel
-): SerializedEntity[] {
-  const entities: SerializedEntity[] = [];
-
-  const collectEntities = (entity: SerializedEntity) => {
-    if (entity.level === level) {
-      entities.push(entity);
-    }
-    for (const child of entity.children) {
-      collectEntities(child);
-    }
-  };
-
-  for (const [, account] of serialized.accounts) {
-    collectEntities(account);
-  }
-
-  return entities;
-}
-
-/**
- * Check if an entity's status is considered "active"
- */
-export function isActiveStatus(status: string | undefined): boolean {
-  if (!status) return false;
-  const activeStatuses = ['ACTIVE', 'ENABLED', 'RUNNING', 'LIVE'];
-  return activeStatuses.includes(status.toUpperCase());
-}
-
-/**
- * Build a map of entity IDs that should be skipped due to disabled parent hierarchy.
- * If a campaign is disabled, all its ad sets and ads should be skipped.
- * If an ad set is disabled, all its ads should be skipped.
- *
- * This dramatically reduces LLM calls for accounts with many paused campaigns.
- */
-export function buildHierarchySkipSet(tree: SerializedEntityTree): Set<string> {
-  const skipSet = new Set<string>();
-
-  const markChildrenForSkip = (entity: SerializedEntity) => {
-    for (const child of entity.children) {
-      skipSet.add(child.id);
-      // Recursively mark all descendants
-      markChildrenForSkip(child);
-    }
-  };
-
-  // Traverse the tree and mark children of disabled entities
-  for (const [, account] of tree.accounts) {
-    // Check each campaign
-    for (const campaign of account.children) {
-      if (!isActiveStatus(campaign.status)) {
-        // Campaign is disabled - skip ALL its children (ad sets and ads)
-        markChildrenForSkip(campaign);
-      } else {
-        // Campaign is active - check ad sets
-        for (const adset of campaign.children) {
-          if (!isActiveStatus(adset.status)) {
-            // Ad set is disabled - skip its ads
-            markChildrenForSkip(adset);
-          }
-        }
-      }
-    }
-  }
-
-  return skipSet;
-}
-
-
-/**
  * Parameters for the analysis workflow
  */
 export interface AnalysisWorkflowParams {
@@ -237,15 +161,14 @@ export interface AnalysisWorkflowParams {
       maxRecommendations?: number;
       enableExploration?: boolean;
     };
+    budgetStrategy?: 'conservative' | 'moderate' | 'aggressive';
+    dailyCapCents?: number | null;
+    monthlyCapCents?: number | null;
+    maxCacCents?: number | null;
+    growthStrategy?: 'lean' | 'balanced' | 'bold';
+    aiControl?: 'copilot' | 'autopilot';
+    businessType?: 'ecommerce' | 'lead_gen' | 'saas';
   };
-}
-
-/**
- * Result from analyzing a single level
- */
-export interface LevelAnalysisResult {
-  summaries: Record<string, string>;  // entityId -> summary
-  processedCount: number;
 }
 
 /**
@@ -273,39 +196,9 @@ export interface AgenticIterationResult {
   // Accumulated insight state (passed between iterations)
   accumulatedInsightId?: string;
   accumulatedInsights?: AccumulatedInsightData[];
-}
-
-/**
- * Create concurrency limiter for LLM calls within a step
- */
-export function createLimiter(concurrency: number) {
-  let active = 0;
-  const queue: Array<() => void> = [];
-
-  const next = () => {
-    if (queue.length > 0 && active < concurrency) {
-      active++;
-      const resolve = queue.shift()!;
-      resolve();
-    }
-  };
-
-  return <T>(fn: () => Promise<T>): Promise<T> => {
-    return new Promise<T>((resolve, reject) => {
-      const run = async () => {
-        try {
-          const result = await fn();
-          resolve(result);
-        } catch (error) {
-          reject(error);
-        } finally {
-          active--;
-          next();
-        }
-      };
-
-      queue.push(run);
-      next();
-    });
-  };
+  // Tool call names from this iteration (for sequential pattern detection)
+  toolCallNames?: string[];
+  // Token usage from this iteration's LLM call
+  inputTokens?: number;
+  outputTokens?: number;
 }

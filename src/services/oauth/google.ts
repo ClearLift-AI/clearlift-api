@@ -316,10 +316,10 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
       throw new Error('Campaign has no budget resource');
     }
 
-    // Update the budget
-    const mutateUrl = `https://googleads.googleapis.com/v22/${budgetResourceName}:mutate`;
+    // Update the budget via the campaignBudgets:mutate endpoint
+    const url = `https://googleads.googleapis.com/v22/customers/${customerId}/campaignBudgets:mutate`;
 
-    const response = await fetch(mutateUrl.replace('/campaignBudgets/', '/customers/' + customerId + '/campaignBudgets:mutate'), {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${accessToken}`,
@@ -383,5 +383,126 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
     }
 
     return response.json();
+  }
+
+  /**
+   * Update campaign bidding strategy
+   *
+   * Google Ads standard bidding strategies are set directly on the campaign
+   * via the campaign_bidding_strategy union field:
+   *   maximize_conversions — optional target_cpa_micros
+   *   maximize_conversion_value — optional target_roas
+   *   manual_cpc — optional enhanced_cpc_enabled
+   *   target_impression_share — location, fraction, cpc_bid_ceiling_micros
+   *
+   * ECPC deprecated March 2025 — now equivalent to manual CPC.
+   */
+  async updateCampaignBiddingStrategy(
+    accessToken: string,
+    developerToken: string,
+    customerId: string,
+    campaignId: string,
+    strategy: {
+      type: 'MAXIMIZE_CONVERSIONS' | 'MAXIMIZE_CONVERSION_VALUE' | 'MANUAL_CPC' | 'TARGET_IMPRESSION_SHARE';
+      target_cpa_micros?: number;  // for maximize_conversions
+      target_roas?: number;        // for maximize_conversion_value (e.g. 2.0 = 200% ROAS)
+    }
+  ): Promise<any> {
+    const url = `https://googleads.googleapis.com/v22/customers/${customerId}/campaigns:mutate`;
+
+    // Build the bidding strategy field based on type
+    const campaignUpdate: any = {
+      resourceName: `customers/${customerId}/campaigns/${campaignId}`,
+    };
+    let updateMask = '';
+
+    switch (strategy.type) {
+      case 'MAXIMIZE_CONVERSIONS':
+        campaignUpdate.maximizeConversions = {};
+        if (strategy.target_cpa_micros) {
+          campaignUpdate.maximizeConversions.targetCpaMicros = strategy.target_cpa_micros.toString();
+        }
+        updateMask = 'maximize_conversions';
+        break;
+      case 'MAXIMIZE_CONVERSION_VALUE':
+        campaignUpdate.maximizeConversionValue = {};
+        if (strategy.target_roas) {
+          campaignUpdate.maximizeConversionValue.targetRoas = strategy.target_roas;
+        }
+        updateMask = 'maximize_conversion_value';
+        break;
+      case 'MANUAL_CPC':
+        campaignUpdate.manualCpc = {};
+        updateMask = 'manual_cpc';
+        break;
+      case 'TARGET_IMPRESSION_SHARE':
+        campaignUpdate.targetImpressionShare = {};
+        updateMask = 'target_impression_share';
+        break;
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'developer-token': developerToken,
+        'login-customer-id': customerId,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        operations: [{
+          update: campaignUpdate,
+          updateMask
+        }]
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to update Google campaign bidding strategy: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Read current campaign budget amount
+   * Returns budget in micros (1 dollar = 1,000,000 micros)
+   */
+  async readCampaignBudget(
+    accessToken: string,
+    developerToken: string,
+    customerId: string,
+    campaignId: string
+  ): Promise<{ budget_amount_micros: number; budget_resource_name: string }> {
+    const searchUrl = `https://googleads.googleapis.com/v22/customers/${customerId}/googleAds:search`;
+    const query = `SELECT campaign.campaign_budget, campaign_budget.amount_micros FROM campaign WHERE campaign.id = ${campaignId}`;
+
+    const response = await fetch(searchUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'developer-token': developerToken,
+        'login-customer-id': customerId,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ query })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to read Google campaign budget: ${error}`);
+    }
+
+    const data = await response.json() as any;
+    const result = data.results?.[0];
+    if (!result?.campaign?.campaignBudget || !result?.campaignBudget?.amountMicros) {
+      throw new Error('Campaign has no budget resource');
+    }
+
+    return {
+      budget_amount_micros: parseInt(result.campaignBudget.amountMicros, 10),
+      budget_resource_name: result.campaign.campaignBudget
+    };
   }
 }

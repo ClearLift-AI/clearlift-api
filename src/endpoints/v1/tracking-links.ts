@@ -177,6 +177,18 @@ export class CreateTrackingLink extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>();
     const body = data.body;
 
+    // Auto-create platform_connections row for tracking_link if it doesn't exist
+    // Uses ON CONFLICT to handle concurrent requests safely
+    const connectionId = nanoid(21);
+    await c.env.DB.prepare(`
+      INSERT INTO platform_connections (
+        id, organization_id, platform, account_id, account_name,
+        connected_by, connected_at, is_active, settings
+      ) VALUES (?, ?, 'tracking_link', 'internal', 'Tracking Links', ?, datetime('now'), 1,
+        json('{"auto_sync":false}'))
+      ON CONFLICT(organization_id, platform, account_id) DO NOTHING
+    `).bind(connectionId, orgId, session.user_id).run();
+
     // Generate short ID (12 chars, URL-safe)
     const id = nanoid(12);
     const now = new Date().toISOString();

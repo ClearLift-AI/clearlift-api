@@ -11,6 +11,8 @@
  * Uses D1 ANALYTICS_DB for metrics queries
  */
 
+import { fitPowerLaw } from './simulation-service';
+
 // D1Database type from Cloudflare Workers (matches worker-configuration.d.ts)
 type D1Database = {
   prepare(query: string): D1PreparedStatement;
@@ -50,14 +52,14 @@ interface D1ExecResult {
 export const EXPLORATION_TOOLS = {
   query_ad_metrics: {
     name: 'query_ad_metrics',
-    description: 'Query ad platform data. Scopes: "performance" — metrics for a specific entity (spend, impressions, clicks, etc.); "creatives" — ad creative details (copy, media); "audiences" — targeting/audience breakdown by dimension; "budgets" — current budget configuration for a campaign or ad set. Common params: platform, entity_type, entity_id, days. For "performance" scope: metrics array, include_verified_revenue. For "creatives" scope: ad_id. For "audiences" scope: dimension. For "budgets" scope: entity_type includes ad_group.',
+    description: 'Query ad platform data from D1. REQUIRED: platform (google/facebook/tiktok) and entity_type (campaign/adset/ad/ad_group) for all scopes except account-level. entity_id is REQUIRED for non-account queries — pass the campaign/ad group NAME (e.g. "Los Angeles - Search"), platform external ID, or D1 UUID. Names are resolved automatically. Scopes: "performance" — metrics for a specific entity; "children" — LIST all child entities with aggregated KPIs (e.g. entity_type=campaign shows its ad groups, entity_type=ad_group shows its ads); "creatives" — ad creative details; "audiences" — targeting breakdown by dimension; "budgets" — current budget config. Use entity_type "account" for aggregate platform-level performance (not for budgets/audiences). Use "children" scope to drill down the entity tree.',
     input_schema: {
       type: 'object' as const,
       properties: {
         scope: {
           type: 'string',
-          enum: ['performance', 'creatives', 'audiences', 'budgets'],
-          description: 'Which ad metrics operation to perform'
+          enum: ['performance', 'children', 'creatives', 'audiences', 'budgets'],
+          description: 'Which ad metrics operation to perform. Use "children" to list all child entities (ad groups in a campaign, or ads in an ad group) with their aggregated KPIs.'
         },
         platform: {
           type: 'string',
@@ -70,7 +72,7 @@ export const EXPLORATION_TOOLS = {
         },
         entity_id: {
           type: 'string',
-          description: 'The entity ID to query'
+          description: 'REQUIRED for non-account queries. Pass the entity NAME (e.g. "Los Angeles - Search", "Atlanta - Performance Max"), platform external ID, or D1 UUID. Names are auto-resolved.'
         },
         metrics: {
           type: 'array',
@@ -103,7 +105,7 @@ export const EXPLORATION_TOOLS = {
 
   query_revenue: {
     name: 'query_revenue',
-    description: 'Query revenue data from connected platforms. Scopes: "stripe" — Stripe charges/subscriptions with metadata filtering; "jobber" — Jobber completed jobs for field service; "shopify" — Shopify orders with UTM attribution and product breakdown; "ecommerce" — unified e-commerce data across platforms; "subscriptions" — MRR, LTV, churn, retention cohort analysis; "accounting" — invoices, expenses, P&L from QuickBooks/Xero. Common params: days, group_by. For "stripe": conversion_type, filters, metadata_filters, breakdown_by_metadata_key. For "shopify": filters (financial_status, fulfillment_status, etc.), include_products, include_attribution. For "ecommerce": platform, include_products, include_customers. For "subscriptions": metric (required), breakdown_by, filters. For "accounting": platform, data_type.',
+    description: 'Query revenue data from connected platforms (all via connector_events in ANALYTICS_DB). Scopes: "stripe" — Stripe payments with metadata filtering; "jobber" — Jobber completed jobs for field service; "shopify" — Shopify orders with UTM attribution and product breakdown; "ecommerce" — unified e-commerce data across platforms; "subscriptions" — MRR, LTV, churn, retention cohort analysis; "accounting" — invoices, expenses, P&L from QuickBooks/Xero. Common params: days, group_by. For "stripe": conversion_type, filters, metadata_filters, breakdown_by_metadata_key. For "shopify": filters (financial_status, fulfillment_status, etc.), include_products, include_attribution. For "ecommerce": platform, include_products, include_customers. For "subscriptions": metric (required), breakdown_by, filters. For "accounting": platform, data_type.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -120,7 +122,7 @@ export const EXPLORATION_TOOLS = {
         },
         group_by: {
           type: 'string',
-          description: 'Time/dimension grouping. For stripe/jobber: day/week/month. For shopify: day/week/month/utm_source/utm_campaign/source_name/shipping_country. For ecommerce: day/platform/status/utm_source/utm_campaign. For accounting: day/month/status/category.'
+          description: 'Time/dimension grouping. For stripe: day/week/month/geo. For jobber: day/week/month. For shopify: day/week/month/utm_source/utm_campaign/source_name. For ecommerce: day/platform/status/utm_source/utm_campaign/geo (geo extracts country/state from billing/shipping metadata — best with Stripe which stores billing_details). For accounting: day/month/status/category.'
         },
         platform: {
           type: 'string',
@@ -133,7 +135,7 @@ export const EXPLORATION_TOOLS = {
         },
         filters: {
           type: 'object',
-          description: 'For "stripe": status, min/max_amount_cents, currency, product_id. For "jobber": min/max_amount_cents. For "shopify": financial_status, fulfillment_status, min/max_total_cents, utm_source, utm_campaign, shipping_country. For "subscriptions": status array, plan_interval, min_ltv_cents.'
+          description: 'For "stripe": status, min/max_amount_cents, currency, product_id. For "jobber": min/max_amount_cents. For "shopify": financial_status, fulfillment_status, min/max_total_cents, utm_source, utm_campaign. For "ecommerce": financial_status, min/max_amount_cents. For "subscriptions": status array, plan_interval, min_ltv_cents.'
         },
         metadata_filters: {
           type: 'array',
@@ -442,13 +444,13 @@ export const EXPLORATION_TOOLS = {
 
   query_growth: {
     name: 'query_growth',
-    description: 'Query growth and brand metrics. Scopes: "cac" — historical CAC trend with optional AI predictions and baselines; "affiliates" — affiliate/partner program data with referral volume and commission costs; "social" — organic social media performance with post engagement and follower growth; "reviews" — review/reputation data with ratings and sentiment. Common params: days, platform. For "cac": include_predictions, include_baselines. For "affiliates": include_partners, group_by. For "social": include_posts, include_follower_trends. For "reviews": min_rating, include_sentiment.',
+    description: 'Query growth and brand metrics. Scopes: "cac" — historical CAC trend with optional AI predictions and baselines; "affiliates" — affiliate/partner program data with referral volume and commission costs; "social" — organic social media performance with post engagement and follower growth; "reviews" — review/reputation data with ratings and sentiment; "saturation_signals" — detect campaigns hitting frequency walls via CPC/CPM/CTR/efficiency trends over 60 days. Requires: platform, entity_type (campaign/ad_group/adset). Common params: days, platform. For "cac": include_predictions, include_baselines. For "affiliates": include_partners, group_by. For "social": include_posts, include_follower_trends. For "reviews": min_rating, include_sentiment.',
     input_schema: {
       type: 'object' as const,
       properties: {
         scope: {
           type: 'string',
-          enum: ['cac', 'affiliates', 'social', 'reviews'],
+          enum: ['cac', 'affiliates', 'social', 'reviews', 'saturation_signals'],
           description: 'Which growth metric to query'
         },
         days: {
@@ -494,6 +496,11 @@ export const EXPLORATION_TOOLS = {
         group_by: {
           type: 'string',
           description: 'For "affiliates" scope: day/partner/status/conversion_type'
+        },
+        entity_type: {
+          type: 'string',
+          enum: ['campaign', 'ad_group', 'adset'],
+          description: 'For "saturation_signals" scope: entity level to analyze'
         }
       },
       required: ['scope']
@@ -502,13 +509,13 @@ export const EXPLORATION_TOOLS = {
 
   calculate: {
     name: 'calculate',
-    description: 'Perform calculations for analysis. Scopes: "budget_change" — calculate new budget after percentage change (use before recommending budget changes); "pct_change" — calculate percentage change between two values; "spend_vs_revenue" — compare ad spend against actual revenue with true ROAS; "compare_entities" — compare performance metrics across multiple entities. For "budget_change": current_budget_cents, percentage_change. For "pct_change": old_value, new_value. For "spend_vs_revenue": days, platforms, breakdown_by. For "compare_entities": platform, entity_type, entity_ids, metrics, days.',
+    description: 'Perform calculations for analysis. Scopes: "budget_change" — calculate new budget after percentage change (use before recommending budget changes); "pct_change" — calculate percentage change between two values; "spend_vs_revenue" — compare ad spend against actual revenue with true ROAS; "compare_entities" — compare performance metrics across multiple entities; "marginal_efficiency" — project CPA at different spend levels using diminishing returns model (power-law fit on 90-day history). Requires: platform, entity_type, entity_id, days. For "budget_change": current_budget_cents, percentage_change. For "pct_change": old_value, new_value. For "spend_vs_revenue": days, platforms, breakdown_by. For "compare_entities": platform, entity_type, entity_ids, metrics, days.',
     input_schema: {
       type: 'object' as const,
       properties: {
         scope: {
           type: 'string',
-          enum: ['budget_change', 'pct_change', 'spend_vs_revenue', 'compare_entities'],
+          enum: ['budget_change', 'pct_change', 'spend_vs_revenue', 'compare_entities', 'marginal_efficiency'],
           description: 'Which calculation to perform'
         },
         current_budget_cents: {
@@ -545,12 +552,16 @@ export const EXPLORATION_TOOLS = {
         },
         platform: {
           type: 'string',
-          description: 'For "compare_entities" scope: the ad platform'
+          description: 'For "compare_entities"/"marginal_efficiency" scope: the ad platform'
         },
         entity_type: {
           type: 'string',
           enum: ['ad', 'adset', 'campaign'],
-          description: 'For "compare_entities" scope: type of entities to compare'
+          description: 'For "compare_entities"/"marginal_efficiency" scope: type of entities to compare or analyze'
+        },
+        entity_id: {
+          type: 'string',
+          description: 'For "marginal_efficiency" scope: entity name or ID to analyze'
         },
         entity_ids: {
           type: 'array',
@@ -622,6 +633,35 @@ export const EXPLORATION_TOOLS = {
       },
       required: ['connector_type', 'days']
     }
+  },
+
+  manage_watchlist: {
+    name: 'manage_watchlist',
+    description: 'Read or write to your persistent watchlist. Items survive between analysis runs. Use to track entities that need follow-up, note seasonal patterns, or flag recent changes to verify later. Max 2 active items per org.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'add', 'resolve'],
+          description: 'list: show all active watchlist items. add: create a new watch item. resolve: mark an item as resolved (you verified the outcome).'
+        },
+        entity_ref: { type: 'string', description: 'For "add": entity reference ID' },
+        entity_name: { type: 'string', description: 'For "add": entity name for display' },
+        platform: { type: 'string', description: 'For "add": ad platform' },
+        entity_type: { type: 'string', description: 'For "add": entity type (campaign, ad_group, ad)' },
+        watch_type: {
+          type: 'string',
+          enum: ['monitor_performance', 'check_back', 'budget_change_followup', 'seasonal_note', 'custom'],
+          description: 'For "add": type of watch'
+        },
+        note: { type: 'string', description: 'For "add": what to watch for and why' },
+        review_after: { type: 'string', description: 'For "add": ISO date (YYYY-MM-DD) when this should be reviewed' },
+        watchlist_id: { type: 'string', description: 'For "resolve": ID of the item to resolve' },
+        resolution_note: { type: 'string', description: 'For "resolve": what you found when checking back' }
+      },
+      required: ['action']
+    }
   }
 };
 
@@ -635,6 +675,9 @@ export function getExplorationTools(): Array<{
 }> {
   return Object.values(EXPLORATION_TOOLS);
 }
+
+/** @deprecated Use getExplorationTools() instead */
+export const getExplorationToolDefinitions = getExplorationTools;
 
 /**
  * Check if a tool name is an exploration tool
@@ -705,8 +748,9 @@ export async function getExplorationToolsForOrg(
       affiliates: (types) => types.has('affiliate'),
       social: (types) => types.has('social'),
       reviews: (types) => types.has('reviews'),
+      saturation_signals: (types) => types.has('ad_platform'),
     },
-    // calculate always included, list_active_connectors always included, query_unified_data always included
+    // calculate, list_active_connectors, query_unified_data, manage_watchlist — always included (no scope filter)
   };
 
   const allTools = getExplorationTools();
@@ -780,7 +824,7 @@ interface MetadataFilter {
 interface QueryStripeRevenueInput {
   days: number;
   conversion_type?: 'all' | 'charges' | 'subscriptions' | 'subscription_initial' | 'subscription_renewal';
-  group_by?: 'day' | 'week' | 'month';
+  group_by?: 'day' | 'week' | 'month' | 'geo';
   filters?: {
     status?: 'succeeded' | 'active' | 'trialing';
     min_amount_cents?: number;
@@ -908,7 +952,7 @@ interface QueryRealtimeTrafficInput {
 
 interface QueryShopifyRevenueInput {
   days: number;
-  group_by?: 'day' | 'week' | 'month' | 'utm_source' | 'utm_campaign' | 'source_name' | 'shipping_country';
+  group_by?: 'day' | 'week' | 'month' | 'utm_source' | 'utm_campaign' | 'source_name';
   filters?: {
     financial_status?: string;
     fulfillment_status?: string;
@@ -916,7 +960,6 @@ interface QueryShopifyRevenueInput {
     max_total_cents?: number;
     utm_source?: string;
     utm_campaign?: string;
-    shipping_country?: string;
   };
   include_products?: boolean;
   include_attribution?: boolean;
@@ -940,7 +983,7 @@ interface QueryCommEngagementInput {
 interface QueryEcommerceAnalyticsInput {
   days: number;
   platform?: string;
-  group_by?: 'day' | 'platform' | 'status' | 'utm_source' | 'utm_campaign';
+  group_by?: 'day' | 'platform' | 'status' | 'utm_source' | 'utm_campaign' | 'geo';
   include_products?: boolean;
   include_customers?: boolean;
 }
@@ -1001,13 +1044,26 @@ interface ListActiveConnectorsInput {
   include_data_stats?: boolean;
 }
 
+interface MarginalEfficiencyInput {
+  platform: string;
+  entity_type: string;
+  entity_id: string;
+  days?: number;
+}
+
+interface SaturationSignalsInput {
+  platform: string;
+  entity_type?: string;
+  days?: number;
+}
+
 /**
  * Exploration Tool Executor
  * Uses D1 ANALYTICS_DB for all queries
  * UPDATED: Now supports unified tables and dynamic platform discovery
  */
 export class ExplorationToolExecutor {
-  constructor(private db: D1Database, private aiDb?: D1Database) {}
+  constructor(private db: D1Database, private coreDb?: D1Database) {}
 
   /**
    * Execute an exploration tool and return results
@@ -1019,14 +1075,30 @@ export class ExplorationToolExecutor {
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
       switch (toolName) {
-        case 'query_ad_metrics':
+        case 'query_ad_metrics': {
+          // Validate platform is provided and valid
+          const validPlatforms = ['google', 'facebook', 'tiktok', 'linkedin', 'microsoft', 'pinterest', 'snapchat', 'twitter'];
+          if (!input.platform || typeof input.platform !== 'string') {
+            return { success: false, error: `Missing required parameter "platform". Must be one of: ${validPlatforms.join(', ')}` };
+          }
+          // Validate entity_type is provided for scopes that need it
+          const validEntityTypes = ['ad', 'adset', 'campaign', 'account', 'ad_group'];
+          if (['performance', 'audiences', 'budgets'].includes(input.scope) && (!input.entity_type || !validEntityTypes.includes(input.entity_type))) {
+            return { success: false, error: `Missing or invalid "entity_type" for scope "${input.scope}". Must be one of: ${validEntityTypes.join(', ')}` };
+          }
+          // Validate entity_id for scopes that require it (account-level queries are OK without entity_id)
+          if (['performance', 'creatives', 'audiences', 'budgets', 'children'].includes(input.scope) && input.entity_type !== 'account' && !input.entity_id) {
+            return { success: false, error: `Missing required parameter "entity_id" for scope "${input.scope}" with entity_type "${input.entity_type}". Provide the specific entity ID to query.` };
+          }
           switch (input.scope) {
             case 'performance': return await this.queryMetrics(input as QueryMetricsInput, orgId);
+            case 'children': return await this.queryChildren(input as QueryMetricsInput, orgId);
             case 'creatives': return await this.getCreativeDetails(input as GetCreativeDetailsInput, orgId);
             case 'audiences': return await this.getAudienceBreakdown(input as GetAudienceBreakdownInput, orgId);
             case 'budgets': return await this.getEntityBudget(input as GetEntityBudgetInput, orgId);
             default: return { success: false, error: `Unknown scope for query_ad_metrics: ${input.scope}` };
           }
+        }
         case 'query_revenue':
           switch (input.scope) {
             case 'stripe': return await this.queryStripeRevenue(input as QueryStripeRevenueInput, orgId);
@@ -1072,6 +1144,7 @@ export class ExplorationToolExecutor {
             case 'affiliates': return await this.queryAffiliateMetrics(input as QueryAffiliateMetricsInput, orgId);
             case 'social': return await this.querySocialMetrics(input as QuerySocialMetricsInput, orgId);
             case 'reviews': return await this.queryReviews(input as QueryReviewsInput, orgId);
+            case 'saturation_signals': return await this.getSaturationSignals(input as SaturationSignalsInput, orgId);
             default: return { success: false, error: `Unknown scope for query_growth: ${input.scope}` };
           }
         case 'calculate':
@@ -1080,12 +1153,15 @@ export class ExplorationToolExecutor {
             case 'pct_change': return this.calculatePercentageChange(input as CalculatePercentageChangeInput);
             case 'spend_vs_revenue': return await this.compareSpendToRevenue(input as CompareSpendToRevenueInput, orgId);
             case 'compare_entities': return await this.compareEntities(input as CompareEntitiesInput, orgId);
+            case 'marginal_efficiency': return await this.getMarginalEfficiency(input as MarginalEfficiencyInput, orgId);
             default: return { success: false, error: `Unknown scope for calculate: ${input.scope}` };
           }
         case 'query_unified_data':
           return await this.queryUnifiedData(input as QueryUnifiedDataInput, orgId);
         case 'list_active_connectors':
           return await this.listActiveConnectors(input as ListActiveConnectorsInput, orgId);
+        case 'manage_watchlist':
+          return await this.manageWatchlist(input, orgId);
         default:
           return { success: false, error: `Unknown exploration tool: ${toolName}` };
       }
@@ -1101,7 +1177,8 @@ export class ExplorationToolExecutor {
     input: QueryMetricsInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { platform, entity_type, entity_id, metrics, days, include_verified_revenue } = input;
+    const { platform, entity_type, metrics, days, include_verified_revenue } = input;
+    let { entity_id } = input;
 
     // Build date range
     const endDate = new Date();
@@ -1111,59 +1188,30 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // Try unified tables first (ad_metrics)
-      const hasUnified = await this.hasUnifiedData(orgId, platform);
-      let data: Array<{
+      // Resolve entity_id (name/UUID/external ID) to the external ID used in ad_metrics.entity_ref
+      if (entity_id && entity_type && entity_type !== 'account') {
+        const resolved = await this.resolveEntityId(entity_id, entity_type, platform, orgId);
+        if (resolved) {
+          entity_id = resolved.externalId;
+        }
+        // If resolution fails, pass through as-is — buildUnifiedMetricsQuery will just return empty results
+      }
+
+      // Use unified ad_metrics table
+      const { query, params } = this.buildUnifiedMetricsQuery(platform, entity_type, entity_id, days, orgId);
+      const result = await this.db.prepare(query).bind(...params).all<{
         metric_date: string;
-        spend_cents: number;
         impressions: number;
         clicks: number;
+        spend_cents: number;
         conversions: number;
         conversion_value_cents: number;
-      }> = [];
-
-      if (hasUnified) {
-        // Use unified ad_metrics table
-        const { query, params } = this.buildUnifiedMetricsQuery(platform, entity_type, entity_id, days, orgId);
-        const result = await this.db.prepare(query).bind(...params).all<{
-          metric_date: string;
-          impressions: number;
-          clicks: number;
-          spend_cents: number;
-          conversions: number;
-          conversion_value_cents: number;
-          ctr: number;
-          cpc_cents: number;
-          cpm_cents: number;
-          extra_metrics: string | null;
-        }>();
-        data = result.results || [];
-      } else {
-        // Fall back to legacy platform-specific tables
-        const tableInfo = this.getMetricsTableInfo(platform, entity_type);
-        if (!tableInfo) {
-          return { success: false, error: `Unsupported platform/entity for metrics: ${platform}/${entity_type}` };
-        }
-
-        // D1 SQL query for legacy tables
-        const sql = `
-          SELECT metric_date, spend_cents, impressions, clicks, conversions, conversion_value_cents
-          FROM ${tableInfo.table}
-          WHERE ${tableInfo.idColumn} = ? AND organization_id = ?
-            AND metric_date >= ? AND metric_date <= ?
-          ORDER BY metric_date ASC
-        `;
-
-        const result = await this.db.prepare(sql).bind(entity_id, orgId, startStr, endStr).all<{
-          metric_date: string;
-          spend_cents: number;
-          impressions: number;
-          clicks: number;
-          conversions: number;
-          conversion_value_cents: number;
-        }>();
-        data = result.results || [];
-      }
+        ctr: number;
+        cpc_cents: number;
+        cpm_cents: number;
+        extra_metrics: string | null;
+      }>();
+      const data = result.results || [];
 
       // Enrich with derived metrics
       const enrichedData = this.enrichMetrics(data || [], metrics);
@@ -1186,9 +1234,9 @@ export class ExplorationToolExecutor {
           : 0;
 
         response.verified_metrics = {
-          stripe_revenue_cents: verifiedMetrics.revenue_cents,
-          stripe_revenue: '$' + (verifiedMetrics.revenue_cents / 100).toFixed(2),
-          stripe_conversions: verifiedMetrics.conversions,
+          revenue_cents: verifiedMetrics.revenue_cents,
+          revenue: '$' + (verifiedMetrics.revenue_cents / 100).toFixed(2),
+          conversions: verifiedMetrics.conversions,
           true_roas: platformSpend > 0
             ? ((verifiedMetrics.revenue_cents / 100) / platformSpend).toFixed(2)
             : '0',
@@ -1208,6 +1256,116 @@ export class ExplorationToolExecutor {
   }
 
   /**
+   * List child entities of a parent with aggregated KPIs.
+   * campaign → ad_groups, ad_group → ads
+   */
+  private async queryChildren(
+    input: QueryMetricsInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { platform, entity_type, days } = input;
+    let { entity_id } = input;
+
+    // Determine child entity type
+    const childTypeMap: Record<string, { childEntityType: string; lookupTable: string; parentRefCol: string; nameCol: string; idCol: string; statusCol: string }> = {
+      campaign: { childEntityType: 'ad_group', lookupTable: 'ad_groups', parentRefCol: 'campaign_ref', nameCol: 'ad_group_name', idCol: 'ad_group_id', statusCol: 'ad_group_status' },
+      ad_group: { childEntityType: 'ad', lookupTable: 'ads', parentRefCol: 'ad_group_ref', nameCol: 'ad_name', idCol: 'ad_id', statusCol: 'ad_status' },
+    };
+
+    const mapping = childTypeMap[entity_type || ''];
+    if (!mapping) {
+      return { success: false, error: `Cannot list children of entity_type "${entity_type}". Use entity_type="campaign" to list ad groups, or "ad_group" to list ads.` };
+    }
+
+    try {
+      // Resolve parent entity_id
+      if (entity_id && entity_type) {
+        const resolved = await this.resolveEntityId(entity_id, entity_type, platform, orgId);
+        if (resolved) entity_id = resolved.externalId;
+      }
+
+      const dateFrom = new Date();
+      dateFrom.setDate(dateFrom.getDate() - (days || 7));
+      const dateFromStr = dateFrom.toISOString().split('T')[0];
+
+      // Find child entity refs from the lookup table
+      const childrenQuery = `
+        SELECT ${mapping.idCol} as entity_ref, ${mapping.nameCol} as entity_name, ${mapping.statusCol} as entity_status
+        FROM ${mapping.lookupTable}
+        WHERE organization_id = ? AND platform = ? AND ${mapping.parentRefCol} = ?
+        ORDER BY ${mapping.nameCol}
+        LIMIT 50
+      `;
+      const childRows = await this.db.prepare(childrenQuery).bind(orgId, platform, entity_id).all<{
+        entity_ref: string; entity_name: string; entity_status: string;
+      }>();
+
+      if (!childRows.results || childRows.results.length === 0) {
+        return { success: true, data: { parent: entity_id, children: [], message: `No ${mapping.childEntityType}s found for this ${entity_type}.` } };
+      }
+
+      // Get aggregated metrics for each child
+      const childRefs = childRows.results.map(c => c.entity_ref);
+      const placeholders = childRefs.map(() => '?').join(',');
+      const metricsQuery = `
+        SELECT entity_ref,
+          SUM(impressions) as impressions, SUM(clicks) as clicks,
+          SUM(spend_cents) as spend_cents, SUM(conversions) as conversions,
+          SUM(conversion_value_cents) as conversion_value_cents
+        FROM ad_metrics
+        WHERE organization_id = ? AND platform = ? AND entity_type = ?
+          AND entity_ref IN (${placeholders}) AND metric_date >= ?
+        GROUP BY entity_ref
+      `;
+      const metricsRows = await this.db.prepare(metricsQuery)
+        .bind(orgId, platform, mapping.childEntityType, ...childRefs, dateFromStr)
+        .all<{ entity_ref: string; impressions: number; clicks: number; spend_cents: number; conversions: number; conversion_value_cents: number }>();
+
+      const metricsMap = new Map<string, typeof metricsRows.results[0]>();
+      for (const m of metricsRows.results || []) {
+        metricsMap.set(m.entity_ref, m);
+      }
+
+      // Build response sorted by spend descending
+      const children = childRows.results.map(c => {
+        const m = metricsMap.get(c.entity_ref);
+        const spend = m?.spend_cents || 0;
+        const clicks = m?.clicks || 0;
+        const impressions = m?.impressions || 0;
+        const conversions = m?.conversions || 0;
+        const revenue = m?.conversion_value_cents || 0;
+        return {
+          name: c.entity_name,
+          entity_ref: c.entity_ref,
+          status: c.entity_status,
+          spend: '$' + (spend / 100).toFixed(2),
+          spend_cents: spend,
+          impressions,
+          clicks,
+          ctr: impressions > 0 ? ((clicks / impressions) * 100).toFixed(2) + '%' : '0%',
+          conversions,
+          cpa: conversions > 0 ? '$' + (spend / conversions / 100).toFixed(2) : 'N/A',
+          roas: spend > 0 ? (revenue / spend).toFixed(2) + 'x' : '0x',
+        };
+      }).sort((a, b) => b.spend_cents - a.spend_cents);
+
+      return {
+        success: true,
+        data: {
+          parent: entity_id,
+          parent_type: entity_type,
+          child_type: mapping.childEntityType,
+          days,
+          count: children.length,
+          children
+        }
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+    }
+  }
+
+  /**
    * Get verified Stripe revenue for a date range (D1 version)
    */
   private async getVerifiedRevenueForDateRange(
@@ -1217,11 +1375,11 @@ export class ExplorationToolExecutor {
   ): Promise<{ revenue_cents: number; conversions: number }> {
     try {
       const sql = `
-        SELECT SUM(amount_cents) as total_cents, COUNT(*) as count
-        FROM stripe_charges
+        SELECT COALESCE(SUM(value_cents), 0) as total_cents, COUNT(*) as count
+        FROM connector_events
         WHERE organization_id = ?
-          AND created_at >= ? AND created_at <= ?
-          AND status IN ('succeeded', 'active', 'trialing')
+          AND transacted_at >= ? AND transacted_at <= ?
+          AND status IN ('succeeded', 'paid', 'completed', 'active')
       `;
       const result = await this.db.prepare(sql).bind(orgId, startStr, endStr + 'T23:59:59Z').first<{
         total_cents: number | null;
@@ -1315,13 +1473,16 @@ export class ExplorationToolExecutor {
       return { success: false, error: `Unsupported platform` };
     }
 
-    const sql = `SELECT * FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
-
     try {
-      const ad = await this.db.prepare(sql).bind(ad_id, orgId).first<any>();
+      // Resolve ad_id (name/UUID/external ID)
+      const resolved = await this.resolveEntityId(ad_id, 'ad', platform, orgId);
+      const resolvedId = resolved?.externalId || ad_id;
+
+      const sql = `SELECT * FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
+      const ad = await this.db.prepare(sql).bind(resolvedId, orgId).first<any>();
 
       if (!ad) {
-        return { success: false, error: `Ad not found: ${ad_id}` };
+        return { success: false, error: `Ad not found: "${ad_id}". Pass an ad name, platform ID, or D1 UUID.` };
       }
 
       const creativeInfo = this.extractCreativeInfo(ad, platform);
@@ -1355,18 +1516,21 @@ export class ExplorationToolExecutor {
       return { success: false, error: 'Unsupported platform/entity' };
     }
 
-    // Get name column based on platform and entity type
-    const nameCol = this.getNameColumn(platform, entity_type);
-    const sql = `SELECT ${nameCol} as name, targeting FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
-
     try {
-      const entity = await this.db.prepare(sql).bind(entity_id, orgId).first<{ name: string; targeting: string }>();
+      // Resolve entity_id (name/UUID/external ID)
+      const resolved = await this.resolveEntityId(entity_id, entity_type, platform, orgId);
+      const resolvedId = resolved?.externalId || entity_id;
+
+      // Get name column based on platform and entity type
+      const nameCol = this.getNameColumn(platform, entity_type);
+      const sql = `SELECT ${nameCol} as name, platform_fields FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
+      const entity = await this.db.prepare(sql).bind(resolvedId, orgId).first<{ name: string; platform_fields: string }>();
 
       if (!entity) {
-        return { success: false, error: `Entity not found: ${entity_id}` };
+        return { success: false, error: `Entity not found: "${entity_id}". Pass a campaign name, platform ID, or D1 UUID.` };
       }
 
-      const targeting = this.parseTargeting(entity.targeting);
+      const targeting = this.parseTargeting(entity.platform_fields);
 
       return {
         success: true,
@@ -1414,12 +1578,15 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // Build D1 SQL query for stripe_charges table
+      // Build D1 SQL query for connector_events table (Stripe)
       let sql = `
-        SELECT charge_id, amount_cents, currency, status, customer_id, created_at, metadata
-        FROM stripe_charges
+        SELECT external_id as charge_id, value_cents as amount_cents, currency,
+               status, customer_external_id as customer_id,
+               transacted_at as created_at, metadata
+        FROM connector_events
         WHERE organization_id = ?
-          AND created_at >= ? AND created_at <= ?
+          AND source_platform = 'stripe'
+          AND transacted_at >= ? AND transacted_at <= ?
       `;
       const params: any[] = [orgId, startStr, endStr + 'T23:59:59Z'];
 
@@ -1429,11 +1596,11 @@ export class ExplorationToolExecutor {
         params.push(filters.status);
       }
       if (filters?.min_amount_cents) {
-        sql += ` AND amount_cents >= ?`;
+        sql += ` AND value_cents >= ?`;
         params.push(filters.min_amount_cents);
       }
       if (filters?.max_amount_cents) {
-        sql += ` AND amount_cents <= ?`;
+        sql += ` AND value_cents <= ?`;
         params.push(filters.max_amount_cents);
       }
       if (filters?.currency) {
@@ -1520,6 +1687,40 @@ export class ExplorationToolExecutor {
         response.by_metadata = this.breakdownByMetadata(filteredData, breakdown_by_metadata_key);
       }
 
+      // Geo breakdown from customer billing/shipping address in metadata
+      if (group_by === 'geo') {
+        const geoMap = new Map<string, { revenue_cents: number; count: number }>();
+        for (const row of filteredData) {
+          const meta = row.metadata || {};
+          // Extract country from billing_details, shipping, or charge metadata
+          const country =
+            meta?.billing_details?.address?.country ||
+            meta?.shipping?.address?.country ||
+            meta?.customer_address?.country ||
+            meta?.country ||
+            'Unknown';
+          const state =
+            meta?.billing_details?.address?.state ||
+            meta?.shipping?.address?.state ||
+            meta?.customer_address?.state ||
+            '';
+          const geoKey = state ? `${country}/${state}` : country;
+          const existing = geoMap.get(geoKey) || { revenue_cents: 0, count: 0 };
+          existing.revenue_cents += row.amount_cents || 0;
+          existing.count++;
+          geoMap.set(geoKey, existing);
+        }
+        response.by_geo = Array.from(geoMap.entries())
+          .sort((a, b) => b[1].revenue_cents - a[1].revenue_cents)
+          .map(([geo, stats]) => ({
+            location: geo,
+            revenue: '$' + (stats.revenue_cents / 100).toFixed(2),
+            revenue_cents: stats.revenue_cents,
+            transactions: stats.count,
+            pct_of_total: totalRevenue > 0 ? (stats.revenue_cents / totalRevenue * 100).toFixed(1) + '%' : '0%',
+          }));
+      }
+
       // Add available metadata keys
       response.metadata_keys_available = this.extractMetadataKeys(filteredData);
 
@@ -1530,8 +1731,7 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Query Jobber completed jobs as revenue (D1 version)
-   * Note: Requires jobber_jobs table in ANALYTICS_DB
+   * Query Jobber completed jobs as revenue from connector_events.
    */
   private async queryJobberRevenue(
     input: QueryJobberRevenueInput,
@@ -1547,14 +1747,16 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // D1 SQL query for jobber_jobs table
+      // D1 SQL query for Jobber connector_events
       let sql = `
-        SELECT job_id, total_amount_cents, client_id, completed_at
-        FROM jobber_jobs
+        SELECT external_id as job_id, value_cents as total_amount_cents,
+               customer_external_id as client_id, transacted_at as completed_at
+        FROM connector_events
         WHERE organization_id = ?
-          AND job_status = 'COMPLETED'
-          AND completed_at >= ? AND completed_at <= ?
-        ORDER BY completed_at ASC
+          AND source_platform = 'jobber'
+          AND status IN ('completed', 'paid', 'succeeded')
+          AND transacted_at >= ? AND transacted_at <= ?
+        ORDER BY transacted_at ASC
       `;
       const params: any[] = [orgId, startStr, endStr + 'T23:59:59Z'];
 
@@ -1628,7 +1830,7 @@ export class ExplorationToolExecutor {
         }
       };
     } catch (err) {
-      // If jobber_jobs table doesn't exist yet, return empty result
+      // If connector_events table doesn't exist yet, return empty result
       const errorMessage = err instanceof Error ? err.message : 'Query failed';
       if (errorMessage.includes('no such table')) {
         return { success: true, data: { time_series: [], summary: { total_revenue: '$0.00', total_jobs: 0 }, note: 'Jobber data not yet synced to D1' } };
@@ -1688,9 +1890,9 @@ export class ExplorationToolExecutor {
           const sql = `
             SELECT SUM(spend_cents) as spend_cents, SUM(conversions) as conversions, SUM(conversion_value_cents) as conversion_value_cents
             FROM ${tableInfo.table}
-            WHERE organization_id = ? AND metric_date >= ? AND metric_date <= ?
+            WHERE organization_id = ? AND platform = ? AND metric_date >= ? AND metric_date <= ?
           `;
-          const result = await this.db.prepare(sql).bind(orgId, startStr, endStr).first<{
+          const result = await this.db.prepare(sql).bind(orgId, platform, startStr, endStr).first<{
             spend_cents: number | null;
             conversions: number | null;
             conversion_value_cents: number | null;
@@ -1705,13 +1907,13 @@ export class ExplorationToolExecutor {
         })
       );
 
-      // Fetch verified Stripe revenue using D1
+      // Fetch verified connector revenue using D1
       const stripeSql = `
-        SELECT SUM(amount_cents) as total_cents, COUNT(*) as count
-        FROM stripe_charges
+        SELECT COALESCE(SUM(value_cents), 0) as total_cents, COUNT(*) as count
+        FROM connector_events
         WHERE organization_id = ?
-          AND created_at >= ? AND created_at <= ?
-          AND status IN ('succeeded', 'active', 'trialing')
+          AND transacted_at >= ? AND transacted_at <= ?
+          AND status IN ('succeeded', 'paid', 'completed', 'active')
       `;
       const stripeResult = await this.db.prepare(stripeSql).bind(orgId, startStr, endStr + 'T23:59:59Z').first<{
         total_cents: number | null;
@@ -1726,22 +1928,19 @@ export class ExplorationToolExecutor {
       const totalPlatformConversions = platformData.reduce((sum, p) => sum + p.platform_conversions, 0);
       const totalPlatformRevenue = platformData.reduce((sum, p) => sum + p.platform_conversion_value_cents, 0);
 
-      const platformRoas = totalSpend > 0 ? totalPlatformRevenue / totalSpend : 0;
       const trueRoas = totalSpend > 0 ? verifiedRevenue / totalSpend : 0;
-      const discrepancyPct = totalPlatformRevenue > 0
-        ? ((verifiedRevenue - totalPlatformRevenue) / totalPlatformRevenue * 100).toFixed(1)
-        : '0';
 
       const response: any = {
         summary: {
           total_spend: '$' + (totalSpend / 100).toFixed(2),
-          platform_reported_revenue: '$' + (totalPlatformRevenue / 100).toFixed(2),
-          verified_stripe_revenue: '$' + (verifiedRevenue / 100).toFixed(2),
+          // NOTE: Platform-reported revenue is almost always near-zero because ad platforms
+          // cannot see revenue that happens in external payment processors. This is expected.
+          platform_reported_revenue: '$' + (totalPlatformRevenue / 100).toFixed(2) + ' (ad platforms lack payment visibility — this being low is expected)',
+          verified_revenue: '$' + (verifiedRevenue / 100).toFixed(2) + ' (ground truth from payment processors)',
           platform_conversions: totalPlatformConversions,
           verified_conversions: verifiedConversions,
-          platform_roas: platformRoas.toFixed(2),
           true_roas: trueRoas.toFixed(2),
-          discrepancy_pct: discrepancyPct + '%'
+          note: 'The gap between platform-reported and verified revenue is the core problem AdBliss solves. Use true_roas for decision-making.'
         }
       };
 
@@ -1785,7 +1984,6 @@ export class ExplorationToolExecutor {
         FROM conversions
         WHERE organization_id = ?
           AND conversion_timestamp >= ? AND conversion_timestamp <= ?
-          AND conversion_source = 'stripe'
       `;
       const result = await this.db.prepare(sql).bind(orgId, startStr, endStr + 'T23:59:59Z').all<any>();
       const conversions = result.results || [];
@@ -1855,7 +2053,7 @@ export class ExplorationToolExecutor {
 
   /**
    * Query subscription cohort metrics (MRR, LTV, churn, retention) (D1 version)
-   * Note: Requires stripe_subscriptions table in ANALYTICS_DB
+   * Note: Queries connector_events WHERE source_platform='stripe' AND event_type LIKE '%subscription%' in ANALYTICS_DB
    */
   private async querySubscriptionCohorts(
     input: QuerySubscriptionCohortsInput,
@@ -1869,8 +2067,12 @@ export class ExplorationToolExecutor {
     const startStr = startDate.toISOString().split('T')[0];
 
     try {
-      // Build D1 SQL query for stripe_subscriptions
-      let sql = `SELECT * FROM stripe_subscriptions WHERE organization_id = ?`;
+      // Build D1 SQL query for Stripe subscription events from connector_events
+      let sql = `SELECT id, external_id, customer_external_id, value_cents,
+                        status, event_type, transacted_at,
+                        metadata, currency
+                 FROM connector_events
+                 WHERE organization_id = ? AND source_platform = 'stripe' AND event_type LIKE '%subscription%'`;
       const params: any[] = [orgId];
 
       // Apply status filters
@@ -1880,16 +2082,10 @@ export class ExplorationToolExecutor {
         params.push(...filters.status);
       }
 
-      // Apply interval filter
-      if (filters?.plan_interval) {
-        sql += ` AND interval = ?`;
-        params.push(filters.plan_interval);
-      }
-
       const result = await this.db.prepare(sql).bind(...params).all<any>();
-      const subscriptions = result.results || [];
+      const rawSubscriptions = result.results || [];
 
-      if (subscriptions.length === 0) {
+      if (rawSubscriptions.length === 0) {
         return {
           success: true,
           data: {
@@ -1899,8 +2095,26 @@ export class ExplorationToolExecutor {
         };
       }
 
+      // Enrich connector_events rows with subscription-specific fields from metadata
+      const subscriptions = rawSubscriptions.map(s => {
+        const meta = s.metadata ? (typeof s.metadata === 'string' ? JSON.parse(s.metadata) : s.metadata) : {};
+        return {
+          ...s,
+          amount_cents: s.value_cents || 0,
+          interval: meta.interval || meta.plan_interval || 'month',
+          interval_count: meta.interval_count || 1,
+          stripe_created_at: s.transacted_at,
+          metadata: meta,
+        };
+      });
+
+      // Apply interval filter in-memory (interval is in metadata, not a column)
+      const filteredSubscriptions = filters?.plan_interval
+        ? subscriptions.filter(s => s.interval === filters.plan_interval)
+        : subscriptions;
+
       // Calculate core subscription metrics
-      const activeSubscriptions = subscriptions.filter(s =>
+      const activeSubscriptions = filteredSubscriptions.filter(s =>
         ['active', 'trialing', 'past_due'].includes(s.status)
       );
 
@@ -1922,7 +2136,7 @@ export class ExplorationToolExecutor {
       // Calculate average subscription age
       const now = new Date();
       const avgAgeDays = activeSubscriptions.reduce((sum, s) => {
-        const created = new Date(s.created_at || s.stripe_created_at);
+        const created = new Date(s.transacted_at);
         const ageDays = (now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);
         return sum + ageDays;
       }, 0) / (activeSubscriptions.length || 1);
@@ -1930,9 +2144,9 @@ export class ExplorationToolExecutor {
       // Calculate churn rate (canceled in last 30 days / active at start)
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      const recentlyCanceled = subscriptions.filter(s =>
+      const recentlyCanceled = filteredSubscriptions.filter(s =>
         s.status === 'canceled' &&
-        new Date(s.updated_at) > thirtyDaysAgo
+        new Date(s.transacted_at) > thirtyDaysAgo
       ).length;
       const churnRate = activeSubscriptions.length > 0
         ? (recentlyCanceled / (activeSubscriptions.length + recentlyCanceled) * 100)
@@ -2088,35 +2302,29 @@ export class ExplorationToolExecutor {
       return { success: false, error: `Unsupported platform/entity for budget: ${platform}/${entity_type}` };
     }
 
-    // Build D1 SQL query
-    const sql = `SELECT * FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
-
     try {
-      const entity = await this.db.prepare(sql).bind(entity_id, orgId).first<any>();
+      // Resolve entity_id (accepts name, UUID, or external ID)
+      const resolved = await this.resolveEntityId(entity_id, normalizedEntityType, platform, orgId);
+      if (!resolved) {
+        return { success: false, error: `Entity not found: "${entity_id}". Pass a campaign name (e.g. "Los Angeles - Search"), platform ID, or D1 UUID.` };
+      }
+
+      const sql = `SELECT * FROM ${tableInfo.table} WHERE ${tableInfo.idColumn} = ? AND organization_id = ? LIMIT 1`;
+      const entity = await this.db.prepare(sql).bind(resolved.externalId, orgId).first<any>();
 
       if (!entity) {
-        return { success: false, error: `Entity not found: ${entity_id}` };
+        return { success: false, error: `Entity not found after resolution: ${entity_id} → ${resolved.externalId}` };
       }
 
       // Normalize budget response
       let budget_cents: number | null = null;
       let budget_type: 'daily' | 'lifetime' | null = null;
 
-      if (platform === 'google') {
-        budget_cents = entity.budget_amount_cents;
-        budget_type = entity.budget_type === 'DAILY' ? 'daily' : 'lifetime';
-      } else if (platform === 'facebook') {
-        // Facebook: prefer daily, fallback to lifetime
-        if (entity.daily_budget_cents && entity.daily_budget_cents > 0) {
-          budget_cents = entity.daily_budget_cents;
-          budget_type = 'daily';
-        } else if (entity.lifetime_budget_cents && entity.lifetime_budget_cents > 0) {
-          budget_cents = entity.lifetime_budget_cents;
-          budget_type = 'lifetime';
-        }
-      } else if (platform === 'tiktok') {
-        budget_cents = entity.budget_cents;
-        budget_type = entity.budget_mode === 'BUDGET_MODE_DAY' ? 'daily' : 'lifetime';
+      // Unified schema: budget_cents + budget_type columns on ad_campaigns
+      budget_cents = entity.budget_cents ?? null;
+      if (entity.budget_type) {
+        budget_type = entity.budget_type === 'daily' || entity.budget_type === 'DAILY' || entity.budget_type === 'BUDGET_MODE_DAY'
+          ? 'daily' : 'lifetime';
       }
 
       const name = entity.name || entity.campaign_name || entity.ad_group_name;
@@ -2132,12 +2340,11 @@ export class ExplorationToolExecutor {
           budget_cents,
           budget: budget_cents ? '$' + (budget_cents / 100).toFixed(2) : null,
           budget_type,
-          // Platform-specific raw data
-          raw_budget_data: platform === 'facebook' ? {
-            daily_budget_cents: entity.daily_budget_cents,
-            lifetime_budget_cents: entity.lifetime_budget_cents,
-            budget_remaining_cents: entity.budget_remaining_cents
-          } : undefined,
+          // Raw budget data from unified schema
+          raw_budget_data: {
+            budget_cents: entity.budget_cents ?? null,
+            budget_type: entity.budget_type ?? null,
+          },
           // Helper for recommendations
           recommendation_hint: budget_cents === null || budget_cents === 0
             ? 'WARNING: No budget set or budget is $0. Cannot calculate percentage-based changes on zero budget.'
@@ -2150,8 +2357,8 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Query verified conversions grouped by goal
-   * Uses the conversions table with linked_goal_id populated by ConversionLinkingWorkflow
+   * Query verified conversions grouped by source platform / connector.
+   * Uses the conversions table populated by ConversionAggregationWorkflow.
    */
   private async queryConversionsByGoal(
     input: QueryConversionsByGoalInput,
@@ -2167,47 +2374,41 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // Query conversions with linked goals from D1
+      // Query conversions from unified conversions table
       let sql = `
         SELECT
-          c.conversion_id,
-          c.linked_goal_id,
-          c.link_method,
-          c.link_confidence,
-          c.value_cents,
-          c.currency,
-          c.conversion_timestamp,
-          c.source_platform,
-          g.name as goal_name,
-          g.event_type as goal_event_type
-        FROM conversions c
-        LEFT JOIN conversion_goals g ON g.id = c.linked_goal_id
-        WHERE c.organization_id = ?
-          AND c.linked_goal_id IS NOT NULL
-          AND c.link_confidence >= ?
-          AND c.conversion_timestamp >= ?
-          AND c.conversion_timestamp <= ?
+          id,
+          conversion_source,
+          link_method,
+          link_confidence,
+          value_cents,
+          currency,
+          conversion_timestamp,
+          source_platform
+        FROM conversions
+        WHERE organization_id = ?
+          AND link_confidence >= ?
+          AND conversion_timestamp >= ?
+          AND conversion_timestamp <= ?
       `;
       const params: any[] = [orgId, min_confidence, startStr, endStr + 'T23:59:59Z'];
 
       if (goal_id) {
-        sql += ` AND c.linked_goal_id = ?`;
+        sql += ` AND conversion_source = ?`;
         params.push(goal_id);
       }
 
-      sql += ` ORDER BY c.conversion_timestamp DESC`;
+      sql += ` ORDER BY conversion_timestamp DESC`;
 
       const result = await this.db.prepare(sql).bind(...params).all<{
-        conversion_id: string;
-        linked_goal_id: string;
+        id: string;
+        conversion_source: string;
         link_method: string;
         link_confidence: number;
         value_cents: number;
         currency: string;
         conversion_timestamp: string;
         source_platform: string;
-        goal_name: string;
-        goal_event_type: string;
       }>();
 
       const conversions = result.results || [];
@@ -2293,10 +2494,18 @@ export class ExplorationToolExecutor {
     const endStr = endDate.toISOString().split('T')[0];
 
     try {
-      // Determine which platforms to query
-      const platformsToQuery = platforms.includes('all')
-        ? ['facebook', 'google', 'tiktok']
-        : platforms.filter(p => p !== 'all');
+      // Determine which platforms to query — use actually connected platforms, not hardcoded list
+      let platformsToQuery: string[];
+      if (platforms.includes('all')) {
+        // Query ad_metrics for distinct platforms that have data for this org
+        const activePlatforms = await this.db.prepare(`
+          SELECT DISTINCT platform FROM ad_metrics
+          WHERE organization_id = ? AND metric_date >= ?
+        `).bind(orgId, startStr).all<{ platform: string }>();
+        platformsToQuery = (activePlatforms.results || []).map(r => r.platform);
+      } else {
+        platformsToQuery = platforms.filter(p => p !== 'all');
+      }
 
       // Fetch platform-reported metrics (spend, conversions, conversion value)
       const platformData = await Promise.all(
@@ -2316,10 +2525,11 @@ export class ExplorationToolExecutor {
               SUM(conversion_value_cents) as conversion_value_cents
             FROM ${tableInfo.table}
             WHERE organization_id = ?
+              AND platform = ?
               AND metric_date >= ?
               AND metric_date <= ?
           `;
-          const result = await this.db.prepare(sql).bind(orgId, startStr, endStr).first<{
+          const result = await this.db.prepare(sql).bind(orgId, platform, startStr, endStr).first<{
             spend_cents: number | null;
             conversions: number | null;
             conversion_value_cents: number | null;
@@ -2334,7 +2544,7 @@ export class ExplorationToolExecutor {
         })
       );
 
-      // Fetch verified conversions (linked to goals with sufficient confidence)
+      // Fetch verified conversions (attributed with sufficient confidence)
       const verifiedSql = `
         SELECT
           COUNT(*) as verified_count,
@@ -2343,7 +2553,6 @@ export class ExplorationToolExecutor {
           link_method
         FROM conversions
         WHERE organization_id = ?
-          AND linked_goal_id IS NOT NULL
           AND link_confidence >= ?
           AND conversion_timestamp >= ?
           AND conversion_timestamp <= ?
@@ -2365,7 +2574,7 @@ export class ExplorationToolExecutor {
         SELECT COUNT(*) as total_count, SUM(value_cents) as total_value_cents
         FROM conversions
         WHERE organization_id = ?
-          AND source_platform IN ('stripe', 'shopify')
+          AND source_platform IN ('stripe', 'shopify', 'jobber', 'hubspot', 'lemon_squeezy', 'paddle', 'chargebee', 'recurly')
           AND conversion_timestamp >= ?
           AND conversion_timestamp <= ?
       `;
@@ -2390,9 +2599,6 @@ export class ExplorationToolExecutor {
       // Calculate key metrics
       const platformRoas = totalSpend > 0 ? totalPlatformRevenue / totalSpend : 0;
       const trueRoas = totalSpend > 0 ? totalVerifiedValue / totalSpend : 0;
-      const inflationFactor = totalVerifiedValue > 0 && totalPlatformRevenue > 0
-        ? totalPlatformRevenue / totalVerifiedValue
-        : 1;
       const verificationRate = totalConnectorConversions > 0
         ? (totalVerifiedCount / totalConnectorConversions) * 100
         : 0;
@@ -2414,15 +2620,17 @@ export class ExplorationToolExecutor {
             roas: trueRoas.toFixed(2),
             avg_confidence: avgConfidence.toFixed(2)
           },
-          // Analysis
+          // Analysis — NOTE: Platform underreporting is EXPECTED. Ad platforms cannot track
+          // revenue that happens in external payment processors (Stripe, Shopify, etc.).
+          // This is the core problem AdBliss solves — do NOT treat this gap as an error.
           analysis: {
-            inflation_factor: inflationFactor.toFixed(2) + 'x',
-            platform_overstates_by: totalPlatformRevenue > 0 && totalVerifiedValue > 0
-              ? (((totalPlatformRevenue - totalVerifiedValue) / totalVerifiedValue) * 100).toFixed(1) + '%'
-              : 'N/A',
-            true_roas_vs_reported: platformRoas > 0
-              ? ((trueRoas / platformRoas) * 100).toFixed(1) + '%'
-              : 'N/A'
+            revenue_visibility_gap: totalPlatformRevenue > 0 && totalVerifiedValue > 0
+              ? ((1 - totalPlatformRevenue / totalVerifiedValue) * 100).toFixed(1) + '% of revenue invisible to ad platforms'
+              : totalVerifiedValue > 0
+                ? '100% of revenue invisible to ad platforms (expected for payment processor setups)'
+                : 'No verified revenue data',
+            true_roas: trueRoas.toFixed(2) + 'x',
+            platform_reported_roas: platformRoas.toFixed(2) + 'x (unreliable — ad platforms lack payment data)',
           },
           // Verification metrics
           verification: {
@@ -2475,33 +2683,29 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Group conversions by goal
+   * Group conversions by source platform / connector
    */
   private groupConversionsByGoal(conversions: any[]): any[] {
-    const byGoal = new Map<string, { conversions: number; value_cents: number; avg_confidence: number; confidences: number[] }>();
+    const bySource = new Map<string, { conversions: number; value_cents: number; confidences: number[] }>();
 
     for (const c of conversions) {
-      const goalId = c.linked_goal_id || 'unlinked';
-      if (!byGoal.has(goalId)) {
-        byGoal.set(goalId, { conversions: 0, value_cents: 0, avg_confidence: 0, confidences: [] });
+      const source = c.conversion_source || c.source_platform || 'unknown';
+      if (!bySource.has(source)) {
+        bySource.set(source, { conversions: 0, value_cents: 0, confidences: [] });
       }
-      const g = byGoal.get(goalId)!;
+      const g = bySource.get(source)!;
       g.conversions += 1;
       g.value_cents += c.value_cents || 0;
       g.confidences.push(c.link_confidence || 0);
     }
 
-    return Array.from(byGoal.entries()).map(([goalId, data]) => {
-      const matchingConversion = conversions.find(c => c.linked_goal_id === goalId);
-      return {
-        goal_id: goalId,
-        goal_name: matchingConversion?.goal_name || 'Unknown',
-        goal_event_type: matchingConversion?.goal_event_type || 'unknown',
-        conversions: data.conversions,
-        value: '$' + (data.value_cents / 100).toFixed(2),
-        avg_confidence: (data.confidences.reduce((a, b) => a + b, 0) / data.confidences.length).toFixed(2)
-      };
-    }).sort((a, b) => b.conversions - a.conversions);
+    return Array.from(bySource.entries()).map(([source, data]) => ({
+      goal_id: source,
+      goal_name: source,
+      conversions: data.conversions,
+      value: '$' + (data.value_cents / 100).toFixed(2),
+      avg_confidence: (data.confidences.reduce((a, b) => a + b, 0) / data.confidences.length).toFixed(2)
+    })).sort((a, b) => b.conversions - a.conversions);
   }
 
   /**
@@ -2559,28 +2763,6 @@ export class ExplorationToolExecutor {
 
   // Helper methods
 
-  /**
-   * Check if unified tables have data for this platform/org combination
-   * Used to determine whether to use unified or legacy tables
-   */
-  private async hasUnifiedData(orgId: string, platform?: string): Promise<boolean> {
-    try {
-      let query = 'SELECT 1 FROM ad_metrics WHERE organization_id = ?';
-      const params: any[] = [orgId];
-
-      if (platform) {
-        query += ' AND platform = ?';
-        params.push(platform);
-      }
-
-      query += ' LIMIT 1';
-
-      const result = await this.db.prepare(query).bind(...params).first();
-      return !!result;
-    } catch {
-      return false;
-    }
-  }
 
   /**
    * Get METRICS table info (for queryMetrics, compareEntities)
@@ -2613,7 +2795,7 @@ export class ExplorationToolExecutor {
   private buildUnifiedMetricsQuery(
     platform: string,
     entityType: string,
-    entityId: string,
+    entityId: string | undefined,
     days: number,
     orgId: string
   ): { query: string; params: any[] } {
@@ -2627,6 +2809,31 @@ export class ExplorationToolExecutor {
     const dateFrom = new Date();
     dateFrom.setDate(dateFrom.getDate() - days);
     const dateFromStr = dateFrom.toISOString().split('T')[0];
+
+    // Account-level queries: aggregate across all campaign-level entities for this platform
+    if (entityType === 'account' || !entityId) {
+      const query = `
+        SELECT
+          metric_date,
+          SUM(impressions) as impressions,
+          SUM(clicks) as clicks,
+          SUM(spend_cents) as spend_cents,
+          SUM(conversions) as conversions,
+          SUM(conversion_value_cents) as conversion_value_cents,
+          CASE WHEN SUM(impressions) > 0 THEN CAST(SUM(clicks) AS REAL) / SUM(impressions) * 100 ELSE 0 END as ctr,
+          CASE WHEN SUM(clicks) > 0 THEN SUM(spend_cents) / SUM(clicks) ELSE 0 END as cpc_cents,
+          CASE WHEN SUM(impressions) > 0 THEN SUM(spend_cents) * 1000.0 / SUM(impressions) ELSE 0 END as cpm_cents,
+          NULL as extra_metrics
+        FROM ad_metrics
+        WHERE organization_id = ?
+          AND platform = ?
+          AND entity_type = 'campaign'
+          AND metric_date >= ?
+        GROUP BY metric_date
+        ORDER BY metric_date DESC
+      `;
+      return { query, params: [orgId, platform, dateFromStr] };
+    }
 
     const query = `
       SELECT
@@ -2657,14 +2864,14 @@ export class ExplorationToolExecutor {
 
   /**
    * Get ENTITY table info (for getCreativeDetails, getAudienceBreakdown)
-   * UPDATED: Now uses unified tables (ad_campaigns, ad_groups, ads) for all platforms
-   * Falls back to legacy platform-specific tables for backward compatibility
+   * Uses unified tables (ad_campaigns, ad_groups, ads) for all platforms
    */
   private getEntityTableInfo(platform: string, entityType: string): { table: string; idColumn: string; unified: boolean } | null {
-    // Unified tables
+    // All platforms use unified tables — no legacy fallback
     const unifiedTables: Record<string, { table: string; idColumn: string }> = {
       ad: { table: 'ads', idColumn: 'ad_id' },
       adset: { table: 'ad_groups', idColumn: 'ad_group_id' },
+      ad_group: { table: 'ad_groups', idColumn: 'ad_group_id' },
       campaign: { table: 'ad_campaigns', idColumn: 'campaign_id' }
     };
 
@@ -2672,30 +2879,52 @@ export class ExplorationToolExecutor {
       return { ...unifiedTables[entityType], unified: true };
     }
 
-    // Legacy fallback
-    const legacyTables: Record<string, Record<string, { table: string; idColumn: string }>> = {
-      facebook: {
-        ad: { table: 'facebook_ads', idColumn: 'ad_id' },
-        adset: { table: 'facebook_ad_sets', idColumn: 'ad_set_id' },
-        campaign: { table: 'facebook_campaigns', idColumn: 'campaign_id' },
-        account: { table: 'facebook_accounts', idColumn: 'account_id' }
-      },
-      google: {
-        ad: { table: 'google_ads', idColumn: 'ad_id' },
-        adset: { table: 'google_ad_groups', idColumn: 'ad_group_id' },
-        campaign: { table: 'google_campaigns', idColumn: 'campaign_id' },
-        account: { table: 'google_accounts', idColumn: 'customer_id' }
-      },
-      tiktok: {
-        ad: { table: 'tiktok_ads', idColumn: 'ad_id' },
-        adset: { table: 'tiktok_ad_groups', idColumn: 'ad_group_id' },
-        campaign: { table: 'tiktok_campaigns', idColumn: 'campaign_id' },
-        account: { table: 'tiktok_advertisers', idColumn: 'advertiser_id' }
-      }
-    };
+    return null;
+  }
 
-    const legacy = legacyTables[platform]?.[entityType];
-    return legacy ? { ...legacy, unified: false } : null;
+  /**
+   * Resolve an entity identifier (name, UUID, or external ID) to the platform external ID
+   * used by D1 tables. The LLM often passes campaign names from the portfolio summary
+   * or D1 UUIDs — this resolves them to the campaign_id/ad_group_id/ad_id that the
+   * entity tables actually use as lookup keys.
+   *
+   * Resolution order: exact external ID match → name match → UUID match
+   */
+  private async resolveEntityId(
+    entityId: string,
+    entityType: string,
+    platform: string,
+    orgId: string
+  ): Promise<{ externalId: string; name: string } | null> {
+    const tableInfo = this.getEntityTableInfo(platform, entityType);
+    if (!tableInfo) return null;
+
+    const nameColumn = entityType === 'campaign' ? 'campaign_name'
+      : entityType === 'ad' ? 'ad_name'
+      : 'ad_group_name';
+
+    // 1. Try exact match on external ID (campaign_id / ad_group_id / ad_id)
+    const byExternal = await this.db.prepare(
+      `SELECT ${tableInfo.idColumn} as ext_id, ${nameColumn} as name FROM ${tableInfo.table}
+       WHERE ${tableInfo.idColumn} = ? AND organization_id = ? AND platform = ? LIMIT 1`
+    ).bind(entityId, orgId, platform).first<{ ext_id: string; name: string }>();
+    if (byExternal) return { externalId: byExternal.ext_id, name: byExternal.name };
+
+    // 2. Try name match (case-insensitive) — the LLM usually knows campaign names
+    const byName = await this.db.prepare(
+      `SELECT ${tableInfo.idColumn} as ext_id, ${nameColumn} as name FROM ${tableInfo.table}
+       WHERE ${nameColumn} = ? COLLATE NOCASE AND organization_id = ? AND platform = ? LIMIT 1`
+    ).bind(entityId, orgId, platform).first<{ ext_id: string; name: string }>();
+    if (byName) return { externalId: byName.ext_id, name: byName.name };
+
+    // 3. Try D1 UUID primary key
+    const byUuid = await this.db.prepare(
+      `SELECT ${tableInfo.idColumn} as ext_id, ${nameColumn} as name FROM ${tableInfo.table}
+       WHERE id = ? AND organization_id = ? LIMIT 1`
+    ).bind(entityId, orgId).first<{ ext_id: string; name: string }>();
+    if (byUuid) return { externalId: byUuid.ext_id, name: byUuid.name };
+
+    return null;
   }
 
   /**
@@ -2730,7 +2959,8 @@ export class ExplorationToolExecutor {
     };
   }
 
-  private enrichMetrics(data: any[], requestedMetrics: string[]): any[] {
+  private enrichMetrics(data: any[], requestedMetrics?: string[]): any[] {
+    if (!requestedMetrics || requestedMetrics.length === 0) return data;
     return data.map(row => {
       const enriched = { ...row };
       const spend = row.spend_cents || 0;
@@ -2887,7 +3117,22 @@ export class ExplorationToolExecutor {
       const date = new Date(timestamp);
       let key: string;
 
-      if (groupBy === 'week') {
+      if (groupBy === 'geo') {
+        // Group by country/state from billing metadata
+        const meta = row.metadata || {};
+        const COUNTRY_NORMALIZE: Record<string, string> = {
+          'USA': 'US', 'GBR': 'GB', 'CAN': 'CA', 'AUS': 'AU',
+          'DEU': 'DE', 'FRA': 'FR', 'NZL': 'NZ', 'JPN': 'JP',
+        };
+        const rawCountry =
+          meta?.billing_details?.address?.country ||
+          meta?.shipping_address?.country_code ||
+          meta?.country ||
+          'Unknown';
+        const country = COUNTRY_NORMALIZE[rawCountry.toUpperCase()] || rawCountry;
+        const state = meta?.billing_details?.address?.state || '';
+        key = state ? `${country}/${state}` : country;
+      } else if (groupBy === 'week') {
         const weekStart = new Date(date);
         weekStart.setDate(date.getDate() - date.getDay());
         key = weekStart.toISOString().split('T')[0];
@@ -3150,7 +3395,7 @@ export class ExplorationToolExecutor {
 
   /**
    * Query clickstream events from D1
-   * Supports daily_metrics, goal_conversions, and hourly_metrics tables
+   * Supports daily_metrics, conversions, and hourly_metrics tables
    */
   private async queryEvents(
     input: QueryEventsInput,
@@ -3171,18 +3416,18 @@ export class ExplorationToolExecutor {
       // Query daily metrics for overall event counts
       const dailyResult = await this.db.prepare(`
         SELECT
-          metric_date,
+          date,
           SUM(total_visits) as page_views,
           SUM(unique_visitors) as unique_visitors,
           SUM(total_conversions) as conversions,
           SUM(total_conversion_value) as conversion_value_cents
         FROM daily_metrics
         WHERE organization_id = ?
-          AND metric_date >= ?
-        GROUP BY metric_date
-        ORDER BY metric_date DESC
+          AND date >= ?
+        GROUP BY date
+        ORDER BY date DESC
       `).bind(orgId, startStr).all<{
-        metric_date: string;
+        date: string;
         page_views: number;
         unique_visitors: number;
         conversions: number;
@@ -3191,27 +3436,26 @@ export class ExplorationToolExecutor {
 
       response.daily_summary = dailyResult.results || [];
 
-      // Query goal conversions if looking for specific goals or conversions
+      // Query conversions from unified conversions table
       if (goal_ids?.length || event_types?.includes('goal_completed')) {
         let goalQuery = `
           SELECT
-            gc.goal_id,
-            g.name as goal_name,
+            conversion_source as goal_id,
+            conversion_source as goal_name,
             COUNT(*) as conversion_count,
-            SUM(gc.value_cents) as total_value_cents
-          FROM goal_conversions gc
-          LEFT JOIN conversion_goals g ON gc.goal_id = g.id
-          WHERE gc.organization_id = ?
-            AND gc.converted_at >= ?
+            COALESCE(SUM(value_cents), 0) as total_value_cents
+          FROM conversions
+          WHERE organization_id = ?
+            AND conversion_timestamp >= ?
         `;
         const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
         if (goal_ids?.length) {
-          goalQuery += ` AND gc.goal_id IN (${goal_ids.map(() => '?').join(',')})`;
+          goalQuery += ` AND conversion_source IN (${goal_ids.map(() => '?').join(',')})`;
           params.push(...goal_ids);
         }
 
-        goalQuery += ' GROUP BY gc.goal_id, g.name';
+        goalQuery += ' GROUP BY conversion_source';
 
         const goalResult = await this.db.prepare(goalQuery).bind(...params).all<{
           goal_id: string;
@@ -3237,7 +3481,7 @@ export class ExplorationToolExecutor {
             ROUND(AVG(total_visits * 1.0 / NULLIF(unique_visitors, 0)), 2) as avg_pages_per_visitor
           FROM daily_metrics
           WHERE organization_id = ?
-            AND metric_date >= ?
+            AND date >= ?
         `).bind(orgId, startStr).first<{
           total_sessions: number;
           total_page_views: number;
@@ -3264,8 +3508,8 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Query CRM pipeline data from unified tables
-   * Uses crm_deals table for deal/opportunity data
+   * Query CRM pipeline data from connector_events
+   * All CRM data flows through connector_events with source_platform = 'hubspot' etc.
    */
   private async queryCrmPipeline(
     input: QueryCrmPipelineInput,
@@ -3278,36 +3522,28 @@ export class ExplorationToolExecutor {
     const startStr = startDate.toISOString().split('T')[0];
 
     try {
-      // Build dynamic query
+      // Query connector_events for CRM deals
       let query = `
         SELECT
-          id,
-          platform,
-          deal_id,
-          deal_name,
-          stage,
-          status,
-          value_cents,
-          owner_name,
-          source,
-          utm_source,
-          utm_campaign,
-          created_at,
-          closed_at
-        FROM crm_deals
+          id, source_platform, external_id, event_type,
+          status, value_cents, metadata, transacted_at
+        FROM connector_events
         WHERE organization_id = ?
-          AND created_at >= ?
+          AND event_type = 'deal'
+          AND transacted_at >= ?
       `;
       const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
-      if (stages?.length) {
-        query += ` AND stage IN (${stages.map(() => '?').join(',')})`;
-        params.push(...stages);
-      }
-
       if (status && status !== 'all') {
-        query += ' AND status = ?';
-        params.push(status);
+        // Map deal status to status values
+        const statusMap: Record<string, string[]> = {
+          won: ['closedwon', 'won'],
+          lost: ['closedlost', 'lost'],
+          open: ['open', 'appointmentscheduled', 'qualifiedtobuy', 'presentationscheduled', 'decisionmakerboughtin', 'contractsent']
+        };
+        const statuses = statusMap[status] || [status];
+        query += ` AND status IN (${statuses.map(() => '?').join(',')})`;
+        params.push(...statuses);
       }
 
       if (min_value_cents) {
@@ -3315,34 +3551,60 @@ export class ExplorationToolExecutor {
         params.push(min_value_cents);
       }
 
-      query += ' ORDER BY created_at DESC LIMIT 500';
+      query += ' ORDER BY transacted_at DESC LIMIT 500';
 
       const result = await this.db.prepare(query).bind(...params).all<{
         id: string;
-        platform: string;
-        deal_id: string;
-        deal_name: string | null;
-        stage: string;
+        source_platform: string;
+        external_id: string;
+        event_type: string;
         status: string;
         value_cents: number | null;
-        owner_name: string | null;
-        source: string | null;
-        utm_source: string | null;
-        utm_campaign: string | null;
-        created_at: string;
-        closed_at: string | null;
+        metadata: string | null;
+        transacted_at: string;
       }>();
 
       const deals = result.results || [];
 
-      // Calculate pipeline summary
+      // Parse metadata for deal details
+      const parseDealMeta = (meta: string | null) => {
+        if (!meta) return {};
+        try { return JSON.parse(meta); } catch { return {}; }
+      };
+
+      // Map status to simplified status
+      const normalizeStatus = (ps: string): string => {
+        if (['closedwon', 'won'].includes(ps)) return 'won';
+        if (['closedlost', 'lost'].includes(ps)) return 'lost';
+        return 'open';
+      };
+
+      const enriched = deals.map(d => {
+        const meta = parseDealMeta(d.metadata);
+        return {
+          ...d,
+          deal_name: meta.deal_name || meta.dealname || d.external_id,
+          stage: meta.dealstage || meta.stage || d.status,
+          normalized_status: normalizeStatus(d.status),
+          owner_name: meta.hubspot_owner_id || meta.owner_name || null,
+          source: meta.source || null,
+          utm_source: meta.utm_source || null,
+          utm_campaign: meta.utm_campaign || null,
+        };
+      });
+
+      // Apply stage filter in-memory (stage is in metadata)
+      const filtered = stages?.length
+        ? enriched.filter(d => stages.some(s => d.stage.toLowerCase().includes(s.toLowerCase())))
+        : enriched;
+
       const summary = {
-        total_deals: deals.length,
-        total_value: '$' + (deals.reduce((sum, d) => sum + (d.value_cents || 0), 0) / 100).toFixed(2),
-        won_deals: deals.filter(d => d.status === 'won').length,
-        won_value: '$' + (deals.filter(d => d.status === 'won').reduce((sum, d) => sum + (d.value_cents || 0), 0) / 100).toFixed(2),
-        lost_deals: deals.filter(d => d.status === 'lost').length,
-        open_deals: deals.filter(d => d.status === 'open').length
+        total_deals: filtered.length,
+        total_value: '$' + (filtered.reduce((sum, d) => sum + (d.value_cents || 0), 0) / 100).toFixed(2),
+        won_deals: filtered.filter(d => d.normalized_status === 'won').length,
+        won_value: '$' + (filtered.filter(d => d.normalized_status === 'won').reduce((sum, d) => sum + (d.value_cents || 0), 0) / 100).toFixed(2),
+        lost_deals: filtered.filter(d => d.normalized_status === 'lost').length,
+        open_deals: filtered.filter(d => d.normalized_status === 'open').length
       };
 
       // Group by dimension if requested
@@ -3350,28 +3612,17 @@ export class ExplorationToolExecutor {
       if (group_by) {
         const groups = new Map<string, { count: number; value_cents: number }>();
 
-        for (const deal of deals) {
+        for (const deal of filtered) {
           let key: string;
           switch (group_by) {
-            case 'day':
-              key = deal.created_at.split('T')[0];
-              break;
-            case 'stage':
-              key = deal.stage || 'unknown';
-              break;
-            case 'source':
-              key = deal.source || deal.utm_source || 'unknown';
-              break;
-            case 'owner':
-              key = deal.owner_name || 'unassigned';
-              break;
-            default:
-              key = 'all';
+            case 'day': key = deal.transacted_at.split('T')[0]; break;
+            case 'stage': key = deal.stage || 'unknown'; break;
+            case 'source': key = deal.source || deal.utm_source || 'unknown'; break;
+            case 'owner': key = deal.owner_name || 'unassigned'; break;
+            default: key = 'all';
           }
 
-          if (!groups.has(key)) {
-            groups.set(key, { count: 0, value_cents: 0 });
-          }
+          if (!groups.has(key)) groups.set(key, { count: 0, value_cents: 0 });
           const entry = groups.get(key)!;
           entry.count += 1;
           entry.value_cents += deal.value_cents || 0;
@@ -3384,19 +3635,19 @@ export class ExplorationToolExecutor {
         }));
       }
 
-      // Build response
       const response: any = {
         days,
         filters: { stages, status, min_value_cents },
         summary,
-        deals: deals.slice(0, 50).map(d => ({
-          deal_id: d.deal_id,
+        deals: filtered.slice(0, 50).map(d => ({
+          deal_id: d.external_id,
           name: d.deal_name,
           stage: d.stage,
-          status: d.status,
+          status: d.normalized_status,
+          platform_status: d.status,
           value: d.value_cents ? '$' + (d.value_cents / 100).toFixed(2) : null,
           owner: d.owner_name,
-          created_at: d.created_at,
+          created_at: d.transacted_at,
           ...(include_attribution ? {
             source: d.source,
             utm_source: d.utm_source,
@@ -3405,13 +3656,15 @@ export class ExplorationToolExecutor {
         }))
       };
 
-      if (grouped) {
-        response.grouped = grouped;
-      }
+      if (grouped) response.grouped = grouped;
 
       return { success: true, data: response };
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'Query failed' };
+      const msg = err instanceof Error ? err.message : 'Query failed';
+      if (msg.includes('no such table')) {
+        return { success: true, data: { note: 'connector_events table not yet created', summary: { total_deals: 0 } } };
+      }
+      return { success: false, error: msg };
     }
   }
 
@@ -3423,7 +3676,13 @@ export class ExplorationToolExecutor {
     input: QueryUnifiedDataInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { connector_type, platform, days, metrics, group_by } = input;
+    // LLM sometimes sends "connector" instead of "connector_type" — normalize
+    const connector_type = input.connector_type || (input as any).connector;
+    const { platform, days, metrics, group_by } = input;
+
+    if (!connector_type) {
+      return { success: false, error: 'Missing required parameter "connector_type". Valid types: ad_platform, payments, ecommerce, crm, communication, field_service' };
+    }
 
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
@@ -3449,6 +3708,7 @@ export class ExplorationToolExecutor {
               SUM(conversion_value_cents) as conversion_value_cents
             FROM ad_metrics
             WHERE organization_id = ?
+              AND entity_type = 'campaign'
               AND metric_date >= ?
           `;
           const params: any[] = [orgId, startStr];
@@ -3487,7 +3747,7 @@ export class ExplorationToolExecutor {
           // Query conversions table for revenue data
           let query = `
             SELECT
-              source,
+              source_platform,
               COUNT(*) as count,
               SUM(value_cents) as total_cents
             FROM conversions
@@ -3497,20 +3757,20 @@ export class ExplorationToolExecutor {
           const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
           if (platform) {
-            query += ' AND source = ?';
+            query += ' AND source_platform = ?';
             params.push(platform);
           }
 
-          query += ' GROUP BY source';
+          query += ' GROUP BY source_platform';
 
           const result = await this.db.prepare(query).bind(...params).all<{
-            source: string;
+            source_platform: string;
             count: number;
             total_cents: number | null;
           }>();
 
           response.sources = (result.results || []).map(r => ({
-            source: r.source,
+            source: r.source_platform,
             conversions: r.count,
             revenue: '$' + ((r.total_cents || 0) / 100).toFixed(2)
           }));
@@ -3518,35 +3778,36 @@ export class ExplorationToolExecutor {
         }
 
         case 'crm': {
-          // Query crm_deals table
+          // Query connector_events for CRM deals
           let query = `
             SELECT
-              platform,
+              source_platform,
               COUNT(*) as deals,
-              SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) as won,
+              SUM(CASE WHEN status IN ('closedwon', 'won') THEN 1 ELSE 0 END) as won,
               SUM(value_cents) as total_value_cents
-            FROM crm_deals
+            FROM connector_events
             WHERE organization_id = ?
-              AND created_at >= ?
+              AND event_type = 'deal'
+              AND transacted_at >= ?
           `;
           const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
           if (platform) {
-            query += ' AND platform = ?';
+            query += ' AND source_platform = ?';
             params.push(platform);
           }
 
-          query += ' GROUP BY platform';
+          query += ' GROUP BY source_platform';
 
           const result = await this.db.prepare(query).bind(...params).all<{
-            platform: string;
+            source_platform: string;
             deals: number;
             won: number;
             total_value_cents: number | null;
           }>();
 
           response.platforms = (result.results || []).map(r => ({
-            platform: r.platform,
+            platform: r.source_platform,
             total_deals: r.deals,
             won_deals: r.won,
             total_value: '$' + ((r.total_value_cents || 0) / 100).toFixed(2),
@@ -3556,83 +3817,80 @@ export class ExplorationToolExecutor {
         }
 
         case 'communication': {
-          // Query comm_campaigns table if it exists
+          // Query connector_events for email/SMS engagement data
           let query = `
             SELECT
-              platform,
-              COUNT(*) as campaigns,
-              SUM(sent_count) as total_sent,
-              SUM(open_count) as total_opens,
-              SUM(click_count) as total_clicks
-            FROM comm_campaigns
+              source_platform,
+              COUNT(*) as events,
+              SUM(CASE WHEN event_type IN ('email_sent', 'sms_sent', 'campaign_sent') THEN 1 ELSE 0 END) as sent,
+              SUM(CASE WHEN event_type IN ('email_open', 'sms_open') THEN 1 ELSE 0 END) as opens,
+              SUM(CASE WHEN event_type IN ('email_click', 'sms_click', 'link_click') THEN 1 ELSE 0 END) as clicks
+            FROM connector_events
             WHERE organization_id = ?
-              AND sent_at >= ?
+              AND source_platform IN ('sendgrid', 'attentive', 'mailchimp', 'tracking_link')
+              AND transacted_at >= ?
           `;
           const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
           if (platform) {
-            query += ' AND platform = ?';
+            query += ' AND source_platform = ?';
             params.push(platform);
           }
 
-          query += ' GROUP BY platform';
+          query += ' GROUP BY source_platform';
 
           try {
             const result = await this.db.prepare(query).bind(...params).all<{
-              platform: string;
-              campaigns: number;
-              total_sent: number | null;
-              total_opens: number | null;
-              total_clicks: number | null;
+              source_platform: string;
+              events: number;
+              sent: number;
+              opens: number;
+              clicks: number;
             }>();
 
             response.platforms = (result.results || []).map(r => ({
-              platform: r.platform,
-              campaigns: r.campaigns,
-              sent: r.total_sent || 0,
-              opens: r.total_opens || 0,
-              clicks: r.total_clicks || 0,
-              open_rate: r.total_sent ? ((r.total_opens || 0) / r.total_sent * 100).toFixed(1) + '%' : '0%'
+              platform: r.source_platform,
+              events: r.events,
+              sent: r.sent,
+              opens: r.opens,
+              clicks: r.clicks,
+              open_rate: r.sent ? ((r.opens / r.sent) * 100).toFixed(1) + '%' : '0%'
             }));
           } catch {
             response.platforms = [];
-            response.note = 'No communication campaign data available';
+            response.note = 'No communication data available';
           }
           break;
         }
 
         case 'field_service': {
-          // Query field service jobs (Jobber)
+          // Query connector_events for field service data (Jobber jobs/invoices)
           let query = `
             SELECT
-              COUNT(*) as jobs,
-              SUM(total_price_cents) as revenue_cents,
-              COUNT(DISTINCT customer_id) as customers
-            FROM field_service_jobs
+              COUNT(*) as events,
+              SUM(value_cents) as revenue_cents,
+              COUNT(DISTINCT customer_external_id) as customers
+            FROM connector_events
             WHERE organization_id = ?
-              AND job_date >= ?
+              AND source_platform = 'jobber'
+              AND transacted_at >= ?
           `;
-          const params: any[] = [orgId, startStr];
-
-          if (platform) {
-            query += ' AND platform = ?';
-            params.push(platform);
-          }
+          const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
           try {
             const result = await this.db.prepare(query).bind(...params).first<{
-              jobs: number;
+              events: number;
               revenue_cents: number | null;
               customers: number;
             }>();
 
             response.summary = {
-              jobs: result?.jobs || 0,
+              events: result?.events || 0,
               revenue: '$' + ((result?.revenue_cents || 0) / 100).toFixed(2),
               unique_customers: result?.customers || 0
             };
           } catch {
-            response.summary = { jobs: 0, revenue: '$0.00', unique_customers: 0 };
+            response.summary = { events: 0, revenue: '$0.00', unique_customers: 0 };
             response.note = 'No field service data available';
           }
           break;
@@ -3667,7 +3925,20 @@ export class ExplorationToolExecutor {
         last_sync?: string;
       }> = [];
 
-      // Check ad platforms (unified tables)
+      // Type mapping from source_platform to connector type
+      const platformTypeMap: Record<string, string> = {
+        stripe: 'payments', shopify: 'ecommerce', jobber: 'field_service',
+        hubspot: 'crm', salesforce: 'crm',
+        sendgrid: 'communication', attentive: 'communication', mailchimp: 'communication',
+        zendesk: 'support', intercom: 'support',
+        calendly: 'scheduling', acuity: 'scheduling',
+        typeform: 'forms', jotform: 'forms',
+        quickbooks: 'accounting', xero: 'accounting',
+        trustpilot: 'reviews', g2: 'reviews',
+        tracking_link: 'tracking',
+      };
+
+      // 1. Check ad platforms (unified ad_campaigns table)
       if (!connector_type || connector_type === 'all' || connector_type === 'ad_platform') {
         const adResult = await this.db.prepare(`
           SELECT platform, COUNT(*) as count, MAX(last_synced_at) as last_sync
@@ -3684,159 +3955,73 @@ export class ExplorationToolExecutor {
             ...(include_data_stats ? { record_count: r.count, last_sync: r.last_sync || undefined } : {})
           });
         }
+      }
 
-        // Also check legacy tables for backward compatibility
-        const legacyPlatforms = ['google', 'facebook', 'tiktok'];
-        const legacyTables = ['google_campaigns', 'facebook_campaigns', 'tiktok_campaigns'];
+      // 2. Check all connector types via connector_events (single query)
+      {
+        const ceResult = await this.db.prepare(`
+          SELECT source_platform, COUNT(*) as count, MAX(transacted_at) as last_sync
+          FROM connector_events
+          WHERE organization_id = ?
+          GROUP BY source_platform
+        `).bind(orgId).all<{ source_platform: string; count: number; last_sync: string | null }>();
 
-        for (let i = 0; i < legacyPlatforms.length; i++) {
-          const exists = connectors.some(c => c.platform === legacyPlatforms[i]);
-          if (!exists) {
-            try {
-              const check = await this.db.prepare(`
-                SELECT COUNT(*) as count FROM ${legacyTables[i]} WHERE organization_id = ?
-              `).bind(orgId).first<{ count: number }>();
-
-              if (check && check.count > 0) {
-                connectors.push({
-                  type: 'ad_platform',
-                  platform: legacyPlatforms[i],
-                  has_data: true,
-                  ...(include_data_stats ? { record_count: check.count } : {})
-                });
-              }
-            } catch {
-              // Table doesn't exist, skip
-            }
+        for (const r of ceResult.results || []) {
+          const type = platformTypeMap[r.source_platform] || 'other';
+          if (connector_type && connector_type !== 'all' && connector_type !== type) continue;
+          if (r.count > 0 && !connectors.some(c => c.platform === r.source_platform)) {
+            connectors.push({
+              type,
+              platform: r.source_platform,
+              has_data: true,
+              ...(include_data_stats ? { record_count: r.count, last_sync: r.last_sync || undefined } : {})
+            });
           }
         }
       }
 
-      // Check revenue sources
+      // 3. Check revenue sources via conversions table
       if (!connector_type || connector_type === 'all' || connector_type === 'payments' || connector_type === 'ecommerce') {
         const revenueResult = await this.db.prepare(`
-          SELECT source, COUNT(*) as count, MAX(created_at) as last_sync
+          SELECT conversion_source as source, COUNT(*) as count, MAX(conversion_timestamp) as last_sync
           FROM conversions
           WHERE organization_id = ?
-          GROUP BY source
+          GROUP BY conversion_source
         `).bind(orgId).all<{ source: string; count: number; last_sync: string | null }>();
 
         for (const r of revenueResult.results || []) {
-          connectors.push({
-            type: ['shopify'].includes(r.source) ? 'ecommerce' : 'payments',
-            platform: r.source,
-            has_data: r.count > 0,
-            ...(include_data_stats ? { record_count: r.count, last_sync: r.last_sync || undefined } : {})
-          });
-        }
-      }
-
-      // Check CRM
-      if (!connector_type || connector_type === 'all' || connector_type === 'crm') {
-        try {
-          const crmResult = await this.db.prepare(`
-            SELECT platform, COUNT(*) as count, MAX(created_at) as last_sync
-            FROM crm_deals
-            WHERE organization_id = ?
-            GROUP BY platform
-          `).bind(orgId).all<{ platform: string; count: number; last_sync: string | null }>();
-
-          for (const r of crmResult.results || []) {
+          if (!connectors.some(c => c.platform === r.source)) {
             connectors.push({
-              type: 'crm',
-              platform: r.platform,
+              type: ['shopify'].includes(r.source) ? 'ecommerce' : 'payments',
+              platform: r.source,
               has_data: r.count > 0,
               ...(include_data_stats ? { record_count: r.count, last_sync: r.last_sync || undefined } : {})
             });
           }
-        } catch {
-          // CRM table doesn't exist yet
         }
       }
 
-      // Check events/tag
+      // 4. Check events/tag
       if (!connector_type || connector_type === 'all') {
-        const eventsResult = await this.db.prepare(`
-          SELECT COUNT(*) as count, MAX(metric_date) as last_date
-          FROM daily_metrics
-          WHERE organization_id = ?
-        `).bind(orgId).first<{ count: number; last_date: string | null }>();
-
-        if (eventsResult && eventsResult.count > 0) {
-          connectors.push({
-            type: 'events',
-            platform: 'clearlift_tag',
-            has_data: true,
-            ...(include_data_stats ? { record_count: eventsResult.count, last_sync: eventsResult.last_date || undefined } : {})
-          });
-        }
-      }
-
-      // Check all unified connector categories
-      const unifiedChecks: Array<{ type: string; table: string; dateCol: string }> = [
-        { type: 'communication', table: 'comm_campaigns', dateCol: 'sent_at' },
-        { type: 'ecommerce', table: 'ecommerce_orders', dateCol: 'ordered_at' },
-        { type: 'support', table: 'support_tickets', dateCol: 'opened_at' },
-        { type: 'scheduling', table: 'scheduling_appointments', dateCol: 'booked_at' },
-        { type: 'forms', table: 'forms_submissions', dateCol: 'submitted_at' },
-        { type: 'accounting', table: 'accounting_invoices', dateCol: 'invoice_date' },
-        { type: 'reviews', table: 'reviews_items', dateCol: 'reviewed_at' },
-        { type: 'affiliate', table: 'affiliate_conversions', dateCol: 'converted_at' },
-        { type: 'social', table: 'social_posts', dateCol: 'published_at' },
-        { type: 'field_service', table: 'jobber_jobs', dateCol: 'completed_at' },
-      ];
-
-      for (const check of unifiedChecks) {
-        if (connector_type && connector_type !== 'all' && connector_type !== check.type) continue;
-        // Skip types we've already checked above
-        if (check.type === 'ecommerce' && connectors.some(c => c.type === 'ecommerce')) continue;
-
         try {
-          const uResult = await this.db.prepare(`
-            SELECT source_platform, COUNT(*) as count, MAX(last_synced_at) as last_sync
-            FROM ${check.table}
+          const eventsResult = await this.db.prepare(`
+            SELECT COUNT(*) as count, MAX(date) as last_date
+            FROM daily_metrics
             WHERE organization_id = ?
-            GROUP BY source_platform
-          `).bind(orgId).all<{ source_platform: string; count: number; last_sync: string | null }>();
+          `).bind(orgId).first<{ count: number; last_date: string | null }>();
 
-          for (const r of uResult.results || []) {
-            if (r.count > 0 && !connectors.some(c => c.type === check.type && c.platform === r.source_platform)) {
-              connectors.push({
-                type: check.type,
-                platform: r.source_platform || check.table,
-                has_data: true,
-                ...(include_data_stats ? { record_count: r.count, last_sync: r.last_sync || undefined } : {})
-              });
-            }
+          if (eventsResult && eventsResult.count > 0) {
+            connectors.push({
+              type: 'events',
+              platform: 'clearlift_tag',
+              has_data: true,
+              ...(include_data_stats ? { record_count: eventsResult.count, last_sync: eventsResult.last_date || undefined } : {})
+            });
           }
-        } catch {
-          // Table doesn't exist yet — skip
-        }
+        } catch { /* table doesn't exist */ }
       }
 
-      // Check Shopify specifically (shopify_orders table)
-      if (!connector_type || connector_type === 'all' || connector_type === 'ecommerce') {
-        if (!connectors.some(c => c.platform === 'shopify')) {
-          try {
-            const shopResult = await this.db.prepare(`
-              SELECT COUNT(*) as count, MAX(created_at) as last_sync
-              FROM shopify_orders
-              WHERE organization_id = ?
-            `).bind(orgId).first<{ count: number; last_sync: string | null }>();
-
-            if (shopResult && shopResult.count > 0) {
-              connectors.push({
-                type: 'ecommerce',
-                platform: 'shopify',
-                has_data: true,
-                ...(include_data_stats ? { record_count: shopResult.count, last_sync: shopResult.last_sync || undefined } : {})
-              });
-            }
-          } catch { /* table doesn't exist */ }
-        }
-      }
-
-      // Check customer identities
+      // 5. Check customer identities
       if (!connector_type || connector_type === 'all') {
         try {
           const idResult = await this.db.prepare(`
@@ -3873,19 +4058,6 @@ export class ExplorationToolExecutor {
   // ADVANCED ANALYTICS TOOL EXECUTORS
   // ========================================================================
 
-  /**
-   * Resolve org_tag from org_tag_mappings for a given organization
-   */
-  private async resolveOrgTag(orgId: string): Promise<string | null> {
-    try {
-      const row = await this.db.prepare(
-        'SELECT org_tag FROM org_tag_mappings WHERE organization_id = ? LIMIT 1'
-      ).bind(orgId).first<{ org_tag: string }>();
-      return row?.org_tag || null;
-    } catch {
-      return null;
-    }
-  }
 
   /**
    * Query journey/funnel analytics: channel distribution, paths, transitions
@@ -3897,20 +4069,15 @@ export class ExplorationToolExecutor {
     const { include_paths = true, include_transitions = false, top_n = 10 } = input;
 
     try {
-      const orgTag = await this.resolveOrgTag(orgId);
-      if (!orgTag) {
-        return { success: true, data: { note: 'No org_tag configured — journey analytics unavailable', sessions: 0 } };
-      }
-
       const row = await this.db.prepare(`
         SELECT total_sessions, converting_sessions, conversion_rate,
                avg_path_length, channel_distribution, common_paths, transition_matrix,
                computed_at
         FROM journey_analytics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
         ORDER BY computed_at DESC
         LIMIT 1
-      `).bind(orgTag).first<{
+      `).bind(orgId).first<{
         total_sessions: number;
         converting_sessions: number;
         conversion_rate: number;
@@ -3969,19 +4136,14 @@ export class ExplorationToolExecutor {
     const { goal_id } = input;
 
     try {
-      const orgTag = await this.resolveOrgTag(orgId);
-      if (!orgTag) {
-        return { success: true, data: { note: 'No org_tag configured — flow insights unavailable', stages: [] } };
-      }
-
       // Get latest journey analytics
       const journey = await this.db.prepare(`
         SELECT total_sessions, converting_sessions, channel_distribution, computed_at
         FROM journey_analytics
-        WHERE org_tag = ?
+        WHERE organization_id = ?
         ORDER BY computed_at DESC
         LIMIT 1
-      `).bind(orgTag).first<{
+      `).bind(orgId).first<{
         total_sessions: number;
         converting_sessions: number;
         channel_distribution: string | null;
@@ -3992,11 +4154,13 @@ export class ExplorationToolExecutor {
         return { success: true, data: { note: 'No journey data available', stages: [] } };
       }
 
-      // Get conversion goals
+      // Get conversion config from platform_connections (in coreDb / DB)
+      const pcDb = this.coreDb || this.db;
       let goalSql = `
-        SELECT id, goal_name, goal_type, event_type, configuration
-        FROM conversion_goals
-        WHERE organization_id = ?
+        SELECT id, platform, settings
+        FROM platform_connections
+        WHERE organization_id = ? AND is_active = 1
+          AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
       `;
       const goalParams: any[] = [orgId];
       if (goal_id) {
@@ -4004,47 +4168,124 @@ export class ExplorationToolExecutor {
         goalParams.push(goal_id);
       }
 
-      const goalsResult = await this.db.prepare(goalSql).bind(...goalParams).all<{
+      const goalsResult = await pcDb.prepare(goalSql).bind(...goalParams).all<{
         id: string;
-        goal_name: string;
-        goal_type: string;
-        event_type: string;
-        configuration: string | null;
+        platform: string;
+        settings: string | null;
       }>();
 
-      const goals = goalsResult.results || [];
-      const channels = journey.channel_distribution ? JSON.parse(journey.channel_distribution) : {};
+      // Map platform_connections to goal-like objects for the AI
+      const goals = (goalsResult.results || []).map(r => ({
+        id: r.id,
+        goal_name: r.platform,
+        goal_type: 'conversion',
+        event_type: r.platform,
+        configuration: r.settings,
+      }));
       const totalSessions = journey.total_sessions || 1;
 
-      // Build funnel stages from goals
-      const stages = goals.map((goal, idx) => {
-        // Estimate visitors per stage using a simple decay model
-        // First stage gets all sessions, subsequent stages decay
-        const decayFactor = Math.pow(0.6, idx);
-        const estimatedVisitors = Math.round(totalSessions * decayFactor);
-        const nextVisitors = idx < goals.length - 1
-          ? Math.round(totalSessions * Math.pow(0.6, idx + 1))
-          : journey.converting_sessions;
-        const dropoffRate = estimatedVisitors > 0
-          ? ((estimatedVisitors - nextVisitors) / estimatedVisitors * 100)
-          : 0;
+      // Query real page flow data from funnel_transitions (daily aggregates)
+      const days = 30;
+      const pageFlowResult = await this.db.prepare(`
+        SELECT to_id as page,
+               SUM(visitors_transitioned) as visitors,
+               SUM(conversions) as conversions,
+               SUM(revenue_cents) as revenue_cents
+        FROM funnel_transitions
+        WHERE organization_id = ?
+          AND from_type = 'page_url' AND to_type = 'page_url'
+          AND period_start >= date('now', '-' || ? || ' days')
+        GROUP BY to_id
+        ORDER BY visitors DESC
+        LIMIT 20
+      `).bind(orgId, days).all<{
+        page: string;
+        visitors: number;
+        conversions: number;
+        revenue_cents: number;
+      }>();
 
-        return {
-          goal_id: goal.id,
-          goal_name: goal.goal_name,
-          goal_type: goal.goal_type,
-          estimated_visitors: estimatedVisitors,
-          dropoff_rate: Math.round(dropoffRate * 10) / 10,
-          conversion_rate: totalSessions > 0
-            ? Math.round((nextVisitors / totalSessions) * 1000) / 10
-            : 0
-        };
-      });
+      const topSourcesResult = await this.db.prepare(`
+        SELECT from_id as source, from_type,
+               SUM(visitors_transitioned) as visitors,
+               SUM(conversions) as conversions
+        FROM funnel_transitions
+        WHERE organization_id = ? AND from_type IN ('source','referrer') AND to_type = 'page_url'
+          AND period_start >= date('now', '-' || ? || ' days')
+        GROUP BY from_id, from_type
+        ORDER BY visitors DESC
+        LIMIT 10
+      `).bind(orgId, days).all<{
+        source: string;
+        from_type: string;
+        visitors: number;
+        conversions: number;
+      }>();
 
-      // Identify bottleneck (highest dropoff)
-      const bottleneck = stages.length > 0
-        ? stages.reduce((max, s) => s.dropoff_rate > max.dropoff_rate ? s : max, stages[0])
-        : null;
+      const pageFlowPages = pageFlowResult.results || [];
+      const topSources = topSourcesResult.results || [];
+
+      let stages: Array<{
+        page: string;
+        visitors: number;
+        conversions: number;
+        revenue_cents: number;
+        dropoff_rate: number;
+        conversion_rate: number;
+      }>;
+      let bottleneck: { page: string; dropoff_rate: number } | null = null;
+
+      if (pageFlowPages.length > 0) {
+        // Build stages from real page data
+        stages = pageFlowPages.map((p, idx) => {
+          const nextVisitors = idx + 1 < pageFlowPages.length ? pageFlowPages[idx + 1].visitors : 0;
+          const dropoffRate = p.visitors > 0
+            ? ((p.visitors - nextVisitors) / p.visitors * 100)
+            : 0;
+          const conversionRate = p.visitors > 0
+            ? Math.round((p.conversions / p.visitors) * 1000) / 10
+            : 0;
+          return {
+            page: p.page,
+            visitors: p.visitors,
+            conversions: p.conversions,
+            revenue_cents: p.revenue_cents,
+            dropoff_rate: Math.round(dropoffRate * 10) / 10,
+            conversion_rate: conversionRate,
+          };
+        });
+
+        // Bottleneck: page with highest traffic-to-next-page dropoff (excluding last page)
+        const stagesForBottleneck = stages.slice(0, -1);
+        if (stagesForBottleneck.length > 0) {
+          bottleneck = stagesForBottleneck.reduce(
+            (max, s) => s.dropoff_rate > max.dropoff_rate ? { page: s.page, dropoff_rate: s.dropoff_rate } : max,
+            { page: stagesForBottleneck[0].page, dropoff_rate: stagesForBottleneck[0].dropoff_rate }
+          );
+        }
+      } else {
+        // Fallback: decay model when no funnel_transitions data exists
+        stages = goals.map((goal, idx) => {
+          const decayFactor = Math.pow(0.6, idx);
+          const estimatedVisitors = Math.round(totalSessions * decayFactor);
+          const nextVisitors = idx < goals.length - 1
+            ? Math.round(totalSessions * Math.pow(0.6, idx + 1))
+            : journey.converting_sessions;
+          const dropoffRate = estimatedVisitors > 0
+            ? ((estimatedVisitors - nextVisitors) / estimatedVisitors * 100)
+            : 0;
+          return {
+            page: goal.goal_name,
+            visitors: estimatedVisitors,
+            conversions: 0,
+            revenue_cents: 0,
+            dropoff_rate: Math.round(dropoffRate * 10) / 10,
+            conversion_rate: totalSessions > 0
+              ? Math.round((nextVisitors / totalSessions) * 1000) / 10
+              : 0,
+          };
+        });
+      }
 
       return {
         success: true,
@@ -4055,8 +4296,16 @@ export class ExplorationToolExecutor {
             ? Math.round((journey.converting_sessions / journey.total_sessions) * 1000) / 10
             : 0,
           stages,
-          bottleneck_stage: bottleneck ? { goal_name: bottleneck.goal_name, dropoff_rate: bottleneck.dropoff_rate } : null,
-          computed_at: journey.computed_at
+          top_sources: topSources.map(s => ({
+            source: s.source,
+            type: s.from_type,
+            visitors: s.visitors,
+            conversions: s.conversions,
+          })),
+          bottleneck_page: bottleneck,
+          goals: goals.map(g => ({ id: g.id, name: g.goal_name, type: g.event_type })),
+          computed_at: journey.computed_at,
+          data_source: pageFlowPages.length > 0 ? 'funnel_transitions' : 'estimated',
         }
       };
     } catch (err) {
@@ -4085,7 +4334,7 @@ export class ExplorationToolExecutor {
     try {
       // Query CAC history
       const historyResult = await db.prepare(`
-        SELECT date, cac_cents, spend_cents, conversions, notes
+        SELECT date, cac_cents, spend_cents, conversions
         FROM cac_history
         WHERE organization_id = ?
         ORDER BY date DESC
@@ -4095,7 +4344,6 @@ export class ExplorationToolExecutor {
         cac_cents: number;
         spend_cents: number;
         conversions: number;
-        notes: string | null;
       }>();
 
       const history = (historyResult.results || []).reverse();
@@ -4147,7 +4395,9 @@ export class ExplorationToolExecutor {
 
       if (include_predictions) {
         try {
-          const predsResult = await db.prepare(`
+          // cac_predictions is in DB (coreDb), not ANALYTICS_DB
+          const predDb = this.coreDb || this.db;
+          const predsResult = await predDb.prepare(`
             SELECT prediction_date, predicted_cac_cents, assumptions
             FROM cac_predictions
             WHERE organization_id = ?
@@ -4172,22 +4422,22 @@ export class ExplorationToolExecutor {
 
       if (include_baselines) {
         try {
-          const basResult = await db.prepare(`
-            SELECT target_cac_cents, baseline_type, notes
+          // cac_baselines is in DB (coreDb), not ANALYTICS_DB
+          const basDb = this.coreDb || this.db;
+          const basResult = await basDb.prepare(`
+            SELECT baseline_cac_cents, calculation_method
             FROM cac_baselines
             WHERE organization_id = ?
             ORDER BY created_at DESC
             LIMIT 5
           `).bind(orgId).all<{
-            target_cac_cents: number;
-            baseline_type: string;
-            notes: string | null;
+            baseline_cac_cents: number;
+            calculation_method: string;
           }>();
           result.baselines = (basResult.results || []).map(b => ({
-            target_cac: '$' + (b.target_cac_cents / 100).toFixed(2),
-            target_cac_cents: b.target_cac_cents,
-            type: b.baseline_type,
-            notes: b.notes
+            target_cac: '$' + (b.baseline_cac_cents / 100).toFixed(2),
+            target_cac_cents: b.baseline_cac_cents,
+            type: b.calculation_method
           }));
         } catch {
           result.baselines = [];
@@ -4214,17 +4464,12 @@ export class ExplorationToolExecutor {
     const { hours = 24, breakdown } = input;
 
     try {
-      const orgTag = await this.resolveOrgTag(orgId);
-      if (!orgTag) {
-        return { success: true, data: { note: 'No org_tag configured — traffic data unavailable', sessions: 0 } };
-      }
-
       // Try hourly_metrics first for recent data
       let rows: Array<{
-        hour_ts?: string;
-        metric_date?: string;
+        hour?: string;
+        date?: string;
         sessions: number;
-        unique_users: number;
+        users: number;
         page_views: number;
         conversions: number;
         revenue_cents: number;
@@ -4236,13 +4481,13 @@ export class ExplorationToolExecutor {
 
       try {
         const hourlyResult = await this.db.prepare(`
-          SELECT hour_ts, sessions, unique_users, page_views, conversions, revenue_cents,
+          SELECT hour, sessions, users, page_views, conversions, revenue_cents,
                  by_channel, by_device, by_geo, by_utm_source
           FROM hourly_metrics
-          WHERE org_tag = ?
-            AND hour_ts >= datetime('now', '-${Math.min(hours, 168)} hours')
-          ORDER BY hour_ts DESC
-        `).bind(orgTag).all<any>();
+          WHERE organization_id = ?
+            AND hour >= datetime('now', '-${Math.min(hours, 168)} hours')
+          ORDER BY hour DESC
+        `).bind(orgId).all<any>();
         rows = hourlyResult.results || [];
       } catch {
         // hourly_metrics may not exist, fall back to daily_metrics
@@ -4253,13 +4498,13 @@ export class ExplorationToolExecutor {
         const dailyDays = Math.ceil(hours / 24);
         try {
           const dailyResult = await this.db.prepare(`
-            SELECT metric_date, sessions, unique_users, page_views, conversions, revenue_cents,
+            SELECT date, sessions, users, page_views, conversions, revenue_cents,
                    by_channel, by_device, by_geo, by_utm_source
             FROM daily_metrics
-            WHERE org_tag = ?
-              AND metric_date >= date('now', '-${dailyDays} days')
-            ORDER BY metric_date DESC
-          `).bind(orgTag).all<any>();
+            WHERE organization_id = ?
+              AND date >= date('now', '-${dailyDays} days')
+            ORDER BY date DESC
+          `).bind(orgId).all<any>();
           rows = dailyResult.results || [];
         } catch {
           return { success: true, data: { note: 'Traffic metrics tables not yet created', sessions: 0 } };
@@ -4273,14 +4518,14 @@ export class ExplorationToolExecutor {
       // Aggregate totals
       const totals = {
         sessions: 0,
-        unique_users: 0,
+        users: 0,
         page_views: 0,
         conversions: 0,
         revenue_cents: 0
       };
       for (const row of rows) {
         totals.sessions += row.sessions || 0;
-        totals.unique_users += row.unique_users || 0;
+        totals.users += row.users || 0;
         totals.page_views += row.page_views || 0;
         totals.conversions += row.conversions || 0;
         totals.revenue_cents += row.revenue_cents || 0;
@@ -4291,7 +4536,7 @@ export class ExplorationToolExecutor {
         data_points: rows.length,
         summary: {
           sessions: totals.sessions,
-          unique_users: totals.unique_users,
+          users: totals.users,
           page_views: totals.page_views,
           conversions: totals.conversions,
           revenue: '$' + (totals.revenue_cents / 100).toFixed(2),
@@ -4363,66 +4608,81 @@ export class ExplorationToolExecutor {
 
     try {
       let sql = `
-        SELECT shopify_order_id, order_number, total_price_cents, subtotal_price_cents,
-               total_tax_cents, total_discounts_cents, total_shipping_cents, currency,
-               financial_status, fulfillment_status, source_name,
-               utm_source, utm_medium, utm_campaign, utm_content, utm_term,
-               gclid, fbclid, ttclid, landing_site_path, referring_site,
-               shipping_country, shipping_province, shipping_city,
-               line_items_count, total_items_quantity,
-               customer_orders_count, shopify_created_at
-        FROM shopify_orders
+        SELECT external_id as shopify_order_id,
+               value_cents as total_price_cents, currency,
+               status as financial_status,
+               customer_external_id,
+               transacted_at as shopify_created_at,
+               metadata
+        FROM connector_events
         WHERE organization_id = ?
-          AND shopify_created_at >= ?
+          AND source_platform = 'shopify'
+          AND transacted_at >= ?
       `;
       const params: any[] = [orgId, startStr + 'T00:00:00Z'];
 
       if (filters?.financial_status) {
-        sql += ' AND financial_status = ?';
+        sql += ' AND status = ?';
         params.push(filters.financial_status);
       }
       if (filters?.fulfillment_status) {
-        sql += ' AND fulfillment_status = ?';
+        // fulfillment_status may be in metadata JSON
+        sql += " AND json_extract(metadata, '$.fulfillment_status') = ?";
         params.push(filters.fulfillment_status);
       }
       if (filters?.min_total_cents) {
-        sql += ' AND total_price_cents >= ?';
+        sql += ' AND value_cents >= ?';
         params.push(filters.min_total_cents);
       }
       if (filters?.max_total_cents) {
-        sql += ' AND total_price_cents <= ?';
+        sql += ' AND value_cents <= ?';
         params.push(filters.max_total_cents);
       }
       if (filters?.utm_source) {
-        sql += ' AND utm_source = ?';
+        sql += " AND json_extract(metadata, '$.utm_source') = ?";
         params.push(filters.utm_source);
       }
       if (filters?.utm_campaign) {
-        sql += ' AND utm_campaign = ?';
+        sql += " AND json_extract(metadata, '$.utm_campaign') = ?";
         params.push(filters.utm_campaign);
-      }
-      if (filters?.shipping_country) {
-        sql += ' AND shipping_country = ?';
-        params.push(filters.shipping_country);
       }
 
       sql += ' ORDER BY shopify_created_at DESC LIMIT 1000';
 
       const result = await this.db.prepare(sql).bind(...params).all<any>();
-      const orders = result.results || [];
+      const rawOrders = result.results || [];
 
-      if (orders.length === 0) {
+      if (rawOrders.length === 0) {
         return { success: true, data: { time_series: [], summary: { total_revenue: '$0.00', total_orders: 0 }, note: 'No Shopify orders in period' } };
       }
 
+      // Parse metadata JSON and merge fields onto each order
+      const orders = rawOrders.map((o: any) => {
+        const meta = o.metadata ? (typeof o.metadata === 'string' ? JSON.parse(o.metadata) : o.metadata) : {};
+        return {
+          ...o,
+          utm_source: meta.utm_source || null,
+          utm_medium: meta.utm_medium || null,
+          utm_campaign: meta.utm_campaign || null,
+          click_id: meta.click_id || null,
+          click_id_type: meta.click_id_type || null,
+          referring_site: meta.referring_site || null,
+          source_name: meta.landing_site || null,
+          discount_cents: meta.discount_cents || 0,
+          shipping_cents: meta.shipping_cents || 0,
+          tax_cents: meta.tax_cents || 0,
+          refund_cents: meta.refund_cents || 0,
+        };
+      });
+
       // Summary
       const totalRevenue = orders.reduce((s: number, o: any) => s + (o.total_price_cents || 0), 0);
-      const totalDiscount = orders.reduce((s: number, o: any) => s + (o.total_discounts_cents || 0), 0);
-      const totalShipping = orders.reduce((s: number, o: any) => s + (o.total_shipping_cents || 0), 0);
-      const totalTax = orders.reduce((s: number, o: any) => s + (o.total_tax_cents || 0), 0);
-      const uniqueCountries = new Set(orders.map((o: any) => o.shipping_country).filter(Boolean));
-      const newCustomers = orders.filter((o: any) => (o.customer_orders_count || 0) <= 1).length;
-      const returningCustomers = orders.length - newCustomers;
+      const totalDiscount = orders.reduce((s: number, o: any) => s + (o.discount_cents || 0), 0);
+      const totalShipping = orders.reduce((s: number, o: any) => s + (o.shipping_cents || 0), 0);
+      const totalTax = orders.reduce((s: number, o: any) => s + (o.tax_cents || 0), 0);
+      const newCustomers = orders.length; // Can't determine from connector_events without customer history
+      // Count unique customers to estimate new vs returning
+      const uniqueCustomers = new Set(orders.map((o: any) => o.customer_external_id).filter(Boolean));
 
       const summary = {
         total_revenue: '$' + (totalRevenue / 100).toFixed(2),
@@ -4433,11 +4693,7 @@ export class ExplorationToolExecutor {
         total_discounts: '$' + (totalDiscount / 100).toFixed(2),
         total_shipping: '$' + (totalShipping / 100).toFixed(2),
         total_tax: '$' + (totalTax / 100).toFixed(2),
-        new_customers: newCustomers,
-        returning_customers: returningCustomers,
-        returning_customer_pct: orders.length > 0 ? Math.round(returningCustomers / orders.length * 100) : 0,
-        unique_countries: uniqueCountries.size,
-        total_items: orders.reduce((s: number, o: any) => s + (o.total_items_quantity || 0), 0)
+        unique_customers: uniqueCustomers.size,
       };
 
       // Group by dimension
@@ -4464,9 +4720,6 @@ export class ExplorationToolExecutor {
             break;
           case 'source_name':
             key = order.source_name || 'unknown';
-            break;
-          case 'shipping_country':
-            key = order.shipping_country || 'unknown';
             break;
           default:
             key = orderDate;
@@ -4496,9 +4749,10 @@ export class ExplorationToolExecutor {
         const bySource = new Map<string, { revenue_cents: number; orders: number }>();
         for (const order of orders) {
           let source = 'direct';
-          if (order.gclid) source = 'google_ads';
-          else if (order.fbclid) source = 'meta_ads';
-          else if (order.ttclid) source = 'tiktok_ads';
+          const clickType = order.click_id_type;
+          if (clickType === 'gclid') source = 'google_ads';
+          else if (clickType === 'fbclid') source = 'meta_ads';
+          else if (clickType === 'ttclid') source = 'tiktok_ads';
           else if (order.utm_source) source = order.utm_source;
           else if (order.referring_site) source = 'referral';
 
@@ -4519,14 +4773,17 @@ export class ExplorationToolExecutor {
           }));
       }
 
-      // Product breakdown from ecommerce_orders if requested
+      // Product breakdown from connector_events metadata if requested
       if (include_products) {
         try {
           const prodResult = await this.db.prepare(`
-            SELECT name, COUNT(*) as order_count, SUM(price_cents) as total_revenue_cents
-            FROM ecommerce_products
-            WHERE organization_id = ? AND source_platform = 'shopify'
-            GROUP BY name
+            SELECT json_extract(metadata, '$.product_name') as name,
+                   COUNT(*) as order_count,
+                   SUM(value_cents) as total_revenue_cents
+            FROM connector_events
+            WHERE organization_id = ? AND source_platform = 'shopify' AND event_type = 'order'
+              AND json_extract(metadata, '$.product_name') IS NOT NULL
+            GROUP BY json_extract(metadata, '$.product_name')
             ORDER BY total_revenue_cents DESC
             LIMIT 20
           `).bind(orgId).all<{ name: string; order_count: number; total_revenue_cents: number }>();
@@ -4692,66 +4949,47 @@ export class ExplorationToolExecutor {
     try {
       const response: any = { days, platform: platform || 'all', channel };
 
-      // Campaign metrics
+      // All communication data now lives in connector_events
+      const commPlatforms = ['sendgrid', 'attentive', 'mailchimp', 'tracking_link'];
+
       if (include_campaigns) {
-        let campSql = `
-          SELECT source_platform, name, campaign_type, status,
-                 audience_count, subject_line, sent_at
-          FROM comm_campaigns
+        // Aggregate engagement by event_type from connector_events
+        let engSql = `
+          SELECT event_type, COUNT(*) as count, SUM(value_cents) as total_value_cents
+          FROM connector_events
           WHERE organization_id = ?
-            AND (sent_at >= ? OR scheduled_at >= ?)
+            AND source_platform IN (${commPlatforms.map(() => '?').join(',')})
+            AND transacted_at >= ?
         `;
-        const campParams: any[] = [orgId, startStr + 'T00:00:00Z', startStr + 'T00:00:00Z'];
+        const engParams: any[] = [orgId, ...commPlatforms, startStr + 'T00:00:00Z'];
 
         if (platform) {
-          campSql += ' AND source_platform = ?';
-          campParams.push(platform);
+          engSql += ' AND source_platform = ?';
+          engParams.push(platform);
         }
 
-        campSql += ' ORDER BY sent_at DESC LIMIT 100';
+        engSql += ' GROUP BY event_type';
 
-        const campResult = await this.db.prepare(campSql).bind(...campParams).all<any>();
-        const campaigns = campResult.results || [];
+        const engResult = await this.db.prepare(engSql).bind(...engParams).all<{
+          event_type: string;
+          count: number;
+          total_value_cents: number | null;
+        }>();
 
-        // Get engagement metrics for these campaigns
-        const campaignIds = campaigns.map((c: any) => c.id).filter(Boolean);
-        let engagementByType: Record<string, number> = {};
-
-        if (campaignIds.length > 0) {
-          const engSql = `
-            SELECT engagement_type, COUNT(*) as count,
-                   SUM(conversion_value_cents) as conversion_value_cents
-            FROM comm_engagements
-            WHERE organization_id = ?
-              AND occurred_at >= ?
-              ${platform ? 'AND source_platform = ?' : ''}
-              ${channel !== 'all' ? 'AND channel = ?' : ''}
-            GROUP BY engagement_type
-          `;
-          const engParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-          if (platform) engParams.push(platform);
-          if (channel !== 'all') engParams.push(channel);
-
-          const engResult = await this.db.prepare(engSql).bind(...engParams).all<{
-            engagement_type: string;
-            count: number;
-            conversion_value_cents: number | null;
-          }>();
-
-          for (const r of engResult.results || []) {
-            engagementByType[r.engagement_type] = r.count;
-          }
+        const engagementByType: Record<string, number> = {};
+        for (const r of engResult.results || []) {
+          engagementByType[r.event_type] = r.count;
         }
 
-        const totalSent = engagementByType['sent'] || engagementByType['delivered'] || campaigns.reduce((s: number, c: any) => s + (c.audience_count || 0), 0);
-        const totalOpens = engagementByType['open'] || engagementByType['opened'] || 0;
-        const totalClicks = engagementByType['click'] || engagementByType['clicked'] || 0;
-        const totalBounces = engagementByType['bounce'] || engagementByType['bounced'] || 0;
-        const totalUnsubscribes = engagementByType['unsubscribe'] || engagementByType['unsubscribed'] || 0;
+        const totalSent = engagementByType['email_sent'] || engagementByType['campaign_sent'] || engagementByType['sms_sent'] || 0;
+        const totalOpens = engagementByType['email_open'] || engagementByType['sms_open'] || 0;
+        const totalClicks = engagementByType['email_click'] || engagementByType['sms_click'] || engagementByType['link_click'] || 0;
+        const totalBounces = engagementByType['bounce'] || engagementByType['email_bounce'] || 0;
+        const totalUnsubscribes = engagementByType['unsubscribe'] || engagementByType['email_unsubscribe'] || 0;
         const totalConversions = engagementByType['conversion'] || engagementByType['purchase'] || 0;
 
         response.campaign_summary = {
-          total_campaigns: campaigns.length,
+          total_events: (engResult.results || []).reduce((s, r) => s + r.count, 0),
           total_sent: totalSent,
           total_opens: totalOpens,
           total_clicks: totalClicks,
@@ -4765,55 +5003,31 @@ export class ExplorationToolExecutor {
           unsubscribe_rate: totalSent > 0 ? (totalUnsubscribes / totalSent * 100).toFixed(2) + '%' : 'N/A'
         };
 
-        response.recent_campaigns = campaigns.slice(0, 20).map((c: any) => ({
-          platform: c.source_platform,
-          name: c.name,
-          type: c.campaign_type,
-          status: c.status,
-          audience: c.audience_count,
-          subject: c.subject_line,
-          sent_at: c.sent_at
-        }));
-
         response.engagement_by_type = engagementByType;
       }
 
-      // Subscriber health
+      // Subscriber health from connector_customers if available
       if (include_subscriber_health) {
-        let subSql = `
-          SELECT
-            COUNT(*) as total_subscribers,
-            COUNT(CASE WHEN email_status = 'subscribed' THEN 1 END) as email_subscribed,
-            COUNT(CASE WHEN email_status = 'unsubscribed' THEN 1 END) as email_unsubscribed,
-            COUNT(CASE WHEN sms_status = 'subscribed' THEN 1 END) as sms_subscribed,
-            AVG(email_open_rate) as avg_open_rate,
-            AVG(email_click_rate) as avg_click_rate,
-            AVG(total_emails_received) as avg_emails_received,
-            AVG(total_emails_opened) as avg_emails_opened
-          FROM comm_subscribers
-          WHERE organization_id = ?
-        `;
-        const subParams: any[] = [orgId];
-        if (platform) {
-          subSql += ' AND source_platform = ?';
-          subParams.push(platform);
-        }
+        try {
+          let subSql = `
+            SELECT
+              COUNT(*) as total_contacts,
+              COUNT(DISTINCT customer_external_id) as unique_contacts
+            FROM connector_events
+            WHERE organization_id = ?
+              AND source_platform IN (${commPlatforms.map(() => '?').join(',')})
+              AND transacted_at >= ?
+          `;
+          const subParams: any[] = [orgId, ...commPlatforms, startStr + 'T00:00:00Z'];
 
-        const subResult = await this.db.prepare(subSql).bind(...subParams).first<any>();
-
-        if (subResult) {
+          const subResult = await this.db.prepare(subSql).bind(...subParams).first<any>();
           response.subscriber_health = {
-            total_subscribers: subResult.total_subscribers || 0,
-            email_subscribed: subResult.email_subscribed || 0,
-            email_unsubscribed: subResult.email_unsubscribed || 0,
-            sms_subscribed: subResult.sms_subscribed || 0,
-            avg_open_rate: subResult.avg_open_rate ? (subResult.avg_open_rate * 100).toFixed(1) + '%' : 'N/A',
-            avg_click_rate: subResult.avg_click_rate ? (subResult.avg_click_rate * 100).toFixed(1) + '%' : 'N/A',
-            avg_emails_per_subscriber: subResult.avg_emails_received ? Math.round(subResult.avg_emails_received) : 0,
-            list_health: subResult.total_subscribers > 0
-              ? ((subResult.email_subscribed || 0) / subResult.total_subscribers * 100).toFixed(0) + '% active'
-              : 'N/A'
+            total_events: subResult?.total_contacts || 0,
+            unique_contacts: subResult?.unique_contacts || 0,
+            note: 'Subscriber-level health metrics require live API query (use query_api tool)'
           };
+        } catch {
+          response.subscriber_health = { note: 'Subscriber data not available' };
         }
       }
 
@@ -4828,7 +5042,7 @@ export class ExplorationToolExecutor {
   }
 
   /**
-   * Query unified e-commerce analytics
+   * Query unified e-commerce analytics from connector_events
    */
   private async queryEcommerceAnalytics(
     input: QueryEcommerceAnalyticsInput,
@@ -4841,22 +5055,21 @@ export class ExplorationToolExecutor {
     const startStr = startDate.toISOString().split('T')[0];
 
     try {
-      // Orders summary
+      // Query connector_events for e-commerce transactions
+      // Stripe uses 'charge', Shopify uses 'order', payment platforms vary
+      const ecommPlatforms = platform ? [platform] : ['shopify', 'stripe', 'lemon_squeezy', 'paddle', 'chargebee'];
+      const revenueEventTypes = ['order', 'charge', 'payment', 'invoice'];
       let orderSql = `
-        SELECT source_platform, status, financial_status, fulfillment_status,
-               total_cents, discount_cents, shipping_cents, tax_cents,
-               item_count, utm_source, utm_medium, utm_campaign, ordered_at
-        FROM ecommerce_orders
+        SELECT id, source_platform, external_id, event_type, status,
+               value_cents, metadata, transacted_at
+        FROM connector_events
         WHERE organization_id = ?
-          AND ordered_at >= ?
+          AND source_platform IN (${ecommPlatforms.map(() => '?').join(',')})
+          AND event_type IN (${revenueEventTypes.map(() => '?').join(',')})
+          AND transacted_at >= ?
+        ORDER BY transacted_at DESC LIMIT 2000
       `;
-      const orderParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-
-      if (platform) {
-        orderSql += ' AND source_platform = ?';
-        orderParams.push(platform);
-      }
-      orderSql += ' ORDER BY ordered_at DESC LIMIT 2000';
+      const orderParams: any[] = [orgId, ...ecommPlatforms, ...revenueEventTypes, startStr + 'T00:00:00Z'];
 
       const orderResult = await this.db.prepare(orderSql).bind(...orderParams).all<any>();
       const orders = orderResult.results || [];
@@ -4865,12 +5078,13 @@ export class ExplorationToolExecutor {
         return { success: true, data: { note: 'No e-commerce orders in period', summary: { total_revenue: '$0.00', total_orders: 0 } } };
       }
 
-      const totalRevenue = orders.reduce((s: number, o: any) => s + (o.total_cents || 0), 0);
-      const totalDiscounts = orders.reduce((s: number, o: any) => s + (o.discount_cents || 0), 0);
-      const totalItems = orders.reduce((s: number, o: any) => s + (o.item_count || 0), 0);
-      const paidOrders = orders.filter((o: any) => o.financial_status === 'paid' || o.status === 'completed');
-      const cancelledOrders = orders.filter((o: any) => o.cancelled_at || o.status === 'cancelled');
-      const withUtm = orders.filter((o: any) => o.utm_source);
+      const totalRevenue = orders.reduce((s: number, o: any) => s + (o.value_cents || 0), 0);
+      const paidOrders = orders.filter((o: any) => ['paid', 'completed', 'succeeded'].includes(o.status));
+      const cancelledOrders = orders.filter((o: any) => ['cancelled', 'refunded', 'voided'].includes(o.status));
+
+      // Parse metadata for UTM info
+      const parseMeta = (m: string | null) => { try { return m ? JSON.parse(m) : {}; } catch { return {}; } };
+      const withUtm = orders.filter((o: any) => parseMeta(o.metadata).utm_source);
 
       const response: any = {
         summary: {
@@ -4880,8 +5094,6 @@ export class ExplorationToolExecutor {
           paid_orders: paidOrders.length,
           cancelled_orders: cancelledOrders.length,
           avg_order_value: '$' + (orders.length > 0 ? (totalRevenue / 100 / orders.length).toFixed(2) : '0.00'),
-          total_discounts: '$' + (totalDiscounts / 100).toFixed(2),
-          total_items_sold: totalItems,
           orders_with_utm: withUtm.length,
           utm_coverage: orders.length > 0 ? Math.round(withUtm.length / orders.length * 100) + '%' : 'N/A',
           platforms: [...new Set(orders.map((o: any) => o.source_platform))].filter(Boolean)
@@ -4889,30 +5101,57 @@ export class ExplorationToolExecutor {
       };
 
       // Grouped data
-      const grouped = new Map<string, { revenue_cents: number; count: number; items: number }>();
+      const grouped = new Map<string, { revenue_cents: number; count: number }>();
       for (const order of orders) {
+        const meta = parseMeta(order.metadata);
         let key: string;
         switch (group_by) {
           case 'platform':
             key = order.source_platform || 'unknown';
             break;
           case 'status':
-            key = order.financial_status || order.status || 'unknown';
+            key = order.status || 'unknown';
             break;
           case 'utm_source':
-            key = order.utm_source || '(direct)';
+            key = meta.utm_source || '(direct)';
             break;
           case 'utm_campaign':
-            key = order.utm_campaign || '(none)';
+            key = meta.utm_campaign || '(none)';
             break;
+          case 'geo': {
+            // Generic geo extraction from metadata across all connectors
+            // Stripe: billing_details.address.country/state
+            // Shopify: shipping_address.country/province (when available)
+            // Others: fall back to any country/state field in metadata
+            const rawCountry =
+              meta?.billing_details?.address?.country ||
+              meta?.shipping_address?.country_code ||
+              meta?.shipping_address?.country ||
+              meta?.customer_address?.country ||
+              meta?.country ||
+              'Unknown';
+            // Normalize common 3-letter country codes to ISO 2-letter
+            const COUNTRY_NORMALIZE: Record<string, string> = {
+              'USA': 'US', 'GBR': 'GB', 'CAN': 'CA', 'AUS': 'AU',
+              'DEU': 'DE', 'FRA': 'FR', 'NZL': 'NZ', 'JPN': 'JP',
+            };
+            const country = COUNTRY_NORMALIZE[rawCountry.toUpperCase()] || rawCountry;
+            const state =
+              meta?.billing_details?.address?.state ||
+              meta?.shipping_address?.province_code ||
+              meta?.shipping_address?.province ||
+              meta?.customer_address?.state ||
+              '';
+            key = state ? `${country}/${state}` : country;
+            break;
+          }
           default:
-            key = (order.ordered_at || '').split('T')[0];
+            key = (order.transacted_at || '').split('T')[0];
         }
-        if (!grouped.has(key)) grouped.set(key, { revenue_cents: 0, count: 0, items: 0 });
+        if (!grouped.has(key)) grouped.set(key, { revenue_cents: 0, count: 0 });
         const g = grouped.get(key)!;
-        g.revenue_cents += order.total_cents || 0;
+        g.revenue_cents += order.value_cents || 0;
         g.count += 1;
-        g.items += order.item_count || 0;
       }
 
       response.grouped = Array.from(grouped.entries())
@@ -4920,71 +5159,54 @@ export class ExplorationToolExecutor {
         .map(([key, data]) => ({
           [group_by]: key,
           revenue: '$' + (data.revenue_cents / 100).toFixed(2),
-          orders: data.count,
-          items: data.items
+          orders: data.count
         }));
 
-      // Product breakdown
+      // Product breakdown from metadata JSON
       if (include_products) {
-        try {
-          let prodSql = `
-            SELECT name, vendor, product_type, status, price_cents, inventory_quantity
-            FROM ecommerce_products
-            WHERE organization_id = ?
-          `;
-          const prodParams: any[] = [orgId];
-          if (platform) {
-            prodSql += ' AND source_platform = ?';
-            prodParams.push(platform);
+        const productMap = new Map<string, { count: number; revenue_cents: number }>();
+        for (const order of orders) {
+          const meta = parseMeta(order.metadata);
+          const items = meta.line_items || meta.products || [];
+          for (const item of (Array.isArray(items) ? items : [])) {
+            const name = item.name || item.title || 'unknown';
+            if (!productMap.has(name)) productMap.set(name, { count: 0, revenue_cents: 0 });
+            const p = productMap.get(name)!;
+            p.count += item.quantity || 1;
+            p.revenue_cents += item.price_cents || item.amount || 0;
           }
-          prodSql += ' ORDER BY price_cents DESC LIMIT 50';
-
-          const prodResult = await this.db.prepare(prodSql).bind(...prodParams).all<any>();
-          response.products = (prodResult.results || []).map((p: any) => ({
-            name: p.name,
-            vendor: p.vendor,
-            type: p.product_type,
-            status: p.status,
-            price: '$' + ((p.price_cents || 0) / 100).toFixed(2),
-            inventory: p.inventory_quantity
-          }));
-        } catch {
-          response.products = [];
         }
+        response.products = Array.from(productMap.entries())
+          .sort((a, b) => b[1].revenue_cents - a[1].revenue_cents)
+          .slice(0, 50)
+          .map(([name, data]) => ({
+            name,
+            quantity_sold: data.count,
+            revenue: '$' + (data.revenue_cents / 100).toFixed(2)
+          }));
       }
 
-      // Customer cohort metrics
+      // Customer metrics from connector_customers if available
       if (include_customers) {
         try {
-          let custSql = `
+          const custSql = `
             SELECT
               COUNT(*) as total_customers,
-              AVG(total_orders) as avg_orders,
-              AVG(total_spent_cents) as avg_ltv_cents,
-              COUNT(CASE WHEN total_orders = 1 THEN 1 END) as single_purchase,
-              COUNT(CASE WHEN total_orders > 1 THEN 1 END) as repeat_customers,
-              COUNT(CASE WHEN accepts_marketing = 1 THEN 1 END) as marketing_opted_in
-            FROM ecommerce_customers
+              COUNT(DISTINCT customer_external_id) as unique_customers
+            FROM connector_events
             WHERE organization_id = ?
+              AND source_platform IN (${ecommPlatforms.map(() => '?').join(',')})
+              AND event_type IN (${revenueEventTypes.map(() => '?').join(',')})
+              AND transacted_at >= ?
           `;
-          const custParams: any[] = [orgId];
-          if (platform) {
-            custSql += ' AND source_platform = ?';
-            custParams.push(platform);
-          }
-
-          const custResult = await this.db.prepare(custSql).bind(...custParams).first<any>();
-          if (custResult) {
-            response.customers = {
-              total_customers: custResult.total_customers || 0,
-              avg_orders_per_customer: custResult.avg_orders ? Math.round(custResult.avg_orders * 10) / 10 : 0,
-              avg_ltv: '$' + ((custResult.avg_ltv_cents || 0) / 100).toFixed(2),
-              single_purchase_customers: custResult.single_purchase || 0,
-              repeat_customers: custResult.repeat_customers || 0,
-              repeat_rate: custResult.total_customers > 0 ? Math.round((custResult.repeat_customers || 0) / custResult.total_customers * 100) + '%' : 'N/A',
-              marketing_opted_in: custResult.marketing_opted_in || 0
-            };
-          }
+          const custResult = await this.db.prepare(custSql).bind(orgId, ...ecommPlatforms, ...revenueEventTypes, startStr + 'T00:00:00Z').first<any>();
+          response.customers = {
+            total_orders: custResult?.total_customers || 0,
+            unique_customers: custResult?.unique_customers || 0,
+            avg_orders_per_customer: custResult?.unique_customers > 0
+              ? Math.round((custResult.total_customers / custResult.unique_customers) * 10) / 10
+              : 0,
+          };
         } catch {
           response.customers = null;
         }
@@ -4994,1052 +5216,726 @@ export class ExplorationToolExecutor {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Query failed';
       if (msg.includes('no such table')) {
-        return { success: true, data: { note: 'E-commerce tables not yet created', summary: { total_revenue: '$0.00', total_orders: 0 } } };
+        return { success: true, data: { note: 'connector_events table not yet created', summary: { total_revenue: '$0.00', total_orders: 0 } } };
       }
       return { success: false, error: msg };
     }
   }
 
   /**
-   * Query support ticket and conversation metrics
+   * Query support metrics from connector_events (zendesk, intercom)
    */
   private async querySupportMetrics(
     input: QuerySupportMetricsInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { days, platform, include_satisfaction = true, include_conversations = false, group_by } = input;
-
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    const startStr = startDate.toISOString().split('T')[0];
-
-    try {
-      // Ticket summary
-      let ticketSql = `
-        SELECT
-          COUNT(*) as total_tickets,
-          COUNT(CASE WHEN status = 'open' OR status = 'new' THEN 1 END) as open_tickets,
-          COUNT(CASE WHEN status = 'solved' OR status = 'closed' THEN 1 END) as resolved_tickets,
-          COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_tickets,
-          AVG(CASE WHEN first_response_at IS NOT NULL AND opened_at IS NOT NULL
-            THEN (julianday(first_response_at) - julianday(opened_at)) * 24
-          END) as avg_first_response_hours,
-          AVG(CASE WHEN full_resolution_at IS NOT NULL AND opened_at IS NOT NULL
-            THEN (julianday(full_resolution_at) - julianday(opened_at)) * 24
-          END) as avg_resolution_hours,
-          AVG(reply_count) as avg_replies,
-          AVG(reopened_count) as avg_reopens
-        FROM support_tickets
-        WHERE organization_id = ?
-          AND opened_at >= ?
-      `;
-      const ticketParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-      if (platform) {
-        ticketSql += ' AND source_platform = ?';
-        ticketParams.push(platform);
-      }
-
-      const ticketResult = await this.db.prepare(ticketSql).bind(...ticketParams).first<any>();
-
-      const response: any = {
-        ticket_summary: {
-          total_tickets: ticketResult?.total_tickets || 0,
-          open_tickets: ticketResult?.open_tickets || 0,
-          resolved_tickets: ticketResult?.resolved_tickets || 0,
-          pending_tickets: ticketResult?.pending_tickets || 0,
-          resolution_rate: ticketResult?.total_tickets > 0
-            ? Math.round((ticketResult.resolved_tickets || 0) / ticketResult.total_tickets * 100) + '%'
-            : 'N/A',
-          avg_first_response_hours: ticketResult?.avg_first_response_hours
-            ? Math.round(ticketResult.avg_first_response_hours * 10) / 10
-            : null,
-          avg_resolution_hours: ticketResult?.avg_resolution_hours
-            ? Math.round(ticketResult.avg_resolution_hours * 10) / 10
-            : null,
-          avg_replies_per_ticket: ticketResult?.avg_replies
-            ? Math.round(ticketResult.avg_replies * 10) / 10
-            : 0
-        }
-      };
-
-      // Satisfaction
-      if (include_satisfaction) {
-        let satSql = `
-          SELECT
-            satisfaction_rating,
-            COUNT(*) as count
-          FROM support_tickets
-          WHERE organization_id = ?
-            AND opened_at >= ?
-            AND satisfaction_rating IS NOT NULL
-        `;
-        const satParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-        if (platform) {
-          satSql += ' AND source_platform = ?';
-          satParams.push(platform);
-        }
-        satSql += ' GROUP BY satisfaction_rating ORDER BY satisfaction_rating DESC';
-
-        const satResult = await this.db.prepare(satSql).bind(...satParams).all<{
-          satisfaction_rating: string;
-          count: number;
-        }>();
-
-        const ratings = satResult.results || [];
-        const totalRated = ratings.reduce((s, r) => s + r.count, 0);
-        const goodRatings = ratings.filter(r =>
-          r.satisfaction_rating === 'good' || r.satisfaction_rating === 'great' || r.satisfaction_rating === '5' || r.satisfaction_rating === '4'
-        ).reduce((s, r) => s + r.count, 0);
-
-        response.satisfaction = {
-          total_rated: totalRated,
-          csat_score: totalRated > 0 ? Math.round(goodRatings / totalRated * 100) + '%' : 'N/A',
-          distribution: ratings.map(r => ({ rating: r.satisfaction_rating, count: r.count }))
-        };
-      }
-
-      // Grouped breakdown
-      if (group_by) {
-        let grpCol: string;
-        switch (group_by) {
-          case 'day': grpCol = "date(opened_at)"; break;
-          case 'status': grpCol = 'status'; break;
-          case 'priority': grpCol = 'priority'; break;
-          case 'channel': grpCol = 'channel'; break;
-          case 'assignee': grpCol = 'assignee_name'; break;
-          default: grpCol = 'status';
-        }
-
-        let grpSql = `
-          SELECT ${grpCol} as dimension, COUNT(*) as count
-          FROM support_tickets
-          WHERE organization_id = ? AND opened_at >= ?
-        `;
-        const grpParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-        if (platform) {
-          grpSql += ' AND source_platform = ?';
-          grpParams.push(platform);
-        }
-        grpSql += ` GROUP BY ${grpCol} ORDER BY count DESC LIMIT 30`;
-
-        const grpResult = await this.db.prepare(grpSql).bind(...grpParams).all<{ dimension: string | null; count: number }>();
-        response.grouped = (grpResult.results || []).map(r => ({
-          [group_by]: r.dimension || '(unknown)',
-          tickets: r.count
-        }));
-      }
-
-      // Conversations
-      if (include_conversations) {
-        let convSql = `
-          SELECT
-            COUNT(*) as total_conversations,
-            COUNT(CASE WHEN state = 'open' THEN 1 END) as open_conversations,
-            COUNT(CASE WHEN state = 'closed' THEN 1 END) as closed_conversations,
-            AVG(message_count) as avg_messages,
-            AVG(admin_reply_count) as avg_admin_replies,
-            AVG(user_reply_count) as avg_user_replies
-          FROM support_conversations
-          WHERE organization_id = ?
-            AND started_at >= ?
-        `;
-        const convParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-        if (platform) {
-          convSql += ' AND source_platform = ?';
-          convParams.push(platform);
-        }
-
-        const convResult = await this.db.prepare(convSql).bind(...convParams).first<any>();
-        response.conversations = {
-          total: convResult?.total_conversations || 0,
-          open: convResult?.open_conversations || 0,
-          closed: convResult?.closed_conversations || 0,
-          avg_messages: convResult?.avg_messages ? Math.round(convResult.avg_messages * 10) / 10 : 0,
-          avg_admin_replies: convResult?.avg_admin_replies ? Math.round(convResult.avg_admin_replies * 10) / 10 : 0,
-          avg_user_replies: convResult?.avg_user_replies ? Math.round(convResult.avg_user_replies * 10) / 10 : 0
-        };
-      }
-
-      return { success: true, data: response };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Query failed';
-      if (msg.includes('no such table')) {
-        return { success: true, data: { note: 'Support tables not yet created', ticket_summary: { total_tickets: 0 } } };
-      }
-      return { success: false, error: msg };
-    }
+    const { days, platform, group_by } = input;
+    return this.queryConnectorEventCategory({
+      orgId, days, platform, group_by,
+      categoryPlatforms: ['zendesk', 'intercom'],
+      categoryName: 'support',
+      dateGroupCol: 'transacted_at',
+    });
   }
 
   /**
-   * Query scheduling/appointment metrics
+   * Query scheduling metrics from connector_events (calendly, acuity)
    */
   private async querySchedulingMetrics(
     input: QuerySchedulingMetricsInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { days, platform, include_services = true, group_by } = input;
-
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    const startStr = startDate.toISOString().split('T')[0];
-
-    try {
-      let sql = `
-        SELECT
-          COUNT(*) as total_appointments,
-          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
-          COUNT(CASE WHEN status = 'cancelled' OR status = 'canceled' THEN 1 END) as cancelled,
-          COUNT(CASE WHEN status = 'no_show' OR status = 'noshow' THEN 1 END) as no_shows,
-          COUNT(CASE WHEN status = 'scheduled' OR status = 'confirmed' THEN 1 END) as upcoming,
-          SUM(price_cents) as total_revenue_cents,
-          AVG(duration_minutes) as avg_duration,
-          COUNT(DISTINCT assignee_id) as unique_assignees,
-          COUNT(CASE WHEN utm_source IS NOT NULL THEN 1 END) as with_utm
-        FROM scheduling_appointments
-        WHERE organization_id = ?
-          AND (booked_at >= ? OR start_time >= ?)
-      `;
-      const params: any[] = [orgId, startStr + 'T00:00:00Z', startStr + 'T00:00:00Z'];
-      if (platform) {
-        sql += ' AND source_platform = ?';
-        params.push(platform);
-      }
-
-      const result = await this.db.prepare(sql).bind(...params).first<any>();
-
-      const total = result?.total_appointments || 0;
-      const response: any = {
-        summary: {
-          total_appointments: total,
-          completed: result?.completed || 0,
-          cancelled: result?.cancelled || 0,
-          no_shows: result?.no_shows || 0,
-          upcoming: result?.upcoming || 0,
-          completion_rate: total > 0 ? Math.round((result?.completed || 0) / total * 100) + '%' : 'N/A',
-          cancellation_rate: total > 0 ? Math.round((result?.cancelled || 0) / total * 100) + '%' : 'N/A',
-          no_show_rate: total > 0 ? Math.round((result?.no_shows || 0) / total * 100) + '%' : 'N/A',
-          total_revenue: '$' + ((result?.total_revenue_cents || 0) / 100).toFixed(2),
-          avg_duration_minutes: result?.avg_duration ? Math.round(result.avg_duration) : null,
-          unique_assignees: result?.unique_assignees || 0,
-          utm_coverage: total > 0 ? Math.round((result?.with_utm || 0) / total * 100) + '%' : 'N/A'
-        }
-      };
-
-      // Grouped breakdown
-      if (group_by) {
-        let grpCol: string;
-        switch (group_by) {
-          case 'day': grpCol = "date(booked_at)"; break;
-          case 'status': grpCol = 'status'; break;
-          case 'assignee': grpCol = 'assignee_name'; break;
-          case 'utm_source': grpCol = 'utm_source'; break;
-          case 'service': grpCol = 'service_external_id'; break;
-          default: grpCol = 'status';
-        }
-
-        let grpSql = `
-          SELECT ${grpCol} as dimension, COUNT(*) as count, SUM(price_cents) as revenue_cents
-          FROM scheduling_appointments
-          WHERE organization_id = ? AND (booked_at >= ? OR start_time >= ?)
-        `;
-        const grpParams: any[] = [orgId, startStr + 'T00:00:00Z', startStr + 'T00:00:00Z'];
-        if (platform) {
-          grpSql += ' AND source_platform = ?';
-          grpParams.push(platform);
-        }
-        grpSql += ` GROUP BY ${grpCol} ORDER BY count DESC LIMIT 30`;
-
-        const grpResult = await this.db.prepare(grpSql).bind(...grpParams).all<{ dimension: string | null; count: number; revenue_cents: number | null }>();
-        response.grouped = (grpResult.results || []).map(r => ({
-          [group_by]: r.dimension || '(unknown)',
-          appointments: r.count,
-          revenue: '$' + ((r.revenue_cents || 0) / 100).toFixed(2)
-        }));
-      }
-
-      // Service breakdown
-      if (include_services) {
-        try {
-          let svcSql = `
-            SELECT name, duration_minutes, price_cents, status, booking_url, category
-            FROM scheduling_services
-            WHERE organization_id = ?
-          `;
-          const svcParams: any[] = [orgId];
-          if (platform) {
-            svcSql += ' AND source_platform = ?';
-            svcParams.push(platform);
-          }
-          svcSql += ' ORDER BY price_cents DESC LIMIT 20';
-
-          const svcResult = await this.db.prepare(svcSql).bind(...svcParams).all<any>();
-          response.services = (svcResult.results || []).map((s: any) => ({
-            name: s.name,
-            duration: s.duration_minutes ? s.duration_minutes + ' min' : null,
-            price: '$' + ((s.price_cents || 0) / 100).toFixed(2),
-            status: s.status,
-            category: s.category
-          }));
-        } catch {
-          response.services = [];
-        }
-      }
-
-      return { success: true, data: response };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Query failed';
-      if (msg.includes('no such table')) {
-        return { success: true, data: { note: 'Scheduling tables not yet created', summary: { total_appointments: 0 } } };
-      }
-      return { success: false, error: msg };
-    }
+    const { days, platform, group_by } = input;
+    return this.queryConnectorEventCategory({
+      orgId, days, platform, group_by,
+      categoryPlatforms: ['calendly', 'acuity'],
+      categoryName: 'scheduling',
+      dateGroupCol: 'transacted_at',
+    });
   }
 
   /**
-   * Query form submission metrics
+   * Query form submission metrics from connector_events (typeform, jotform)
    */
   private async queryFormSubmissions(
     input: QueryFormSubmissionsInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { days, platform, form_id, group_by, include_utm_breakdown = true } = input;
-
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    const startStr = startDate.toISOString().split('T')[0];
-
-    try {
-      let sql = `
-        SELECT
-          COUNT(*) as total_submissions,
-          COUNT(CASE WHEN status = 'completed' OR status IS NULL THEN 1 END) as completed,
-          COUNT(CASE WHEN status = 'partial' THEN 1 END) as partial,
-          AVG(time_to_complete_seconds) as avg_completion_time_secs,
-          AVG(score) as avg_score,
-          COUNT(CASE WHEN utm_source IS NOT NULL THEN 1 END) as with_utm,
-          COUNT(DISTINCT form_external_id) as unique_forms
-        FROM forms_submissions
-        WHERE organization_id = ?
-          AND submitted_at >= ?
-      `;
-      const params: any[] = [orgId, startStr + 'T00:00:00Z'];
-      if (platform) {
-        sql += ' AND source_platform = ?';
-        params.push(platform);
-      }
-      if (form_id) {
-        sql += ' AND form_external_id = ?';
-        params.push(form_id);
-      }
-
-      const result = await this.db.prepare(sql).bind(...params).first<any>();
-      const total = result?.total_submissions || 0;
-
-      const response: any = {
-        summary: {
-          total_submissions: total,
-          completed: result?.completed || 0,
-          partial: result?.partial || 0,
-          completion_rate: total > 0 ? Math.round((result?.completed || 0) / total * 100) + '%' : 'N/A',
-          avg_completion_time: result?.avg_completion_time_secs
-            ? Math.round(result.avg_completion_time_secs) + 's'
-            : null,
-          avg_score: result?.avg_score ? Math.round(result.avg_score * 10) / 10 : null,
-          unique_forms: result?.unique_forms || 0,
-          utm_coverage: total > 0 ? Math.round((result?.with_utm || 0) / total * 100) + '%' : 'N/A'
-        }
-      };
-
-      // UTM breakdown
-      if (include_utm_breakdown) {
-        let utmSql = `
-          SELECT utm_source, utm_campaign, COUNT(*) as count
-          FROM forms_submissions
-          WHERE organization_id = ?
-            AND submitted_at >= ?
-            AND utm_source IS NOT NULL
-        `;
-        const utmParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-        if (platform) {
-          utmSql += ' AND source_platform = ?';
-          utmParams.push(platform);
-        }
-        utmSql += ' GROUP BY utm_source, utm_campaign ORDER BY count DESC LIMIT 20';
-
-        const utmResult = await this.db.prepare(utmSql).bind(...utmParams).all<{
-          utm_source: string;
-          utm_campaign: string | null;
-          count: number;
-        }>();
-
-        response.utm_breakdown = (utmResult.results || []).map(r => ({
-          source: r.utm_source,
-          campaign: r.utm_campaign,
-          submissions: r.count,
-          pct: total > 0 ? Math.round(r.count / total * 100) : 0
-        }));
-      }
-
-      // Group by dimension
-      if (group_by) {
-        let grpCol: string;
-        switch (group_by) {
-          case 'day': grpCol = "date(submitted_at)"; break;
-          case 'form': grpCol = 'form_external_id'; break;
-          case 'utm_source': grpCol = 'utm_source'; break;
-          case 'utm_campaign': grpCol = 'utm_campaign'; break;
-          case 'device_type': grpCol = 'device_type'; break;
-          default: grpCol = "date(submitted_at)";
-        }
-
-        let grpSql = `
-          SELECT ${grpCol} as dimension, COUNT(*) as count
-          FROM forms_submissions
-          WHERE organization_id = ? AND submitted_at >= ?
-        `;
-        const grpParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-        if (platform) {
-          grpSql += ' AND source_platform = ?';
-          grpParams.push(platform);
-        }
-        grpSql += ` GROUP BY ${grpCol} ORDER BY count DESC LIMIT 30`;
-
-        const grpResult = await this.db.prepare(grpSql).bind(...grpParams).all<{ dimension: string | null; count: number }>();
-        response.grouped = (grpResult.results || []).map(r => ({
-          [group_by]: r.dimension || '(unknown)',
-          submissions: r.count
-        }));
-      }
-
-      return { success: true, data: response };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Query failed';
-      if (msg.includes('no such table')) {
-        return { success: true, data: { note: 'Forms tables not yet created', summary: { total_submissions: 0 } } };
-      }
-      return { success: false, error: msg };
-    }
+    const { days, platform, group_by } = input;
+    return this.queryConnectorEventCategory({
+      orgId, days, platform, group_by,
+      categoryPlatforms: ['typeform', 'jotform'],
+      categoryName: 'forms',
+      dateGroupCol: 'transacted_at',
+    });
   }
 
   /**
-   * Query accounting invoices and expenses
+   * Query accounting metrics from connector_events (quickbooks, xero)
    */
   private async queryAccountingMetrics(
     input: QueryAccountingMetricsInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { days, platform, data_type = 'both', group_by } = input;
-
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    const startStr = startDate.toISOString().split('T')[0];
-
-    try {
-      const response: any = {};
-
-      // Invoices
-      if (data_type === 'invoices' || data_type === 'both') {
-        let invSql = `
-          SELECT
-            COUNT(*) as total_invoices,
-            COUNT(CASE WHEN status = 'paid' THEN 1 END) as paid,
-            COUNT(CASE WHEN status = 'open' OR status = 'sent' THEN 1 END) as outstanding,
-            COUNT(CASE WHEN status = 'overdue' THEN 1 END) as overdue,
-            SUM(total_cents) as total_invoiced_cents,
-            SUM(amount_paid_cents) as total_collected_cents,
-            SUM(balance_due_cents) as total_outstanding_cents,
-            AVG(total_cents) as avg_invoice_cents
-          FROM accounting_invoices
-          WHERE organization_id = ?
-            AND invoice_date >= ?
-        `;
-        const invParams: any[] = [orgId, startStr];
-        if (platform) {
-          invSql += ' AND source_platform = ?';
-          invParams.push(platform);
-        }
-
-        const invResult = await this.db.prepare(invSql).bind(...invParams).first<any>();
-
-        response.invoices = {
-          total_invoices: invResult?.total_invoices || 0,
-          paid: invResult?.paid || 0,
-          outstanding: invResult?.outstanding || 0,
-          overdue: invResult?.overdue || 0,
-          total_invoiced: '$' + ((invResult?.total_invoiced_cents || 0) / 100).toFixed(2),
-          total_collected: '$' + ((invResult?.total_collected_cents || 0) / 100).toFixed(2),
-          total_outstanding: '$' + ((invResult?.total_outstanding_cents || 0) / 100).toFixed(2),
-          avg_invoice_value: '$' + ((invResult?.avg_invoice_cents || 0) / 100).toFixed(2),
-          collection_rate: (invResult?.total_invoiced_cents || 0) > 0
-            ? Math.round((invResult?.total_collected_cents || 0) / invResult.total_invoiced_cents * 100) + '%'
-            : 'N/A'
-        };
-      }
-
-      // Expenses
-      if (data_type === 'expenses' || data_type === 'both') {
-        let expSql = `
-          SELECT
-            COUNT(*) as total_expenses,
-            SUM(total_cents) as total_expense_cents,
-            AVG(total_cents) as avg_expense_cents,
-            COUNT(DISTINCT category) as unique_categories,
-            COUNT(DISTINCT vendor_name) as unique_vendors
-          FROM accounting_expenses
-          WHERE organization_id = ?
-            AND expense_date >= ?
-        `;
-        const expParams: any[] = [orgId, startStr];
-        if (platform) {
-          expSql += ' AND source_platform = ?';
-          expParams.push(platform);
-        }
-
-        const expResult = await this.db.prepare(expSql).bind(...expParams).first<any>();
-
-        response.expenses = {
-          total_expenses: expResult?.total_expenses || 0,
-          total_amount: '$' + ((expResult?.total_expense_cents || 0) / 100).toFixed(2),
-          avg_expense: '$' + ((expResult?.avg_expense_cents || 0) / 100).toFixed(2),
-          unique_categories: expResult?.unique_categories || 0,
-          unique_vendors: expResult?.unique_vendors || 0
-        };
-
-        // Category breakdown
-        let catSql = `
-          SELECT category, COUNT(*) as count, SUM(total_cents) as total_cents
-          FROM accounting_expenses
-          WHERE organization_id = ? AND expense_date >= ?
-        `;
-        const catParams: any[] = [orgId, startStr];
-        if (platform) {
-          catSql += ' AND source_platform = ?';
-          catParams.push(platform);
-        }
-        catSql += ' GROUP BY category ORDER BY total_cents DESC LIMIT 15';
-
-        const catResult = await this.db.prepare(catSql).bind(...catParams).all<{
-          category: string | null;
-          count: number;
-          total_cents: number;
-        }>();
-
-        response.expense_categories = (catResult.results || []).map(r => ({
-          category: r.category || '(uncategorized)',
-          count: r.count,
-          total: '$' + ((r.total_cents || 0) / 100).toFixed(2)
-        }));
-      }
-
-      // P&L summary if both types
-      if (data_type === 'both' && response.invoices && response.expenses) {
-        const invoicedCents = parseInt(String(response.invoices.total_invoiced).replace(/[$,]/g, '')) * 100 || 0;
-        const collectedCents = parseInt(String(response.invoices.total_collected).replace(/[$,]/g, '')) * 100 || 0;
-        const expenseCents = parseInt(String(response.expenses.total_amount).replace(/[$,]/g, '')) * 100 || 0;
-        // Re-parse from raw numbers
-        response.profit_loss = {
-          note: 'Approximate P&L from accounting data only (excludes ad platform spend)'
-        };
-      }
-
-      return { success: true, data: response };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Query failed';
-      if (msg.includes('no such table')) {
-        return { success: true, data: { note: 'Accounting tables not yet created' } };
-      }
-      return { success: false, error: msg };
-    }
+    const { days, platform, group_by } = input;
+    return this.queryConnectorEventCategory({
+      orgId, days, platform, group_by,
+      categoryPlatforms: ['quickbooks', 'xero'],
+      categoryName: 'accounting',
+      dateGroupCol: 'transacted_at',
+    });
   }
 
   /**
-   * Query review and reputation metrics
+   * Query review metrics from connector_events (trustpilot, g2)
    */
   private async queryReviews(
     input: QueryReviewsInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { days, platform, min_rating, include_sentiment = true } = input;
-
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    const startStr = startDate.toISOString().split('T')[0];
-
-    try {
-      let sql = `
-        SELECT
-          COUNT(*) as total_reviews,
-          AVG(rating) as avg_rating,
-          MIN(rating) as min_rating,
-          MAX(rating) as max_rating,
-          COUNT(CASE WHEN rating >= 4 THEN 1 END) as positive_reviews,
-          COUNT(CASE WHEN rating <= 2 THEN 1 END) as negative_reviews,
-          COUNT(CASE WHEN is_verified = 1 OR reviewer_verified = 1 THEN 1 END) as verified_reviews,
-          COUNT(CASE WHEN is_incentivized = 1 THEN 1 END) as incentivized_reviews,
-          COUNT(DISTINCT source_platform) as platforms
-        FROM reviews_items
-        WHERE organization_id = ?
-          AND reviewed_at >= ?
-      `;
-      const params: any[] = [orgId, startStr + 'T00:00:00Z'];
-      if (platform) {
-        sql += ' AND source_platform = ?';
-        params.push(platform);
-      }
-      if (min_rating) {
-        sql += ' AND rating >= ?';
-        params.push(min_rating);
-      }
-
-      const result = await this.db.prepare(sql).bind(...params).first<any>();
-      const total = result?.total_reviews || 0;
-
-      const response: any = {
-        summary: {
-          total_reviews: total,
-          avg_rating: result?.avg_rating ? Math.round(result.avg_rating * 10) / 10 : null,
-          rating_range: result?.min_rating && result?.max_rating
-            ? `${result.min_rating}-${result.max_rating}`
-            : null,
-          positive_reviews: result?.positive_reviews || 0,
-          negative_reviews: result?.negative_reviews || 0,
-          positive_rate: total > 0
-            ? Math.round((result?.positive_reviews || 0) / total * 100) + '%'
-            : 'N/A',
-          verified_reviews: result?.verified_reviews || 0,
-          incentivized_reviews: result?.incentivized_reviews || 0,
-          platforms_count: result?.platforms || 0
-        }
-      };
-
-      // Rating distribution
-      let distSql = `
-        SELECT rating, COUNT(*) as count
-        FROM reviews_items
-        WHERE organization_id = ? AND reviewed_at >= ?
-      `;
-      const distParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-      if (platform) {
-        distSql += ' AND source_platform = ?';
-        distParams.push(platform);
-      }
-      distSql += ' GROUP BY rating ORDER BY rating DESC';
-
-      const distResult = await this.db.prepare(distSql).bind(...distParams).all<{ rating: number; count: number }>();
-      response.rating_distribution = (distResult.results || []).map(r => ({
-        rating: r.rating,
-        count: r.count,
-        pct: total > 0 ? Math.round(r.count / total * 100) : 0
-      }));
-
-      // Sentiment analysis
-      if (include_sentiment) {
-        let sentSql = `
-          SELECT sentiment, COUNT(*) as count, AVG(sentiment_score) as avg_score
-          FROM reviews_items
-          WHERE organization_id = ? AND reviewed_at >= ?
-            AND sentiment IS NOT NULL
-        `;
-        const sentParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-        if (platform) {
-          sentSql += ' AND source_platform = ?';
-          sentParams.push(platform);
-        }
-        sentSql += ' GROUP BY sentiment ORDER BY count DESC';
-
-        const sentResult = await this.db.prepare(sentSql).bind(...sentParams).all<{
-          sentiment: string;
-          count: number;
-          avg_score: number | null;
-        }>();
-
-        response.sentiment = (sentResult.results || []).map(r => ({
-          sentiment: r.sentiment,
-          count: r.count,
-          avg_score: r.avg_score ? Math.round(r.avg_score * 100) / 100 : null
-        }));
-      }
-
-      // Recent notable reviews
-      let recentSql = `
-        SELECT source_platform, rating, title, body, reviewer_name,
-               product_name, sentiment, reviewed_at
-        FROM reviews_items
-        WHERE organization_id = ? AND reviewed_at >= ?
-      `;
-      const recentParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-      if (platform) {
-        recentSql += ' AND source_platform = ?';
-        recentParams.push(platform);
-      }
-      recentSql += ' ORDER BY reviewed_at DESC LIMIT 10';
-
-      const recentResult = await this.db.prepare(recentSql).bind(...recentParams).all<any>();
-      response.recent_reviews = (recentResult.results || []).map((r: any) => ({
-        platform: r.source_platform,
-        rating: r.rating,
-        title: r.title,
-        body: r.body ? (r.body.length > 200 ? r.body.substring(0, 200) + '...' : r.body) : null,
-        reviewer: r.reviewer_name,
-        product: r.product_name,
-        sentiment: r.sentiment,
-        date: r.reviewed_at
-      }));
-
-      return { success: true, data: response };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Query failed';
-      if (msg.includes('no such table')) {
-        return { success: true, data: { note: 'Reviews tables not yet created', summary: { total_reviews: 0 } } };
-      }
-      return { success: false, error: msg };
-    }
+    const { days, platform } = input;
+    return this.queryConnectorEventCategory({
+      orgId, days, platform,
+      categoryPlatforms: ['trustpilot', 'g2'],
+      categoryName: 'reviews',
+      dateGroupCol: 'transacted_at',
+    });
   }
 
   /**
-   * Query affiliate/partner program metrics
+   * Query affiliate metrics from connector_events
    */
   private async queryAffiliateMetrics(
     input: QueryAffiliateMetricsInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { days, platform, include_partners = true, group_by } = input;
-
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    const startStr = startDate.toISOString().split('T')[0];
-
-    try {
-      // Referrals summary
-      let refSql = `
-        SELECT
-          COUNT(*) as total_referrals,
-          COUNT(CASE WHEN status = 'converted' THEN 1 END) as converted,
-          COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
-          COUNT(DISTINCT partner_external_id) as unique_partners,
-          COUNT(DISTINCT visitor_id) as unique_visitors
-        FROM affiliate_referrals
-        WHERE organization_id = ?
-          AND referred_at >= ?
-      `;
-      const refParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-      if (platform) {
-        refSql += ' AND source_platform = ?';
-        refParams.push(platform);
-      }
-
-      const refResult = await this.db.prepare(refSql).bind(...refParams).first<any>();
-
-      // Conversions summary
-      let convSql = `
-        SELECT
-          COUNT(*) as total_conversions,
-          SUM(sale_amount_cents) as total_sales_cents,
-          SUM(commission_cents) as total_commission_cents,
-          COUNT(CASE WHEN is_recurring = 1 THEN 1 END) as recurring_conversions,
-          COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved,
-          COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_approval
-        FROM affiliate_conversions
-        WHERE organization_id = ?
-          AND converted_at >= ?
-      `;
-      const convParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-      if (platform) {
-        convSql += ' AND source_platform = ?';
-        convParams.push(platform);
-      }
-
-      const convResult = await this.db.prepare(convSql).bind(...convParams).first<any>();
-
-      const totalReferrals = refResult?.total_referrals || 0;
-      const totalConversions = convResult?.total_conversions || 0;
-      const totalSales = convResult?.total_sales_cents || 0;
-      const totalCommission = convResult?.total_commission_cents || 0;
-
-      const response: any = {
-        summary: {
-          total_referrals: totalReferrals,
-          converted_referrals: refResult?.converted || 0,
-          referral_conversion_rate: totalReferrals > 0
-            ? Math.round((refResult?.converted || 0) / totalReferrals * 100) + '%'
-            : 'N/A',
-          unique_partners: refResult?.unique_partners || 0,
-          total_conversions: totalConversions,
-          total_sales: '$' + (totalSales / 100).toFixed(2),
-          total_commission: '$' + (totalCommission / 100).toFixed(2),
-          commission_rate: totalSales > 0
-            ? (totalCommission / totalSales * 100).toFixed(1) + '%'
-            : 'N/A',
-          recurring_conversions: convResult?.recurring_conversions || 0,
-          approved_conversions: convResult?.approved || 0,
-          pending_approval: convResult?.pending_approval || 0
-        }
-      };
-
-      // Partner breakdown
-      if (include_partners) {
-        let partnerSql = `
-          SELECT
-            ac.partner_external_id,
-            COUNT(*) as conversions,
-            SUM(ac.sale_amount_cents) as sales_cents,
-            SUM(ac.commission_cents) as commission_cents
-          FROM affiliate_conversions ac
-          WHERE ac.organization_id = ?
-            AND ac.converted_at >= ?
-        `;
-        const partnerParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-        if (platform) {
-          partnerSql += ' AND ac.source_platform = ?';
-          partnerParams.push(platform);
-        }
-        partnerSql += ' GROUP BY ac.partner_external_id ORDER BY sales_cents DESC LIMIT 20';
-
-        const partnerResult = await this.db.prepare(partnerSql).bind(...partnerParams).all<{
-          partner_external_id: string;
-          conversions: number;
-          sales_cents: number;
-          commission_cents: number;
-        }>();
-
-        response.top_partners = (partnerResult.results || []).map(p => ({
-          partner_id: p.partner_external_id,
-          conversions: p.conversions,
-          sales: '$' + ((p.sales_cents || 0) / 100).toFixed(2),
-          commission: '$' + ((p.commission_cents || 0) / 100).toFixed(2),
-          pct_of_sales: totalSales > 0 ? Math.round((p.sales_cents || 0) / totalSales * 100) : 0
-        }));
-      }
-
-      // Group by dimension
-      if (group_by) {
-        let grpCol: string;
-        switch (group_by) {
-          case 'day': grpCol = "date(converted_at)"; break;
-          case 'partner': grpCol = 'partner_external_id'; break;
-          case 'status': grpCol = 'status'; break;
-          case 'conversion_type': grpCol = 'conversion_type'; break;
-          default: grpCol = "date(converted_at)";
-        }
-
-        let grpSql = `
-          SELECT ${grpCol} as dimension, COUNT(*) as count,
-                 SUM(sale_amount_cents) as sales_cents,
-                 SUM(commission_cents) as commission_cents
-          FROM affiliate_conversions
-          WHERE organization_id = ? AND converted_at >= ?
-        `;
-        const grpParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-        if (platform) {
-          grpSql += ' AND source_platform = ?';
-          grpParams.push(platform);
-        }
-        grpSql += ` GROUP BY ${grpCol} ORDER BY sales_cents DESC LIMIT 30`;
-
-        const grpResult = await this.db.prepare(grpSql).bind(...grpParams).all<{
-          dimension: string | null;
-          count: number;
-          sales_cents: number;
-          commission_cents: number;
-        }>();
-
-        response.grouped = (grpResult.results || []).map(r => ({
-          [group_by]: r.dimension || '(unknown)',
-          conversions: r.count,
-          sales: '$' + ((r.sales_cents || 0) / 100).toFixed(2),
-          commission: '$' + ((r.commission_cents || 0) / 100).toFixed(2)
-        }));
-      }
-
-      return { success: true, data: response };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Query failed';
-      if (msg.includes('no such table')) {
-        return { success: true, data: { note: 'Affiliate tables not yet created', summary: { total_referrals: 0, total_conversions: 0 } } };
-      }
-      return { success: false, error: msg };
-    }
+    const { days, platform, group_by } = input;
+    return this.queryConnectorEventCategory({
+      orgId, days, platform, group_by,
+      categoryPlatforms: ['rewardful', 'partnerstack', 'impact'],
+      categoryName: 'affiliate',
+      dateGroupCol: 'transacted_at',
+    });
   }
 
   /**
-   * Query organic social media metrics
+   * Query social media metrics from connector_events (instagram, twitter)
    */
   private async querySocialMetrics(
     input: QuerySocialMetricsInput,
     orgId: string
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const { days, platform, include_posts = false, include_follower_trends = true } = input;
+    const { days, platform } = input;
+    return this.queryConnectorEventCategory({
+      orgId, days, platform,
+      categoryPlatforms: ['instagram', 'twitter', 'linkedin', 'facebook_pages'],
+      categoryName: 'social',
+      dateGroupCol: 'transacted_at',
+    });
+  }
+
+  /**
+   * Generic connector_events query for categories without active sync writers yet.
+   * Returns event counts, value totals, and status breakdown from connector_events.
+   * Returns 0 rows until the connector ships — no scaffolding, no dead tables.
+   */
+  private async queryConnectorEventCategory(opts: {
+    orgId: string;
+    days: number;
+    platform?: string;
+    group_by?: string;
+    categoryPlatforms: string[];
+    categoryName: string;
+    dateGroupCol: string;
+  }): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { orgId, days, platform, group_by, categoryPlatforms, categoryName, dateGroupCol } = opts;
 
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
     const startStr = startDate.toISOString().split('T')[0];
 
     try {
-      // Post performance summary
-      let postSql = `
+      const platforms = platform ? [platform] : categoryPlatforms;
+
+      // Summary query
+      const summSql = `
         SELECT
-          COUNT(*) as total_posts,
-          SUM(impressions) as total_impressions,
-          SUM(reach) as total_reach,
-          SUM(likes) as total_likes,
-          SUM(comments) as total_comments,
-          SUM(shares) as total_shares,
-          SUM(saves) as total_saves,
-          SUM(clicks) as total_clicks,
-          SUM(video_views) as total_video_views,
-          AVG(engagement_rate) as avg_engagement_rate,
-          COUNT(DISTINCT source_platform) as platforms
-        FROM social_posts
+          COUNT(*) as total_events,
+          SUM(value_cents) as total_value_cents,
+          COUNT(DISTINCT customer_external_id) as unique_entities,
+          COUNT(DISTINCT source_platform) as platforms_count
+        FROM connector_events
         WHERE organization_id = ?
-          AND published_at >= ?
+          AND source_platform IN (${platforms.map(() => '?').join(',')})
+          AND transacted_at >= ?
       `;
-      const postParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-      if (platform) {
-        postSql += ' AND source_platform = ?';
-        postParams.push(platform);
-      }
+      const summResult = await this.db.prepare(summSql)
+        .bind(orgId, ...platforms, startStr + 'T00:00:00Z')
+        .first<{ total_events: number; total_value_cents: number | null; unique_entities: number; platforms_count: number }>();
 
-      const postResult = await this.db.prepare(postSql).bind(...postParams).first<any>();
-
-      const totalPosts = postResult?.total_posts || 0;
-      const totalImpressions = postResult?.total_impressions || 0;
-      const totalEngagements = (postResult?.total_likes || 0) + (postResult?.total_comments || 0)
-        + (postResult?.total_shares || 0) + (postResult?.total_saves || 0);
+      const totalEvents = summResult?.total_events || 0;
 
       const response: any = {
-        post_summary: {
-          total_posts: totalPosts,
-          total_impressions: totalImpressions,
-          total_reach: postResult?.total_reach || 0,
-          total_engagements: totalEngagements,
-          total_likes: postResult?.total_likes || 0,
-          total_comments: postResult?.total_comments || 0,
-          total_shares: postResult?.total_shares || 0,
-          total_saves: postResult?.total_saves || 0,
-          total_clicks: postResult?.total_clicks || 0,
-          total_video_views: postResult?.total_video_views || 0,
-          avg_engagement_rate: postResult?.avg_engagement_rate
-            ? (postResult.avg_engagement_rate * 100).toFixed(2) + '%'
-            : 'N/A',
-          calculated_engagement_rate: totalImpressions > 0
-            ? (totalEngagements / totalImpressions * 100).toFixed(2) + '%'
-            : 'N/A',
-          platforms_count: postResult?.platforms || 0
+        category: categoryName,
+        days,
+        summary: {
+          total_events: totalEvents,
+          total_value: '$' + ((summResult?.total_value_cents || 0) / 100).toFixed(2),
+          unique_entities: summResult?.unique_entities || 0,
+          platforms_count: summResult?.platforms_count || 0,
         }
       };
 
-      // Per-platform breakdown
-      let platSql = `
-        SELECT source_platform,
-               COUNT(*) as posts,
-               SUM(impressions) as impressions,
-               SUM(likes) as likes,
-               SUM(comments) as comments,
-               SUM(shares) as shares,
-               SUM(clicks) as clicks,
-               AVG(engagement_rate) as avg_engagement_rate
-        FROM social_posts
-        WHERE organization_id = ? AND published_at >= ?
-      `;
-      const platParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-      if (platform) {
-        platSql += ' AND source_platform = ?';
-        platParams.push(platform);
+      if (totalEvents === 0) {
+        response.note = `No ${categoryName} data synced yet. Connect a ${categoryName} platform to see data here.`;
+        return { success: true, data: response };
       }
-      platSql += ' GROUP BY source_platform ORDER BY impressions DESC';
 
-      const platResult = await this.db.prepare(platSql).bind(...platParams).all<any>();
-      response.by_platform = (platResult.results || []).map((r: any) => ({
-        platform: r.source_platform,
-        posts: r.posts,
-        impressions: r.impressions || 0,
-        likes: r.likes || 0,
-        comments: r.comments || 0,
-        shares: r.shares || 0,
-        clicks: r.clicks || 0,
-        engagement_rate: r.avg_engagement_rate
-          ? (r.avg_engagement_rate * 100).toFixed(2) + '%'
-          : 'N/A'
+      // Status breakdown
+      const statusSql = `
+        SELECT status, COUNT(*) as count, SUM(value_cents) as value_cents
+        FROM connector_events
+        WHERE organization_id = ?
+          AND source_platform IN (${platforms.map(() => '?').join(',')})
+          AND transacted_at >= ?
+        GROUP BY status
+        ORDER BY count DESC LIMIT 20
+      `;
+      const statusResult = await this.db.prepare(statusSql)
+        .bind(orgId, ...platforms, startStr + 'T00:00:00Z')
+        .all<{ status: string; count: number; value_cents: number | null }>();
+
+      response.by_status = (statusResult.results || []).map(r => ({
+        status: r.status,
+        count: r.count,
+        value: '$' + ((r.value_cents || 0) / 100).toFixed(2)
       }));
 
-      // Individual posts
-      if (include_posts) {
-        let topSql = `
-          SELECT source_platform, post_type, content, published_at,
-                 impressions, reach, likes, comments, shares, saves, clicks,
-                 engagement_rate, video_views
-          FROM social_posts
-          WHERE organization_id = ? AND published_at >= ?
-        `;
-        const topParams: any[] = [orgId, startStr + 'T00:00:00Z'];
-        if (platform) {
-          topSql += ' AND source_platform = ?';
-          topParams.push(platform);
-        }
-        topSql += ' ORDER BY impressions DESC LIMIT 20';
+      // Event type breakdown
+      const typeSql = `
+        SELECT event_type, COUNT(*) as count, SUM(value_cents) as value_cents
+        FROM connector_events
+        WHERE organization_id = ?
+          AND source_platform IN (${platforms.map(() => '?').join(',')})
+          AND transacted_at >= ?
+        GROUP BY event_type
+        ORDER BY count DESC LIMIT 20
+      `;
+      const typeResult = await this.db.prepare(typeSql)
+        .bind(orgId, ...platforms, startStr + 'T00:00:00Z')
+        .all<{ event_type: string; count: number; value_cents: number | null }>();
 
-        const topResult = await this.db.prepare(topSql).bind(...topParams).all<any>();
-        response.top_posts = (topResult.results || []).map((p: any) => ({
-          platform: p.source_platform,
-          type: p.post_type,
-          content: p.content ? (p.content.length > 150 ? p.content.substring(0, 150) + '...' : p.content) : null,
-          published: p.published_at,
-          impressions: p.impressions || 0,
-          engagement: (p.likes || 0) + (p.comments || 0) + (p.shares || 0),
-          engagement_rate: p.engagement_rate ? (p.engagement_rate * 100).toFixed(2) + '%' : null,
-          clicks: p.clicks || 0
-        }));
-      }
+      response.by_event_type = (typeResult.results || []).map(r => ({
+        event_type: r.event_type,
+        count: r.count,
+        value: '$' + ((r.value_cents || 0) / 100).toFixed(2)
+      }));
 
-      // Follower trends
-      if (include_follower_trends) {
-        let followerSql = `
-          SELECT source_platform, snapshot_date, follower_count,
-                 new_followers, lost_followers, net_change
-          FROM social_followers
+      // Group by dimension if requested
+      if (group_by) {
+        const grpCol = group_by === 'day' ? `date(${dateGroupCol})` : 'status';
+        const grpSql = `
+          SELECT ${grpCol} as dimension, COUNT(*) as count, SUM(value_cents) as value_cents
+          FROM connector_events
           WHERE organization_id = ?
-            AND snapshot_date >= ?
+            AND source_platform IN (${platforms.map(() => '?').join(',')})
+            AND transacted_at >= ?
+          GROUP BY ${grpCol}
+          ORDER BY count DESC LIMIT 30
         `;
-        const followerParams: any[] = [orgId, startStr];
-        if (platform) {
-          followerSql += ' AND source_platform = ?';
-          followerParams.push(platform);
-        }
-        followerSql += ' ORDER BY snapshot_date DESC LIMIT 90';
+        const grpResult = await this.db.prepare(grpSql)
+          .bind(orgId, ...platforms, startStr + 'T00:00:00Z')
+          .all<{ dimension: string | null; count: number; value_cents: number | null }>();
 
-        const followerResult = await this.db.prepare(followerSql).bind(...followerParams).all<any>();
-        const followers = (followerResult.results || []).reverse();
-
-        if (followers.length > 0) {
-          const latest = followers[followers.length - 1];
-          const earliest = followers[0];
-          const totalNetChange = followers.reduce((s: number, f: any) => s + (f.net_change || 0), 0);
-
-          response.follower_trends = {
-            current_followers: latest.follower_count || 0,
-            net_change: totalNetChange,
-            growth_rate: earliest.follower_count > 0
-              ? ((totalNetChange / earliest.follower_count) * 100).toFixed(1) + '%'
-              : 'N/A',
-            timeline: followers.map((f: any) => ({
-              platform: f.source_platform,
-              date: f.snapshot_date,
-              followers: f.follower_count,
-              new: f.new_followers || 0,
-              lost: f.lost_followers || 0,
-              net: f.net_change || 0
-            }))
-          };
-        }
+        response.grouped = (grpResult.results || []).map(r => ({
+          [group_by]: r.dimension || '(unknown)',
+          events: r.count,
+          value: '$' + ((r.value_cents || 0) / 100).toFixed(2)
+        }));
       }
 
       return { success: true, data: response };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Query failed';
       if (msg.includes('no such table')) {
-        return { success: true, data: { note: 'Social media tables not yet created', post_summary: { total_posts: 0 } } };
+        return { success: true, data: { note: `${categoryName} tables not yet created`, summary: { total_events: 0 } } };
       }
       return { success: false, error: msg };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MARGINAL EFFICIENCY (calculate scope)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async getMarginalEfficiency(
+    input: MarginalEfficiencyInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { platform, entity_type, days = 90 } = input;
+    let { entity_id } = input;
+
+    if (!platform || !entity_type || !entity_id) {
+      return { success: false, error: 'marginal_efficiency requires platform, entity_type, and entity_id' };
+    }
+
+    try {
+      // Resolve entity name to external ID
+      const resolved = await this.resolveEntityId(entity_id, entity_type, platform, orgId);
+      const entityName = resolved?.name || entity_id;
+      if (resolved) entity_id = resolved.externalId;
+
+      // Get daily metrics history
+      const { query, params } = this.buildUnifiedMetricsQuery(platform, entity_type, entity_id, days, orgId);
+      const result = await this.db.prepare(query).bind(...params).all<{
+        metric_date: string;
+        spend_cents: number;
+        conversions: number;
+      }>();
+      const history = result.results || [];
+
+      // Overlay verified conversions from unified conversions table
+      // entity_id here is the external/resolved ID which maps to attributed_campaign_id
+      try {
+        const verifiedQuery = `
+          SELECT
+            DATE(conversion_timestamp) as date,
+            COUNT(*) as verified_conversions
+          FROM conversions
+          WHERE organization_id = ?
+            AND attributed_campaign_id = ?
+            AND conversion_timestamp >= datetime('now', '-' || ? || ' days')
+          GROUP BY DATE(conversion_timestamp)
+        `;
+        const verifiedResult = await this.db.prepare(verifiedQuery)
+          .bind(orgId, entity_id, days)
+          .all<{ date: string; verified_conversions: number }>();
+        const verifiedByDate = new Map(
+          (verifiedResult.results || []).map(r => [r.date, r.verified_conversions])
+        );
+
+        for (const day of history) {
+          const verified = verifiedByDate.get(day.metric_date);
+          if (verified !== undefined && verified > 0) {
+            day.conversions = verified;
+          }
+        }
+      } catch {
+        // Non-critical: fall back to platform-reported conversions for power-law fit
+      }
+
+      if (history.length < 7) {
+        return {
+          success: true,
+          data: {
+            entity_name: entityName,
+            error: 'Insufficient data',
+            note: `Only ${history.length} days of data. Need at least 7 days with spend > 0 and conversions > 0 for power-law fit.`
+          }
+        };
+      }
+
+      // Fit power-law model
+      const model = fitPowerLaw(history);
+      const confidence = model.r_squared > 0.8 ? 'high' : model.r_squared > 0.6 ? 'medium' : 'low';
+
+      // Current totals
+      const totalSpend = history.reduce((s, d) => s + d.spend_cents, 0);
+      const totalConversions = history.reduce((s, d) => s + d.conversions, 0);
+      const avgDailySpend = totalSpend / history.length;
+      const currentCpa = totalConversions > 0 ? Math.round(totalSpend / totalConversions) : 0;
+
+      // Project at 5 spend levels
+      const levels = [
+        { label: '-20%', multiplier: 0.8 },
+        { label: 'current', multiplier: 1.0 },
+        { label: '+20%', multiplier: 1.2 },
+        { label: '+50%', multiplier: 1.5 },
+        { label: '+100%', multiplier: 2.0 },
+      ];
+
+      const projections = levels.map(({ label, multiplier }) => {
+        const newDailySpend = avgDailySpend * multiplier;
+        const totalConvAtNew = model.k > 0
+          ? model.k * Math.pow(newDailySpend, model.alpha) * history.length
+          : totalConversions * multiplier;
+        const totalSpendAtNew = newDailySpend * history.length;
+        const cpa = totalConvAtNew > 0 ? Math.round(totalSpendAtNew / totalConvAtNew) : 0;
+
+        // Marginal CPA: cost of incremental conversions vs current
+        let marginalCpa = 0;
+        if (multiplier > 1.0 && model.k > 0) {
+          const currentConvModel = model.k * Math.pow(avgDailySpend, model.alpha) * history.length;
+          const marginalConversions = totalConvAtNew - currentConvModel;
+          const marginalSpend = totalSpendAtNew - (avgDailySpend * history.length);
+          marginalCpa = marginalConversions > 0 ? Math.round(marginalSpend / marginalConversions) : 0;
+        }
+
+        return {
+          label,
+          spend_cents: Math.round(totalSpendAtNew),
+          total_conversions: Math.round(totalConvAtNew * 10) / 10,
+          cpa_cents: cpa,
+          marginal_cpa_cents: marginalCpa
+        };
+      });
+
+      // Scaling signal summary
+      const convAt150 = model.k > 0
+        ? model.k * Math.pow(avgDailySpend * 1.5, model.alpha) * history.length
+        : totalConversions * 1.5;
+      const convPctIncrease = totalConversions > 0
+        ? Math.round(((convAt150 / totalConversions) - 1) * 100)
+        : 0;
+
+      const scalingSignal = model.k === 0
+        ? 'Insufficient data for power-law fit — using linear approximation.'
+        : `α=${model.alpha.toFixed(2)}: ${model.alpha >= 0.85 ? 'near-linear returns — safe to scale' : model.alpha >= 0.6 ? 'moderate diminishing returns' : 'heavy diminishing returns — near saturation'}. +50% spend → +${convPctIncrease}% conversions.`;
+
+      return {
+        success: true,
+        data: {
+          entity_name: entityName,
+          current_spend_cents: totalSpend,
+          current_conversions: totalConversions,
+          current_cpa_cents: currentCpa,
+          curve: { k: model.k, alpha: model.alpha, r_squared: model.r_squared, data_points: history.length },
+          confidence,
+          projections,
+          scaling_signal: scalingSignal
+        }
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Marginal efficiency calculation failed' };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SATURATION SIGNALS (query_growth scope)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async getSaturationSignals(
+    input: SaturationSignalsInput,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { platform, entity_type = 'campaign', days = 60 } = input;
+
+    if (!platform) {
+      return { success: false, error: 'saturation_signals requires platform' };
+    }
+
+    const normalizedEntityType = entity_type === 'adset' ? 'ad_group' : entity_type;
+
+    try {
+      const dateFrom = new Date();
+      dateFrom.setDate(dateFrom.getDate() - days);
+      const dateFromStr = dateFrom.toISOString().split('T')[0];
+
+      // Get all entity metrics for this platform over the period
+      const sql = `
+        SELECT
+          entity_ref,
+          metric_date,
+          spend_cents,
+          impressions,
+          clicks,
+          conversions,
+          cpc_cents,
+          cpm_cents,
+          CASE WHEN impressions > 0 THEN CAST(clicks AS REAL) / impressions * 100 ELSE 0 END as ctr
+        FROM ad_metrics
+        WHERE organization_id = ?
+          AND platform = ?
+          AND entity_type = ?
+          AND metric_date >= ?
+        ORDER BY entity_ref, metric_date DESC
+      `;
+
+      const result = await this.db.prepare(sql)
+        .bind(orgId, platform, normalizedEntityType, dateFromStr)
+        .all<{
+          entity_ref: string;
+          metric_date: string;
+          spend_cents: number;
+          impressions: number;
+          clicks: number;
+          conversions: number;
+          cpc_cents: number;
+          cpm_cents: number;
+          ctr: number;
+        }>();
+
+      const rows = result.results || [];
+      if (rows.length === 0) {
+        return { success: true, data: { entities: [], summary: 'No ad metrics data found for this platform and entity type.' } };
+      }
+
+      // Group by entity
+      const byEntity = new Map<string, typeof rows>();
+      for (const row of rows) {
+        if (!byEntity.has(row.entity_ref)) byEntity.set(row.entity_ref, []);
+        byEntity.get(row.entity_ref)!.push(row);
+      }
+
+      // Resolve entity names
+      const entityNames = new Map<string, string>();
+      for (const entityRef of byEntity.keys()) {
+        const resolved = await this.resolveEntityId(entityRef, entity_type, platform, orgId);
+        entityNames.set(entityRef, resolved?.name || entityRef);
+      }
+
+      const entities: Array<{
+        entity_ref: string;
+        entity_name: string;
+        risk_level: 'high' | 'medium' | 'low';
+        signals: {
+          cpc_trend_pct: number;
+          cpm_trend_pct: number;
+          ctr_cliff_detected: boolean;
+          ctr_change_pct: number;
+          impression_momentum: number;
+          efficiency_trend_pct: number;
+        };
+        current_spend_cents: number;
+        current_conversions: number;
+        recommendation: string;
+      }> = [];
+
+      for (const [entityRef, entityRows] of byEntity.entries()) {
+        // Need at least 7 days of data
+        if (entityRows.length < 7) continue;
+
+        // Sort by date descending (already sorted but ensure)
+        entityRows.sort((a, b) => b.metric_date.localeCompare(a.metric_date));
+
+        const last7 = entityRows.slice(0, 7);
+        const prior7 = entityRows.slice(7, 14);
+
+        if (prior7.length < 7) continue; // Need 2 weeks minimum
+
+        // Compute WoW metrics
+        const avg = (arr: typeof rows, field: 'cpc_cents' | 'cpm_cents' | 'ctr' | 'spend_cents' | 'conversions' | 'impressions') =>
+          arr.reduce((s, r) => s + (r[field] || 0), 0) / arr.length;
+
+        const sum = (arr: typeof rows, field: 'spend_cents' | 'conversions' | 'impressions') =>
+          arr.reduce((s, r) => s + (r[field] || 0), 0);
+
+        const avgCpcLast = avg(last7, 'cpc_cents');
+        const avgCpcPrior = avg(prior7, 'cpc_cents');
+        const cpcTrend = avgCpcPrior > 0 ? ((avgCpcLast - avgCpcPrior) / avgCpcPrior) * 100 : 0;
+
+        const avgCpmLast = avg(last7, 'cpm_cents');
+        const avgCpmPrior = avg(prior7, 'cpm_cents');
+        const cpmTrend = avgCpmPrior > 0 ? ((avgCpmLast - avgCpmPrior) / avgCpmPrior) * 100 : 0;
+
+        const avgCtrLast = avg(last7, 'ctr');
+        const avgCtrPrior = avg(prior7, 'ctr');
+        const ctrChange = avgCtrPrior > 0 ? ((avgCtrLast - avgCtrPrior) / avgCtrPrior) * 100 : 0;
+
+        // CTR cliff detection: check if CTR was stable for 14+ days then dropped >25% WoW
+        const allCtr = entityRows.slice(0, Math.min(entityRows.length, 21)).map(r => r.ctr);
+        const stableCtr = allCtr.slice(7); // days 8-21
+        const ctrMean = stableCtr.length > 0 ? stableCtr.reduce((a, b) => a + b, 0) / stableCtr.length : 0;
+        const ctrStdDev = stableCtr.length > 1
+          ? Math.sqrt(stableCtr.reduce((acc, v) => acc + (v - ctrMean) ** 2, 0) / (stableCtr.length - 1))
+          : 0;
+        const ctrStable = ctrMean > 0 && stableCtr.length >= 7 && (ctrStdDev / ctrMean) < 0.10;
+        const ctrCliff = ctrStable && ctrChange < -25;
+
+        // Impression momentum: last 7d vs 30d normalized rate
+        const imp7 = sum(last7, 'impressions');
+        const imp30 = sum(entityRows.slice(0, Math.min(entityRows.length, 30)), 'impressions');
+        const days30 = Math.min(entityRows.length, 30);
+        const impressionMomentum = (imp30 > 0 && days30 > 0) ? (imp7 / 7) / (imp30 / days30) : 1.0;
+
+        // Efficiency trend (conversions/spend)
+        const spendLast = sum(last7, 'spend_cents');
+        const convLast = sum(last7, 'conversions');
+        const spendPrior = sum(prior7, 'spend_cents');
+        const convPrior = sum(prior7, 'conversions');
+        const effLast = spendLast > 0 ? convLast / spendLast : 0;
+        const effPrior = spendPrior > 0 ? convPrior / spendPrior : 0;
+        const effTrend = effPrior > 0 ? ((effLast - effPrior) / effPrior) * 100 : 0;
+
+        // Risk classification
+        let riskLevel: 'high' | 'medium' | 'low' = 'low';
+        if ((cpcTrend > 20 && (ctrCliff || effTrend < -15)) || (effTrend < -25)) {
+          riskLevel = 'high';
+        } else if (cpcTrend > 10 || effTrend < -10) {
+          riskLevel = 'medium';
+        }
+
+        // Build recommendation string
+        const signals: string[] = [];
+        if (cpcTrend > 15) signals.push(`CPC +${Math.round(cpcTrend)}%`);
+        if (ctrCliff) signals.push(`CTR dropped ${Math.round(Math.abs(ctrChange))}%`);
+        if (effTrend < -10) signals.push(`efficiency ${Math.round(effTrend)}%`);
+        if (impressionMomentum < 0.7) signals.push('declining reach');
+
+        let recommendation = '';
+        if (riskLevel === 'high') {
+          recommendation = `Audience saturating — ${signals.join(', ')}. Consider pausing or refreshing creative.`;
+        } else if (riskLevel === 'medium') {
+          recommendation = `Early saturation signs — ${signals.join(', ')}. Monitor closely.`;
+        } else {
+          recommendation = 'Metrics stable — no saturation signals detected.';
+        }
+
+        entities.push({
+          entity_ref: entityRef,
+          entity_name: entityNames.get(entityRef) || entityRef,
+          risk_level: riskLevel,
+          signals: {
+            cpc_trend_pct: Math.round(cpcTrend * 10) / 10,
+            cpm_trend_pct: Math.round(cpmTrend * 10) / 10,
+            ctr_cliff_detected: ctrCliff,
+            ctr_change_pct: Math.round(ctrChange * 10) / 10,
+            impression_momentum: Math.round(impressionMomentum * 100) / 100,
+            efficiency_trend_pct: Math.round(effTrend * 10) / 10,
+          },
+          current_spend_cents: spendLast,
+          current_conversions: convLast,
+          recommendation,
+        });
+      }
+
+      // Sort by risk level (high first)
+      const riskOrder = { high: 0, medium: 1, low: 2 };
+      entities.sort((a, b) => riskOrder[a.risk_level] - riskOrder[b.risk_level]);
+
+      const highRisk = entities.filter(e => e.risk_level === 'high');
+      const summary = highRisk.length > 0
+        ? `${highRisk.length} of ${entities.length} ${entity_type}s show high saturation risk. Top candidate for reallocation: ${highRisk[0].entity_name}.`
+        : entities.some(e => e.risk_level === 'medium')
+          ? `No high-risk entities. ${entities.filter(e => e.risk_level === 'medium').length} of ${entities.length} show medium saturation signals.`
+          : `All ${entities.length} ${entity_type}s show stable metrics — no saturation detected.`;
+
+      return { success: true, data: { entities, summary } };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Saturation signals query failed' };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // WATCHLIST (persistent cross-run memory)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async manageWatchlist(
+    input: Record<string, any>,
+    orgId: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    if (!this.coreDb) {
+      return { success: false, error: 'Watchlist requires core database access (DB binding)' };
+    }
+
+    const { action } = input;
+
+    try {
+      switch (action) {
+        case 'list': {
+          // Auto-expire stale items (review_after > 7 days past due)
+          await this.coreDb.prepare(`
+            UPDATE analysis_watchlist
+            SET status = 'expired', updated_at = datetime('now')
+            WHERE organization_id = ? AND status = 'active'
+              AND review_after IS NOT NULL
+              AND review_after < date('now', '-7 days')
+          `).bind(orgId).run();
+
+          const items = await this.coreDb.prepare(`
+            SELECT id, entity_ref, entity_name, platform, entity_type,
+                   watch_type, note, review_after, created_at
+            FROM analysis_watchlist
+            WHERE organization_id = ? AND status = 'active'
+            ORDER BY review_after ASC NULLS LAST
+            LIMIT 2
+          `).bind(orgId).all();
+
+          return {
+            success: true,
+            data: {
+              items: items.results || [],
+              count: (items.results || []).length,
+              note: (items.results || []).length === 0
+                ? 'Watchlist is empty. Use add action to flag entities for follow-up.'
+                : undefined
+            }
+          };
+        }
+
+        case 'add': {
+          if (!input.note || !input.watch_type) {
+            return { success: false, error: 'add requires watch_type and note' };
+          }
+
+          // Check hard limit: max 2 active items per org
+          const countResult = await this.coreDb.prepare(`
+            SELECT COUNT(*) as cnt FROM analysis_watchlist
+            WHERE organization_id = ? AND status = 'active'
+          `).bind(orgId).first<{ cnt: number }>();
+
+          if (countResult && countResult.cnt >= 2) {
+            return {
+              success: false,
+              error: `Watchlist full (${countResult.cnt}/2 active items). Resolve an existing item first using manage_watchlist(action='resolve', watchlist_id=...).`
+            };
+          }
+
+          const id = crypto.randomUUID().replace(/-/g, '').substring(0, 32);
+          await this.coreDb.prepare(`
+            INSERT INTO analysis_watchlist (id, organization_id, entity_ref, entity_name, platform, entity_type, watch_type, note, review_after, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+          `).bind(
+            id, orgId,
+            input.entity_ref || null,
+            input.entity_name || null,
+            input.platform || null,
+            input.entity_type || null,
+            input.watch_type,
+            input.note,
+            input.review_after || null
+          ).run();
+
+          return {
+            success: true,
+            data: {
+              id,
+              message: `Watchlist item created. Will appear in your next analysis run.${input.review_after ? ` Review scheduled for ${input.review_after}.` : ''}`
+            }
+          };
+        }
+
+        case 'resolve': {
+          if (!input.watchlist_id) {
+            return { success: false, error: 'resolve requires watchlist_id' };
+          }
+
+          const updated = await this.coreDb.prepare(`
+            UPDATE analysis_watchlist
+            SET status = 'resolved', updated_at = datetime('now'),
+                note = note || ' [RESOLVED: ' || ? || ']'
+            WHERE id = ? AND organization_id = ? AND status = 'active'
+          `).bind(
+            input.resolution_note || 'Resolved',
+            input.watchlist_id,
+            orgId
+          ).run();
+
+          if (!updated.meta?.changes) {
+            return { success: false, error: `No active watchlist item found with id=${input.watchlist_id}` };
+          }
+
+          return {
+            success: true,
+            data: { message: 'Watchlist item resolved. Slot freed for new items.' }
+          };
+        }
+
+        default:
+          return { success: false, error: `Unknown watchlist action: ${action}. Use list, add, or resolve.` };
+      }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Watchlist operation failed' };
     }
   }
 }

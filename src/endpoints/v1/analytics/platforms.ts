@@ -4,7 +4,6 @@ import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
 import { getDBSession } from "../../../utils/db-session";
-import { getShardDbForOrg } from "../../../services/shard-router";
 import { structuredLog } from "../../../utils/structured-logger";
 
 /**
@@ -112,9 +111,8 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     console.log(`[Unified] Fetching data for org ${orgId}, date range: ${effectiveDateRange.start} to ${effectiveDateRange.end}, platforms: ${JSON.stringify(activePlatforms)}`);
 
     try {
-      const shardDb = await getShardDbForOrg(c.env, orgId);
-      console.log('[Unified] Using D1 shard DB for platform data');
-      const d1Analytics = new D1AnalyticsService(shardDb);
+      const analyticsDb = c.env.ANALYTICS_DB;
+      const d1Analytics = new D1AnalyticsService(analyticsDb);
       const { summary: d1Summary, by_platform } = await d1Analytics.getUnifiedPlatformSummary(
         orgId,
         effectiveDateRange.start,
@@ -148,9 +146,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
 
       let totalConversions = summary.total_conversions;
 
-      // If using connectors (Stripe, etc.) for conversions, fetch from D1 stripe_charges
+      // If using connectors for conversions, fetch from D1 connector_events
       if (conversionSource === 'connectors') {
-        const stripeConversions = await this.fetchStripeConversionsD1(
+        const stripeConversions = await this.fetchConnectorConversionsD1(
           c.env.ANALYTICS_DB,
           orgId,
           effectiveDateRange.start,
@@ -162,9 +160,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         }
       }
 
-      // Fetch time series from D1 (ad_metrics is a shard table)
+      // Fetch time series from D1
       const timeSeries = await this.fetchPlatformTimeSeriesD1(
-        shardDb,
+        analyticsDb,
         orgId,
         activePlatforms,
         effectiveDateRange
@@ -197,9 +195,9 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
   }
 
   /**
-   * Fetch conversions from D1 stripe_charges table
+   * Fetch conversions from D1 connector_events table.
    */
-  private async fetchStripeConversionsD1(
+  private async fetchConnectorConversionsD1(
     db: any,
     orgId: string,
     startDate: string,
@@ -208,14 +206,15 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
     try {
       const result = await db.prepare(`
         SELECT
-          DATE(created_at) as date,
+          DATE(transacted_at) as date,
           COUNT(*) as conversions
-        FROM stripe_charges
+        FROM connector_events
         WHERE organization_id = ?
-        AND status = 'succeeded'
-        AND DATE(created_at) >= ?
-        AND DATE(created_at) <= ?
-        GROUP BY DATE(created_at)
+        AND source_platform = 'stripe'
+        AND status IN ('succeeded', 'paid', 'active')
+        AND DATE(transacted_at) >= ?
+        AND DATE(transacted_at) <= ?
+        GROUP BY DATE(transacted_at)
         ORDER BY date ASC
       `).bind(orgId, startDate, endDate).all();
 
@@ -227,7 +226,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         by_date: byDate
       };
     } catch (err) {
-      structuredLog('ERROR', 'Failed to fetch Stripe conversions from D1', { endpoint: 'platforms', step: 'stripe_conversions', error: err instanceof Error ? err.message : String(err) });
+      structuredLog('ERROR', 'Failed to fetch connector conversions from D1', { endpoint: 'platforms', step: 'stripe_conversions', error: err instanceof Error ? err.message : String(err) });
       return null;
     }
   }
@@ -323,7 +322,7 @@ export class GetUnifiedPlatformData extends OpenAPIRoute {
         const spend = row.spend_cents || 0;
         const impressions = row.impressions || 0;
         const clicks = row.clicks || 0;
-        const conversions = row.conversions || 0;
+        const conversions = Math.round(row.conversions || 0);
 
         // Add to totals
         dayData.total_spend_cents += spend;

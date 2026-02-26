@@ -136,9 +136,9 @@ export class ReceiveWebhook extends OpenAPIRoute {
       const eventId = handler.getEventId(event);
       const unifiedEventType = handler.getUnifiedEventType(event);
 
-      // Dedup check
+      // Dedup check (webhook_events in ANALYTICS_DB)
       if (eventId) {
-        const existing = await c.env.DB.prepare(
+        const existing = await c.env.ANALYTICS_DB.prepare(
           `SELECT id FROM webhook_events WHERE organization_id = ? AND connector = ? AND event_id = ?`
         ).bind(orgId, connector, eventId).first();
         if (existing) {
@@ -149,7 +149,7 @@ export class ReceiveWebhook extends OpenAPIRoute {
       const webhookEventId = crypto.randomUUID();
       const payloadHash = await hashPayload(body);
 
-      await c.env.DB.prepare(
+      await c.env.ANALYTICS_DB.prepare(
         `INSERT INTO webhook_events
          (id, organization_id, endpoint_id, connector, event_type, unified_event_type, event_id, payload_hash, payload, status, received_at)
          VALUES (?, ?, 'shopify_app', ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`
@@ -179,7 +179,7 @@ export class ReceiveWebhook extends OpenAPIRoute {
 
           // Mark the stored event as queue_failed so a sweep job can retry it
           try {
-            await c.env.DB.prepare(
+            await c.env.ANALYTICS_DB.prepare(
               `UPDATE webhook_events SET status = 'queue_failed', error_message = ? WHERE id = ?`
             ).bind(`Queue send failed: ${errMsg}`, webhookEventId).run();
           } catch (d1Error) {
@@ -241,9 +241,9 @@ export class ReceiveWebhook extends OpenAPIRoute {
       }
     }
 
-    // Check for duplicate events
+    // Check for duplicate events (webhook_events in ANALYTICS_DB)
     if (eventId) {
-      const existing = await c.env.DB.prepare(
+      const existing = await c.env.ANALYTICS_DB.prepare(
         `SELECT id FROM webhook_events
          WHERE organization_id = ? AND connector = ? AND event_id = ?`
       )
@@ -260,8 +260,8 @@ export class ReceiveWebhook extends OpenAPIRoute {
     const webhookEventId = crypto.randomUUID();
     const payloadHash = await hashPayload(body);
 
-    // Store the event
-    await c.env.DB.prepare(
+    // Store the event (webhook_events in ANALYTICS_DB)
+    await c.env.ANALYTICS_DB.prepare(
       `INSERT INTO webhook_events
        (id, organization_id, endpoint_id, connector, event_type, unified_event_type, event_id, payload_hash, payload, status, received_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))`
@@ -312,7 +312,7 @@ export class ReceiveWebhook extends OpenAPIRoute {
 
         // Mark the stored event as queue_failed so a sweep job can retry it
         try {
-          await c.env.DB.prepare(
+          await c.env.ANALYTICS_DB.prepare(
             `UPDATE webhook_events SET status = 'queue_failed', error_message = ? WHERE id = ?`
           ).bind(`Queue send failed: ${errMsg}`, webhookEventId).run();
         } catch (d1Error) {
@@ -634,7 +634,7 @@ export class GetWebhookEvents extends OpenAPIRoute {
     query += " ORDER BY received_at DESC LIMIT ? OFFSET ?";
     params.push(limit, offset);
 
-    const events = await c.env.DB.prepare(query).bind(...params).all();
+    const events = await c.env.ANALYTICS_DB.prepare(query).bind(...params).all();
 
     // Get total count
     let countQuery = `SELECT COUNT(*) as total FROM webhook_events WHERE organization_id = ?`;
@@ -650,7 +650,7 @@ export class GetWebhookEvents extends OpenAPIRoute {
       countParams.push(status);
     }
 
-    const countResult = await c.env.DB.prepare(countQuery)
+    const countResult = await c.env.ANALYTICS_DB.prepare(countQuery)
       .bind(...countParams)
       .first<{ total: number }>();
 
@@ -804,8 +804,8 @@ export class ShopifyCustomerDataRequest extends OpenAPIRoute {
     // Look up org for audit trail
     const org = await getOrgByShopDomain(c.env.DB, shop_domain);
 
-    // Log the GDPR request for compliance audit
-    await c.env.DB.prepare(
+    // Log the GDPR request for compliance audit (webhook_events in ANALYTICS_DB)
+    await c.env.ANALYTICS_DB.prepare(
       `INSERT INTO webhook_events
        (id, organization_id, endpoint_id, connector, event_type, unified_event_type, event_id, payload_hash, payload, status, received_at)
        VALUES (?, ?, 'gdpr', 'shopify', 'customers/data_request', 'gdpr.customers_data_request', ?, ?, ?, 'pending', datetime('now'))`
@@ -897,8 +897,8 @@ export class ShopifyCustomerRedact extends OpenAPIRoute {
 
     const org = await getOrgByShopDomain(c.env.DB, shop_domain);
 
-    // Log for compliance audit
-    await c.env.DB.prepare(
+    // Log for compliance audit (webhook_events in ANALYTICS_DB)
+    await c.env.ANALYTICS_DB.prepare(
       `INSERT INTO webhook_events
        (id, organization_id, endpoint_id, connector, event_type, unified_event_type, event_id, payload_hash, payload, status, received_at)
        VALUES (?, ?, 'gdpr', 'shopify', 'customers/redact', 'gdpr.customers_redact', ?, ?, ?, 'processing', datetime('now'))`
@@ -916,31 +916,23 @@ export class ShopifyCustomerRedact extends OpenAPIRoute {
       // Redact customer PII from all tables
       const statements = [];
 
-      // 1. Null out email hashes in shopify_orders (ANALYTICS_DB)
+      // 1. Null out customer data in connector_events (ANALYTICS_DB)
       statements.push(
         c.env.ANALYTICS_DB.prepare(
-          `UPDATE shopify_orders SET customer_email_hash = NULL
-           WHERE organization_id = ? AND customer_id = ?`
+          `UPDATE connector_events SET customer_external_id = NULL
+           WHERE organization_id = ? AND source_platform = 'shopify' AND customer_external_id = ?`
         ).bind(org.organization_id, shopifyCustomerId)
       );
 
-      // 2. Null out customer data in ecommerce_orders (ANALYTICS_DB)
+      // 2. Null out customer data in connector_customers (ANALYTICS_DB)
       statements.push(
         c.env.ANALYTICS_DB.prepare(
-          `UPDATE ecommerce_orders SET customer_email_hash = NULL, customer_external_id = NULL
-           WHERE organization_id = ? AND platform = 'shopify' AND customer_external_id = ?`
+          `UPDATE connector_customers SET email_hash = NULL, name = NULL, phone_hash = NULL
+           WHERE organization_id = ? AND source_platform = 'shopify' AND external_id = ?`
         ).bind(org.organization_id, shopifyCustomerId)
       );
 
-      // 3. Null out customer data in ecommerce_customers (ANALYTICS_DB)
-      statements.push(
-        c.env.ANALYTICS_DB.prepare(
-          `UPDATE ecommerce_customers SET email_hash = NULL, name = NULL, phone_hash = NULL
-           WHERE organization_id = ? AND platform = 'shopify' AND external_id = ?`
-        ).bind(org.organization_id, shopifyCustomerId)
-      );
-
-      // 4. Remove from customer_identities (ANALYTICS_DB)
+      // 3. Remove from customer_identities (ANALYTICS_DB)
       statements.push(
         c.env.ANALYTICS_DB.prepare(
           `DELETE FROM customer_identities
@@ -1022,8 +1014,8 @@ export class ShopifyShopRedact extends OpenAPIRoute {
 
     const org = await getOrgByShopDomain(c.env.DB, shop_domain);
 
-    // Log for compliance audit
-    await c.env.DB.prepare(
+    // Log for compliance audit (webhook_events in ANALYTICS_DB)
+    await c.env.ANALYTICS_DB.prepare(
       `INSERT INTO webhook_events
        (id, organization_id, endpoint_id, connector, event_type, unified_event_type, event_id, payload_hash, payload, status, received_at)
        VALUES (?, ?, 'gdpr', 'shopify', 'shop/redact', 'gdpr.shop_redact', ?, ?, ?, 'processing', datetime('now'))`
@@ -1042,19 +1034,10 @@ export class ShopifyShopRedact extends OpenAPIRoute {
         // Delete all Shopify data for this organization
         const analyticsStatements = [
           c.env.ANALYTICS_DB.prepare(
-            `DELETE FROM shopify_orders WHERE organization_id = ?`
+            `DELETE FROM connector_events WHERE organization_id = ? AND source_platform = 'shopify'`
           ).bind(org.organization_id),
           c.env.ANALYTICS_DB.prepare(
-            `DELETE FROM shopify_refunds WHERE organization_id = ?`
-          ).bind(org.organization_id),
-          c.env.ANALYTICS_DB.prepare(
-            `DELETE FROM ecommerce_orders WHERE organization_id = ? AND platform = 'shopify'`
-          ).bind(org.organization_id),
-          c.env.ANALYTICS_DB.prepare(
-            `DELETE FROM ecommerce_customers WHERE organization_id = ? AND platform = 'shopify'`
-          ).bind(org.organization_id),
-          c.env.ANALYTICS_DB.prepare(
-            `DELETE FROM ecommerce_products WHERE organization_id = ? AND platform = 'shopify'`
+            `DELETE FROM connector_customers WHERE organization_id = ? AND source_platform = 'shopify'`
           ).bind(org.organization_id),
           c.env.ANALYTICS_DB.prepare(
             `DELETE FROM customer_identities WHERE organization_id = ? AND source_platform = 'shopify'`

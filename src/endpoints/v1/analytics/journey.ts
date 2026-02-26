@@ -69,7 +69,7 @@ interface ConnectorConversion {
 
 /**
  * Query connector conversions for a user from D1 ANALYTICS_DB
- * Currently supports Stripe charges from stripe_charges table
+ * Queries connector_events for revenue data
  */
 async function queryConnectorConversionsD1(
   analyticsDb: D1Database,
@@ -81,190 +81,83 @@ async function queryConnectorConversionsD1(
 ): Promise<ConnectorConversion[]> {
   const conversions: ConnectorConversion[] = [];
 
+  // Query all connector conversions from unified connector_events table
   try {
-    // Query Stripe charges from D1 ANALYTICS_DB
-    // Note: stripe_charges may have customer_email that we can match against userId
-    let stripeQuery = `
+    let connectorQuery = `
       SELECT
         id,
-        stripe_charge_id,
-        amount_cents,
+        external_id,
+        source_platform,
+        value_cents,
         currency,
         status,
-        stripe_created_at,
-        customer_email,
-        product_metadata
-      FROM stripe_charges
-      WHERE org_id = ?
-        AND status = 'succeeded'
+        transacted_at,
+        customer_external_id,
+        event_type,
+        metadata
+      FROM connector_events
+      WHERE organization_id = ?
+        AND status IN ('succeeded', 'paid', 'completed', 'active')
     `;
 
     const queryParams: any[] = [orgId];
 
     if (dateFrom) {
-      stripeQuery += ` AND stripe_created_at >= ?`;
+      connectorQuery += ` AND transacted_at >= ?`;
       queryParams.push(`${dateFrom}T00:00:00Z`);
     }
     if (dateTo) {
-      stripeQuery += ` AND stripe_created_at <= ?`;
+      connectorQuery += ` AND transacted_at <= ?`;
       queryParams.push(`${dateTo}T23:59:59Z`);
     }
 
-    stripeQuery += ` ORDER BY stripe_created_at DESC LIMIT 500`;
+    connectorQuery += ` ORDER BY transacted_at DESC LIMIT 500`;
 
-    const stripeResult = await analyticsDb.prepare(stripeQuery)
+    const connectorResult = await analyticsDb.prepare(connectorQuery)
       .bind(...queryParams)
       .all<{
         id: string;
-        stripe_charge_id: string;
-        amount_cents: number;
-        currency: string;
+        external_id: string | null;
+        source_platform: string;
+        value_cents: number;
+        currency: string | null;
         status: string;
-        stripe_created_at: string;
-        customer_email: string | null;
-        product_metadata: string | null;
+        transacted_at: string;
+        customer_external_id: string | null;
+        event_type: string | null;
+        metadata: string | null;
       }>();
 
-    for (const row of stripeResult.results || []) {
-      // Match by email if available
-      const matches = row.customer_email?.toLowerCase() === userId.toLowerCase();
+    for (const row of connectorResult.results || []) {
+      // Map source_platform to the ConnectorConversion source type
+      const sourceMap: Record<string, string> = {
+        stripe: 'stripe',
+        shopify: 'shopify',
+        jobber: 'other',
+        hubspot: 'other',
+      };
+      const source = sourceMap[row.source_platform] || 'other';
+
+      // Match by customer_external_id if available
+      const matches = !userId ||
+        row.customer_external_id?.toLowerCase() === userId.toLowerCase();
+
       if (matches) {
         conversions.push({
-          source: 'stripe',
-          transaction_id: row.stripe_charge_id,
-          timestamp: row.stripe_created_at,
-          amount: (row.amount_cents || 0) / 100,
+          source: source as any,
+          transaction_id: row.external_id || row.id,
+          timestamp: row.transacted_at,
+          amount: (row.value_cents || 0) / 100,
           currency: row.currency || 'usd',
           status: row.status,
           product_id: null,
-          customer_id: row.customer_email || null,
-          metadata: row.product_metadata ? JSON.parse(row.product_metadata) : {}
+          customer_id: row.customer_external_id || null,
+          metadata: row.metadata ? (() => { try { return JSON.parse(row.metadata); } catch { return { source_platform: row.source_platform }; } })() : { source_platform: row.source_platform }
         });
       }
     }
   } catch (err) {
-    // Table may not exist yet
-    structuredLog('WARN', 'Failed to query stripe_charges from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
-  }
-
-  // Query Shopify orders
-  try {
-    let shopifyQuery = `
-      SELECT
-        id,
-        shopify_order_id,
-        total_price_cents,
-        currency,
-        financial_status,
-        shopify_created_at,
-        customer_email_hash,
-        customer_first_name
-      FROM shopify_orders
-      WHERE organization_id = ?
-        AND financial_status = 'paid'
-    `;
-    const shopifyParams: any[] = [orgId];
-
-    if (dateFrom) {
-      shopifyQuery += ` AND shopify_created_at >= ?`;
-      shopifyParams.push(`${dateFrom}T00:00:00Z`);
-    }
-    if (dateTo) {
-      shopifyQuery += ` AND shopify_created_at <= ?`;
-      shopifyParams.push(`${dateTo}T23:59:59Z`);
-    }
-
-    shopifyQuery += ` ORDER BY shopify_created_at DESC LIMIT 500`;
-
-    const shopifyResult = await analyticsDb.prepare(shopifyQuery)
-      .bind(...shopifyParams)
-      .all<{
-        id: string;
-        shopify_order_id: string;
-        total_price_cents: number;
-        currency: string;
-        financial_status: string;
-        shopify_created_at: string;
-        customer_email_hash: string | null;
-        customer_first_name: string | null;
-      }>();
-
-    for (const row of shopifyResult.results || []) {
-      // Note: Shopify stores customer_email_hash, not plain email
-      // We can match by hash if userId was hashed, or skip if not
-      conversions.push({
-        source: 'shopify',
-        transaction_id: row.shopify_order_id,
-        timestamp: row.shopify_created_at,
-        amount: (row.total_price_cents || 0) / 100,
-        currency: row.currency || 'usd',
-        status: row.financial_status,
-        product_id: null,
-        customer_id: row.customer_first_name || null,
-        metadata: {}
-      });
-    }
-  } catch (err) {
-    structuredLog('WARN', 'Failed to query shopify_orders from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
-  }
-
-  // Query Jobber completed jobs
-  try {
-    let jobberQuery = `
-      SELECT
-        id,
-        jobber_job_id,
-        total_amount_cents,
-        currency,
-        job_status,
-        completed_at,
-        client_email_hash,
-        client_name
-      FROM jobber_jobs
-      WHERE organization_id = ?
-        AND is_completed = 1
-    `;
-    const jobberParams: any[] = [orgId];
-
-    if (dateFrom) {
-      jobberQuery += ` AND completed_at >= ?`;
-      jobberParams.push(`${dateFrom}T00:00:00Z`);
-    }
-    if (dateTo) {
-      jobberQuery += ` AND completed_at <= ?`;
-      jobberParams.push(`${dateTo}T23:59:59Z`);
-    }
-
-    jobberQuery += ` ORDER BY completed_at DESC LIMIT 500`;
-
-    const jobberResult = await analyticsDb.prepare(jobberQuery)
-      .bind(...jobberParams)
-      .all<{
-        id: string;
-        jobber_job_id: string;
-        total_amount_cents: number;
-        currency: string;
-        job_status: string;
-        completed_at: string;
-        client_email_hash: string | null;
-        client_name: string | null;
-      }>();
-
-    for (const row of jobberResult.results || []) {
-      conversions.push({
-        source: 'other', // Jobber maps to 'other' in the union type
-        transaction_id: row.jobber_job_id,
-        timestamp: row.completed_at,
-        amount: (row.total_amount_cents || 0) / 100,
-        currency: row.currency || 'usd',
-        status: row.job_status,
-        product_id: null,
-        customer_id: row.client_name || null,
-        metadata: { source_type: 'jobber' }
-      });
-    }
-  } catch (err) {
-    structuredLog('WARN', 'Failed to query jobber_jobs from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
+    structuredLog('WARN', 'Failed to query connector_events from D1', { endpoint: 'analytics/journey', error: err instanceof Error ? err.message : String(err) });
   }
 
   return conversions.sort((a, b) =>
@@ -404,7 +297,7 @@ Returns the complete journey for an identified user, including:
     const dateTo = query.date_to;
     const includeEvents = query.include_events !== 'false';
 
-    const d1 = new D1Adapter(c.env.DB);
+    const identityDb = new D1Adapter(c.env.ANALYTICS_DB);
 
     // Get org tag
     const tagMapping = await c.env.DB.prepare(`
@@ -443,11 +336,11 @@ Returns the complete journey for an identified user, including:
       });
     }
 
-    // Get all anonymous_ids linked to this user from identity_mappings
-    const anonymousIds = await d1.getAnonymousIdsByUserId(orgId, userId);
+    // Get all anonymous_ids linked to this user from identity_mappings (ANALYTICS_DB)
+    const anonymousIds = await identityDb.getAnonymousIdsByUserId(orgId, userId);
 
-    // Get identity graph for metadata
-    const identityGraph = await d1.getIdentityGraph(orgId, userId);
+    // Get identity graph for metadata (ANALYTICS_DB)
+    const identityGraph = await identityDb.getIdentityGraph(orgId, userId);
     const firstIdentified = identityGraph.length > 0
       ? identityGraph.reduce((min, ig) =>
           ig.identified_at < min ? ig.identified_at : min, identityGraph[0].identified_at)
@@ -483,7 +376,6 @@ Returns the complete journey for an identified user, including:
     const totalConnectorRevenue = connectorConversions.reduce((sum, c) => sum + c.amount, 0);
 
     // Query journeys from D1 ANALYTICS_DB for this user's anonymous_ids
-    const orgTag = tagMapping.short_tag;
     let userJourneys: Array<{
       id: string;
       channel_path: string;
@@ -511,9 +403,9 @@ Returns the complete journey for an identified user, including:
           SELECT id, channel_path, path_length, first_touch_ts, last_touch_ts,
                  converted, conversion_value_cents, time_to_conversion_hours
           FROM journeys
-          WHERE org_tag = ? AND anonymous_id IN (${placeholders})
+          WHERE organization_id = ? AND anonymous_id IN (${placeholders})
         `;
-        const params: any[] = [orgTag, ...anonymousIds];
+        const params: any[] = [orgId, ...anonymousIds];
 
         if (dateFrom) {
           journeyQuery += ` AND first_touch_ts >= ?`;
@@ -539,22 +431,22 @@ Returns the complete journey for an identified user, including:
         }>;
       }
 
-      // Query tag conversions (goal_conversions) for this user
+      // Query tag conversions from unified conversions table for this user
       if (anonymousIds.length > 0) {
         const placeholders = anonymousIds.map(() => '?').join(',');
         const tagConvQuery = `
-          SELECT gc.id as event_id, gc.conversion_timestamp as timestamp,
-                 'goal_conversion' as type,
-                 COALESCE(gc.value_cents, 0) / 100.0 as revenue,
+          SELECT c.id as event_id, c.conversion_timestamp as timestamp,
+                 'conversion' as type,
+                 COALESCE(c.value_cents, 0) / 100.0 as revenue,
                  NULL as session_id
-          FROM goal_conversions gc
-          JOIN journeys j ON gc.conversion_id = j.conversion_id
-          WHERE j.org_tag = ? AND j.anonymous_id IN (${placeholders})
-          ORDER BY gc.conversion_timestamp DESC
+          FROM conversions c
+          JOIN journeys j ON c.id = j.conversion_id
+          WHERE j.organization_id = ? AND j.anonymous_id IN (${placeholders})
+          ORDER BY c.conversion_timestamp DESC
           LIMIT 50
         `;
         const tagResult = await analyticsDb.prepare(tagConvQuery)
-          .bind(orgTag, ...anonymousIds)
+          .bind(orgId, ...anonymousIds)
           .all();
         tagConversions = (tagResult.results || []) as Array<{
           event_id: string;
@@ -799,17 +691,17 @@ export class GetJourneysOverview extends OpenAPIRoute {
           total_conversions: 0,
           total_revenue: 0
         },
-        top_paths: [],
+        top_journeys: [],
+        top_converting_paths: [],
         conversion_by_path_length: [],
         revenue_by_source: {}
       });
     }
 
-    const orgTag = tagMapping.short_tag;
     const analyticsDb = c.env.ANALYTICS_DB;
 
-    // Get identity mappings count from D1
-    const identityCount = await c.env.DB.prepare(`
+    // Get identity mappings count from ANALYTICS_DB (identity tables moved from DB)
+    const identityCount = await c.env.ANALYTICS_DB.prepare(`
       SELECT COUNT(DISTINCT user_id) as users, COUNT(DISTINCT anonymous_id) as anon_ids
       FROM identity_mappings WHERE organization_id = ?
     `).bind(orgId).first() as { users: number; anon_ids: number } | null;
@@ -823,9 +715,9 @@ export class GetJourneysOverview extends OpenAPIRoute {
             COALESCE(SUM(sessions), 0) as sessions,
             COALESCE(SUM(users), 0) as users
           FROM daily_metrics
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND date >= ? AND date <= ?
-        `).bind(orgTag, dateFrom, dateTo).first() as { sessions: number; users: number } | null;
+        `).bind(orgId, dateFrom, dateTo).first() as { sessions: number; users: number } | null;
       } catch (err) {
         structuredLog('WARN', 'Failed to query daily_metrics', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }
@@ -847,7 +739,6 @@ export class GetJourneysOverview extends OpenAPIRoute {
         { start: dateFrom, end: dateTo }
       );
       revenueData = combinedRevenue.summary;
-      console.log(`[Journey Overview] Revenue sources for org ${orgId}:`, Object.keys(revenueData.sources));
     } catch (err) {
       structuredLog('WARN', 'Failed to query unified revenue sources', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
     }
@@ -871,9 +762,9 @@ export class GetJourneysOverview extends OpenAPIRoute {
             COUNT(*) as total_journeys,
             SUM(CASE WHEN converted = 1 THEN 1 ELSE 0 END) as converted_journeys
           FROM journeys
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND first_touch_ts >= ? AND first_touch_ts <= ?
-        `).bind(orgTag, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).first() as {
+        `).bind(orgId, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).first() as {
           avg_path_length: number;
           avg_time_to_convert: number;
           avg_sessions_to_convert: number;
@@ -896,22 +787,33 @@ export class GetJourneysOverview extends OpenAPIRoute {
             SUM(CASE WHEN converted = 1 THEN 1 ELSE 0 END) as conversions,
             COALESCE(SUM(conversion_value_cents), 0) as revenue_cents
           FROM journeys
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND first_touch_ts >= ? AND first_touch_ts <= ?
           GROUP BY channel_path
           ORDER BY journeys DESC
           LIMIT 10
-        `).bind(orgTag, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
+        `).bind(orgId, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
           results: Array<{ path: string; journeys: number; conversions: number; revenue_cents: number }>
         };
 
-        topJourneys = (journeysResult.results || []).map(row => ({
-          path: row.path,
-          journeys: row.journeys,
-          conversions: row.conversions || 0,
-          revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100,
-          conversion_rate: row.journeys > 0 ? Math.round((row.conversions || 0) / row.journeys * 100 * 100) / 100 : 0
-        }));
+        topJourneys = (journeysResult.results || []).map(row => {
+          // channel_path is stored as JSON array string (e.g. '["google","direct"]')
+          // Parse it to a readable path like "google → direct"
+          let displayPath = row.path;
+          try {
+            const parsed = JSON.parse(row.path);
+            if (Array.isArray(parsed)) {
+              displayPath = parsed.join(' → ');
+            }
+          } catch { /* already a plain string */ }
+          return {
+            path: displayPath,
+            journeys: row.journeys,
+            conversions: row.conversions || 0,
+            revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100,
+            conversion_rate: row.journeys > 0 ? Math.round((row.conversions || 0) / row.journeys * 100 * 100) / 100 : 0
+          };
+        });
       } catch (err) {
         structuredLog('WARN', 'Failed to query top journeys', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }
@@ -927,21 +829,30 @@ export class GetJourneysOverview extends OpenAPIRoute {
             COUNT(*) as conversions,
             COALESCE(SUM(conversion_value_cents), 0) as revenue_cents
           FROM journeys
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND converted = 1
             AND first_touch_ts >= ? AND first_touch_ts <= ?
           GROUP BY channel_path
           ORDER BY conversions DESC
           LIMIT 10
-        `).bind(orgTag, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
+        `).bind(orgId, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
           results: Array<{ path: string; conversions: number; revenue_cents: number }>
         };
 
-        topConvertingPaths = (pathsResult.results || []).map(row => ({
-          path: row.path,
-          conversions: row.conversions,
-          revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100
-        }));
+        topConvertingPaths = (pathsResult.results || []).map(row => {
+          let displayPath = row.path;
+          try {
+            const parsed = JSON.parse(row.path);
+            if (Array.isArray(parsed)) {
+              displayPath = parsed.join(' → ');
+            }
+          } catch { /* already a plain string */ }
+          return {
+            path: displayPath,
+            conversions: row.conversions,
+            revenue: Math.round((row.revenue_cents || 0) / 100 * 100) / 100
+          };
+        });
       } catch (err) {
         structuredLog('WARN', 'Failed to query top converting paths', { endpoint: 'analytics/journey', step: 'overview', error: err instanceof Error ? err.message : String(err) });
       }
@@ -958,12 +869,12 @@ export class GetJourneysOverview extends OpenAPIRoute {
             COUNT(*) as total,
             CAST(SUM(CASE WHEN converted = 1 THEN 1 ELSE 0 END) AS REAL) / COUNT(*) * 100 as conversion_rate
           FROM journeys
-          WHERE org_tag = ?
+          WHERE organization_id = ?
             AND first_touch_ts >= ? AND first_touch_ts <= ?
           GROUP BY path_length
           ORDER BY path_length ASC
           LIMIT 20
-        `).bind(orgTag, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
+        `).bind(orgId, `${dateFrom}T00:00:00Z`, `${dateTo}T23:59:59Z`).all() as {
           results: Array<{ path_length: number; conversions: number; conversion_rate: number }>
         };
 

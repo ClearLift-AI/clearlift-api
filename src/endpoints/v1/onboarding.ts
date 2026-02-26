@@ -132,9 +132,9 @@ export class GetOnboardingStatus extends OpenAPIRoute {
     if (!aiSettings) {
       await c.env.DB.prepare(`
         INSERT INTO ai_optimization_settings (
-          org_id, growth_strategy, budget_optimization, ai_control,
+          org_id, run_frequency, budget_optimization, ai_control,
           daily_cap_cents, monthly_cap_cents, created_at, updated_at
-        ) VALUES (?, 'balanced', 'moderate', 'copilot', 100000, 3000000, ?, ?)
+        ) VALUES (?, 'weekly', 'moderate', 'copilot', 100000, 3000000, ?, ?)
       `).bind(orgId, now, now).run();
 
       console.log(`[ONBOARDING_HEAL] Created default ai_optimization_settings for org ${orgId}`);
@@ -205,10 +205,11 @@ export class GetOnboardingStatus extends OpenAPIRoute {
       console.log(`[ONBOARDING_HEAL] Synced has_verified_tag for user ${session.user_id}: ${verifiedCount}`);
     }
 
-    // 7. Sync goals_count with conversion_goals
+    // 7. Sync goals_count with platform_connections that have conversion_events configured
     const goalsCount = await c.env.DB.prepare(`
-      SELECT COUNT(*) as count FROM conversion_goals
+      SELECT COUNT(*) as count FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
+        AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
     `).bind(orgId).first<{ count: number }>();
 
     const gCount = goalsCount?.count || 0;
@@ -376,10 +377,10 @@ export class ValidateOnboarding extends OpenAPIRoute {
           hasOrganization: false,
           hasConnectedPlatform: false,
           hasInstalledTag: false,
-          hasDefinedGoal: false,
+          hasDefinedConversion: false,
           isComplete: false,
-          missingSteps: ['organization', 'platforms', 'tracking', 'goals'],
-          details: { connectedPlatforms: 0, verifiedDomains: 0, definedGoals: 0 }
+          missingSteps: ['organization', 'platforms', 'tracking', 'conversions'],
+          details: { connectedPlatforms: 0, verifiedDomains: 0, definedConversions: 0 }
         });
       }
       orgId = orgResult.organization_id;
@@ -397,33 +398,34 @@ export class ValidateOnboarding extends OpenAPIRoute {
       WHERE organization_id = ? AND is_verified = 1
     `).bind(orgId).first<{ count: number }>();
 
-    // Check goals
-    const goals = await c.env.DB.prepare(`
-      SELECT COUNT(*) as count FROM conversion_goals
+    // Check conversion tracking (criteria in platform_connections.settings.conversion_events)
+    const conversions = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM platform_connections
       WHERE organization_id = ? AND is_active = 1
+        AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
     `).bind(orgId).first<{ count: number }>();
 
     const connectedPlatforms = connections?.count || 0;
     const verifiedDomains = domains?.count || 0;
-    const definedGoals = goals?.count || 0;
+    const definedConversions = conversions?.count || 0;
 
     const hasConnectedPlatform = connectedPlatforms > 0;
     const hasInstalledTag = verifiedDomains > 0;
-    const hasDefinedGoal = definedGoals > 0;
+    const hasDefinedConversion = definedConversions > 0;
 
     const missingSteps: string[] = [];
     if (!hasConnectedPlatform) missingSteps.push('platforms');
     if (!hasInstalledTag) missingSteps.push('tracking');
-    if (!hasDefinedGoal) missingSteps.push('goals');
+    if (!hasDefinedConversion) missingSteps.push('conversions');
 
     return success(c, {
       hasOrganization: true,
       hasConnectedPlatform,
       hasInstalledTag,
-      hasDefinedGoal,
+      hasDefinedConversion,
       isComplete: missingSteps.length === 0,
       missingSteps,
-      details: { connectedPlatforms, verifiedDomains, definedGoals }
+      details: { connectedPlatforms, verifiedDomains, definedConversions }
     });
   }
 }

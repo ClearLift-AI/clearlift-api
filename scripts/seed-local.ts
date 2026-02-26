@@ -6,25 +6,27 @@
  *   npx tsx scripts/seed-local.ts
  *
  * Prerequisites:
- *   npm run db:migrate:local   (applies DB + ANALYTICS_DB + AI_DB migrations)
+ *   npm run db:migrate:local   (applies DB + ANALYTICS_DB migrations)
  *
  * What it creates:
- *   - "Acme SaaS Demo" org with user, tag, domain, 4 connectors, 3 goals
- *   - ~150 conversions (30 days, mix of stripe/tag)
- *   - ~90 goal_conversions linked to goals
- *   - 30 cac_history rows with per-source breakdown
+ *   - "Acme SaaS Demo" org with user, tag, domain, 3 webhook connectors
+ *   - ~200 connector_events (30 days: Stripe + Shopify + Jobber)
+ *   - ~200 conversions (derived from connector_events)
+ *   - 28 cac_history rows (0 ad spend — connect real Google/Meta for that)
  *   - 2 handoff_patterns + ~40 handoff_observations
  *   - ~60 conversion_daily_summary rows
  *   - ~90 conversion_attribution rows (first/last touch)
- *   - ~90 stripe_charges linked to stripe conversions
- *   - ~35 jobber_jobs (completed, with revenue)
  *   - 1 journey_analytics pre-computed row
  *   - ~600 journey_touchpoints (multi-touch sessions)
- *   - ~84 event_daily_summary rows (3 event types × 28 days)
- *   - ~300 event_hourly_summary rows (last 7 days)
- *   - 10 attribution_model_results (markov + shapley, AI_DB)
+ *   - ~84 daily_metrics rows (3 event types × 28 days)
+ *   - ~300 hourly_metrics rows (last 7 days)
+ *   - 10 attribution_model_results (markov + shapley, ANALYTICS_DB)
  *   - org_tracking_configs for tag configuration
  *   - Valid session token for dashboard access (no OAuth needed)
+ *   - End-to-end math verification (CAC, revenue, per-source breakdowns)
+ *
+ * Ad platform connections (Google, Meta) are NOT seeded — connect real
+ * accounts via OAuth through the local.clearlift.ai tunnel.
  */
 
 import { execSync } from "child_process";
@@ -71,24 +73,13 @@ const SESSION_TOKEN = "demo_session_token_001";
 const TAG = "acme_demo";
 const DOMAIN = "acme-saas.com";
 
-const GOAL_STRIPE_ID = "goal_demo_stripe_purchase";
-const GOAL_TRIAL_ID = "goal_demo_trial_signup";
-const GOAL_DEMO_ID = "goal_demo_request";
-
 const CONN_STRIPE_ID = "conn_demo_stripe";
-const CONN_GOOGLE_ID = "conn_demo_google";
-const CONN_META_ID = "conn_demo_meta";
+const CONN_SHOPIFY_ID = "conn_demo_shopify";
 const CONN_JOBBER_ID = "conn_demo_jobber";
 
 // Date range: Feb 1 – Feb 28, 2026
 const START_DATE = new Date("2026-02-01T00:00:00Z");
 const DAYS = 28;
-
-// Ad spend ranges (cents)
-const GOOGLE_SPEND_MIN = 8000; // $80
-const GOOGLE_SPEND_MAX = 12000; // $120
-const META_SPEND_MIN = 4000; // $40
-const META_SPEND_MAX = 8000; // $80
 
 // Plan values (cents)
 const PLAN_VALUES = [2900, 4900, 9900, 19900, 29900]; // $29 – $299
@@ -152,9 +143,11 @@ function generateDbSql(): string {
   const now = isoStr(new Date());
   const expires = isoStr(addDays(new Date(), 30));
 
-  // User
-  lines.push(`INSERT OR IGNORE INTO users (id, email, issuer, access_sub, name, is_admin, created_at, last_login_at)
-VALUES ('${USER_ID}', '${USER_EMAIL}', 'seed', 'seed_${USER_ID}', 'Demo User', 0, '${now}', '${now}');`);
+  // User — password: demo1234 (PBKDF2-SHA256, 100k iterations, base64 salt+hash)
+  // To regenerate: node -e "const c=require('crypto');(async()=>{const s=c.randomBytes(16);const k=await c.subtle.importKey('raw',new TextEncoder().encode('demo1234'),{name:'PBKDF2'},false,['deriveBits']);const h=new Uint8Array(await c.subtle.deriveBits({name:'PBKDF2',salt:s,iterations:100000,hash:'SHA-256'},k,256));const r=new Uint8Array(s.length+h.length);r.set(s,0);r.set(h,s.length);console.log(Buffer.from(r).toString('base64'))})()"
+  const DEMO_PASSWORD_HASH = 'A5eyu0Q2L3MsPTn4YK8ov5B7PbuX/GF0MsQ+p5BWXi4KkXZRr0oF63EzmuieLKmW';
+  lines.push(`INSERT OR IGNORE INTO users (id, email, issuer, access_sub, name, is_admin, password_hash, created_at, last_login_at)
+VALUES ('${USER_ID}', '${USER_EMAIL}', 'seed', 'seed_${USER_ID}', 'Demo User', 0, '${DEMO_PASSWORD_HASH}', '${now}', '${now}');`);
 
   // Organization
   lines.push(`INSERT OR IGNORE INTO organizations (id, name, slug, subscription_tier, settings, created_at, updated_at)
@@ -176,40 +169,54 @@ VALUES ('domain_demo_001', '${ORG_ID}', '${DOMAIN}', 1, 1, '${now}', '${now}');`
   lines.push(`INSERT OR IGNORE INTO sessions (token, user_id, created_at, expires_at)
 VALUES ('${SESSION_TOKEN}', '${USER_ID}', '${now}', '${expires}');`);
 
-  // Platform connections
+  // Webhook connectors only — Google/Meta are connected via real OAuth
   const connectors = [
-    { id: CONN_STRIPE_ID, platform: "stripe", accountId: "acct_demo_stripe", name: "Acme Stripe" },
-    { id: CONN_GOOGLE_ID, platform: "google", accountId: "123-456-7890", name: "Acme Google Ads" },
-    { id: CONN_META_ID, platform: "facebook", accountId: "act_demo_meta", name: "Acme Meta Ads" },
-    { id: CONN_JOBBER_ID, platform: "jobber", accountId: "jobber_demo_001", name: "Acme Jobber" },
+    {
+      id: CONN_STRIPE_ID, platform: "stripe", accountId: "acct_demo_stripe", name: "Acme Stripe",
+      settings: {
+        conversion_events: [
+          { event_type: "charge", status: ["succeeded"], label: "Payment Success" },
+        ],
+        value_type: "from_source",
+        conversion_pages: ["/thank-you"],
+        pre_conversion_pages: ["/checkout", "/pricing"],
+      },
+    },
+    {
+      id: CONN_SHOPIFY_ID, platform: "shopify", accountId: "acme-saas.myshopify.com", name: "Acme Shopify",
+      settings: {
+        conversion_events: [
+          { event_type: "order", status: ["paid", "partially_paid"], label: "Paid Order" },
+        ],
+        value_type: "from_source",
+        conversion_pages: ["/order-confirmation"],
+        pre_conversion_pages: ["/cart", "/checkout"],
+      },
+    },
+    {
+      id: CONN_JOBBER_ID, platform: "jobber", accountId: "jobber_demo_001", name: "Acme Jobber",
+      settings: {
+        conversion_events: [
+          { event_type: "invoice", status: ["PAID"], label: "Paid Invoice" },
+        ],
+        value_type: "from_source",
+        conversion_pages: ["/booking-confirmed"],
+        pre_conversion_pages: ["/book", "/services"],
+      },
+    },
   ];
   for (const c of connectors) {
     lines.push(`INSERT OR IGNORE INTO platform_connections (id, organization_id, platform, account_id, account_name, connected_by, connected_at, last_synced_at, sync_status, is_active, settings)
-VALUES ('${c.id}', '${ORG_ID}', '${c.platform}', '${c.accountId}', '${c.name}', '${USER_ID}', '${now}', '${now}', 'synced', 1, '{}');`);
+VALUES ('${c.id}', '${ORG_ID}', '${c.platform}', '${c.accountId}', '${c.name}', '${USER_ID}', '${now}', '${now}', 'synced', 1, '${escSql(JSON.stringify(c.settings))}');`);
   }
-
-  // Conversion goals
-  lines.push(`INSERT OR IGNORE INTO conversion_goals (id, organization_id, name, type, trigger_config, default_value_cents, is_primary, goal_type, is_active, category, created_at, updated_at)
-VALUES ('${GOAL_STRIPE_ID}', '${ORG_ID}', 'Stripe Purchase', 'conversion', '${escSql(JSON.stringify({ source: "stripe", events: ["charge.succeeded"] }))}', 4900, 1, 'revenue_source', 1, 'macro_conversion', '${now}', '${now}');`);
-
-  lines.push(`INSERT OR IGNORE INTO conversion_goals (id, organization_id, name, type, trigger_config, default_value_cents, is_primary, goal_type, is_active, category, created_at, updated_at)
-VALUES ('${GOAL_TRIAL_ID}', '${ORG_ID}', 'Trial Signup', 'conversion', '${escSql(JSON.stringify({ event_name: "trial_start" }))}', 0, 0, 'tag_event', 1, 'micro_conversion', '${now}', '${now}');`);
-
-  lines.push(`INSERT OR IGNORE INTO conversion_goals (id, organization_id, name, type, trigger_config, default_value_cents, is_primary, goal_type, is_active, category, created_at, updated_at)
-VALUES ('${GOAL_DEMO_ID}', '${ORG_ID}', 'Demo Request', 'conversion', '${escSql(JSON.stringify({ event_name: "demo_request" }))}', 0, 0, 'tag_event', 1, 'micro_conversion', '${now}', '${now}');`);
 
   // Onboarding progress (completed)
   lines.push(`INSERT OR IGNORE INTO onboarding_progress (user_id, organization_id, current_step, steps_completed, services_connected, first_sync_completed, created_at, updated_at, completed_at)
 VALUES ('${USER_ID}', '${ORG_ID}', 'completed', '["welcome","organization","flow","review"]', 3, 1, '${now}', '${now}', '${now}');`);
 
-  // Tracking config
-  const goalsJson = escSql(JSON.stringify([
-    { id: GOAL_STRIPE_ID, event_name: "charge.succeeded", source: "stripe" },
-    { id: GOAL_TRIAL_ID, event_name: "trial_start", source: "tag" },
-    { id: GOAL_DEMO_ID, event_name: "demo_request", source: "tag" },
-  ]));
+  // Tracking config (goals now derived from platform_connections.settings)
   lines.push(`INSERT OR IGNORE INTO org_tracking_configs (id, organization_id, goals, enable_fingerprinting, enable_cross_domain_tracking, enable_performance_tracking, session_timeout, batch_size, batch_timeout, snippet_complexity, created_by)
-VALUES ('otc_demo_001', '${ORG_ID}', '${goalsJson}', 1, 1, 1, 1800000, 10, 5000, 'simple', '${USER_ID}');`);
+VALUES ('otc_demo_001', '${ORG_ID}', '[]', 1, 1, 1, 1800000, 10, 5000, 'simple', '${USER_ID}');`);
 
   return lines.join("\n\n");
 }
@@ -220,13 +227,12 @@ VALUES ('otc_demo_001', '${ORG_ID}', '${goalsJson}', 1, 1, 1, 1800000, 10, 5000,
 
 interface ConversionRow {
   id: string;
-  source: "stripe" | "tag";
+  source: "stripe" | "shopify" | "jobber";
   sourceId: string;
   valueCents: number;
   timestamp: string;
   emailHash: string | null;
   anonymousId: string | null;
-  goalId: string | null;
   day: number; // day index 0-27
 }
 
@@ -235,105 +241,124 @@ function generateAnalyticsSql(): string {
   const conversions: ConversionRow[] = [];
   const now = isoStr(new Date());
 
-  // -- 1. Generate conversions (30 days) --
+  // -- 1. Generate connector_events + conversions (28 days) --
+  // All 3 webhook sources: Stripe (50%), Shopify (30%), Jobber (20%)
   for (let dayIdx = 0; dayIdx < DAYS; dayIdx++) {
     const day = addDays(START_DATE, dayIdx);
     const weekend = isWeekend(day);
-    const convCount = weekend ? rng.int(2, 4) : rng.int(5, 8);
+    const convCount = weekend ? rng.int(3, 5) : rng.int(6, 10);
 
     for (let ci = 0; ci < convCount; ci++) {
-      const isStripe = rng.chance(0.6);
-      const source = isStripe ? "stripe" as const : "tag" as const;
+      const roll = rng.next();
+      const source: "stripe" | "shopify" | "jobber" = roll < 0.5 ? "stripe" : roll < 0.8 ? "shopify" : "jobber";
       const id = `conv_demo_${pad(dayIdx)}_${pad(ci)}`;
-      const valueCents = isStripe ? pickPlanValue() : 0;
-      const hour = rng.int(9, 18); // 9am-6pm
+      const valueCents = source === "stripe" ? pickPlanValue()
+        : source === "shopify" ? rng.int(1500, 12000) // $15-$120
+        : rng.int(15000, 85000); // $150-$850 (Jobber field service)
+      const hour = rng.int(9, 18);
       const minute = rng.int(0, 59);
       const second = rng.int(0, 59);
       const ts = new Date(day);
       ts.setUTCHours(hour, minute, second);
 
-      // 60% have anonymous_id, 30% null (handoff candidates), 10% null+no click
+      // 60% have anonymous_id, 40% null (handoff candidates)
       const hasAnonId = rng.chance(0.6);
       const anonId = hasAnonId ? `anon_demo_${dayIdx}_${ci}` : null;
 
-      // Email hash for stripe conversions
-      const custEmail = isStripe ? `customer${dayIdx * 10 + ci}@example.com` : null;
-      const eHash = custEmail ? emailHash(custEmail) : null;
+      // Email hash for all webhook conversions (they all have customer info)
+      const custEmail = `customer${dayIdx * 10 + ci}@example.com`;
+      const eHash = emailHash(custEmail);
 
-      // Goal assignment
-      let goalId: string | null = null;
-      if (isStripe) {
-        goalId = GOAL_STRIPE_ID;
-      } else {
-        goalId = rng.chance(0.5) ? GOAL_TRIAL_ID : GOAL_DEMO_ID;
-      }
+      const sourceId = source === "stripe" ? `ch_demo_${dayIdx}_${ci}`
+        : source === "shopify" ? `order_demo_${dayIdx}_${ci}`
+        : `inv_demo_${dayIdx}_${ci}`;
 
       const conv: ConversionRow = {
         id,
         source,
-        sourceId: isStripe ? `ch_demo_${dayIdx}_${ci}` : `evt_demo_${dayIdx}_${ci}`,
+        sourceId,
         valueCents,
         timestamp: isoStr(ts),
         emailHash: eHash,
         anonymousId: anonId,
-        goalId,
         day: dayIdx,
       };
       conversions.push(conv);
 
-      // Attributed platform (for stripe, pick based on rng)
-      const attributedPlatform = isStripe ? (rng.chance(0.6) ? "google" : "facebook") : null;
-      const utmSource = anonId ? (rng.chance(0.5) ? "google" : "facebook") : null;
+      // Insert connector_events row (raw platform event)
+      if (source === "stripe") {
+        const metadata = escSql(JSON.stringify({
+          billing_reason: rng.chance(0.6) ? "subscription_cycle" : null,
+          payment_method_type: "card",
+          has_invoice: rng.chance(0.6),
+        }));
+        lines.push(`INSERT OR IGNORE INTO connector_events (id, organization_id, source_platform, event_type, external_id, customer_external_id, customer_email_hash, value_cents, currency, status, transacted_at, created_at_platform, metadata)
+VALUES ('ce_${id}', '${ORG_ID}', 'stripe', 'charge', '${sourceId}', 'cus_demo_${dayIdx}_${ci}', '${eHash}', ${valueCents}, 'USD', 'succeeded', '${conv.timestamp}', '${conv.timestamp}', '${metadata}');`);
+      } else if (source === "shopify") {
+        const metadata = escSql(JSON.stringify({
+          order_number: 1000 + dayIdx * 10 + ci,
+          financial_status: "paid",
+          fulfillment_status: rng.chance(0.7) ? "fulfilled" : "unfulfilled",
+          line_items_count: rng.int(1, 4),
+        }));
+        lines.push(`INSERT OR IGNORE INTO connector_events (id, organization_id, source_platform, event_type, external_id, customer_external_id, customer_email_hash, value_cents, currency, status, transacted_at, created_at_platform, metadata)
+VALUES ('ce_${id}', '${ORG_ID}', 'shopify', 'order', '${sourceId}', 'shopify_cust_${dayIdx}_${ci}', '${eHash}', ${valueCents}, 'USD', 'paid', '${conv.timestamp}', '${conv.timestamp}', '${metadata}');`);
+      } else {
+        const metadata = escSql(JSON.stringify({
+          invoice_number: `INV-${1000 + dayIdx * 10 + ci}`,
+          job_type: rng.pick(["Plumbing", "Electrical", "HVAC", "Landscaping", "Cleaning"]),
+          client_name: `Client ${rng.int(1, 20)}`,
+        }));
+        lines.push(`INSERT OR IGNORE INTO connector_events (id, organization_id, source_platform, event_type, external_id, customer_external_id, customer_email_hash, value_cents, currency, status, transacted_at, created_at_platform, metadata)
+VALUES ('ce_${id}', '${ORG_ID}', 'jobber', 'invoice', '${sourceId}', 'jobber_client_${dayIdx}_${ci}', '${eHash}', ${valueCents}, 'USD', 'PAID', '${conv.timestamp}', '${conv.timestamp}', '${metadata}');`);
+      }
 
-      lines.push(`INSERT OR IGNORE INTO conversions (id, organization_id, conversion_source, source_id, value_cents, currency, conversion_timestamp, customer_email_hash, anonymous_id, attributed_platform, utm_source, linked_goal_id, link_confidence, link_method, linked_at, created_at, updated_at)
-VALUES ('${id}', '${ORG_ID}', '${source}', '${conv.sourceId}', ${valueCents}, 'USD', '${conv.timestamp}', ${eHash ? `'${eHash}'` : "NULL"}, ${anonId ? `'${anonId}'` : "NULL"}, ${attributedPlatform ? `'${attributedPlatform}'` : "NULL"}, ${utmSource ? `'${utmSource}'` : "NULL"}, ${goalId ? `'${goalId}'` : "NULL"}, ${goalId ? "0.95" : "NULL"}, ${goalId ? "'direct_link'" : "NULL"}, ${goalId ? `'${conv.timestamp}'` : "NULL"}, '${now}', '${now}');`);
+      // Attribution — will be refined when real ad platforms are connected
+      const utmSource = anonId ? rng.pick(["google", "facebook", "direct", "organic"]) : null;
+
+      lines.push(`INSERT OR IGNORE INTO conversions (id, organization_id, conversion_source, source_id, value_cents, currency, conversion_timestamp, customer_email_hash, anonymous_id, attributed_platform, utm_source, created_at, updated_at)
+VALUES ('${id}', '${ORG_ID}', '${source}', '${conv.sourceId}', ${valueCents}, 'USD', '${conv.timestamp}', '${eHash}', ${anonId ? `'${anonId}'` : "NULL"}, ${utmSource && utmSource !== "direct" && utmSource !== "organic" ? `'${utmSource}'` : "NULL"}, ${utmSource ? `'${utmSource}'` : "NULL"}, '${now}', '${now}');`);
     }
   }
 
-  // -- 2. Goal conversions (linked subset ~60% of all) --
-  const linkedConversions = conversions.filter((c) => c.goalId !== null);
-  for (const c of linkedConversions) {
-    const gcId = `gc_${c.id}`;
-    const sourcePlatform = c.source === "stripe" ? "stripe" : null;
-    lines.push(`INSERT OR IGNORE INTO goal_conversions (id, organization_id, goal_id, conversion_id, conversion_source, source_platform, source_event_id, value_cents, currency, conversion_timestamp, created_at)
-VALUES ('${gcId}', '${ORG_ID}', '${c.goalId}', '${c.id}', '${c.source === "stripe" ? "connector" : "tag"}', ${sourcePlatform ? `'${sourcePlatform}'` : "NULL"}, '${c.sourceId}', ${c.valueCents}, 'USD', '${c.timestamp}', '${now}');`);
-  }
-
-  // -- 3. CAC history (30 days) --
+  // -- 2. CAC history (28 days) — spend is 0 until real ad platforms connected --
   for (let dayIdx = 0; dayIdx < DAYS; dayIdx++) {
     const day = addDays(START_DATE, dayIdx);
     const ds = dateStr(day);
 
-    // Slight upward trend
-    const trendMultiplier = 1 + dayIdx * 0.01;
-    const googleSpend = Math.round(rng.int(GOOGLE_SPEND_MIN, GOOGLE_SPEND_MAX) * trendMultiplier);
-    const metaSpend = Math.round(rng.int(META_SPEND_MIN, META_SPEND_MAX) * trendMultiplier);
-    const totalSpend = googleSpend + metaSpend;
-
     const dayConversions = conversions.filter((c) => c.day === dayIdx);
     const stripeConvs = dayConversions.filter((c) => c.source === "stripe");
-    const tagConvs = dayConversions.filter((c) => c.source === "tag");
+    const shopifyConvs = dayConversions.filter((c) => c.source === "shopify");
+    const jobberConvs = dayConversions.filter((c) => c.source === "jobber");
     const totalConvs = dayConversions.length;
     const totalRevenue = dayConversions.reduce((s, c) => s + c.valueCents, 0);
     const stripeRevenue = stripeConvs.reduce((s, c) => s + c.valueCents, 0);
-    const goalConvs = dayConversions.filter((c) => c.goalId !== null).length;
-    const platformConvs = 0; // we don't have platform-reported conversions in this seed
+    const shopifyRevenue = shopifyConvs.reduce((s, c) => s + c.valueCents, 0);
+    const jobberRevenue = jobberConvs.reduce((s, c) => s + c.valueCents, 0);
 
-    const cac = totalConvs > 0 ? Math.round(totalSpend / totalConvs) : 0;
+    // No ad spend yet — connect real Google/Meta to populate
+    const totalSpend = 0;
+    const cac = 0;
 
     const cacId = `cac_demo_${pad(dayIdx)}`;
-    lines.push(`INSERT OR IGNORE INTO cac_history (id, organization_id, date, spend_cents, conversions, revenue_cents, cac_cents, conversions_goal, conversions_platform, conversion_source, goal_ids, revenue_goal_cents, conversions_stripe, conversions_shopify, conversions_jobber, conversions_tag, revenue_stripe_cents, revenue_shopify_cents, revenue_jobber_cents, created_at)
-VALUES ('${cacId}', '${ORG_ID}', '${ds}', ${totalSpend}, ${totalConvs}, ${totalRevenue}, ${cac}, ${goalConvs}, ${platformConvs}, 'goal', '${escSql(JSON.stringify([GOAL_STRIPE_ID]))}', ${stripeRevenue}, ${stripeConvs.length}, 0, 0, ${tagConvs.length}, ${stripeRevenue}, 0, 0, '${now}');`);
+    const perSource: Record<string, { conversions: number; revenue_cents: number }> = {};
+    if (stripeConvs.length > 0) perSource.stripe = { conversions: stripeConvs.length, revenue_cents: stripeRevenue };
+    if (shopifyConvs.length > 0) perSource.shopify = { conversions: shopifyConvs.length, revenue_cents: shopifyRevenue };
+    if (jobberConvs.length > 0) perSource.jobber = { conversions: jobberConvs.length, revenue_cents: jobberRevenue };
+    const perSourceJson = escSql(JSON.stringify(perSource));
+
+    lines.push(`INSERT OR IGNORE INTO cac_history (id, organization_id, date, spend_cents, conversions, revenue_cents, cac_cents, conversions_goal, conversions_platform, conversion_source, revenue_goal_cents, per_source_json, created_at)
+VALUES ('${cacId}', '${ORG_ID}', '${ds}', ${totalSpend}, ${totalConvs}, ${totalRevenue}, ${cac}, ${totalConvs}, 0, 'goal', ${totalRevenue}, '${perSourceJson}', '${now}');`);
   }
 
-  // -- 4. Handoff patterns --
+  // -- 3. Handoff patterns --
   lines.push(`INSERT OR IGNORE INTO handoff_patterns (id, organization_id, click_destination_hostname, conversion_source, observation_count, match_count, match_rate, avg_handoff_to_conversion_seconds, p50_seconds, p95_seconds, min_seconds, max_seconds, first_seen_at, last_seen_at, is_known_provider, created_at, updated_at)
 VALUES ('hp_demo_checkout', '${ORG_ID}', 'checkout.stripe.com', 'stripe', 100, 80, 0.80, 65.0, 45.0, 120.0, 12.0, 180.0, '2026-02-01 10:00:00', '2026-02-13 18:00:00', 1, '${now}', '${now}');`);
 
   lines.push(`INSERT OR IGNORE INTO handoff_patterns (id, organization_id, click_destination_hostname, conversion_source, observation_count, match_count, match_rate, avg_handoff_to_conversion_seconds, p50_seconds, p95_seconds, min_seconds, max_seconds, first_seen_at, last_seen_at, is_known_provider, created_at, updated_at)
 VALUES ('hp_demo_pay', '${ORG_ID}', 'pay.stripe.com', 'stripe', 30, 21, 0.70, 50.0, 35.0, 90.0, 8.0, 150.0, '2026-02-07 09:00:00', '2026-02-13 17:00:00', 1, '${now}', '${now}');`);
 
-  // -- 5. Handoff observations (last 7 days: Feb 7-13) --
+  // -- 4. Handoff observations (last 7 days: Feb 7-13) --
   let obsIdx = 0;
   for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
     const dayIdx = 6 + dayOffset; // Feb 7 = dayIdx 6
@@ -370,7 +395,7 @@ VALUES ('${obsId}', '${ORG_ID}', '${clickEventId}', '${anonId}', '${sessionId}',
     }
   }
 
-  // -- 6. Conversion daily summary --
+  // -- 5. Conversion daily summary --
   for (let dayIdx = 0; dayIdx < DAYS; dayIdx++) {
     const day = addDays(START_DATE, dayIdx);
     const ds = dateStr(day);
@@ -391,100 +416,29 @@ VALUES ('${ORG_ID}', '${ds}', '${src}', ${data.count}, ${data.value}, ${data.cus
     }
   }
 
-  // -- 7. Conversion attribution (first + last touch) --
-  const stripeConvs = conversions.filter((c) => c.source === "stripe");
-  for (const c of stripeConvs) {
-    const platforms = ["google", "facebook"];
-    const touchPlatform = rng.pick(platforms);
+  // -- 6. Conversion attribution (first + last touch) — all webhook conversions --
+  for (const c of conversions) {
+    if (c.valueCents === 0) continue; // skip zero-value
+    const channels = ["google", "facebook", "direct", "organic_search"];
+    const touchPlatform = rng.pick(channels);
+    const touchType = touchPlatform === "google" || touchPlatform === "facebook" ? "ad_click" : "page_view";
 
     // First touch
     lines.push(`INSERT OR IGNORE INTO conversion_attribution (id, organization_id, conversion_id, model, touchpoint_type, touchpoint_platform, touchpoint_timestamp, credit_percent, credit_value_cents, touchpoint_position, total_touchpoints, created_at)
-VALUES ('ca_first_${c.id}', '${ORG_ID}', '${c.id}', 'first_touch', 'ad_click', '${touchPlatform}', '${c.timestamp}', 1.0, ${c.valueCents}, 1, 1, '${now}');`);
+VALUES ('ca_first_${c.id}', '${ORG_ID}', '${c.id}', 'first_touch', '${touchType}', '${touchPlatform}', '${c.timestamp}', 1.0, ${c.valueCents}, 1, 1, '${now}');`);
 
-    // Last touch (sometimes different platform)
-    const lastPlatform = rng.chance(0.3) ? rng.pick(platforms) : touchPlatform;
+    // Last touch (sometimes different channel)
+    const lastPlatform = rng.chance(0.3) ? rng.pick(channels) : touchPlatform;
+    const lastType = lastPlatform === "google" || lastPlatform === "facebook" ? "ad_click" : "page_view";
     lines.push(`INSERT OR IGNORE INTO conversion_attribution (id, organization_id, conversion_id, model, touchpoint_type, touchpoint_platform, touchpoint_timestamp, credit_percent, credit_value_cents, touchpoint_position, total_touchpoints, created_at)
-VALUES ('ca_last_${c.id}', '${ORG_ID}', '${c.id}', 'last_touch', 'ad_click', '${lastPlatform}', '${c.timestamp}', 1.0, ${c.valueCents}, 1, 1, '${now}');`);
+VALUES ('ca_last_${c.id}', '${ORG_ID}', '${c.id}', 'last_touch', '${lastType}', '${lastPlatform}', '${c.timestamp}', 1.0, ${c.valueCents}, 1, 1, '${now}');`);
   }
 
-  // -- 8. Ad campaigns in unified tables --
-  const campaigns = [
-    { id: "camp_google_brand", platform: "google", accountId: "123-456-7890", campaignId: "ggl_brand_001", name: "Brand - Search", objective: "search" },
-    { id: "camp_google_retarget", platform: "google", accountId: "123-456-7890", campaignId: "ggl_retarget_001", name: "Retargeting - Display", objective: "display" },
-    { id: "camp_meta_prospecting", platform: "facebook", accountId: "act_demo_meta", campaignId: "fb_prospect_001", name: "Prospecting - Lookalike", objective: "conversions" },
-    { id: "camp_meta_retarget", platform: "facebook", accountId: "act_demo_meta", campaignId: "fb_retarget_001", name: "Retargeting - Website Visitors", objective: "conversions" },
-  ];
+  // Ad campaigns and ad_metrics are NOT seeded — connect real Google/Meta via OAuth.
+  // stripe_charges and jobber_jobs are legacy tables (not in new schema).
+  // All conversion data lives in connector_events + conversions.
 
-  for (const camp of campaigns) {
-    lines.push(`INSERT OR IGNORE INTO ad_campaigns (id, organization_id, platform, account_id, campaign_id, campaign_name, campaign_status, objective, last_synced_at, created_at, updated_at)
-VALUES ('${camp.id}', '${ORG_ID}', '${camp.platform}', '${camp.accountId}', '${camp.campaignId}', '${camp.name}', 'active', '${camp.objective}', '${now}', '${now}', '${now}');`);
-  }
-
-  // Ad metrics per campaign per day
-  for (let dayIdx = 0; dayIdx < DAYS; dayIdx++) {
-    const day = addDays(START_DATE, dayIdx);
-    const ds = dateStr(day);
-    const weekend = isWeekend(day);
-
-    for (const camp of campaigns) {
-      const isGoogle = camp.platform === "google";
-      const baseImpressions = weekend ? rng.int(500, 1500) : rng.int(1500, 4000);
-      const ctrVal = 0.02 + rng.next() * 0.04; // 2-6% CTR
-      const clicks = Math.round(baseImpressions * ctrVal);
-      const spendCents = isGoogle
-        ? Math.round((rng.int(GOOGLE_SPEND_MIN, GOOGLE_SPEND_MAX) / 2) * (1 + dayIdx * 0.01))
-        : Math.round((rng.int(META_SPEND_MIN, META_SPEND_MAX) / 2) * (1 + dayIdx * 0.01));
-      const convs = rng.int(0, weekend ? 2 : 4);
-      const ctrCalc = baseImpressions > 0 ? (clicks / baseImpressions) : 0;
-      const cpcCents = clicks > 0 ? Math.round(spendCents / clicks) : 0;
-      const cpmCents = baseImpressions > 0 ? Math.round((spendCents / baseImpressions) * 1000) : 0;
-
-      lines.push(`INSERT OR IGNORE INTO ad_metrics (organization_id, platform, entity_type, entity_ref, metric_date, impressions, clicks, spend_cents, conversions, ctr, cpc_cents, cpm_cents, created_at)
-VALUES ('${ORG_ID}', '${camp.platform}', 'campaign', '${camp.id}', '${ds}', ${baseImpressions}, ${clicks}, ${spendCents}, ${convs}, ${ctrCalc.toFixed(4)}, ${cpcCents}, ${cpmCents}, '${now}');`);
-    }
-  }
-
-  // -- 9. Stripe charges (mirror existing stripe conversions) --
-  const stripeConvs2 = conversions.filter((c) => c.source === "stripe");
-  for (const c of stripeConvs2) {
-    const chargeId = c.sourceId; // ch_demo_XX_YY
-    const custId = `cus_demo_${c.id.replace("conv_demo_", "")}`;
-    const custEmailHash = c.emailHash || "NULL";
-    const subId = rng.chance(0.6) ? `sub_demo_${c.id.replace("conv_demo_", "")}` : null;
-    const chargeType = subId ? "subscription" : "one_time";
-
-    lines.push(`INSERT OR IGNORE INTO stripe_charges (id, organization_id, connection_id, charge_id, customer_id, customer_email_hash, has_invoice, amount_cents, currency, status, payment_method_type, stripe_created_at, charge_type, subscription_id, created_at)
-VALUES ('sc_${c.id}', '${ORG_ID}', '${CONN_STRIPE_ID}', '${chargeId}', '${custId}', ${c.emailHash ? `'${c.emailHash}'` : "NULL"}, ${subId ? 1 : 0}, ${c.valueCents}, 'USD', 'succeeded', 'card', '${c.timestamp}', '${chargeType}', ${subId ? `'${subId}'` : "NULL"}, '${now}');`);
-  }
-
-  // -- 10. Jobber jobs (1-2 per day, completed) --
-  for (let dayIdx = 0; dayIdx < DAYS; dayIdx++) {
-    const day = addDays(START_DATE, dayIdx);
-    const weekend = isWeekend(day);
-    const jobCount = weekend ? rng.int(0, 1) : rng.int(1, 2);
-
-    for (let ji = 0; ji < jobCount; ji++) {
-      const jobId = `jj_demo_${pad(dayIdx)}_${pad(ji)}`;
-      const jobberId = `job_${1000 + dayIdx * 10 + ji}`;
-      const jobNum = `J-${1000 + dayIdx * 10 + ji}`;
-      const clientId = `client_${rng.int(1, 20)}`;
-      const clientName = `Client ${clientId.replace("client_", "")}`;
-      const amount = rng.int(15000, 85000); // $150-$850
-      const hour = rng.int(8, 16);
-      const completedAt = new Date(day);
-      completedAt.setUTCHours(hour, rng.int(0, 59), rng.int(0, 59));
-      const createdAt = new Date(completedAt.getTime() - rng.int(1, 5) * 86400000); // 1-5 days before
-      const jobTypes = ["Plumbing", "Electrical", "HVAC", "Landscaping", "Cleaning"];
-      const jobType = rng.pick(jobTypes);
-      const leadSources = ["google", "referral", "website", "facebook", "yelp"];
-      const leadSource = rng.pick(leadSources);
-
-      lines.push(`INSERT OR IGNORE INTO jobber_jobs (id, organization_id, connection_id, jobber_job_id, job_number, client_id, client_name, title, job_type, total_amount_cents, currency, job_status, is_completed, completed_at, lead_source, jobber_created_at, created_at, updated_at)
-VALUES ('${jobId}', '${ORG_ID}', '${CONN_JOBBER_ID}', '${jobberId}', '${jobNum}', '${clientId}', '${escSql(clientName)}', '${jobType} Service', '${jobType.toLowerCase()}', ${amount}, 'USD', 'completed', 1, '${isoStr(completedAt)}', '${leadSource}', '${isoStr(createdAt)}', '${now}', '${now}');`);
-    }
-  }
-
-  // -- 11. Journey analytics (1 pre-computed row for the month) --
+  // -- 7. Journey analytics --
   const channelDist = JSON.stringify({ google: 0.35, facebook: 0.25, direct: 0.20, organic_search: 0.12, email: 0.08 });
   const entryChannels = JSON.stringify({ google: 0.40, direct: 0.25, facebook: 0.20, organic_search: 0.10, email: 0.05 });
   const exitChannels = JSON.stringify({ direct: 0.35, google: 0.25, facebook: 0.20, email: 0.12, organic_search: 0.08 });
@@ -507,11 +461,11 @@ VALUES ('${jobId}', '${ORG_ID}', '${CONN_JOBBER_ID}', '${jobberId}', '${jobNum}'
   lines.push(`INSERT OR IGNORE INTO journey_analytics (org_tag, channel_distribution, entry_channels, exit_channels, transition_matrix, total_sessions, converting_sessions, conversion_rate, avg_path_length, common_paths, data_quality_level, data_quality_report, total_conversions, matched_conversions, match_breakdown, period_start, period_end, computed_at)
 VALUES ('${TAG}', '${escSql(channelDist)}', '${escSql(entryChannels)}', '${escSql(exitChannels)}', '${escSql(transMatrix)}', 2500, 153, 0.061, 2.8, '${escSql(commonPaths)}', 3, '${escSql(JSON.stringify({ level: 3, description: "Good quality with identity matching" }))}', 153, 120, '${escSql(matchBreakdown)}', '2026-02-01', '2026-02-28', '${now}');`);
 
-  // -- 12. Journey touchpoints (~200 sessions with 2-4 touchpoints each) --
+  // -- 8. Touchpoints --
   const channels = ["google", "facebook", "direct", "organic_search", "email"];
-  const touchpointTypes: Record<string, string> = {
-    google: "ad_click", facebook: "ad_click", direct: "direct",
-    organic_search: "organic_search", email: "email",
+  const touchpointEventTypes: Record<string, string> = {
+    google: "ad_click", facebook: "ad_click", direct: "page_view",
+    organic_search: "page_view", email: "email_click",
   };
   let tpIdx = 0;
   for (let dayIdx = 0; dayIdx < DAYS; dayIdx++) {
@@ -526,56 +480,49 @@ VALUES ('${TAG}', '${escSql(channelDist)}', '${escSql(entryChannels)}', '${escSq
       const baseHour = rng.int(8, 20);
 
       for (let ti = 0; ti < tpCount; ti++) {
-        const tpId = `jt_demo_${pad(tpIdx)}`;
+        const tpId = `tp_demo_${pad(tpIdx)}`;
         const channel = ti === tpCount - 1 && rng.chance(0.4) ? "direct" : rng.pick(channels);
-        const tpType = touchpointTypes[channel];
+        const evtType = touchpointEventTypes[channel];
         const ts = new Date(day);
         ts.setUTCHours(baseHour, rng.int(0, 59) + ti * 10, rng.int(0, 59));
 
-        const isConversion = ti === tpCount - 1 && rng.chance(0.15);
-        const convId = isConversion ? `conv_demo_${pad(dayIdx)}_${pad(si % 8)}` : null;
-        const convValue = isConversion ? pickPlanValue() : null;
-
         const utmSource = channel === "google" || channel === "facebook" ? channel : null;
         const utmMedium = channel === "google" ? "cpc" : channel === "facebook" ? "social" : null;
+        const utmCampaign = utmSource ? rng.pick(["brand_q1", "retarget_feb", "demo_launch"]) : null;
+        const pagePath = rng.pick(["/", "/pricing", "/features", "/demo", "/signup"]);
 
-        lines.push(`INSERT OR IGNORE INTO journey_touchpoints (id, organization_id, anonymous_id, session_id, touchpoint_type, touchpoint_source, touchpoint_timestamp, utm_source, utm_medium, page_path, conversion_id, conversion_value_cents, touchpoint_number, is_first_touch, is_last_touch, created_at)
-VALUES ('${tpId}', '${ORG_ID}', '${anonId}', '${sessionId}', '${tpType}', '${channel}', '${isoStr(ts)}', ${utmSource ? `'${utmSource}'` : "NULL"}, ${utmMedium ? `'${utmMedium}'` : "NULL"}, '${rng.pick(["/", "/pricing", "/features", "/demo", "/signup"])}', ${convId ? `'${convId}'` : "NULL"}, ${convValue ?? "NULL"}, ${ti + 1}, ${ti === 0 ? 1 : 0}, ${ti === tpCount - 1 ? 1 : 0}, '${now}');`);
+        lines.push(`INSERT OR IGNORE INTO touchpoints (id, org_tag, anonymous_id, session_id, touchpoint_ts, event_type, page_path, channel_group, utm_source, utm_medium, utm_campaign, device_type, geo_country, created_at)
+VALUES ('${tpId}', '${TAG}', '${anonId}', '${sessionId}', '${isoStr(ts)}', '${evtType}', '${pagePath}', '${channel}', ${utmSource ? `'${utmSource}'` : "NULL"}, ${utmMedium ? `'${utmMedium}'` : "NULL"}, ${utmCampaign ? `'${utmCampaign}'` : "NULL"}, '${rng.pick(["desktop", "mobile", "tablet"])}', 'US', '${now}');`);
 
         tpIdx++;
       }
     }
   }
 
-  // -- 13. Event daily summary (3 event types × 28 days) --
-  const eventTypes = ["page_view", "conversion", "click"];
+  // -- 9. Daily metrics --
   for (let dayIdx = 0; dayIdx < DAYS; dayIdx++) {
     const day = addDays(START_DATE, dayIdx);
     const ds = dateStr(day);
     const weekend = isWeekend(day);
 
-    for (const evtType of eventTypes) {
-      let count: number, visitors: number, sessions: number;
-      if (evtType === "page_view") {
-        count = weekend ? rng.int(200, 500) : rng.int(500, 1200);
-        visitors = Math.round(count * 0.6);
-        sessions = Math.round(count * 0.4);
-      } else if (evtType === "conversion") {
-        count = weekend ? rng.int(2, 5) : rng.int(5, 12);
-        visitors = count;
-        sessions = count;
-      } else {
-        count = weekend ? rng.int(50, 150) : rng.int(150, 400);
-        visitors = Math.round(count * 0.7);
-        sessions = Math.round(count * 0.5);
-      }
+    const pageViews = weekend ? rng.int(200, 500) : rng.int(500, 1200);
+    const clicks = weekend ? rng.int(50, 150) : rng.int(150, 400);
+    const convCount = weekend ? rng.int(2, 5) : rng.int(5, 12);
+    const totalEvents = pageViews + clicks + convCount;
+    const sessions = Math.round(pageViews * 0.4);
+    const users = Math.round(pageViews * 0.6);
+    const newUsers = Math.round(users * 0.3);
+    const returningUsers = users - newUsers;
+    const revenueCents = convCount * rng.int(2900, 9900);
+    const convRate = totalEvents > 0 ? (convCount / totalEvents) : 0;
 
-      lines.push(`INSERT OR IGNORE INTO event_daily_summary (organization_id, org_tag, summary_date, event_type, event_count, unique_visitors, unique_sessions, created_at)
-VALUES ('${ORG_ID}', '${TAG}', '${ds}', '${evtType}', ${count}, ${visitors}, ${sessions}, '${now}');`);
-    }
+    const byChannel = escSql(JSON.stringify({ google: 0.35, facebook: 0.25, direct: 0.20, organic: 0.12, email: 0.08 }));
+
+    lines.push(`INSERT OR IGNORE INTO daily_metrics (org_tag, date, total_events, page_views, clicks, sessions, users, new_users, returning_users, conversions, revenue_cents, conversion_rate, by_channel, created_at)
+VALUES ('${TAG}', '${ds}', ${totalEvents}, ${pageViews}, ${clicks}, ${sessions}, ${users}, ${newUsers}, ${returningUsers}, ${convCount}, ${revenueCents}, ${convRate.toFixed(4)}, '${byChannel}', '${now}');`);
   }
 
-  // -- 14. Event hourly summary (last 7 days, page_view + conversion) --
+  // -- 10. Hourly metrics --
   for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
     const dayIdx = DAYS - 7 + dayOffset; // Last 7 days
     const day = addDays(START_DATE, dayIdx);
@@ -586,37 +533,25 @@ VALUES ('${ORG_ID}', '${TAG}', '${ds}', '${evtType}', ${count}, ${visitors}, ${s
       const hourStr = hourTs.toISOString().replace(/:\d{2}\.\d{3}Z$/, ":00Z");
       const isBusinessHour = hour >= 9 && hour <= 18;
 
-      for (const evtType of ["page_view", "conversion"]) {
-        let count: number, visitors: number;
-        if (evtType === "page_view") {
-          count = isBusinessHour ? rng.int(20, 80) : rng.int(2, 15);
-          visitors = Math.round(count * 0.6);
-        } else {
-          count = isBusinessHour ? rng.int(0, 3) : 0;
-          visitors = count;
-        }
-        if (count === 0) continue;
+      const pageViews = isBusinessHour ? rng.int(20, 80) : rng.int(2, 15);
+      const clicks = isBusinessHour ? rng.int(5, 20) : rng.int(0, 3);
+      const convs = isBusinessHour ? rng.int(0, 3) : 0;
+      const totalEvents = pageViews + clicks + convs;
+      const sessions = Math.round(pageViews * 0.4);
+      const users = Math.round(pageViews * 0.6);
 
-        lines.push(`INSERT OR IGNORE INTO event_hourly_summary (organization_id, summary_hour, event_type, event_count, unique_visitors, created_at)
-VALUES ('${ORG_ID}', '${hourStr}', '${evtType}', ${count}, ${visitors}, '${now}');`);
-      }
+      if (totalEvents === 0) continue;
+
+      lines.push(`INSERT OR IGNORE INTO hourly_metrics (org_tag, hour, total_events, page_views, clicks, sessions, users, conversions, created_at)
+VALUES ('${TAG}', '${hourStr}', ${totalEvents}, ${pageViews}, ${clicks}, ${sessions}, ${users}, ${convs}, '${now}');`);
     }
   }
 
-  return lines.join("\n\n");
-}
-
-// ---------------------------------------------------------------------------
-// AI_DB data
-// ---------------------------------------------------------------------------
-
-function generateAiDbSql(): string {
-  const lines: string[] = [];
-  const now = isoStr(new Date());
-  const expires = isoStr(addDays(new Date(), 30));
+  // -- 11. Attribution model results --
   const computeDate = dateStr(new Date());
+  const expires = isoStr(addDays(new Date(), 30));
 
-  // Attribution model results — Markov Chain
+  // Markov Chain
   const markovChannels: Array<{ channel: string; credit: number; removal: number }> = [
     { channel: "google", credit: 0.38, removal: 0.42 },
     { channel: "facebook", credit: 0.28, removal: 0.31 },
@@ -630,7 +565,7 @@ function generateAiDbSql(): string {
 VALUES ('amr_markov_${ch.channel}', '${ORG_ID}', 'markov_chain', '${ch.channel}', ${ch.credit}, ${ch.removal}, NULL, '${computeDate}', 153, 2500, '${expires}', '${now}');`);
   }
 
-  // Attribution model results — Shapley Value
+  // Shapley Value
   const shapleyChannels: Array<{ channel: string; credit: number; shapley: number }> = [
     { channel: "google", credit: 0.35, shapley: 0.36 },
     { channel: "facebook", credit: 0.26, shapley: 0.27 },
@@ -647,6 +582,9 @@ VALUES ('amr_shapley_${ch.channel}', '${ORG_ID}', 'shapley_value', '${ch.channel
   return lines.join("\n\n");
 }
 
+// AI_DB has been merged into DB (core tables) and ANALYTICS_DB (attribution_model_results).
+// No separate AI_DB seed function needed.
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -655,17 +593,17 @@ async function main() {
   const apiDir = join(import.meta.dirname ?? __dirname, "..");
   const tmpDir = join(apiDir, ".seed-tmp");
 
-  console.log("=== ClearLift Local Seed Script ===\n");
+  console.log("=== AdBliss Local Seed Script ===\n");
 
   // 1. Create temp dir
   mkdirSync(tmpDir, { recursive: true });
 
-  // 2. Apply migrations (run each DB separately for better error handling)
-  console.log("[1/4] Applying D1 migrations...");
-  const dbs = ["DB", "ANALYTICS_DB", "AI_DB"];
+  // 2. Apply migrations (2 databases: DB + ANALYTICS_DB)
+  console.log("[1/5] Applying D1 migrations...");
+  const dbs = ["DB", "ANALYTICS_DB"];
   for (const db of dbs) {
     try {
-      execSync(`npx wrangler d1 migrations apply ${db} --local`, {
+      execSync(`npx wrangler d1 migrations apply ${db} --local --env local`, {
         cwd: apiDir,
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, CI: "true" },
@@ -691,22 +629,17 @@ async function main() {
 
   const dbSql = generateDbSql();
   const analyticsDbSql = generateAnalyticsSql();
-  const aiDbSql = generateAiDbSql();
 
   const dbSqlPath = join(tmpDir, "seed-db.sql");
   const analyticsSqlPath = join(tmpDir, "seed-analytics.sql");
-  const aiSqlPath = join(tmpDir, "seed-ai.sql");
 
   writeFileSync(dbSqlPath, dbSql, "utf-8");
   writeFileSync(analyticsSqlPath, analyticsDbSql, "utf-8");
-  writeFileSync(aiSqlPath, aiDbSql, "utf-8");
 
   const dbLines = dbSql.split("\n").filter((l) => l.startsWith("INSERT")).length;
   const analyticsLines = analyticsDbSql.split("\n").filter((l) => l.startsWith("INSERT")).length;
-  const aiLines = aiDbSql.split("\n").filter((l) => l.startsWith("INSERT")).length;
-  console.log(`      DB:           ${dbLines} INSERT statements`);
-  console.log(`      ANALYTICS_DB: ${analyticsLines} INSERT statements`);
-  console.log(`      AI_DB:        ${aiLines} INSERT statements\n`);
+  console.log(`      DB (adbliss-core):           ${dbLines} INSERT statements`);
+  console.log(`      ANALYTICS_DB (adbliss-analytics-0): ${analyticsLines} INSERT statements\n`);
 
   // 4. Execute SQL via wrangler
   console.log("[3/5] Inserting into local D1...");
@@ -714,26 +647,86 @@ async function main() {
   const dbExecs: Array<{ name: string; db: string; path: string }> = [
     { name: "DB", db: "DB", path: dbSqlPath },
     { name: "ANALYTICS_DB", db: "ANALYTICS_DB", path: analyticsSqlPath },
-    { name: "AI_DB", db: "AI_DB", path: aiSqlPath },
   ];
 
+  const BATCH_SIZE = 100; // D1 can handle ~100 statements per execute
+
   for (const { name, db, path } of dbExecs) {
+    const sql = require("fs").readFileSync(path, "utf-8");
+    const statements = sql.split(";\n\n").filter((s: string) => s.trim().length > 0);
+
+    // Batch statements to avoid D1 compound SELECT limit
+    const batches: string[] = [];
+    for (let i = 0; i < statements.length; i += BATCH_SIZE) {
+      batches.push(statements.slice(i, i + BATCH_SIZE).join(";\n") + ";");
+    }
+
+    console.log(`      ${name}: ${statements.length} statements in ${batches.length} batch(es)...`);
+
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batchPath = path.replace(".sql", `-batch${bi}.sql`);
+      writeFileSync(batchPath, batches[bi], "utf-8");
+      try {
+        execSync(`npx wrangler d1 execute ${db} --local --env local --file="${batchPath}" 2>&1`, {
+          cwd: apiDir,
+          stdio: "pipe",
+          maxBuffer: 10 * 1024 * 1024,
+        });
+      } catch (e: any) {
+        const output = e.stdout?.toString() || e.stderr?.toString() || "";
+        // Wrangler warnings are not errors — check for actual SQL errors
+        if (output.includes("SQLITE_ERROR") || output.includes("no such table") || output.includes("UNIQUE constraint failed")) {
+          console.error(`      ${name} batch ${bi + 1}/${batches.length} failed:`, output.slice(0, 500));
+          process.exit(1);
+        }
+      }
+    }
+    console.log(`      ${name} seeded.`);
+  }
+
+  // 5. Math verification — query D1 to verify end-to-end
+  console.log("\n[4/5] Verifying math end-to-end...\n");
+
+  const verifyQueries = [
+    // 1. connector_events count by platform
+    { name: "connector_events by platform", db: "ANALYTICS_DB", sql: `SELECT source_platform, status, COUNT(*) as cnt, SUM(value_cents) as total_value FROM connector_events WHERE organization_id = '${ORG_ID}' GROUP BY source_platform, status` },
+    // 2. conversions count by source
+    { name: "conversions by source", db: "ANALYTICS_DB", sql: `SELECT conversion_source, COUNT(*) as cnt, SUM(value_cents) as total_value FROM conversions WHERE organization_id = '${ORG_ID}' GROUP BY conversion_source` },
+    // 3. CAC math: sum spend, sum conversions, verify CAC = spend/convs
+    { name: "CAC totals (28 days)", db: "ANALYTICS_DB", sql: `SELECT SUM(spend_cents) as total_spend, SUM(conversions) as total_convs, SUM(revenue_cents) as total_rev, ROUND(CAST(SUM(spend_cents) AS REAL) / MAX(SUM(conversions), 1)) as computed_cac, ROUND(AVG(cac_cents)) as avg_stored_cac FROM cac_history WHERE organization_id = '${ORG_ID}'` },
+    // 4. Per-source breakdown from cac_history (via per_source_json)
+    { name: "CAC per-source sample", db: "ANALYTICS_DB", sql: `SELECT date, per_source_json FROM cac_history WHERE organization_id = '${ORG_ID}' AND per_source_json != '{}' LIMIT 3` },
+    // 5. connector_events ↔ conversions join (stripe events should match conversions)
+    { name: "connector_events→conversions match", db: "ANALYTICS_DB", sql: `SELECT COUNT(*) as matched FROM connector_events ce JOIN conversions c ON c.organization_id = ce.organization_id AND c.source_id = ce.external_id AND c.conversion_source = 'stripe' WHERE ce.organization_id = '${ORG_ID}' AND ce.source_platform = 'stripe'` },
+    // 6. platform_connections settings
+    { name: "platform_connections with conversion_events", db: "DB", sql: `SELECT platform, settings FROM platform_connections WHERE organization_id = '${ORG_ID}' AND settings != '{}' AND is_active = 1` },
+  ];
+
+  for (const q of verifyQueries) {
     try {
-      execSync(`npx wrangler d1 execute ${db} --local --file="${path}"`, {
+      const tmpSqlPath = join(tmpDir, "verify.sql");
+      writeFileSync(tmpSqlPath, q.sql + ";", "utf-8");
+      const output = execSync(`npx wrangler d1 execute ${q.db} --local --env local --file="${tmpSqlPath}" --json 2>/dev/null`, {
         cwd: apiDir,
-        stdio: "pipe",
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
       });
-      console.log(`      ${name} seeded.`);
+      // Parse JSON output
+      const results = JSON.parse(output);
+      const rows = results?.[0]?.results || [];
+      console.log(`  ✓ ${q.name}:`);
+      for (const row of rows) {
+        console.log(`    ${JSON.stringify(row)}`);
+      }
     } catch (e: any) {
-      console.error(`      ${name} seed failed:`, e.stderr?.toString().slice(0, 500));
-      process.exit(1);
+      console.log(`  ✗ ${q.name}: ${e.message?.slice(0, 200)}`);
     }
   }
 
-  // 5. Cleanup
+  // 6. Cleanup
   rmSync(tmpDir, { recursive: true, force: true });
 
-  // 6. Summary
+  // 7. Summary
   console.log("\n[5/5] Done!\n");
   console.log("=== Seed Summary ===");
   console.log(`  Org:     Acme SaaS Demo (${ORG_ID})`);
@@ -742,27 +735,26 @@ async function main() {
   console.log(`  Tag:     ${TAG}`);
   console.log(`  Domain:  ${DOMAIN}`);
   console.log("");
-  console.log("  Connectors: Stripe, Google Ads, Meta Ads");
-  console.log("  Goals:      Stripe Purchase (primary), Trial Signup, Demo Request");
+  console.log("  Webhook Connectors:");
+  console.log("    Stripe  (charge → succeeded)");
+  console.log("    Shopify (order → paid)");
+  console.log("    Jobber  (invoice → PAID)");
   console.log(`  Date range: 2026-02-01 to 2026-02-28`);
+  console.log("  Ad spend: $0 (connect real Google/Meta via OAuth)");
   console.log("");
   console.log("=== Next Steps ===");
-  console.log("  1. Start the API:");
-  console.log("     cd /Users/work/Documents/Code/clearlift-api");
-  console.log("     npx wrangler dev --env local --port 8787");
+  console.log("  1. Start the full dev stack:");
+  console.log("     cd /Users/work/Documents/Code/clearlift-page-router");
+  console.log("     ./scripts/dev-start.sh");
   console.log("");
-  console.log("  2. Test with curl:");
-  console.log(`     curl http://localhost:8787/v1/analytics/cac/summary?org_id=${ORG_ID} \\`);
-  console.log(`       -H "Authorization: Bearer ${SESSION_TOKEN}"`);
-  console.log("");
-  console.log("  3. Start the dashboard:");
-  console.log("     cd /Users/work/Documents/Code/clearlift-page-router/apps/dashboard");
-  console.log("     npm run dev");
-  console.log("");
-  console.log("  4. Set localStorage in browser console:");
-  console.log(`     localStorage.setItem('clearlift_session', '${SESSION_TOKEN}')`);
-  console.log(`     localStorage.setItem('clearlift_current_org', '${ORG_ID}')`);
+  console.log("  2. Set localStorage in browser console (http://localhost:3001):");
+  console.log(`     localStorage.setItem('adbliss_session', '${SESSION_TOKEN}')`);
+  console.log(`     localStorage.setItem('adbliss_current_org', '${ORG_ID}')`);
   console.log("     // Then reload the page");
+  console.log("");
+  console.log("  3. Connect real ad platforms via OAuth tunnel:");
+  console.log("     Start tunnel: cloudflared tunnel --config ~/.cloudflared/config-clearlift-dev.yml run");
+  console.log("     Then connect Google/Meta from the Connectors page");
   console.log("");
 }
 

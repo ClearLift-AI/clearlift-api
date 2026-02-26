@@ -140,7 +140,7 @@ export class GetEventsHistorical extends OpenAPIRoute {
       // Initialize R2SQL adapter
       const accountId = c.env.CLOUDFLARE_ACCOUNT_ID;
       const bucketName = c.env.R2_BUCKET_NAME || "clearlift-db";
-      const tableName = c.env.R2_SQL_TABLE || "clearlift.event_data_v4_1";
+      const tableName = c.env.R2_SQL_TABLE || "clearlift.event_data_v5";
 
       const r2sql = new R2SQLAdapter(accountId, bucketName, r2SqlToken, tableName);
 

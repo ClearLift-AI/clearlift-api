@@ -103,25 +103,25 @@ export class GetConversions extends OpenAPIRoute {
     }
 
     try {
-      // Check if org has revenue connectors OR active tag goals (parallel queries)
-      const [connections, tagGoals] = await Promise.all([
+      // Check if org has revenue connectors OR any connection with conversion_events configured (parallel queries)
+      const [connections, conversionConfig] = await Promise.all([
         c.env.DB.prepare(`
           SELECT platform FROM platform_connections
           WHERE organization_id = ? AND platform IN ('stripe', 'shopify', 'jobber') AND is_active = 1
         `).bind(orgId).all<{ platform: string }>(),
         c.env.DB.prepare(`
-          SELECT COUNT(*) as count FROM conversion_goals
+          SELECT COUNT(*) as count FROM platform_connections
           WHERE organization_id = ?
-            AND (goal_type = 'tag_event' OR goal_type IS NULL)
-            AND (is_active = 1 OR is_active IS NULL)
+            AND is_active = 1
+            AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
         `).bind(orgId).first<{ count: number }>(),
       ]);
 
       const hasRevenueConnectors = connections.results && connections.results.length > 0;
-      const hasTagGoals = (tagGoals?.count || 0) > 0;
+      const hasConversionConfig = (conversionConfig?.count || 0) > 0;
 
-      if (!hasRevenueConnectors && !hasTagGoals) {
-        // No revenue connections and no tag goals - return empty with setup guidance
+      if (!hasRevenueConnectors && !hasConversionConfig) {
+        // No revenue connections and no conversion config - return empty with setup guidance
         const setupStatus = await checkConversionSetupStatus(c.env.DB, orgId);
         const setupGuidance = buildDataQualityResponse(setupStatus);
 
@@ -131,7 +131,7 @@ export class GetConversions extends OpenAPIRoute {
             ...this.formatEmptyResponse(groupBy),
             data_source: 'd1_unified',
             setup_guidance: setupGuidance,
-            _message: 'No revenue source connected. Connect Stripe, Shopify, or Jobber, or configure tag conversion goals to track conversions.'
+            _message: 'No revenue source connected. Connect Stripe, Shopify, or Jobber, or configure conversion events on a connector to track conversions.'
           },
           { date_range: dateRange }
         );

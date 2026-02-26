@@ -46,12 +46,17 @@ export type ConnectorCategory =
 export type AuthType = 'oauth2' | 'oauth' | 'api_key' | 'basic' | 'internal';
 
 /**
- * Event definition for Flow Builder
+ * Event definition for connector registry.
+ * The `id` MUST match the `event_type` written by the sync workflow to `connector_events`.
+ * `statuses` and `default_status` drive the ConversionEventPicker UI.
  */
 export interface ConnectorEvent {
   id: string;
   name: string;
+  description?: string;
   fields: string[];
+  statuses?: string[];
+  default_status?: string[];
 }
 
 /**
@@ -91,7 +96,7 @@ export interface ConnectorDefinition {
   requires_api_key: boolean;
   config_schema: Record<string, any>;
 
-  // Events for Flow Builder
+  // Events schema (used by ConversionEventPicker + AI exploration tools)
   events: ConnectorEvent[];
 
   // Sync configuration
@@ -319,7 +324,7 @@ export class ConnectorRegistryService {
   }
 
   /**
-   * Get events schema for a connector (for Flow Builder)
+   * Get events schema for a connector (for ConversionEventPicker + AI tools)
    */
   async getConnectorEvents(provider: string): Promise<ConnectorEvent[]> {
     const connector = await this.getConnector(provider);

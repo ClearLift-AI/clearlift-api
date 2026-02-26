@@ -11,7 +11,8 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { getSecret } from "../../../utils/secrets";
-import { JobManager, AnalysisConfig } from "../../../services/analysis";
+import { JobManager } from "../../../services/analysis";
+import { AnalysisWorkflowParams } from "../../../workflows/analysis-helpers";
 import { structuredLog } from "../../../utils/structured-logger";
 
 export class RunAnalysis extends OpenAPIRoute {
@@ -85,10 +86,17 @@ export class RunAnalysis extends OpenAPIRoute {
       return error(c, "CONFIGURATION_ERROR", "AI service not configured — secret keys unavailable", 500);
     }
 
-    // Load settings from org (including LLM configuration)
+    // Load settings from org (including LLM configuration and budget strategy)
     const settings = await c.env.DB.prepare(`
       SELECT
         custom_instructions,
+        budget_optimization,
+        daily_cap_cents,
+        monthly_cap_cents,
+        max_cac_cents,
+        growth_strategy,
+        ai_control,
+        business_type,
         llm_default_provider,
         llm_claude_model,
         llm_gemini_model,
@@ -97,6 +105,13 @@ export class RunAnalysis extends OpenAPIRoute {
       FROM ai_optimization_settings WHERE org_id = ?
     `).bind(orgId).first<{
       custom_instructions: string | null;
+      budget_optimization: string | null;
+      daily_cap_cents: number | null;
+      monthly_cap_cents: number | null;
+      max_cac_cents: number | null;
+      growth_strategy: string | null;
+      ai_control: string | null;
+      business_type: string | null;
       llm_default_provider: string | null;
       llm_claude_model: string | null;
       llm_gemini_model: string | null;
@@ -107,7 +122,7 @@ export class RunAnalysis extends OpenAPIRoute {
     const customInstructions = settings?.custom_instructions || null;
 
     // Build analysis configuration from org settings
-    const analysisConfig: AnalysisConfig = {
+    const analysisConfig: AnalysisWorkflowParams['config'] = {
       llm: {
         defaultProvider: (settings?.llm_default_provider || 'auto') as 'auto' | 'claude' | 'gemini',
         claudeModel: (settings?.llm_claude_model || 'haiku') as 'opus' | 'sonnet' | 'haiku',
@@ -116,13 +131,20 @@ export class RunAnalysis extends OpenAPIRoute {
       agentic: {
         maxRecommendations: settings?.llm_max_recommendations ?? 3,
         enableExploration: settings?.llm_enable_exploration !== 0
-      }
+      },
+      budgetStrategy: (settings?.budget_optimization || 'moderate') as 'conservative' | 'moderate' | 'aggressive',
+      dailyCapCents: settings?.daily_cap_cents || null,
+      monthlyCapCents: settings?.monthly_cap_cents || null,
+      maxCacCents: settings?.max_cac_cents || null,
+      growthStrategy: (settings?.growth_strategy || 'balanced') as 'lean' | 'balanced' | 'bold',
+      aiControl: (settings?.ai_control || 'copilot') as 'copilot' | 'autopilot',
+      businessType: (settings?.business_type || 'lead_gen') as 'ecommerce' | 'lead_gen' | 'saas',
     };
 
-    const jobs = new JobManager(c.env.AI_DB);
+    const jobs = new JobManager(c.env.DB);
 
     // Mark stuck jobs as failed (>30 min without completing)
-    await c.env.AI_DB.prepare(`
+    await c.env.DB.prepare(`
       UPDATE analysis_jobs
       SET status = 'failed', error_message = 'Timed out after 30 minutes'
       WHERE organization_id = ? AND status IN ('pending', 'in_progress', 'running')
@@ -130,7 +152,7 @@ export class RunAnalysis extends OpenAPIRoute {
     `).bind(orgId).run();
 
     // Dedup: return existing job if one is already running (<30 min old)
-    const existingJob = await c.env.AI_DB.prepare(`
+    const existingJob = await c.env.DB.prepare(`
       SELECT id, status FROM analysis_jobs
       WHERE organization_id = ? AND status IN ('pending', 'in_progress', 'running')
         AND created_at > datetime('now', '-30 minutes')
@@ -145,11 +167,13 @@ export class RunAnalysis extends OpenAPIRoute {
       });
     }
 
-    // Expire any pending recommendations from previous analysis runs
-    await c.env.AI_DB.prepare(`
+    // Expire old pending recommendations (>7 days) — keep recent ones so users can review
+    // Previous behavior nuked ALL pending on re-run, giving users no time to act
+    await c.env.DB.prepare(`
       UPDATE ai_decisions
       SET status = 'expired'
       WHERE organization_id = ? AND status = 'pending'
+        AND expires_at < datetime('now')
     `).bind(orgId).run();
 
     // Create job in D1 (for status polling)

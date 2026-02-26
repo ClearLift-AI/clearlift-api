@@ -446,18 +446,8 @@ export class InitiateOAuthFlow extends OpenAPIRoute {
           redirectUri
         );
       }
-      case 'salesforce': {
-        const clientId = await getSecret(c.env.SALESFORCE_CLIENT_ID);
-        const clientSecret = await getSecret(c.env.SALESFORCE_CLIENT_SECRET);
-        if (!clientId || !clientSecret) {
-          throw new Error('Salesforce OAuth credentials not configured');
-        }
-        return new SalesforceOAuthProvider(
-          clientId,
-          clientSecret,
-          redirectUri
-        );
-      }
+      case 'salesforce':
+        throw new Error('Salesforce connector not yet implemented');
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -822,18 +812,8 @@ export class HandleOAuthCallback extends OpenAPIRoute {
           redirectUri
         );
       }
-      case 'salesforce': {
-        const clientId = await getSecret(c.env.SALESFORCE_CLIENT_ID);
-        const clientSecret = await getSecret(c.env.SALESFORCE_CLIENT_SECRET);
-        if (!clientId || !clientSecret) {
-          throw new Error('Salesforce OAuth credentials not configured');
-        }
-        return new SalesforceOAuthProvider(
-          clientId,
-          clientSecret,
-          redirectUri
-        );
-      }
+      case 'salesforce':
+        throw new Error('Salesforce connector not yet implemented');
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -1832,14 +1812,6 @@ export class FinalizeOAuthConnection extends OpenAPIRoute {
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementServicesConnected(oauthState.user_id);
 
-      // Auto-register default conversion goal for revenue-capable connectors
-      try {
-        const { GoalService } = await import('../../services/goals/index');
-        const goalService = new GoalService(c.env.DB, c.env.ANALYTICS_DB);
-        await goalService.ensureDefaultGoalForPlatform(oauthState.organization_id, provider);
-      } catch (goalErr) {
-        structuredLog('WARN', `Failed to auto-register goal for ${provider}`, { endpoint: 'connectors', step: 'finalize_oauth', provider, error: goalErr instanceof Error ? goalErr.message : String(goalErr) });
-      }
 
       // Create default filter rules for known platforms
       const platformDefaults: Record<string, { name: string; description: string; rule_type: string; conditions: Array<{ type: string; field: string; operator: string; value: string | string[] }> }> = {
@@ -2075,15 +2047,8 @@ export class GetConnectorSettings extends OpenAPIRoute {
         return error(c, "FORBIDDEN", "No access to this connection", 403);
       }
 
-      // Parse settings if they exist
-      let settings = null;
-      if (connection.settings) {
-        try {
-          settings = JSON.parse(connection.settings);
-        } catch (e) {
-          structuredLog('ERROR', 'Failed to parse connection settings', { endpoint: 'connectors', step: 'get_connector_settings', error: e instanceof Error ? e.message : String(e) });
-        }
-      }
+      // getConnection() already parses settings JSON
+      const settings = connection.settings || null;
 
       const response: any = {
         connection_id: connection.id,
@@ -2206,12 +2171,8 @@ export class UpdateConnectorSettings extends OpenAPIRoute {
       }
 
       // Merge with existing settings (preserve platform-specific settings)
-      let existingSettings: Record<string, any> = {};
-      if (connection.settings) {
-        try {
-          existingSettings = JSON.parse(connection.settings);
-        } catch {}
-      }
+      // getConnection() already parses settings JSON
+      const existingSettings: Record<string, any> = (connection.settings as any) || {};
       const mergedSettings = { ...existingSettings, ...settings };
 
       // Update connection settings
@@ -2296,10 +2257,15 @@ export class TriggerResync extends OpenAPIRoute {
       const jobId = crypto.randomUUID();
       const now = new Date().toISOString();
 
-      // Calculate sync window (last 30 days)
+      // Calculate sync window from connection settings (falls back to 60 days)
+      // Note: getConnection() already parses settings JSON, so no need to JSON.parse again
+      const settings = connection.settings || {};
+      const syncConfig = settings.sync_config;
+      const TIMEFRAME_DAYS: Record<string, number> = { '7_days': 7, '60_days': 60, 'all_time': 730 };
+      const days = syncConfig?.timeframe ? (TIMEFRAME_DAYS[syncConfig.timeframe] || 60) : 60;
       const endDate = new Date();
       const startDate = new Date();
-      startDate.setDate(startDate.getDate() - 30);
+      startDate.setDate(startDate.getDate() - days);
 
       await c.env.DB.prepare(`
         INSERT INTO sync_jobs (
@@ -2307,13 +2273,14 @@ export class TriggerResync extends OpenAPIRoute {
         ) VALUES (?, ?, ?, 'pending', ?, ?)
       `).bind(jobId, connection_id, connection.organization_id, now, now).run();
 
-      // Enqueue sync job
+      // Enqueue sync job (manual=true bypasses hourly dedup in queue consumer)
       await c.env.SYNC_QUEUE.send({
         job_id: jobId,
         connection_id: connection.id,
         organization_id: connection.organization_id,
         platform: connection.platform,
         account_id: connection.account_id,
+        metadata: { manual: true },
         sync_window: {
           start: startDate.toISOString(),
           end: endDate.toISOString()
@@ -2326,7 +2293,7 @@ export class TriggerResync extends OpenAPIRoute {
       });
     } catch (err: any) {
       structuredLog('ERROR', 'TriggerResync error', { endpoint: 'connectors', step: 'trigger_resync', error: err instanceof Error ? err.message : String(err) });
-      return error(c, "INTERNAL_ERROR", `Failed to trigger resync: ${err.message}`, 500);
+      return error(c, "INTERNAL_ERROR", `Failed to trigger resync: ${err instanceof Error ? err.message : String(err)}`, 500);
     }
   }
 }

@@ -32,7 +32,7 @@ export class ConnectStripe extends OpenAPIRoute {
             /^(sk_test_|sk_live_|rk_test_|rk_live_)[a-zA-Z0-9]{24,}$/,
             "Invalid Stripe API key format. Must start with sk_test_, sk_live_, rk_test_, or rk_live_ followed by at least 24 alphanumeric characters"
           ),
-          sync_mode: z.enum(['charges', 'subscriptions']).optional().default('charges'),
+          sync_mode: z.enum(['checkout_sessions', 'charges']).optional().default('checkout_sessions'),
           lookback_days: z.number().int().min(1).max(730).optional().default(90),
           auto_sync: z.boolean().optional().default(true),
           initial_filters: z.array(z.object({
@@ -127,7 +127,7 @@ export class ConnectStripe extends OpenAPIRoute {
       // Store Stripe-specific fields and settings
       const isLiveMode = api_key.startsWith('sk_live_') || api_key.startsWith('rk_live_') ? 1 : 0;
       const settings = JSON.stringify({
-        sync_mode: sync_mode || 'charges',
+        sync_mode: sync_mode || 'checkout_sessions',
         lookback_days: lookback_days || 90,
         auto_sync: auto_sync !== false,
         initial_sync_completed: false
@@ -148,8 +148,8 @@ export class ConnectStripe extends OpenAPIRoute {
 
       // Create mode-specific default filter (serves as demo filter)
       const defaultFilterId = crypto.randomUUID();
-      const syncMode = sync_mode || 'charges';
-      const isSubscriptionMode = syncMode === 'subscriptions';
+      const syncMode = sync_mode || 'checkout_sessions';
+      const isCheckoutMode = syncMode === 'checkout_sessions';
 
       // Use provided initial_filters or fall back to defaults
       let filterConfig: {
@@ -180,7 +180,7 @@ export class ConnectStripe extends OpenAPIRoute {
         );
 
         filterConfig = {
-          name: isSubscriptionMode ? 'Subscription Filter' : 'Payment Filter',
+          name: isCheckoutMode ? 'Checkout Session Filter' : 'Payment Filter',
           description: 'Custom filter configured during setup',
           // For 'in' operator on status (like "status in incomplete,incomplete_expired"), use exclude
           // For 'equals' or 'not_in', use include
@@ -188,20 +188,8 @@ export class ConnectStripe extends OpenAPIRoute {
           conditions
         };
       } else {
-        // Use default filters based on sync mode
-        filterConfig = isSubscriptionMode ? {
-          name: 'Exclude Incomplete Subscriptions',
-          description: 'Excludes subscriptions that have not completed payment setup',
-          rule_type: 'exclude',
-          conditions: [
-            {
-              type: 'standard',
-              field: 'status',
-              operator: 'in',
-              value: ['incomplete', 'incomplete_expired']
-            }
-          ]
-        } : {
+        // Default filter: only succeeded payments (applies to both checkout_sessions and charges)
+        filterConfig = {
           name: 'Successful Payments Only',
           description: 'Only includes payments that have succeeded',
           rule_type: 'include',
@@ -244,14 +232,6 @@ export class ConnectStripe extends OpenAPIRoute {
       const onboarding = new OnboardingService(c.env.DB);
       await onboarding.incrementServicesConnected(session.user_id);
 
-      // Auto-register default conversion goal for Stripe
-      try {
-        const { GoalService } = await import('../../../services/goals/index');
-        const goalService = new GoalService(c.env.DB, c.env.ANALYTICS_DB);
-        await goalService.ensureDefaultGoalForPlatform(organization_id, 'stripe');
-      } catch (goalErr) {
-        structuredLog('WARN', 'Failed to auto-register goal', { endpoint: 'POST /v1/connectors/stripe/connect', error: goalErr instanceof Error ? goalErr.message : String(goalErr) });
-      }
 
       // Auto-trigger initial sync
       const jobId = crypto.randomUUID();
@@ -392,7 +372,7 @@ export class UpdateStripeConfig extends OpenAPIRoute {
       }),
       body: contentJson(
         z.object({
-          sync_mode: z.enum(['charges', 'subscriptions']).optional(),
+          sync_mode: z.enum(['checkout_sessions', 'charges']).optional(),
           lookback_days: z.number().min(1).max(730).optional(),
           auto_sync: z.boolean().optional()
         })
@@ -531,7 +511,7 @@ export class TriggerStripeSync extends OpenAPIRoute {
 
     // Determine sync parameters
     const isInitialSync = !connectionSettings.initial_sync_completed;
-    const syncMode = connectionSettings.sync_mode || 'charges';
+    const syncMode = connectionSettings.sync_mode || 'checkout_sessions';
     const lookbackDays = body.lookback_days || connectionSettings.lookback_days || (isInitialSync ? 90 : 7);
 
     // Queue new sync job

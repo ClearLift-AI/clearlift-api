@@ -21,22 +21,22 @@
   "scripts": {
     "cf-typegen": "wrangler types",
     "deploy": "wrangler deploy",
-    "dev": "npm run db:migrate:local && wrangler dev",
+    "dev": "npm run db:migrate && wrangler dev",
     "dev:local": "npm run db:migrate:local && wrangler dev --env local",
     "predeploy": "npx tsx scripts/capture-bookmark.ts && npm run db:migrate:remote",
-    "db:migrate:local": "wrangler d1 migrations apply DB --local && wrangler d1 migrations apply ANALYTICS_DB --local && wrangler d1 migrations apply AI_DB --local",
-    "db:migrate:remote": "wrangler d1 migrations apply DB --remote && wrangler d1 migrations apply ANALYTICS_DB --remote && wrangler d1 migrations apply AI_DB --remote",
+    "db:migrate": "wrangler d1 migrations apply DB --local && wrangler d1 migrations apply ANALYTICS_DB --local",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local --env local && wrangler d1 migrations apply ANALYTICS_DB --local --env local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote && wrangler d1 migrations apply ANALYTICS_DB --remote",
     "schema": "npx chanfana",
     "test": "wrangler deploy --dry-run && npx vitest run --config tests/vitest.config.mts",
     "test:local": "npx vitest run --config tests/vitest.config.mts tests/api.test.ts",
     "test:prod": "npx vitest run tests/api-production.test.ts",
-    "test:all": "npm run test:local && npm run test:prod",
+    "test:schema": "npx vitest run --config tests/vitest-v2.config.mts",
+    "test:all": "npm run test:local && npm run test:prod && npm run test:schema",
     "test:db": "./test-database-access.sh",
     "seed:local": "npx tsx scripts/seed-local.ts"
   },
   "dependencies": {
-    "@cloudflare/containers": "^0.0.28",
-    "@supabase/supabase-js": "^2.47.10",
     "chanfana": "^2.8.1",
     "hono": "4.8.2",
     "uuid": "^13.0.0",
@@ -47,11 +47,12 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.8.44",
+    "@inquirer/prompts": "^8.3.0",
     "@types/node": "24.0.4",
     "@types/uuid": "^10.0.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.2",
-    "wrangler": "^4.63.0"
+    "wrangler": "^4.67.0"
   },
   "optionalDependencies": {
     "@rollup/rollup-darwin-arm64": "^4.57.1"

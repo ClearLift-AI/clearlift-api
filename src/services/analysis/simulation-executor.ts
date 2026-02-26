@@ -133,7 +133,11 @@ Returns detailed math explanation showing exactly how the numbers were calculate
       },
       entity_id: {
         type: 'string',
-        description: 'ID of the campaign/ad_set/ad to simulate changes for'
+        description: 'Name or ID of the campaign/ad_set/ad to simulate changes for. Can use the human-readable name from analysis summaries (e.g. "DTC US = Refurb Classic Post-Labor Day 2025") or the entity_ref UUID.'
+      },
+      days: {
+        type: 'number',
+        description: 'Lookback window in days for portfolio metrics (default 30). Use larger values (60, 90) for entities that may not have recent spend.'
       },
       budget_change_percent: {
         type: 'number',
@@ -170,10 +174,12 @@ Returns detailed math explanation showing exactly how the numbers were calculate
       },
       hours_to_add: {
         type: 'array',
+        items: { type: 'number' },
         description: 'For schedule changes: hours (0-23) to add'
       },
       hours_to_remove: {
         type: 'array',
+        items: { type: 'number' },
         description: 'For schedule changes: hours (0-23) to remove'
       }
     },
@@ -236,7 +242,9 @@ The simulation results will be automatically attached.`,
         simulated_cac: result.simulated_state.blended_cac_cents / 100,
         cac_change_percent: cacChange,
         conversion_change_percent: convChange,
-        confidence: result.confidence
+        confidence: result.confidence,
+        projected_cac_cents: result.simulated_state.blended_cac_cents,
+        projected_total_spend_cents: result.simulated_state.total_spend_cents
       }
     };
   } catch (err) {
@@ -284,6 +292,22 @@ export async function executeRecommendationWithSimulation(
         return 'change_bid';
       case 'set_schedule':
         return 'change_schedule';
+      case 'compound_action': {
+        // Find the primary sub-action (first set_budget or largest budget change)
+        const actions = input.actions || [];
+        const budgetAction = actions.find((a: any) => a.tool === 'set_budget');
+        if (budgetAction) {
+          const p = budgetAction.parameters || {};
+          return p.recommended_budget_cents > (p.current_budget_cents || 0)
+            ? 'increase_budget'
+            : 'decrease_budget';
+        }
+        const statusAction = actions.find((a: any) => a.tool === 'set_status');
+        if (statusAction) {
+          return statusAction.parameters?.recommended_status === 'PAUSED' ? 'pause' : 'enable';
+        }
+        return 'pause'; // fallback
+      }
       default:
         return null; // Tool doesn't require simulation
     }
@@ -299,7 +323,10 @@ export async function executeRecommendationWithSimulation(
     };
   }
 
-  const entityId = toolInput.entity_id;
+  // For compound_action, extract entity_id from the primary sub-action
+  const entityId = toolName === 'compound_action'
+    ? (toolInput.actions?.[0]?.entity_id || toolInput.entity_id)
+    : toolInput.entity_id;
   const simKey = getSimulationKey(action, entityId);
   const existingSimulation = context.simulationCache.simulations.get(simKey);
 
@@ -430,16 +457,16 @@ If these numbers don't support your recommendation, do NOT proceed.`,
   const recommendation: Recommendation = {
     tool: toolName,
     platform: toolInput.platform || context.platform || 'unknown',
-    entity_type: toolInput.entity_type,
-    entity_id: toolInput.entity_id,
-    entity_name: toolInput.entity_name || sim.current_state.entity.name,
+    entity_type: toolInput.entity_type || 'campaign',
+    entity_id: toolInput.entity_id || toolInput.campaign_id || 'unknown',
+    entity_name: toolInput.entity_name || sim.current_state.entity.name || 'unknown',
     parameters: {
       ...toolInput,
       // Override any guessed impact with calculated value
       predicted_impact: sim.simulated_state.cac_change_percent,
       predicted_conversion_change: sim.simulated_state.conversion_change_percent
     },
-    reason: toolInput.reason,
+    reason: toolInput.reason || 'No reason provided',
     // USE CALCULATED IMPACT, NOT LLM'S GUESS
     predicted_impact: sim.simulated_state.cac_change_percent,
     confidence: sim.confidence
@@ -466,7 +493,9 @@ The user will see the mathematical explanation when reviewing.`,
     data: {
       recommendation_id: recId,
       calculated_impact: sim.simulated_state.cac_change_percent,
-      confidence: sim.confidence
+      confidence: sim.confidence,
+      projected_cac_cents: sim.simulated_state.blended_cac_cents,
+      projected_total_spend_cents: sim.simulated_state.total_spend_cents
     }
   };
 }
@@ -482,11 +511,16 @@ async function storeRecommendation(
   recommendation: Recommendation,
   simulation: SimulationResult
 ): Promise<string> {
-  // Determine the correct tool name for ai_decisions
-  let tool = recommendation.tool;
-  if (tool === 'set_status') {
-    tool = recommendation.parameters.recommended_status === 'PAUSED' ? 'pause' : 'enable';
-  }
+  // Store canonical tool name — dashboard switches on 'set_status', not 'pause'/'enable'.
+  // The recommended_status field inside parameters carries the directional intent.
+  const tool = recommendation.tool;
+
+  // Guard against undefined values that crash D1 bind()
+  const platform = recommendation.platform || 'unknown';
+  const entityType = recommendation.entity_type || 'campaign';
+  const entityId = recommendation.entity_id || 'unknown';
+  const entityName = recommendation.entity_name || 'unknown';
+  const reason = recommendation.reason || '';
 
   // Dedup: skip if an identical pending decision already exists (workflow retry safety)
   const existing = await aiDb.prepare(`
@@ -494,7 +528,7 @@ async function storeRecommendation(
     WHERE organization_id = ? AND tool = ? AND platform = ? AND entity_type = ? AND entity_id = ?
       AND status = 'pending'
     LIMIT 1
-  `).bind(orgId, tool, recommendation.platform, recommendation.entity_type, recommendation.entity_id)
+  `).bind(orgId, tool, platform, entityType, entityId)
     .first<{ id: string }>();
 
   if (existing) return existing.id;
@@ -513,26 +547,26 @@ async function storeRecommendation(
     id,
     orgId,
     tool,
-    recommendation.platform,
-    recommendation.entity_type,
-    recommendation.entity_id,
-    recommendation.entity_name,
-    JSON.stringify(recommendation.parameters),
-    JSON.stringify(simulation.current_state),
-    recommendation.reason,
-    simulation.simulated_state.cac_change_percent,
-    simulation.confidence,
+    platform,
+    entityType,
+    entityId,
+    entityName,
+    JSON.stringify(recommendation.parameters || {}),
+    JSON.stringify(simulation.current_state || {}),
+    reason,
+    simulation.simulated_state?.cac_change_percent ?? 0,
+    simulation.confidence ?? 0,
     JSON.stringify({
       analysis_run_id: analysisRunId,
-      math_explanation: simulation.math_explanation,
-      assumptions: simulation.assumptions
+      math_explanation: simulation.math_explanation || '',
+      assumptions: simulation.assumptions || []
     }),
     JSON.stringify({
-      current_state: simulation.current_state,
-      simulated_state: simulation.simulated_state,
-      diminishing_returns_model: simulation.diminishing_returns_model
+      current_state: simulation.current_state || {},
+      simulated_state: simulation.simulated_state || {},
+      diminishing_returns_model: simulation.diminishing_returns_model || null
     }),
-    simulation.confidence,
+    simulation.confidence ?? 0,
     expiresAt
   ).run();
 
@@ -558,6 +592,20 @@ export function getToolsWithSimulation(existingTools: any[]): any[] {
   ];
 }
 
+// Generic version (provider-agnostic canonical format)
+export function getToolsWithSimulationGeneric(
+  existingTools: Array<{ name: string; description: string; input_schema: any }>
+): Array<{ name: string; description: string; input_schema: any }> {
+  return [
+    {
+      name: SIMULATE_CHANGE_TOOL.name,
+      description: SIMULATE_CHANGE_TOOL.description,
+      input_schema: SIMULATE_CHANGE_TOOL.input_schema
+    },
+    ...existingTools
+  ];
+}
+
 /**
  * Check if a tool requires simulation
  */
@@ -568,7 +616,8 @@ export function requiresSimulation(toolName: string): boolean {
     'reallocate_budget',
     'set_audience',
     'set_bid',
-    'set_schedule'
+    'set_schedule',
+    'compound_action'
   ];
   return toolsRequiringSimulation.includes(toolName);
 }

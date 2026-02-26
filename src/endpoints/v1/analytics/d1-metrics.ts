@@ -9,6 +9,9 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1AnalyticsService } from "../../../services/d1-analytics";
+import { R2SQLAdapter } from "../../../adapters/platforms/r2sql";
+import { getSecret } from "../../../utils/secrets";
+import { structuredLog } from "../../../utils/structured-logger";
 
 /**
  * GET /v1/analytics/metrics/summary - Get analytics summary from D1
@@ -70,17 +73,9 @@ export class GetD1MetricsSummary extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured - this endpoint is only available in dev environment", 400);
     }
 
-    // Get org_tag
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
 
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const summary = await analyticsService.getAnalyticsSummary(orgTagMapping.short_tag, cappedDays);
+    const summary = await analyticsService.getAnalyticsSummary(orgId, cappedDays);
 
     return success(c, summary);
   }
@@ -133,23 +128,19 @@ export class GetD1DailyMetrics extends OpenAPIRoute {
 
   public async handle(c: AppContext) {
     const orgId = c.get("org_id" as any) as string;
-    const startDate = c.req.query("start_date")!;
-    const endDate = c.req.query("end_date")!;
+    const startDate = c.req.query("start_date");
+    const endDate = c.req.query("end_date");
+
+    if (!startDate || !endDate) {
+      return error(c, "INVALID_PARAMS", "start_date and end_date are required", 400);
+    }
 
     if (!c.env.ANALYTICS_DB) {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const metrics = await analyticsService.getDailyMetrics(orgTagMapping.short_tag, startDate, endDate);
+    const metrics = await analyticsService.getDailyMetrics(orgId, startDate, endDate);
 
     // Transform to API format
     const data = metrics.map(m => ({
@@ -161,7 +152,7 @@ export class GetD1DailyMetrics extends OpenAPIRoute {
       users: m.users,
       conversions: m.conversions,
       revenue: m.revenue_cents / 100,
-      conversionRate: m.conversion_rate,
+      conversionRate: Math.min(m.conversion_rate, 1.0),
       byChannel: m.by_channel ? JSON.parse(m.by_channel) : undefined,
       byDevice: m.by_device ? JSON.parse(m.by_device) : undefined,
       byGeo: m.by_geo ? JSON.parse(m.by_geo) : undefined
@@ -223,16 +214,8 @@ export class GetD1HourlyMetrics extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const metrics = await analyticsService.getHourlyMetrics(orgTagMapping.short_tag, startDate, endDate);
+    const metrics = await analyticsService.getHourlyMetrics(orgId, startDate, endDate);
 
     const data = metrics.map(m => ({
       hour: m.hour,
@@ -303,16 +286,8 @@ export class GetD1UTMPerformance extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const metrics = await analyticsService.getUTMPerformance(orgTagMapping.short_tag, startDate, endDate);
+    const metrics = await analyticsService.getUTMPerformance(orgId, startDate, endDate);
 
     const data = metrics.map(m => ({
       date: m.date,
@@ -324,7 +299,7 @@ export class GetD1UTMPerformance extends OpenAPIRoute {
       pageViews: m.page_views,
       conversions: m.conversions,
       revenue: m.revenue_cents / 100,
-      conversionRate: m.conversion_rate
+      conversionRate: Math.min(m.conversion_rate, 1.0)
     }));
 
     return success(c, data);
@@ -384,20 +359,12 @@ export class GetD1Attribution extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     // Map API model names to DB model names (markov_chain → markov, shapley_value → shapley)
     const dbModel = model === 'markov_chain' ? 'markov' : model === 'shapley_value' ? 'shapley' : model;
 
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
     const results = await analyticsService.getAttributionResults(
-      orgTagMapping.short_tag,
+      orgId,
       dbModel,
       periodStart,
       periodEnd
@@ -468,16 +435,8 @@ export class GetD1Journeys extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const journeys = await analyticsService.getJourneys(orgTagMapping.short_tag, limit, convertedOnly);
+    const journeys = await analyticsService.getJourneys(orgId, limit, convertedOnly);
 
     const data = journeys.map(j => ({
       id: j.id,
@@ -546,16 +505,8 @@ export class GetD1ChannelTransitions extends OpenAPIRoute {
       return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
     }
 
-    const orgTagMapping = await c.env.DB.prepare(`
-      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
-    `).bind(orgId).first<{ short_tag: string }>();
-
-    if (!orgTagMapping?.short_tag) {
-      return error(c, "NO_ORG_TAG", "Organization does not have an assigned tag", 404);
-    }
-
     const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
-    const transitions = await analyticsService.getChannelTransitions(orgTagMapping.short_tag, {
+    const transitions = await analyticsService.getChannelTransitions(orgId, {
       periodStart,
       periodEnd,
       fromChannel,
@@ -571,5 +522,250 @@ export class GetD1ChannelTransitions extends OpenAPIRoute {
     }));
 
     return success(c, data);
+  }
+}
+
+/**
+ * GET /v1/analytics/metrics/page-flow - Get page-to-page flow transitions for Sankey visualization
+ */
+export class GetD1PageFlow extends OpenAPIRoute {
+  public schema = {
+    tags: ["Analytics"],
+    summary: "Get page flow transitions from D1",
+    description: "Fetches page-to-page navigation transitions from funnel_transitions for Sankey visualization",
+    operationId: "get-d1-page-flow",
+    security: [{ bearerAuth: [] }],
+    request: {
+      query: z.object({
+        org_id: z.string().describe("Organization ID"),
+        period_start: z.string().optional().describe("Filter by period start date (ISO 8601)"),
+        period_end: z.string().optional().describe("Filter by period end date (ISO 8601)"),
+        limit: z.string().optional().describe("Max transitions to return (default 50)")
+      })
+    },
+    responses: {
+      "200": {
+        description: "Page flow transitions",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.object({
+                transitions: z.array(z.object({
+                  from_id: z.string(),
+                  from_name: z.string().nullable(),
+                  from_type: z.string().optional(),
+                  to_id: z.string(),
+                  to_name: z.string().nullable(),
+                  visitors_at_from: z.number(),
+                  visitors_transitioned: z.number(),
+                  transition_rate: z.number(),
+                  conversions: z.number(),
+                  revenue_cents: z.number()
+                })),
+                source: z.enum(['d1', 'r2sql']).describe("Data source: d1 for hot storage, r2sql for historical reconstruction")
+              })
+            })
+          }
+        }
+      }
+    }
+  };
+
+  public async handle(c: AppContext) {
+    const orgId = c.get("org_id" as any) as string;
+    const periodStart = c.req.query("period_start");
+    const periodEnd = c.req.query("period_end");
+    const limitStr = c.req.query("limit");
+    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+
+    if (!c.env.ANALYTICS_DB) {
+      return error(c, "NOT_CONFIGURED", "ANALYTICS_DB not configured", 400);
+    }
+
+    // Resolve org_tag for R2 SQL fallback (R2 indexes by org_tag, not organization_id)
+    const orgTagMapping = await c.env.DB.prepare(`
+      SELECT short_tag FROM org_tag_mappings WHERE organization_id = ?
+    `).bind(orgId).first<{ short_tag: string }>();
+    const orgTag = orgTagMapping?.short_tag || '';
+
+    // Check if request extends beyond D1's 30-day hot window (use 32 days to avoid
+    // edge cases where default "last 30 days" range lands 31 days ago)
+    const hotWindowCutoff = new Date(Date.now() - 32 * 86_400_000).toISOString().slice(0, 10);
+    const needsR2Fallback = periodStart && periodStart < hotWindowCutoff;
+
+    if (needsR2Fallback) {
+      // R2 SQL fallback: reconstruct page flow from raw events
+      try {
+        const r2ApiToken = await getSecret(c.env.R2_SQL_TOKEN);
+        if (!r2ApiToken) {
+          // No R2 token — fall through to D1 with whatever data is available
+          structuredLog('WARN', 'R2 SQL token not configured, falling back to D1', { endpoint: 'page-flow', org_tag: orgTag });
+        } else {
+          const r2sql = new R2SQLAdapter(
+            c.env.CLOUDFLARE_ACCOUNT_ID || '',
+            c.env.R2_BUCKET_NAME || 'clearlift-events-lake',
+            r2ApiToken,
+            c.env.R2_SQL_TABLE || 'clearlift.event_data_v5'
+          );
+          const transitions = await this.reconstructPageFlowFromR2(r2sql, orgTag, periodStart, periodEnd || new Date().toISOString().slice(0, 10), limit || 50);
+          // Only return R2 results if we got data — otherwise fall through to D1
+          if (transitions.length > 0) {
+            return success(c, { transitions, source: 'r2sql' });
+          }
+          structuredLog('INFO', 'R2 SQL returned empty results, falling back to D1', { endpoint: 'page-flow', org_tag: orgTag });
+        }
+      } catch (err) {
+        structuredLog('WARN', 'R2 SQL page flow reconstruction failed, falling back to D1', {
+          endpoint: 'page-flow', org_tag: orgTag, error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+
+    // D1 hot path: aggregated daily rows
+    const analyticsService = new D1AnalyticsService(c.env.ANALYTICS_DB);
+    const transitions = await analyticsService.getPageFlowTransitions(orgId, {
+      periodStart,
+      periodEnd,
+      limit
+    });
+
+    return success(c, { transitions, source: 'd1' });
+  }
+
+  /**
+   * Reconstruct page flow transitions from raw R2 SQL events.
+   * Used when the requested date range extends beyond D1's 30-day hot window.
+   */
+  private async reconstructPageFlowFromR2(
+    r2sql: R2SQLAdapter,
+    orgTag: string,
+    periodStart: string,
+    periodEnd: string,
+    limit: number
+  ): Promise<{
+    from_id: string; from_name: string | null; from_type: string;
+    to_id: string; to_name: string | null;
+    visitors_at_from: number; visitors_transitioned: number; transition_rate: number;
+    conversions: number; revenue_cents: number;
+  }[]> {
+    // Fetch page_view events from R2 SQL for the requested period
+    // Cap lookback at 90 days — R2 SQL is slow and Analytics Engine retention is 90 days
+    const lookbackDays = Math.min(
+      Math.ceil((Date.now() - new Date(periodStart).getTime()) / 86_400_000),
+      90
+    );
+    const result = await r2sql.getEvents(orgTag, {
+      lookback: `${lookbackDays}d`,
+      limit: 5000,
+    });
+
+    if (result.error || !result.events?.length) return [];
+
+    // Group by session, build page transitions + source entries
+    const sessionMap = new Map<string, typeof result.events>();
+    let skippedNoSession = 0;
+    for (const ev of result.events) {
+      if (ev.event_type !== 'page_view') continue;
+      const sid = ev.session_id as string;
+      if (!sid) { skippedNoSession++; continue; }
+      if (!sessionMap.has(sid)) sessionMap.set(sid, []);
+      sessionMap.get(sid)!.push(ev);
+    }
+    if (skippedNoSession > 0) {
+      structuredLog('WARN', 'Page flow R2 fallback: events without session_id skipped', {
+        endpoint: 'analytics/d1-metrics',
+        step: 'r2-page-flow',
+        skipped: skippedNoSession,
+        total: result.events.length,
+        org_tag: orgTag,
+      });
+    }
+
+    const pageTransMap = new Map<string, { from: string; to: string; visitors: Set<string> }>();
+    const pageVisitors = new Map<string, Set<string>>();
+    const sourceEntryMap = new Map<string, { source: string; type: string; page: string; visitors: Set<string> }>();
+
+    for (const [, events] of sessionMap) {
+      const views = events.sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+      if (!views.length) continue;
+      const anonId = String(views[0].anonymous_id || views[0].session_id);
+      const first = views[0];
+
+      // Classify entry source
+      let entryLabel: string;
+      let entryType: string;
+      if (first.gclid) { entryLabel = `Google Ads${first.utm_campaign ? ' / ' + first.utm_campaign : ''}`; entryType = 'source'; }
+      else if (first.fbclid) { entryLabel = `Meta Ads${first.utm_campaign ? ' / ' + first.utm_campaign : ''}`; entryType = 'source'; }
+      else if (first.ttclid) { entryLabel = `TikTok Ads${first.utm_campaign ? ' / ' + first.utm_campaign : ''}`; entryType = 'source'; }
+      else if (first.utm_source) {
+        entryLabel = String(first.utm_source);
+        if (first.utm_medium) entryLabel += ` / ${first.utm_medium}`;
+        if (first.utm_campaign) entryLabel += ` / ${first.utm_campaign}`;
+        entryType = 'source';
+      } else if (first.referrer_domain) { entryLabel = String(first.referrer_domain); entryType = 'referrer'; }
+      else { entryLabel = 'Direct'; entryType = 'source'; }
+
+      const entryPage = String(first.page_path || '/');
+      const entryKey = `${entryLabel}→${entryPage}`;
+      if (!sourceEntryMap.has(entryKey)) {
+        sourceEntryMap.set(entryKey, { source: entryLabel, type: entryType, page: entryPage, visitors: new Set() });
+      }
+      sourceEntryMap.get(entryKey)!.visitors.add(anonId);
+
+      // Page transitions
+      for (let i = 0; i < views.length; i++) {
+        const path = String(views[i].page_path || '/');
+        if (!pageVisitors.has(path)) pageVisitors.set(path, new Set());
+        pageVisitors.get(path)!.add(anonId);
+
+        if (i + 1 < views.length) {
+          const nextPath = String(views[i + 1].page_path || '/');
+          if (path === nextPath) continue;
+          const key = `${path}→${nextPath}`;
+          if (!pageTransMap.has(key)) pageTransMap.set(key, { from: path, to: nextPath, visitors: new Set() });
+          pageTransMap.get(key)!.visitors.add(anonId);
+        }
+      }
+    }
+
+    // Combine page transitions and source entries, sort by visitors
+    const transitions: Array<{
+      from_id: string; from_name: string | null; from_type: string;
+      to_id: string; to_name: string | null;
+      visitors_at_from: number; visitors_transitioned: number; transition_rate: number;
+      conversions: number; revenue_cents: number;
+    }> = [];
+
+    for (const t of pageTransMap.values()) {
+      const fromVis = pageVisitors.get(t.from)?.size || t.visitors.size;
+      transitions.push({
+        from_id: t.from, from_name: t.from, from_type: 'page_url',
+        to_id: t.to, to_name: t.to,
+        visitors_at_from: fromVis, visitors_transitioned: t.visitors.size,
+        transition_rate: fromVis > 0 ? t.visitors.size / fromVis : 0,
+        conversions: 0, revenue_cents: 0,
+      });
+    }
+
+    for (const s of sourceEntryMap.values()) {
+      transitions.push({
+        from_id: s.source, from_name: s.source, from_type: s.type,
+        to_id: s.page, to_name: s.page,
+        visitors_at_from: s.visitors.size, visitors_transitioned: s.visitors.size,
+        transition_rate: 1.0,
+        conversions: 0, revenue_cents: 0,
+      });
+    }
+
+    // Sort: source/referrer entries first, then by visitors desc
+    transitions.sort((a, b) => {
+      const aRank = a.from_type === 'page_url' ? 1 : 0;
+      const bRank = b.from_type === 'page_url' ? 1 : 0;
+      if (aRank !== bRank) return aRank - bRank;
+      return b.visitors_transitioned - a.visitors_transitioned;
+    });
+
+    return transitions.slice(0, limit);
   }
 }

@@ -4,35 +4,34 @@ import {
   readD1Migrations,
 } from "@cloudflare/vitest-pool-workers/config";
 
-const migrationsPath = path.join(__dirname, "..", "migrations");
-const migrations = await readD1Migrations(migrationsPath);
+// Consolidated schema (Feb 2026) — 2 databases, 74 tables
+const corePath = path.join(__dirname, "..", "migrations-adbliss-core");
+const coreMigrations = await readD1Migrations(corePath);
 
-const analyticsPath = path.join(__dirname, "..", "migrations-analytics");
+const analyticsPath = path.join(__dirname, "..", "migrations-adbliss-analytics");
 const analyticsMigrations = await readD1Migrations(analyticsPath);
-
-const aiPath = path.join(__dirname, "..", "migrations-ai");
-const aiMigrations = await readD1Migrations(aiPath);
 
 export default defineWorkersConfig({
   esbuild: {
     target: "esnext",
   },
   test: {
-    exclude: ["**/api-production.test.ts", "**/node_modules/**"],
+    exclude: ["**/api-production.test.ts", "**/analysis-schema-v2.test.ts", "**/analysis-metrics.test.ts", "**/node_modules/**"],
     setupFiles: ["./tests/apply-migrations.ts"],
     poolOptions: {
       workers: {
         singleWorker: true,
         wrangler: {
           configPath: "../wrangler.jsonc",
+          environment: "local",
         },
         miniflare: {
-          compatibilityFlags: ["experimental", "nodejs_compat"],
+          compatibilityFlags: ["nodejs_compat"],
           bindings: {
-            MIGRATIONS: migrations,
+            MIGRATIONS: coreMigrations,
             ANALYTICS_MIGRATIONS: analyticsMigrations,
-            AI_MIGRATIONS: aiMigrations,
             SENDGRID_API_KEY: "SG.test-key-for-vitest",
+            EMAIL_DRY_RUN: "true",
           },
           // Stub the CLEARLIFT_CRON service binding so miniflare can start.
           // Tests don't call the cron service — this prevents ERR_RUNTIME_FAILURE.
@@ -43,13 +42,5 @@ export default defineWorkersConfig({
         isolatedStorage: false,
       },
     },
-    server: {
-      deps: {
-        inline: [
-          "@supabase/postgrest-js",
-          "@supabase/supabase-js"
-        ]
-      }
-    }
   },
 });

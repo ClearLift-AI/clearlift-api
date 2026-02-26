@@ -14,7 +14,6 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { structuredLog } from "../../../utils/structured-logger";
-import { getShardDbForOrg } from "../../../services/shard-router";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GET /v1/analytics/cac/timeline
@@ -105,43 +104,24 @@ export class GetCACTimeline extends OpenAPIRoute {
 
       if (!hasTodayInHistory && todayStr >= startDateStr && todayStr <= endDateStr) {
         try {
-          const shardDb = await getShardDbForOrg(c.env, org_id);
-
-          // Step 1: Fetch macro goal IDs from DB + today's ad spend from shard (parallel)
-          const [todayMetrics, macroGoalsResult] = await Promise.all([
-            shardDb.prepare(`
+          // Step 1: Fetch today's ad spend + today's unified conversions (parallel)
+          const [todayMetrics, todayGoals] = await Promise.all([
+            c.env.ANALYTICS_DB.prepare(`
               SELECT SUM(spend_cents) as spend_cents, SUM(conversions) as conversions
               FROM ad_metrics
               WHERE organization_id = ? AND entity_type = 'campaign' AND metric_date = ?
             `).bind(org_id, todayStr).first<{ spend_cents: number | null; conversions: number | null }>(),
 
-            c.env.DB.prepare(`
-              SELECT id FROM conversion_goals
-              WHERE organization_id = ? AND is_conversion = 1 AND category = 'macro_conversion'
-            `).bind(org_id).all<{ id: string }>(),
+            c.env.ANALYTICS_DB.prepare(`
+              SELECT COUNT(*) as conversions, COALESCE(SUM(value_cents), 0) as revenue_cents
+              FROM conversions
+              WHERE organization_id = ?
+                AND DATE(conversion_timestamp) = ?
+            `).bind(org_id, todayStr).first<{ conversions: number | null; revenue_cents: number | null }>(),
           ]);
 
-          // Step 2: If macro goals exist, fetch today's goal conversions from ANALYTICS_DB
-          const macroGoalIds = (macroGoalsResult.results || []).map(g => g.id);
-          let todayGoals: { conversions: number | null; revenue_cents: number | null } | null = null;
-
-          if (macroGoalIds.length > 0 && c.env.ANALYTICS_DB) {
-            const placeholders = macroGoalIds.map(() => '?').join(',');
-            todayGoals = await c.env.ANALYTICS_DB.prepare(`
-              WITH unique_conversions AS (
-                SELECT DISTINCT COALESCE(conversion_id, id) as unique_id, value_cents
-                FROM goal_conversions
-                WHERE organization_id = ?
-                  AND goal_id IN (${placeholders})
-                  AND DATE(conversion_timestamp) = ?
-              )
-              SELECT COUNT(*) as conversions, SUM(value_cents) as revenue_cents
-              FROM unique_conversions
-            `).bind(org_id, ...macroGoalIds, todayStr).first<{ conversions: number | null; revenue_cents: number | null }>();
-          }
-
           const todaySpend = todayMetrics?.spend_cents || 0;
-          const todayPlatformConv = todayMetrics?.conversions || 0;
+          const todayPlatformConv = Math.round(todayMetrics?.conversions || 0);
           const todayGoalConv = todayGoals?.conversions || 0;
           const todayGoalRevenue = todayGoals?.revenue_cents || 0;
 
@@ -170,7 +150,7 @@ export class GetCACTimeline extends OpenAPIRoute {
       }
 
       // Fetch predictions (for forecast period)
-      const predictionsResult = await c.env.AI_DB.prepare(`
+      const predictionsResult = await c.env.DB.prepare(`
         SELECT prediction_date as date, predicted_cac_cents
         FROM cac_predictions
         WHERE organization_id = ?
@@ -183,7 +163,7 @@ export class GetCACTimeline extends OpenAPIRoute {
       }>();
 
       // Fetch baselines (for historical period)
-      const baselinesResult = await c.env.AI_DB.prepare(`
+      const baselinesResult = await c.env.DB.prepare(`
         SELECT baseline_date as date, baseline_cac_cents
         FROM cac_baselines
         WHERE organization_id = ?
@@ -207,8 +187,8 @@ export class GetCACTimeline extends OpenAPIRoute {
         historyMap.set(row.date, {
           cac_cents: row.cac_cents,
           conversion_source: row.conversion_source || 'platform',
-          conversions_goal: row.conversions_goal || 0,
-          conversions_platform: row.conversions_platform || 0,
+          conversions_goal: Math.round(row.conversions_goal || 0),
+          conversions_platform: Math.round(row.conversions_platform || 0),
           revenue_goal_cents: row.revenue_goal_cents || 0,
         });
       }
@@ -313,7 +293,7 @@ export class GenerateCACPredictions extends OpenAPIRoute {
 
     try {
       // Get pending recommendations with simulation data
-      const recsResult = await c.env.AI_DB.prepare(`
+      const recsResult = await c.env.DB.prepare(`
         SELECT
           id,
           simulation_data,
@@ -382,7 +362,7 @@ export class GenerateCACPredictions extends OpenAPIRoute {
 
       // Upsert predictions
       for (const pred of predictions) {
-        await c.env.AI_DB.prepare(`
+        await c.env.DB.prepare(`
           INSERT INTO cac_predictions (
             organization_id, prediction_date, predicted_cac_cents,
             recommendation_ids, analysis_run_id, assumptions
@@ -462,7 +442,7 @@ export class ComputeCACBaselines extends OpenAPIRoute {
 
     try {
       // 1. Find when AI recommendations were first accepted
-      const firstDecisionResult = await c.env.AI_DB.prepare(`
+      const firstDecisionResult = await c.env.DB.prepare(`
         SELECT MIN(applied_at) as first_ai_date
         FROM ai_decisions
         WHERE organization_id = ?
@@ -515,7 +495,7 @@ export class ComputeCACBaselines extends OpenAPIRoute {
 
         let baselinesCreated = 0;
         for (const day of allData.slice(-days)) {
-          await this.upsertBaseline(c.env.AI_DB, org_id, day.date, day.cac_cents, Math.round(avgCAC), 'average', {
+          await this.upsertBaseline(c.env.DB, org_id, day.date, day.cac_cents, Math.round(avgCAC), 'average', {
             method: 'insufficient_pre_ai_data',
             average_cac_cents: avgCAC
           });
@@ -562,7 +542,7 @@ export class ComputeCACBaselines extends OpenAPIRoute {
         baselineCAC = Math.max(baselineCAC, day.cac_cents * 0.5);
         baselineCAC = Math.min(baselineCAC, day.cac_cents * 3);
 
-        await this.upsertBaseline(c.env.AI_DB, org_id, day.date, day.cac_cents, Math.round(baselineCAC), 'trend_extrapolation', {
+        await this.upsertBaseline(c.env.DB, org_id, day.date, day.cac_cents, Math.round(baselineCAC), 'trend_extrapolation', {
           slope,
           intercept,
           r_squared,
@@ -573,7 +553,7 @@ export class ComputeCACBaselines extends OpenAPIRoute {
       }
 
       // 6. Get accepted decisions to show impact
-      const decisionsResult = await c.env.AI_DB.prepare(`
+      const decisionsResult = await c.env.DB.prepare(`
         SELECT id, recommended_action, impact
         FROM ai_decisions
         WHERE organization_id = ?
@@ -721,17 +701,17 @@ export class BackfillCACHistory extends OpenAPIRoute {
     const { org_id, days } = data.body;
 
     try {
-      // Check for macro conversion goals
-      const goalsResult = await c.env.DB.prepare(`
-        SELECT id, name FROM conversion_goals
-        WHERE organization_id = ? AND is_conversion = 1 AND category = 'macro_conversion'
-      `).bind(org_id).all<{ id: string; name: string }>();
-      const macroGoals = goalsResult.results || [];
-      const hasGoals = macroGoals.length > 0;
+      // Check for connections with conversion_events configured (non-empty array)
+      const connectorsResult = await c.env.DB.prepare(`
+        SELECT id, platform FROM platform_connections
+        WHERE organization_id = ? AND is_active = 1
+          AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
+      `).bind(org_id).all<{ id: string; platform: string }>();
+      const connectorIds = (connectorsResult.results || []).map(c => c.id);
+      const hasGoals = connectorIds.length > 0;
 
-      // Query daily spend and conversions from unified ad_metrics table (shard table)
-      const shardDb = await getShardDbForOrg(c.env, org_id);
-      const metricsResult = await shardDb.prepare(`
+      // Query daily spend and conversions from unified ad_metrics table
+      const metricsResult = await c.env.ANALYTICS_DB.prepare(`
         SELECT
           metric_date as date,
           SUM(spend_cents) as spend_cents,
@@ -754,40 +734,45 @@ export class BackfillCACHistory extends OpenAPIRoute {
         platformMap.set(row.date, { spend_cents: row.spend_cents, conversions: row.conversions });
       }
 
-      // Fetch goal-linked conversions if goals exist
-      let goalMap = new Map<string, { conversions: number; revenue_cents: number }>();
+      // Fetch unified conversions with generic per-source breakdown
+      interface GoalDay { conversions: number; revenue_cents: number; perSource: Record<string, { conversions: number; revenue_cents: number }> }
+      let goalMap = new Map<string, GoalDay>();
       if (hasGoals) {
-        const goalIds = macroGoals.map(g => g.id);
-        const placeholders = goalIds.map(() => '?').join(',');
-
         const goalResult = await c.env.ANALYTICS_DB.prepare(`
-          WITH unique_conversions AS (
-            SELECT DISTINCT
-              COALESCE(conversion_id, id) as unique_id,
-              DATE(conversion_timestamp) as date,
-              value_cents
-            FROM goal_conversions
-            WHERE organization_id = ?
-              AND goal_id IN (${placeholders})
-              AND DATE(conversion_timestamp) >= date('now', '-' || ? || ' days')
-          )
-          SELECT date, COUNT(*) as conversions, SUM(value_cents) as revenue_cents
-          FROM unique_conversions
-          GROUP BY date
-        `).bind(org_id, ...goalIds, days).all<{
+          SELECT
+            DATE(conversion_timestamp) as date,
+            conversion_source,
+            COUNT(*) as conversions,
+            COALESCE(SUM(value_cents), 0) as revenue_cents
+          FROM conversions
+          WHERE organization_id = ?
+            AND DATE(conversion_timestamp) >= date('now', '-' || ? || ' days')
+          GROUP BY DATE(conversion_timestamp), conversion_source
+        `).bind(org_id, days).all<{
           date: string;
+          conversion_source: string;
           conversions: number;
           revenue_cents: number;
         }>();
 
         for (const row of goalResult.results || []) {
-          goalMap.set(row.date, { conversions: row.conversions, revenue_cents: row.revenue_cents || 0 });
+          if (!goalMap.has(row.date)) {
+            goalMap.set(row.date, { conversions: 0, revenue_cents: 0, perSource: {} });
+          }
+          const day = goalMap.get(row.date)!;
+          day.conversions += row.conversions;
+          day.revenue_cents += row.revenue_cents || 0;
+          const src = (row.conversion_source || 'unknown').toLowerCase();
+          day.perSource[src] = {
+            conversions: (day.perSource[src]?.conversions || 0) + row.conversions,
+            revenue_cents: (day.perSource[src]?.revenue_cents || 0) + (row.revenue_cents || 0),
+          };
         }
       }
 
       // Merge dates from both sources
       const allDates = new Set([...platformMap.keys(), ...goalMap.keys()]);
-      const goalIdsJson = hasGoals ? JSON.stringify(macroGoals.map(g => g.id)) : null;
+      const goalIdsJson = hasGoals ? JSON.stringify(connectorIds) : null;
 
       if (allDates.size === 0) {
         return success(c, {
@@ -804,19 +789,22 @@ export class BackfillCACHistory extends OpenAPIRoute {
         const goal = goalMap.get(date);
 
         const useGoals = hasGoals && goal && goal.conversions > 0;
-        const primaryConversions = useGoals ? goal.conversions : platform.conversions;
+        const primaryConversions = useGoals ? goal.conversions : Math.round(platform.conversions);
         const conversionSource = useGoals ? 'goal' : 'platform';
 
         if (platform.spend_cents === 0 && primaryConversions === 0) continue;
 
         const cacCents = primaryConversions > 0 ? Math.round(platform.spend_cents / primaryConversions) : 0;
 
+        const perSourceJson = JSON.stringify(goal?.perSource || {});
+
         await c.env.ANALYTICS_DB.prepare(`
           INSERT INTO cac_history (
             organization_id, date, spend_cents, conversions, revenue_cents, cac_cents,
-            conversions_goal, conversions_platform, conversion_source, goal_ids, revenue_goal_cents
+            conversions_goal, conversions_platform, conversion_source, goal_ids, revenue_goal_cents,
+            per_source_json
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(organization_id, date)
           DO UPDATE SET
             spend_cents = excluded.spend_cents,
@@ -828,12 +816,14 @@ export class BackfillCACHistory extends OpenAPIRoute {
             conversion_source = excluded.conversion_source,
             goal_ids = excluded.goal_ids,
             revenue_goal_cents = excluded.revenue_goal_cents,
+            per_source_json = excluded.per_source_json,
             created_at = datetime('now')
         `).bind(
           org_id, date, platform.spend_cents, primaryConversions,
           goal?.revenue_cents || 0, cacCents,
-          goal?.conversions || 0, platform.conversions,
-          conversionSource, goalIdsJson, goal?.revenue_cents || 0
+          goal?.conversions || 0, Math.round(platform.conversions),
+          conversionSource, goalIdsJson, goal?.revenue_cents || 0,
+          perSourceJson
         ).run();
 
         rowsInserted++;
@@ -844,7 +834,7 @@ export class BackfillCACHistory extends OpenAPIRoute {
         success: true,
         rows_inserted: rowsInserted,
         conversion_source: hasGoals ? 'goal' : 'platform',
-        goal_count: macroGoals.length,
+        goal_count: connectorIds.length,
         date_range: {
           start: sortedDates[0],
           end: sortedDates[sortedDates.length - 1]
@@ -865,8 +855,8 @@ export class BackfillCACHistory extends OpenAPIRoute {
 export class GetCACSummary extends OpenAPIRoute {
   schema = {
     tags: ["Analytics"],
-    summary: "Get aggregated CAC summary with goal awareness",
-    description: "Returns overall CAC metrics for the selected period, including goal vs platform conversion split",
+    summary: "Get aggregated CAC summary with conversion source awareness",
+    description: "Returns overall CAC metrics for the selected period, including connector vs platform conversion split",
     operationId: "get-cac-summary",
     security: [{ bearerAuth: [] }],
     request: {
@@ -886,20 +876,14 @@ export class GetCACSummary extends OpenAPIRoute {
 
     try {
       // Aggregate cac_history for the period (from ANALYTICS_DB)
+      // per_source_json is aggregated from individual rows since JSON can't be SUMmed
       const historyResult = await c.env.ANALYTICS_DB.prepare(`
         SELECT
           SUM(spend_cents) as total_spend_cents,
           SUM(conversions) as total_conversions,
           SUM(conversions_goal) as total_conversions_goal,
           SUM(conversions_platform) as total_conversions_platform,
-          SUM(revenue_goal_cents) as total_revenue_goal_cents,
-          SUM(conversions_stripe) as total_conversions_stripe,
-          SUM(conversions_shopify) as total_conversions_shopify,
-          SUM(conversions_jobber) as total_conversions_jobber,
-          SUM(conversions_tag) as total_conversions_tag,
-          SUM(revenue_stripe_cents) as total_revenue_stripe_cents,
-          SUM(revenue_shopify_cents) as total_revenue_shopify_cents,
-          SUM(revenue_jobber_cents) as total_revenue_jobber_cents
+          SUM(revenue_goal_cents) as total_revenue_goal_cents
         FROM cac_history
         WHERE organization_id = ?
           AND date >= date('now', '-' || ? || ' days')
@@ -909,14 +893,49 @@ export class GetCACSummary extends OpenAPIRoute {
         total_conversions_goal: number | null;
         total_conversions_platform: number | null;
         total_revenue_goal_cents: number | null;
-        total_conversions_stripe: number | null;
-        total_conversions_shopify: number | null;
-        total_conversions_jobber: number | null;
-        total_conversions_tag: number | null;
-        total_revenue_stripe_cents: number | null;
-        total_revenue_shopify_cents: number | null;
-        total_revenue_jobber_cents: number | null;
       }>();
+
+      // Aggregate per-source JSON from individual daily rows
+      const perSourceRows = await c.env.ANALYTICS_DB.prepare(`
+        SELECT per_source_json FROM cac_history
+        WHERE organization_id = ?
+          AND date >= date('now', '-' || ? || ' days')
+          AND per_source_json IS NOT NULL AND per_source_json != '{}'
+      `).bind(org_id, days).all<{ per_source_json: string }>();
+
+      const aggregatedPerSource: Record<string, { conversions: number; revenue_cents: number }> = {};
+      for (const row of perSourceRows.results || []) {
+        try {
+          const daySource = JSON.parse(row.per_source_json) as Record<string, { conversions?: number; revenue_cents?: number }>;
+          for (const [src, data] of Object.entries(daySource)) {
+            if (!aggregatedPerSource[src]) {
+              aggregatedPerSource[src] = { conversions: 0, revenue_cents: 0 };
+            }
+            aggregatedPerSource[src].conversions += data.conversions || 0;
+            aggregatedPerSource[src].revenue_cents += data.revenue_cents || 0;
+          }
+        } catch { /* skip malformed JSON */ }
+      }
+
+      // Fallback: if per_source_json was never populated, derive from conversion_daily_summary
+      if (Object.keys(aggregatedPerSource).length === 0) {
+        const fallbackResult = await c.env.ANALYTICS_DB.prepare(`
+          SELECT conversion_source, SUM(conversion_count) as conv, SUM(total_value_cents) as rev
+          FROM conversion_daily_summary
+          WHERE organization_id = ?
+            AND summary_date >= date('now', '-' || ? || ' days')
+          GROUP BY conversion_source
+        `).bind(org_id, days).all<{ conversion_source: string; conv: number; rev: number }>();
+
+        for (const row of fallbackResult.results || []) {
+          if (row.conv > 0) {
+            aggregatedPerSource[row.conversion_source] = {
+              conversions: row.conv,
+              revenue_cents: row.rev || 0,
+            };
+          }
+        }
+      }
 
       // SUM returns null when no rows match the date range — propagate as null
       // so the dashboard fallback chain fires. 0 is only returned for genuine zeros.
@@ -934,45 +953,86 @@ export class GetCACSummary extends OpenAPIRoute {
       const conversionSource = conversionsGoal > 0 ? 'goal' : 'platform';
       const cacCents = conversions > 0 ? Math.round(spendCents / conversions) : 0;
 
-      // Get goal names if using goals
+      // Get connector names if using goal-linked conversions
       let goalCount = 0;
       let goalNames: string[] = [];
+      const platformDisplayNames: Record<string, string> = {
+        stripe: 'Stripe Payment',
+        shopify: 'Shopify Order',
+        jobber: 'Jobber Invoice',
+        hubspot: 'HubSpot Deal',
+        adbliss_tag: 'Tag Conversion',
+        lemon_squeezy: 'Lemon Squeezy Payment',
+        paddle: 'Paddle Payment',
+        chargebee: 'Chargebee Subscription',
+        recurly: 'Recurly Subscription',
+      };
       if (conversionsGoal > 0) {
-        const goalsResult = await c.env.DB.prepare(`
-          SELECT name FROM conversion_goals
-          WHERE organization_id = ? AND is_conversion = 1 AND category = 'macro_conversion'
-        `).bind(org_id).all<{ name: string }>();
-        goalNames = (goalsResult.results || []).map(g => g.name);
+        // First try: live connectors with conversion_events configured
+        const connectorsResult = await c.env.DB.prepare(`
+          SELECT platform, json_extract(settings, '$.conversion_events') as events
+          FROM platform_connections
+          WHERE organization_id = ? AND is_active = 1
+            AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
+        `).bind(org_id).all<{ platform: string; events: string }>();
+
+        goalNames = (connectorsResult.results || []).map(
+          r => platformDisplayNames[r.platform] || `${r.platform} Conversion`
+        );
         goalCount = goalNames.length;
+
+        // Fallback: if live lookup returns nothing, use stored goal_ids from cac_history
+        if (goalCount === 0) {
+          const storedGoals = await c.env.ANALYTICS_DB.prepare(`
+            SELECT DISTINCT goal_ids FROM cac_history
+            WHERE organization_id = ? AND goal_ids IS NOT NULL AND goal_ids != ''
+              AND date >= date('now', '-' || ? || ' days')
+            LIMIT 10
+          `).bind(org_id, days).all<{ goal_ids: string }>();
+
+          const connectorIds = new Set<string>();
+          for (const row of storedGoals.results || []) {
+            try {
+              const ids: string[] = JSON.parse(row.goal_ids);
+              ids.forEach(id => connectorIds.add(id));
+            } catch { /* skip malformed */ }
+          }
+
+          if (connectorIds.size > 0) {
+            const placeholders = Array.from(connectorIds).map(() => '?').join(',');
+            const connectors = await c.env.DB.prepare(`
+              SELECT platform FROM platform_connections WHERE id IN (${placeholders})
+            `).bind(...Array.from(connectorIds)).all<{ platform: string }>();
+
+            goalNames = (connectors.results || []).map(
+              r => platformDisplayNames[r.platform] || `${r.platform} Conversion`
+            );
+            goalCount = goalNames.length;
+          }
+        }
+      }
+
+      // Filter out sources with 0 conversions for a cleaner response
+      const perSource: Record<string, { conversions: number; revenue_cents?: number }> = {};
+      for (const [src, data] of Object.entries(aggregatedPerSource)) {
+        if (data.conversions > 0) {
+          perSource[src] = data.revenue_cents > 0
+            ? { conversions: data.conversions, revenue_cents: data.revenue_cents }
+            : { conversions: data.conversions };
+        }
       }
 
       return success(c, {
         cac_cents: cacCents,
-        conversions,
+        conversions: Math.round(conversions),
         conversion_source: conversionSource,
-        conversions_goal: conversionsGoal,
-        conversions_platform: conversionsPlatform,
+        conversions_goal: Math.round(conversionsGoal),
+        conversions_platform: Math.round(conversionsPlatform),
         revenue_goal_cents: revenueGoalCents,
         spend_cents: spendCents,
         goal_count: goalCount,
         goal_names: goalNames,
-        per_source: {
-          stripe: {
-            conversions: historyResult.total_conversions_stripe ?? 0,
-            revenue_cents: historyResult.total_revenue_stripe_cents ?? 0,
-          },
-          shopify: {
-            conversions: historyResult.total_conversions_shopify ?? 0,
-            revenue_cents: historyResult.total_revenue_shopify_cents ?? 0,
-          },
-          jobber: {
-            conversions: historyResult.total_conversions_jobber ?? 0,
-            revenue_cents: historyResult.total_revenue_jobber_cents ?? 0,
-          },
-          tag: {
-            conversions: historyResult.total_conversions_tag ?? 0,
-          },
-        },
+        per_source: perSource,
       });
 
     } catch (err) {

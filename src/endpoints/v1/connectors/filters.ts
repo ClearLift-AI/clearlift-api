@@ -468,30 +468,30 @@ export class TestFilterRule extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "Access denied", 403);
     }
 
-    // Get sample data from D1 ANALYTICS_DB (stripe_charges table)
+    // Get sample data from D1 ANALYTICS_DB (connector_events table)
     const endDate = new Date();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - 30);
 
     let sampleData: any[] = [];
     try {
-      // Query stripe_charges from ANALYTICS_DB
+      // Query connector_events from ANALYTICS_DB
       const result = await c.env.ANALYTICS_DB.prepare(`
         SELECT
           id,
-          charge_id,
-          customer_id,
-          amount_cents,
+          external_id,
+          customer_external_id,
+          value_cents,
           currency,
           status,
-          payment_method_type,
-          stripe_created_at,
+          event_type,
+          transacted_at,
           metadata
-        FROM stripe_charges
+        FROM connector_events
         WHERE connection_id = ?
-          AND stripe_created_at >= ?
-          AND stripe_created_at <= ?
-        ORDER BY stripe_created_at DESC
+          AND transacted_at >= ?
+          AND transacted_at <= ?
+        ORDER BY transacted_at DESC
         LIMIT ?
       `).bind(
         connectionId,
@@ -504,13 +504,13 @@ export class TestFilterRule extends OpenAPIRoute {
       sampleData = (result.results || []).map((row: any) => {
         const metadata = row.metadata ? JSON.parse(row.metadata) : {};
         return {
-          charge_id: row.charge_id,
-          customer_id: row.customer_id,
-          amount: row.amount_cents / 100,
+          charge_id: row.external_id,
+          customer_id: row.customer_external_id,
+          amount: (row.value_cents || 0) / 100,
           currency: row.currency,
           status: row.status,
-          payment_method_type: row.payment_method_type,
-          date: row.stripe_created_at,
+          payment_method_type: metadata.payment_method_type || null,
+          date: row.transacted_at,
           charge_metadata: metadata.charge || metadata,
           product_metadata: metadata.product || {}
         };
@@ -603,21 +603,21 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
       return error(c, "FORBIDDEN", "Access denied", 403);
     }
 
-    // Discover metadata keys from D1 ANALYTICS_DB by sampling recent charges
+    // Discover metadata keys from D1 ANALYTICS_DB by sampling recent events
     let keys: Record<string, string[]> = {
       charge: [],
       product: []
     };
 
     try {
-      // Get recent charges with metadata from D1
+      // Get recent events with metadata from D1
       const result = await c.env.ANALYTICS_DB.prepare(`
         SELECT metadata
-        FROM stripe_charges
+        FROM connector_events
         WHERE connection_id = ?
           AND metadata IS NOT NULL
           AND metadata != '{}'
-        ORDER BY stripe_created_at DESC
+        ORDER BY transacted_at DESC
         LIMIT 100
       `).bind(connectionId).all();
 
@@ -653,24 +653,8 @@ export class DiscoverMetadataKeys extends OpenAPIRoute {
       // Return empty keys if D1 query fails - don't block the response
     }
 
-    // Get cached metadata key info from main D1 DB (may not exist for new connections)
-    let cachedKeys: any[] = [];
-    try {
-      const result = await c.env.DB.prepare(`
-        SELECT object_type, key_path, sample_values, value_type, occurrence_count
-        FROM stripe_metadata_keys
-        WHERE connection_id = ?
-        ORDER BY occurrence_count DESC
-      `).bind(connectionId).all();
-      cachedKeys = result.results || [];
-    } catch (err: any) {
-      structuredLog('ERROR', 'Failed to get cached metadata keys', { endpoint: 'GET /v1/connectors/:id/filters/discover', error: err instanceof Error ? err.message : String(err) });
-      // Table may not exist - not a critical error
-    }
-
     return success(c, {
       discovered_keys: keys,
-      metadata_info: cachedKeys,
       total_keys: keys.charge.length + keys.product.length
     });
   }

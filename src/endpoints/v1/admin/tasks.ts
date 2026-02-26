@@ -543,7 +543,7 @@ export class AdminStartImpersonation extends OpenAPIRoute {
     // HMAC-sign the impersonation token to prevent forgery
     const payload = btoa(JSON.stringify(tokenPayload));
     const encoder = new TextEncoder();
-    const keyData = encoder.encode(c.env.SESSION_SECRET || 'impersonation-fallback-key');
+    const keyData = encoder.encode((c.env as unknown as Record<string, string>).SESSION_SECRET || 'impersonation-fallback-key');
     const key = await crypto.subtle.importKey(
       'raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
     );

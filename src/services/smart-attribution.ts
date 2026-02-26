@@ -265,14 +265,14 @@ export class SmartAttributionService {
       funnelData,
     ] = await Promise.all([
       this.getPlatformMetrics(orgId, startDate, endDate),
-      orgTag ? this.getUtmPerformance(orgTag, startDate, endDate) : Promise.resolve([]),
+      this.getUtmPerformance(orgId, startDate, endDate),
       this.getConnectorRevenue(orgId, startDate, endDate),
-      orgTag ? this.getDailyUtmPerformance(orgTag, startDate, endDate) : Promise.resolve([]),
+      this.getDailyUtmPerformance(orgId, startDate, endDate),
       this.getDailyConnectorRevenue(orgId, startDate, endDate),
       this.getDailyPlatformMetrics(orgId, startDate, endDate),
       this.getClickIdStats(orgId, startDate, endDate),
       this.getClickLevelAttribution(orgId, startDate, endDate),
-      orgTag ? this.getFunnelPositionData(orgId, orgTag, startDate, endDate) : Promise.resolve([]),
+      this.getFunnelPositionData(orgId, startDate, endDate),
     ]);
 
     console.log(`[SmartAttribution] Data sources: platforms=${platformMetrics.length}, utm=${utmPerformance.length}, connectors=${connectorRevenue.length}, clickLevel=${clickLevelAttribution.length}, funnelSteps=${funnelData.length}`);
@@ -400,11 +400,10 @@ export class SmartAttributionService {
 
   /**
    * Get UTM performance from D1 utm_performance table
-   * Note: Uses org_tag, not organization_id
    * Includes DIRECT traffic (null/empty utm_source) as a separate channel
    */
   private async getUtmPerformance(
-    orgTag: string,
+    orgId: string,
     startDate: string,
     endDate: string
   ): Promise<UtmPerformance[]> {
@@ -421,7 +420,7 @@ export class SmartAttributionService {
           SUM(conversions) as conversions,
           SUM(revenue_cents) / 100.0 as revenue
         FROM utm_performance
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND date >= ?
           AND date <= ?
           AND utm_source IS NOT NULL
@@ -429,7 +428,7 @@ export class SmartAttributionService {
         GROUP BY utm_source, utm_medium, utm_campaign
         ORDER BY SUM(sessions) DESC
         LIMIT 100
-      `).bind(orgTag, startDate, endDate).all<{
+      `).bind(orgId, startDate, endDate).all<{
         utm_source: string;
         utm_medium: string | null;
         utm_campaign: string | null;
@@ -460,11 +459,11 @@ export class SmartAttributionService {
           SUM(conversions) as conversions,
           SUM(revenue_cents) / 100.0 as revenue
         FROM utm_performance
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND date >= ?
           AND date <= ?
           AND (utm_source IS NULL OR utm_source = '')
-      `).bind(orgTag, startDate, endDate).first<{
+      `).bind(orgId, startDate, endDate).first<{
         sessions: number;
         conversions: number;
         revenue: number;
@@ -498,150 +497,76 @@ export class SmartAttributionService {
   ): Promise<ConnectorRevenue[]> {
     const results: ConnectorRevenue[] = [];
 
-    // Query Stripe - only count actual CONVERSIONS (new subscriptions/purchases)
-    // - subscription_create: New subscription (first payment)
-    // - NULL billing_reason with succeeded status: One-time charge
-    // Do NOT count subscription_cycle (renewals) as conversions
+    // Query connector_events for all revenue platforms (stripe, shopify, jobber, etc.)
     try {
-      const stripeResult = await this.analyticsDb.prepare(`
+      const connectorResult = await this.analyticsDb.prepare(`
         SELECT
+          source_platform,
           COUNT(*) as conversions,
-          COALESCE(SUM(amount_cents), 0) / 100.0 as revenue
-        FROM stripe_charges
+          COALESCE(SUM(value_cents), 0) / 100.0 as revenue
+        FROM connector_events
         WHERE organization_id = ?
-          AND DATE(stripe_created_at) >= ?
-          AND DATE(stripe_created_at) <= ?
-          AND (
-            billing_reason = 'subscription_create'
-            OR (billing_reason IS NULL AND status = 'succeeded')
-          )
-      `).bind(orgId, startDate, endDate).first<{
+          AND DATE(transacted_at) >= ?
+          AND DATE(transacted_at) <= ?
+          AND status IN ('succeeded', 'paid', 'completed', 'active')
+        GROUP BY source_platform
+      `).bind(orgId, startDate, endDate).all<{
+        source_platform: string;
         conversions: number;
         revenue: number;
       }>();
 
-      if (stripeResult && stripeResult.conversions > 0) {
-        results.push({
-          source: 'stripe',
-          conversions: stripeResult.conversions,
-          revenue: stripeResult.revenue || 0,
-        });
+      for (const row of connectorResult.results || []) {
+        if (row.conversions > 0) {
+          results.push({
+            source: row.source_platform,
+            conversions: row.conversions,
+            revenue: row.revenue || 0,
+          });
+        }
       }
     } catch (err) {
-      structuredLog('WARN', 'Failed to query Stripe revenue', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
-    }
-
-    // Query Shopify if available
-    try {
-      const shopifyResult = await this.analyticsDb.prepare(`
-        SELECT
-          COUNT(*) as conversions,
-          COALESCE(SUM(total_price_cents), 0) / 100.0 as revenue
-        FROM shopify_orders
-        WHERE organization_id = ?
-          AND DATE(created_at) >= ?
-          AND DATE(created_at) <= ?
-      `).bind(orgId, startDate, endDate).first<{
-        conversions: number;
-        revenue: number;
-      }>();
-
-      if (shopifyResult && shopifyResult.conversions > 0) {
-        results.push({
-          source: 'shopify',
-          conversions: shopifyResult.conversions,
-          revenue: shopifyResult.revenue || 0,
-        });
-      }
-    } catch (err) {
-      // Table might not exist
+      structuredLog('WARN', 'Failed to query connector revenue', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
     }
 
     return results;
   }
 
   /**
-   * Get funnel position data for weighting attribution
-   * Sessions that reached higher funnel positions (closer to conversion) get more credit
+   * Get funnel position data for weighting attribution.
    *
-   * This uses the same data sources as flow-metrics for consistency:
-   * - conversion_goals table for stage definitions
-   * - daily_metrics.by_channel for channel breakdown
-   * - Ad platform / connector queries for actual visitors per stage
+   * Returns connector-based funnel data from platform_connections with
+   * conversion_events configured, plus ad platform click counts.
    */
   private async getFunnelPositionData(
     orgId: string,
-    orgTag: string,
     startDate: string,
     endDate: string
   ): Promise<FunnelPositionData[]> {
     try {
-      // Get all goals/stages with their positions
-      const goalsResult = await this.mainDb.prepare(`
-        SELECT
-          id, name, type, connector, connector_event_type,
-          COALESCE(position_row, priority, 0) as position_row,
-          COALESCE(position_col, 0) as position_col,
-          is_conversion, flow_tag, is_exclusive
-        FROM conversion_goals
+      // Get connectors with conversion events configured (non-empty array)
+      const connectionsResult = await this.mainDb.prepare(`
+        SELECT id, platform, settings
+        FROM platform_connections
         WHERE organization_id = ? AND is_active = 1
-        ORDER BY position_row ASC, position_col ASC
+          AND json_array_length(json_extract(settings, '$.conversion_events')) > 0
       `).bind(orgId).all<{
         id: string;
-        name: string;
-        type: string;
-        connector: string | null;
-        connector_event_type: string | null;
-        position_row: number;
-        position_col: number;
-        is_conversion: number | null;
-        flow_tag: string | null;
-        is_exclusive: number | null;
+        platform: string;
+        settings: string | null;
       }>();
 
-      const goals = goalsResult.results || [];
-      if (goals.length === 0) {
+      const connections = connectionsResult.results || [];
+      if (connections.length === 0) {
         return [];
-      }
-
-      // Query goal_relationships for exclusive flow synthesis
-      const relsResult = await this.mainDb.prepare(`
-        SELECT upstream_goal_id, downstream_goal_id, flow_tag, is_exclusive
-        FROM goal_relationships
-        WHERE organization_id = ?
-      `).bind(orgId).all<{
-        upstream_goal_id: string;
-        downstream_goal_id: string;
-        flow_tag: string | null;
-        is_exclusive: number | null;
-      }>();
-      const rels = relsResult.results || [];
-
-      // Synthesize flow_tag on goals when is_exclusive=1 but flow_tag is null
-      const goalMap = new Map(goals.map(g => [g.id, g]));
-      for (const rel of rels) {
-        if (rel.is_exclusive) {
-          const syntheticTag = rel.flow_tag || `_exclusive_${rel.upstream_goal_id}_${rel.downstream_goal_id}`;
-          const upstream = goalMap.get(rel.upstream_goal_id);
-          const downstream = goalMap.get(rel.downstream_goal_id);
-          if (upstream && !upstream.flow_tag) {
-            upstream.flow_tag = syntheticTag;
-            upstream.is_exclusive = 1;
-          }
-          if (downstream && !downstream.flow_tag) {
-            downstream.flow_tag = syntheticTag;
-            downstream.is_exclusive = 1;
-          }
-        }
       }
 
       // Get channel distribution from daily_metrics
       const channelResult = await this.analyticsDb.prepare(`
         SELECT by_channel FROM daily_metrics
-        WHERE org_tag = ? AND date >= ? AND date <= ?
-      `).bind(orgTag, startDate.split('T')[0], endDate.split('T')[0]).all<{ by_channel: string | null }>();
+        WHERE organization_id = ? AND date >= ? AND date <= ?
+      `).bind(orgId, startDate.split('T')[0], endDate.split('T')[0]).all<{ by_channel: string | null }>();
 
-      // Aggregate channel distribution
       const channelDistribution: Record<string, number> = {};
       let totalChannelEvents = 0;
       for (const row of channelResult.results || []) {
@@ -659,17 +584,14 @@ export class SmartAttributionService {
       }
 
       const funnelData: FunnelPositionData[] = [];
-      const maxRow = Math.max(...goals.map(g => g.position_row), 0);
 
-      for (const goal of goals) {
-        const connector = goal.connector || 'clearlift_tag';
+      // Ad platforms are top-of-funnel (position 1), revenue connectors are bottom (position 2)
+      for (const conn of connections) {
+        const platform = conn.platform;
         let visitors = 0;
 
-        // Query visitors based on connector type (same logic as flow-metrics)
         try {
-          if (connector === 'google_ads' || connector === 'facebook_ads' || connector === 'tiktok_ads') {
-            // Map connector name to platform name
-            const platform = connector === 'google_ads' ? 'google' : connector === 'facebook_ads' ? 'facebook' : 'tiktok';
+          if (['google', 'facebook', 'tiktok'].includes(platform)) {
             const result = await this.analyticsDb.prepare(`
               SELECT COALESCE(SUM(m.clicks), 0) as clicks
               FROM ad_campaigns c
@@ -681,33 +603,27 @@ export class SmartAttributionService {
               WHERE c.organization_id = ? AND c.platform = ?
             `).bind(startDate, endDate, orgId, platform).first<{ clicks: number }>();
             visitors = result?.clicks || 0;
-          } else if (connector === 'stripe') {
+          } else {
+            // Revenue connector — count events from connector_events
             const result = await this.analyticsDb.prepare(`
-              SELECT COUNT(*) as conversions FROM stripe_charges
-              WHERE organization_id = ? AND DATE(stripe_created_at) >= ? AND DATE(stripe_created_at) <= ?
-                AND (billing_reason = 'subscription_create' OR (billing_reason IS NULL AND status = 'succeeded'))
-            `).bind(orgId, startDate, endDate).first<{ conversions: number }>();
-            visitors = result?.conversions || 0;
-          } else if (connector === 'shopify') {
-            const result = await this.analyticsDb.prepare(`
-              SELECT COUNT(*) as conversions FROM shopify_orders
-              WHERE organization_id = ? AND DATE(created_at) >= ? AND DATE(created_at) <= ?
-            `).bind(orgId, startDate, endDate).first<{ conversions: number }>();
+              SELECT COUNT(*) as conversions FROM connector_events
+              WHERE organization_id = ? AND source_platform = ?
+                AND DATE(transacted_at) >= ? AND DATE(transacted_at) <= ?
+                AND status IN ('succeeded', 'paid', 'completed', 'active')
+            `).bind(orgId, platform, startDate, endDate).first<{ conversions: number }>();
             visitors = result?.conversions || 0;
           }
         } catch (err) {
-          structuredLog('WARN', 'Failed to fetch visitors for connector', { service: 'smart-attribution', connector, error: err instanceof Error ? err.message : String(err) });
+          structuredLog('WARN', 'Failed to fetch visitors for connector', { service: 'smart-attribution', platform, error: err instanceof Error ? err.message : String(err) });
         }
 
-        // Build by_channel for this goal
         const byChannel: Record<string, number> = {};
         if (visitors > 0) {
-          if (connector === 'google_ads') {
+          if (platform === 'google') {
             byChannel['paid_search'] = visitors;
-          } else if (connector === 'facebook_ads' || connector === 'tiktok_ads') {
+          } else if (platform === 'facebook' || platform === 'tiktok') {
             byChannel['paid_social'] = visitors;
           } else if (totalChannelEvents > 0) {
-            // Distribute based on channel proportions
             for (const [channel, eventCount] of Object.entries(channelDistribution)) {
               const ratio = eventCount / totalChannelEvents;
               const attributed = Math.round(visitors * ratio);
@@ -718,29 +634,23 @@ export class SmartAttributionService {
           }
         }
 
-        // Funnel position = inverted row (higher row = closer to conversion = higher position)
-        // Position 0 = top of funnel, maxRow = bottom (conversion)
-        const funnelPosition = maxRow - goal.position_row + 1;
-
-        // Conversion rate approximation: stages closer to conversion get higher rate
-        const conversionRate = goal.is_conversion ? 1.0 : (funnelPosition / (maxRow + 1));
+        // Flat funnel: ad platforms = position 2, revenue connectors = position 1
+        const isAdPlatform = ['google', 'facebook', 'tiktok'].includes(platform);
+        const funnelPosition = isAdPlatform ? 1 : 2;
 
         funnelData.push({
-          goalId: goal.id,
-          goalName: goal.name,
+          goalId: conn.id,
+          goalName: platform,
           funnelPosition,
-          conversionRate,
+          conversionRate: isAdPlatform ? 0.5 : 1.0,
           visitorCount: visitors,
           byChannel,
-          flowTag: goal.flow_tag || null,
-          isExclusive: !!(goal.is_exclusive),
+          flowTag: null,
+          isExclusive: false,
         });
       }
 
-      // Sort by funnel position (higher = closer to conversion)
       funnelData.sort((a, b) => b.funnelPosition - a.funnelPosition);
-
-      console.log(`[SmartAttribution] Funnel data: ${funnelData.length} goals from flow builder`);
       return funnelData;
     } catch (err) {
       structuredLog('WARN', 'Failed to query funnel position data', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
@@ -1576,7 +1486,7 @@ export class SmartAttributionService {
    * Get daily UTM performance grouped by date and source
    */
   private async getDailyUtmPerformance(
-    orgTag: string,
+    orgId: string,
     startDate: string,
     endDate: string
   ): Promise<DailyUtmPerformance[]> {
@@ -1593,12 +1503,12 @@ export class SmartAttributionService {
           SUM(conversions) as conversions,
           SUM(revenue_cents) / 100.0 as revenue
         FROM utm_performance
-        WHERE org_tag = ?
+        WHERE organization_id = ?
           AND date >= ?
           AND date <= ?
         GROUP BY date, utm_source, utm_medium
         ORDER BY date, sessions DESC
-      `).bind(orgTag, startDate, endDate).all<{
+      `).bind(orgId, startDate, endDate).all<{
         date: string;
         utm_source: string | null;
         utm_medium: string | null;
@@ -1634,73 +1544,38 @@ export class SmartAttributionService {
   ): Promise<DailyConnectorRevenue[]> {
     const results: DailyConnectorRevenue[] = [];
 
-    // Query Stripe by date - only count actual CONVERSIONS (new subscriptions/purchases)
-    // - subscription_create: New subscription (first payment)
-    // - NULL billing_reason with succeeded status: One-time charge
-    // Do NOT count subscription_cycle (renewals) as conversions
+    // Query all revenue connectors from connector_events by date
     try {
-      const stripeResult = await this.analyticsDb.prepare(`
+      const connectorResult = await this.analyticsDb.prepare(`
         SELECT
-          DATE(stripe_created_at) as date,
+          DATE(transacted_at) as date,
+          source_platform,
           COUNT(*) as conversions,
-          COALESCE(SUM(amount_cents), 0) / 100.0 as revenue
-        FROM stripe_charges
+          COALESCE(SUM(value_cents), 0) / 100.0 as revenue
+        FROM connector_events
         WHERE organization_id = ?
-          AND DATE(stripe_created_at) >= ?
-          AND DATE(stripe_created_at) <= ?
-          AND (
-            billing_reason = 'subscription_create'
-            OR (billing_reason IS NULL AND status = 'succeeded')
-          )
-        GROUP BY DATE(stripe_created_at)
+          AND DATE(transacted_at) >= ?
+          AND DATE(transacted_at) <= ?
+          AND status IN ('succeeded', 'paid', 'completed', 'active')
+        GROUP BY DATE(transacted_at), source_platform
         ORDER BY date
       `).bind(orgId, startDate, endDate).all<{
         date: string;
+        source_platform: string;
         conversions: number;
         revenue: number;
       }>();
 
-      for (const r of stripeResult.results || []) {
+      for (const r of connectorResult.results || []) {
         results.push({
           date: r.date,
-          source: 'stripe',
+          source: r.source_platform,
           conversions: r.conversions,
           revenue: r.revenue || 0,
         });
       }
     } catch (err) {
-      structuredLog('WARN', 'Failed to query daily Stripe revenue', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
-    }
-
-    // Query Shopify by date
-    try {
-      const shopifyResult = await this.analyticsDb.prepare(`
-        SELECT
-          DATE(created_at) as date,
-          COUNT(*) as conversions,
-          COALESCE(SUM(total_price_cents), 0) / 100.0 as revenue
-        FROM shopify_orders
-        WHERE organization_id = ?
-          AND DATE(created_at) >= ?
-          AND DATE(created_at) <= ?
-        GROUP BY DATE(created_at)
-        ORDER BY date
-      `).bind(orgId, startDate, endDate).all<{
-        date: string;
-        conversions: number;
-        revenue: number;
-      }>();
-
-      for (const r of shopifyResult.results || []) {
-        results.push({
-          date: r.date,
-          source: 'shopify',
-          conversions: r.conversions,
-          revenue: r.revenue || 0,
-        });
-      }
-    } catch (err) {
-      // Table might not exist
+      structuredLog('WARN', 'Failed to query daily connector revenue', { service: 'smart-attribution', error: err instanceof Error ? err.message : String(err) });
     }
 
     return results;

@@ -22,27 +22,22 @@ ClearLift API Worker - A Cloudflare Workers-based API that serves as the authent
 
 ### Data Sources
 
-#### D1 Databases (Dual Database Architecture)
+#### D1 Databases
 
-This API uses **two separate D1 databases** for isolation between operational and AI workloads:
+**Current local architecture (Feb 2026 consolidation):** 2 databases, 94 tables total.
 
-| Binding | Database Name | Migrations Dir | Purpose |
-|---------|--------------|----------------|---------|
-| `DB` | ClearLiftDash-D1 | `migrations/` | Core operational data (users, sessions, orgs, connections) |
-| `AI_DB` | clearlift-ai | `migrations-ai/` | AI recommendations, analysis logs, LLM audit trail |
+| Binding | Database Name | Migrations Dir | Purpose | Status |
+|---------|--------------|----------------|---------|--------|
+| `DB` | adbliss-core | `migrations-adbliss-core/` | Core operational + AI engine (53 tables: auth, orgs, connections, settings, admin, audit, AI tables merged from former AI_DB) | ✅ Active |
+| `ANALYTICS_DB` | adbliss-analytics-0 | `migrations-adbliss-analytics/` | Connectors, ad platforms, events/identity, webhooks, journeys, attribution, conversions, metrics (41 tables) | ✅ Active |
+| `AI_DB` | clearlift-ai | `migrations-ai/` | ⚠️ **MERGED INTO DB (Feb 2026)** — AI tables now in adbliss-core. Binding remains for production until cutover. | 🔄 Legacy |
+| `SHARD_0-3` | clearlift-shard-{0-3} | `shard-migrations/` | ⚠️ **REMOVED (Feb 2026)** — Shard system removed. Bindings remain in production wrangler.jsonc only. | ❌ Removed |
 
-**Why two databases?**
-- Separates transactional application data from heavy analytical workloads
-- AI tables can be cleared/rebuilt independently
-- Different access patterns (frequent reads vs batch writes)
+**Historical note (pre-consolidation):** AI_DB was a separate database to isolate analytical workloads. SHARD_0-3 used FNV-1a consistent hashing for org-based sharding. Both were removed in the Feb 2026 D1 consolidation.
 
-#### ANALYTICS_DB (D1 Analytics Database)
+#### ANALYTICS_DB Details
 
-A third D1 database for pre-aggregated analytics (sub-millisecond queries):
-
-| Binding | Database Name | Migrations Dir | Purpose |
-|---------|--------------|----------------|---------|
-| `ANALYTICS_DB` | clearlift-analytics-prod | `migrations-analytics/` | Aggregated metrics, attribution, journeys |
+ANALYTICS_DB provides pre-aggregated analytics (sub-millisecond queries). See database table above for binding info.
 
 **Legacy Tables (per-platform):**
 - `hourly_metrics`, `daily_metrics` - Pre-aggregated event metrics
@@ -81,13 +76,11 @@ A third D1 database for pre-aggregated analytics (sub-millisecond queries):
 - `src/services/d1-analytics.ts` - `getGoogleCampaignMetrics()` and all platform methods
 - `src/endpoints/v1/analytics/platforms.ts` - Cross-platform time series
 - `src/endpoints/v1/analytics/cac-timeline.ts` - CAC backfill queries
-- `src/endpoints/v1/analytics/flow-metrics.ts` - Flow stage metrics
 - `src/workflows/analysis-workflow.ts` - CAC calculation
-- `src/workflows/attribution-workflow.ts` - Click attribution
 - `src/services/analysis/metrics-fetcher.ts` - AI metrics fetching
 - `src/services/analysis/simulation-service.ts` - Budget simulation
 - `src/services/analysis/exploration-tools.ts` - AI exploration
-- `src/index.ts` - CAC history backfill cron
+- `src/index.ts` - Stale job cleanup cron (CAC backfill + aggregation moved to clearlift-cron Feb 2026)
 
 **Deprecated tables (legacy daily metrics - no longer written or read):**
 - `google_campaign_daily_metrics`, `facebook_campaign_daily_metrics`, `tiktok_campaign_daily_metrics`
@@ -97,7 +90,12 @@ The unified tables use a `platform`/`source_platform` column to distinguish sour
 
 See `clearlift-cron/docs/SHARED_CODE.md §21` for full unified architecture documentation.
 
-#### D1 Sharding Infrastructure (SHARD_0-3)
+#### D1 Sharding Infrastructure (SHARD_0-3) — ⚠️ REMOVED (Feb 2026)
+
+> **Shard system removed in Feb 2026 consolidation.** All platform data now lives in ANALYTICS_DB unified tables. Shard bindings remain in production wrangler.jsonc only for backward compatibility until cutover. No local shard databases exist.
+
+<details>
+<summary>Legacy shard details (production-only, pre-cutover)</summary>
 
 Four shard databases for scaling platform data by organization:
 
@@ -108,58 +106,18 @@ Four shard databases for scaling platform data by organization:
 | `SHARD_2` | clearlift-shard-2 | `shard-migrations/` | Org data (hash % 4 == 2) |
 | `SHARD_3` | clearlift-shard-3 | `shard-migrations/` | Org data (hash % 4 == 3) |
 
-**Shard Schema** (`shard-migrations/`):
-
-| Migration | Tables | Status |
-|-----------|--------|--------|
-| `0001_platform_tables.sql` | Legacy: Google/Facebook/TikTok campaigns, ad_groups, ads, metrics | ❌ Deprecated |
-| `0002_pre_aggregation_tables.sql` | `org_daily_summary`, `campaign_period_summary`, `platform_comparison`, `org_timeseries`, `aggregation_jobs` | ✅ Active |
-| `0003_unified_ad_tables.sql` | `ad_campaigns`, `ad_groups`, `ads`, `ad_metrics` (unified schema) | ✅ Active |
-
 **Routing:** Uses `ShardRouter` with FNV-1a consistent hashing. See `src/services/shard-router.ts`.
 
-**Migration status:** Tracked in `shard_routing` table (per-org assignment).
-
-**Local Development - Shard Migrations:**
+**Production-only shard migration commands:**
 ```bash
-# Apply shard migrations to all local shards
-npx wrangler d1 migrations apply SHARD_0 --local --env local
-npx wrangler d1 migrations apply SHARD_1 --local --env local
-npx wrangler d1 migrations apply SHARD_2 --local --env local
-npx wrangler d1 migrations apply SHARD_3 --local --env local
-
-# Verify tables exist
-npx wrangler d1 execute clearlift-shard-0 --local --env local \
-  --command "SELECT name FROM sqlite_master WHERE type='table'"
-```
-
-**Production - Shard Migrations:**
-```bash
-# Apply shard migrations to production shards (CAUTION: affects live data)
+# LEGACY: Only run against production if needed before cutover
 npx wrangler d1 migrations apply SHARD_0 --env "" --remote
 npx wrangler d1 migrations apply SHARD_1 --env "" --remote
 npx wrangler d1 migrations apply SHARD_2 --env "" --remote
 npx wrangler d1 migrations apply SHARD_3 --env "" --remote
 ```
 
-**Current Status (Feb 2026):**
-- ✅ Shard databases created in Cloudflare
-- ✅ Unified shard schema defined (`shard-migrations/0003_unified_ad_tables.sql`)
-- ✅ `migrations_dir` configured in wrangler.jsonc for all environments
-- ✅ Local migrations applied and tested
-- ✅ AggregationService reads from shards (unified tables)
-- ✅ DataWriter writes to shards via ShardRouter (clearlift-cron)
-- ✅ Production migrations applied to all 4 shards (SHARD_0-3): 0001 (55 cmds), 0002 (18 cmds), 0003 (22 cmds)
-- ⚠️ API read endpoints still query ANALYTICS_DB (not shards)
-
-**Pending API Read Migration:**
-These D1AnalyticsService methods should be updated to query shards:
-- `getGoogleCampaignsWithMetrics()` - queries unified `ad_campaigns` + `ad_metrics`
-- `getFacebookCampaignsWithMetrics()` - queries unified `ad_campaigns` + `ad_metrics`
-- `getTikTokCampaignsWithMetrics()` - queries unified `ad_campaigns` + `ad_metrics`
-- `getUnifiedPlatformSummary()` - queries unified tables
-
-Summary endpoints can continue reading from ANALYTICS_DB (pre-aggregated by AggregationService).
+</details>
 
 #### Data Sources Summary
 
@@ -167,8 +125,8 @@ Summary endpoints can continue reading from ANALYTICS_DB (pre-aggregated by Aggr
 |-----------|---------|-------------|-------|
 | Real-time events | Analytics Engine | `/v1/analytics/realtime/*` | Sub-second queries |
 | Event aggregations | D1 ANALYTICS_DB | `/v1/analytics/d1/*` | Pre-aggregated metrics |
-| Platform campaigns | D1 Shards | `/v1/analytics/platforms` | Sharded by org |
-| Platform metrics | D1 Shards | `/v1/analytics/platforms` | Sharded by org |
+| Platform campaigns | D1 ANALYTICS_DB | `/v1/analytics/platforms` | Unified `ad_campaigns` + `ad_metrics` tables |
+| Platform metrics | D1 ANALYTICS_DB | `/v1/analytics/platforms` | Unified tables (shards removed Feb 2026) |
 | Raw events (archive) | R2 SQL | `/v1/analytics/events` | 15-25s queries, 96-field schema |
 
 #### Other Data Sources
@@ -183,7 +141,7 @@ Summary endpoints can continue reading from ANALYTICS_DB (pre-aggregated by Aggr
 
 ## Database Schema
 
-### Main Database (DB) - `migrations/`
+### Main Database (DB) - `migrations-adbliss-core/` (local) / `migrations/` (production pre-cutover)
 
 Core operational tables:
 
@@ -218,9 +176,11 @@ Core operational tables:
    - LLM settings: `llm_default_provider`, `llm_claude_model`, `llm_gemini_model`
    - `custom_instructions` for business context
 
-### AI Database (AI_DB) - `migrations-ai/`
+### AI Database (AI_DB) - `migrations-ai/` — ⚠️ MERGED INTO DB (Feb 2026)
 
-AI-specific tables (isolated for performance):
+> **These tables now live in DB (adbliss-core) locally.** The `AI_DB` binding and `migrations-ai/` directory remain for production until cutover. `attribution_model_results` moved to ANALYTICS_DB.
+
+AI-specific tables (historically isolated for performance, now merged into DB):
 
 1. **ai_decisions** - Pending AI recommendations
    - `organization_id`, `tool`, `platform`, `entity_type`, `entity_id`
@@ -249,20 +209,19 @@ AI-specific tables (isolated for performance):
    - `status`: pending → running → completed/failed
    - `total_entities`, `processed_entities`, `current_level`
 
-8. **attribution_model_results** - Pre-computed attribution (Markov/Shapley)
+8. **attribution_model_results** - Pre-computed attribution (Markov/Shapley) *(Note: moved to ANALYTICS_DB in new consolidated schema)*
    - `organization_id`, `model` ('markov_chain' or 'shapley_value'), `channel`
    - `attributed_credit` (0-1 normalized), `removal_effect` (Markov), `shapley_value` (Shapley)
    - `computation_date`, `expires_at` (7-day TTL)
    - Populated by Attribution Workflow, read by attribution endpoint
 
-9. **cac_history** - Daily CAC records (goal-aware since 0006 migration)
+9. **cac_history** - Daily CAC records (goal-aware since 0006 migration) *(Note: in ANALYTICS_DB in new consolidated schema)*
    - `organization_id`, `date`, `spend_cents`, `conversions`, `cac_cents`, `revenue_cents`
-   - `conversions_goal` — deduplicated count from goal_conversions for macro goals
+   - `conversions_goal` — deduplicated count from connector conversions
    - `conversions_platform` — count from ad_metrics (platform-reported)
    - `conversion_source` — `'goal'` | `'platform'` — which source was used for primary `conversions`
-   - `goal_ids` — JSON array of macro goal IDs used
    - `revenue_goal_cents` — actual revenue from Stripe/Shopify/Jobber charges
-   - When macro goals exist, `conversions` = goal count; otherwise fallback to platform count
+   - When connector conversions exist, `conversions` = connector count; otherwise fallback to platform count
 
 10. **cac_predictions** - CAC forecasts
     - `organization_id`, `prediction_date`, `predicted_cac_cents`
@@ -281,7 +240,7 @@ GET  /v1/analytics/cac/summary?org_id=xxx&days=30
     conversions_goal, conversions_platform, revenue_goal_cents, goal_count, goal_names
 
 POST /v1/analytics/cac/backfill
-  → Body: { org_id, days }. Goal-aware: queries macro goals → goal_conversions → cac_history
+  → Body: { org_id, days }. Queries connector conversions → cac_history
 ```
 
 ### Unified Conversions Endpoint
@@ -305,17 +264,18 @@ npm install
 # Run development server (see Local vs Remote below)
 npx wrangler dev --env local --port 8787
 
-# Apply D1 migrations locally (BOTH databases)
-npx wrangler d1 migrations apply DB --local --env local      # Main database
-npx wrangler d1 migrations apply AI_DB --local --env local   # AI database
+# Apply D1 migrations locally (2 databases — NO AI_DB or shards locally)
+npx wrangler d1 migrations apply DB --local --env local           # adbliss-core (41 tables)
+npx wrangler d1 migrations apply ANALYTICS_DB --local --env local # adbliss-analytics-0 (33 tables)
 
-# Apply D1 migrations to production (BOTH databases)
-npx wrangler d1 migrations apply DB --env "" --remote      # Main database
-npx wrangler d1 migrations apply AI_DB --env "" --remote   # AI database
+# Apply D1 migrations to production (LEGACY: includes AI_DB until cutover)
+npx wrangler d1 migrations apply DB --env "" --remote           # Main database
+npx wrangler d1 migrations apply AI_DB --env "" --remote        # AI database (production only)
+npx wrangler d1 migrations apply ANALYTICS_DB --env "" --remote # Analytics database
 
 # Check migration status
 npx wrangler d1 migrations list DB --local --env local
-npx wrangler d1 migrations list AI_DB --local --env local
+npx wrangler d1 migrations list ANALYTICS_DB --local --env local
 
 # Generate TypeScript types from wrangler.jsonc
 npm run cf-typegen
@@ -355,8 +315,9 @@ npx wrangler dev --port 8787
 | Feature | `--env local` | Default |
 |---------|---------------|---------|
 | Secrets | Plain strings from `.dev.vars` | Secrets Store bindings |
-| D1 (DB) | Local SQLite in `.wrangler/state/` | Local SQLite |
-| D1 (AI_DB) | Local SQLite in `.wrangler/state/` | Local SQLite |
+| D1 (DB) | Local SQLite in `.wrangler/state/` (adbliss-core, 53 tables) | Local SQLite |
+| D1 (ANALYTICS_DB) | Local SQLite in `.wrangler/state/` (adbliss-analytics-0, 41 tables) | Local SQLite |
+| D1 (AI_DB) | ⚠️ Not used locally (merged into DB) | Not used locally |
 | Best for | Local development | Pre-deploy testing |
 
 ### Required `.dev.vars` for Local Mode
@@ -375,16 +336,28 @@ OAUTH_CALLBACK_BASE=https://local.clearlift.ai
 APP_BASE_URL=https://app-local.clearlift.ai
 ```
 
+### Canonical Org Identifier (Feb 2026 Consolidation)
+
+**`organization_id` (UUID) is the canonical org identifier on ALL tables in both DB and ANALYTICS_DB.**
+
+- Every table uses `organization_id TEXT NOT NULL` as the org column
+- `org_tag` (short string like `unagi`, `bandago`) exists as an optional indexed column on some
+  ANALYTICS_DB tables for debugging — it is NEVER used in primary keys or UNIQUE constraints
+- The tag pipeline (clearlift-events) embeds `org_tag` in the JS snippet. Cron workflows resolve
+  `org_tag` → `organization_id` via `org_tag_mappings` (in DB) at write time.
+- API endpoints receive `organization_id` from auth context — no org_tag resolution needed for
+  ANALYTICS_DB queries.
+
 ### D1 Local vs Production Isolation
 
 **Local dev (`wrangler dev`) ALWAYS uses local SQLite emulation — it NEVER hits production D1**, even though `database_id` values in `wrangler.jsonc` match production. Miniflare creates SQLite files in `.wrangler/state/v3/d1/miniflare-D1DatabaseObject/`.
 
 | Database | Local State | Production State | Notes |
 |----------|-------------|------------------|-------|
-| `DB` | `.wrangler/state/` SQLite (75 migrations) | Cloudflare D1 `8e55bba7-...` | ✅ Both up to date |
-| `AI_DB` | `.wrangler/state/` SQLite (8 migrations) | Cloudflare D1 `3fb300f4-...` | ⚠️ Prod pending: `0008_drop_dead_cac_history.sql` |
-| `ANALYTICS_DB` | `.wrangler/state/` SQLite (47 migrations) | Cloudflare D1 `a69beb57-...` | ⚠️ Prod pending: `0046`, `0047` |
-| `SHARD_0-3` | No local SQLite files (shards unused locally) | Cloudflare D1 (3 migrations each) | Shards only in production |
+| `DB` | `.wrangler/state/` SQLite — `migrations-adbliss-core/` (53 tables) | Cloudflare D1 `8e55bba7-...` — `migrations/` | Local uses new consolidated schema; prod uses old schema until cutover |
+| `ANALYTICS_DB` | `.wrangler/state/` SQLite — `migrations-adbliss-analytics/` (41 tables) | Cloudflare D1 `a69beb57-...` — `migrations-analytics/` | Local uses new consolidated schema; prod uses old schema until cutover |
+| `AI_DB` | ⚠️ **Not used locally** (merged into DB) | Cloudflare D1 `3fb300f4-...` — `migrations-ai/` | Production only until cutover |
+| `SHARD_0-3` | ⚠️ **Not used locally** (removed) | Cloudflare D1 (3 migrations each) | Production only until cutover, then removed |
 
 **Migration commands:**
 ```bash
@@ -473,9 +446,9 @@ OAuth providers require HTTPS callback URLs. We use `local.clearlift.ai` as a pe
 
 | Purpose | Local (tunnel) | Staging | Production |
 |---------|---------------|---------|------------|
-| Dashboard | `app-local.clearlift.ai` | `dev.clearlift.ai` | `app.clearlift.ai` |
-| API | `local.clearlift.ai` | `api-dev.clearlift.ai` | `api.clearlift.ai` |
-| Events | `events-local.clearlift.ai` | `iris-dev.clearlift.ai` | `iris.clearlift.ai` |
+| Dashboard | `app-local.clearlift.ai` | `dev.clearlift.ai` | `app.adbliss.io` |
+| API | `local.clearlift.ai` | `api-dev.clearlift.ai` | `api.adbliss.io` |
+| Events | `events-local.clearlift.ai` | `iris-dev.clearlift.ai` | `iris.adbliss.io` |
 
 **Registered redirect URIs** (already configured in provider consoles):
 - `https://local.clearlift.ai/v1/connectors/google/callback`
@@ -576,11 +549,12 @@ Tests use Vitest with Cloudflare Workers pool:
 ## Deployment
 
 - **Auto-deployment**: Pushes to GitHub main branch trigger deployment
-- **Databases**:
+- **Databases (production)**:
   - Main DB (DB): `8e55bba7-4b54-4992-b5e5-050611499c18`
-  - AI DB (AI_DB): `3fb300f4-4523-4a29-9efc-955d1684f392`
+  - AI DB (AI_DB): `3fb300f4-4523-4a29-9efc-955d1684f392` *(legacy — merged into DB locally, production only until cutover)*
+  - ANALYTICS_DB: `a69beb57-...`
 - **Domain**: api.clearlift.ai (configured in Cloudflare)
-- **Important**: After adding new migrations, apply to BOTH databases in production
+- **Important**: After adding new migrations, apply to DB + ANALYTICS_DB locally. For production, also apply AI_DB until cutover.
 
 ## AI Analysis Engine
 
@@ -593,19 +567,17 @@ POST /v1/analysis/run
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  EntityTreeBuilder → MetricsFetcher → PromptManager         │
+│  EntityTreeBuilder → MetricsFetcher → AnalysisQueries       │
 │         │                  │                │               │
 │         ▼                  ▼                ▼               │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │            HierarchicalAnalyzer                     │    │
-│  │                                                     │    │
-│  │   Ad → AdSet → Campaign → Account → Cross-Platform  │    │
-│  │        (bottom-up analysis with LLM routing)        │    │
+│  │         compute_portfolio (SQL math phase)          │    │
+│  │   Campaign KPIs, trends, anomaly flags — ~2 seconds │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          │                                  │
 │                          ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │              AgenticLoop (Claude Opus)              │    │
+│  │           AgenticClient (Claude Opus)               │    │
 │  │   Tools: set_budget, set_status, set_audience...   │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                          │                                  │
@@ -634,14 +606,15 @@ Users can override via Settings UI (stored in `ai_optimization_settings.llm_*` c
 | Service | Purpose |
 |---------|---------|
 | `entity-tree.ts` | Builds hierarchy from D1 (campaigns → adsets → ads) |
-| `metrics-fetcher.ts` | Fetches timeseries metrics from `*_daily_metrics` tables |
-| `prompt-manager.ts` | Template hydration from `analysis_prompts` table |
-| `llm-router.ts` | Routes to Claude/Gemini based on level or config |
-| `hierarchical-analyzer.ts` | Orchestrates bottom-up analysis |
-| `agentic-loop.ts` | Tool-calling loop for recommendations |
+| `metrics-fetcher.ts` | Fetches timeseries metrics from `ad_metrics` table |
+| `analysis-queries.ts` | SQL queries for portfolio computation (replaces per-entity LLM calls) |
+| `llm-provider.ts` | Routes to Claude/Gemini based on level or config |
+| `agentic-client.ts` | Tool-calling agentic loop for recommendations |
+| `job-manager.ts` | Analysis job lifecycle management |
 | `exploration-tools.ts` | AI exploration tools for verified conversion analysis |
-| `anthropic-client.ts` | Claude API integration |
-| `gemini-client.ts` | Gemini API integration |
+| `recommendation-tools.ts` | Tool definitions for AI recommendation generation |
+| `simulation-executor.ts` | Executes budget simulation scenarios |
+| `simulation-service.ts` | Budget simulation service layer |
 
 ### AI Exploration Tools for Verified Conversions
 
@@ -667,59 +640,30 @@ GET  /v1/analysis/latest           # Get most recent analysis
 GET  /v1/settings/ai-decisions     # List pending recommendations
 POST /v1/settings/ai-decisions/:id/accept   # Execute recommendation
 POST /v1/settings/ai-decisions/:id/reject   # Dismiss recommendation
+
+# Admin
+GET  /v1/admin/analysis/costs?org_id=xxx   # LLM cost tracking (admin only)
 ```
 
-## Attribution Analysis Workflow
+## Attribution (Read-Only — Computed by Cron)
 
-The API includes a Cloudflare Workflow for computing advanced multi-touch attribution models.
+Attribution is computed by the daily cron (`ProbabilisticAttributionWorkflow` in `clearlift-cron`) and written to `ANALYTICS_DB.attribution_results`. The API serves pre-computed results read-only.
 
-### Architecture
+**The manual `AttributionWorkflow` (`src/workflows/attribution-workflow.ts`) was deleted in Feb 2026.** No manual "Run Attribution" button exists.
+
+### Attribution API Endpoints
 
 ```
-┌─────────────────────┐     ┌───────────────────────────┐
-│  Dashboard UI       │     │  Attribution Workflow     │
-│  "Run Attribution"  │────▶│  (Cloudflare Durable)     │
-└─────────────────────┘     └───────────┬───────────────┘
-                                        │
-                             ┌──────────┴───────────┐
-                             ▼                      ▼
-                    ┌────────────────┐    ┌─────────────────┐
-                    │ Markov Chain   │    │ Shapley Value   │
-                    │ Removal Effect │    │ Attribution     │
-                    └───────┬────────┘    └────────┬────────┘
-                            │                      │
-                            ▼                      ▼
-                    ┌──────────────────────────────────────┐
-                    │   D1: attribution_model_results      │
-                    │   (pre-computed credits by channel)  │
-                    └──────────────────────────────────────┘
+GET  /v1/analytics/attribution/computed?org_id=xxx&model=markov_chain  # Pre-computed results by model (markov_chain or shapley_value)
+GET  /v1/analytics/attribution?org_id=xxx                              # Main attribution endpoint (reads from pre-computed)
 ```
-
-### Workflow Steps
-
-1. **fetch_paths** - Query conversion paths from D1 (conversion_attribution table)
-2. **markov_chain** - Calculate removal effects using Markov Chain model
-3. **shapley_value** - Calculate fair credit using Shapley Value (or Monte Carlo for >10 channels)
-4. **store_results** - Write to `attribution_model_results` table with 7-day TTL
-5. **complete** - Mark job as completed
 
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/workflows/attribution-workflow.ts` | Cloudflare Workflow class |
-| `src/services/attribution-models.ts` | Core calculation algorithms |
-| `src/endpoints/v1/analytics/attribution.ts` | API endpoints |
-| `migrations-ai/0004_attribution_model_results.sql` | D1 schema |
-
-### Attribution API Endpoints
-
-```
-POST /v1/analytics/attribution/run         # Start workflow (returns job_id)
-GET  /v1/analytics/attribution/status/:id  # Poll job status
-GET  /v1/analytics/attribution/computed    # Get pre-computed results by model
-GET  /v1/analytics/attribution             # Main attribution endpoint (reads from pre-computed)
-```
+| `src/services/attribution-models.ts` | Core calculation algorithms (Markov Chain, Shapley Value) |
+| `src/endpoints/v1/analytics/attribution.ts` | Read-only API endpoints |
 
 ### Data Quality Levels
 
@@ -801,7 +745,7 @@ See **`clearlift-cron/docs/SHARED_CODE.md`** for comprehensive cross-repo code s
 | Markov Chain | `src/services/attribution-models.ts` | §4 Markov Chain |
 | Shapley Value | `src/services/attribution-models.ts` | §1 Attribution Models |
 | Stage Markov | `src/services/stage-markov.ts` | §4 Markov Chain |
-| ConversionGoal Types | `src/services/goals/index.ts` | §6 Conversion Goals |
+| Connection Configs | `src/services/connection-configs.ts` | §6 Connection Configs |
 | OAuth Base Provider | `src/services/oauth/base.ts` | §9 OAuth Base |
 | API Response Types | `src/types/response.ts` | §10 API Response Types |
 | Auth Utilities | `src/utils/auth.ts` | §11 Auth Utilities |
@@ -883,8 +827,8 @@ See `clearlift-cron/docs/SHARED_CODE.md §19` for the comprehensive cross-repo i
 | `0081_drop_dead_tables.sql` | DB | Drops unused tables from infrastructure phase |
 
 **Dropped Tables (migration 0081):**
-- `conversion_configs` — replaced by `conversion_goals` + ConversionEventPicker
-- `interaction_nodes` / `interaction_edges` — replaced by FlowBuilder goal-relationship model
+- `conversion_configs` — replaced by `platform_connections.settings` JSON
+- `interaction_nodes` / `interaction_edges` — replaced by FlowBuilder architecture
 - `funnel_metadata` — replaced by FlowBuilder 3-layer architecture
 - `acquisition_instances` — never populated, replaced by traffic source auto-detection
 
@@ -918,7 +862,7 @@ SELECT COUNT(*) FROM journey_analytics WHERE converting_sessions > 0;
 -- Verify conversion linking working
 SELECT link_method, COUNT(*), AVG(link_confidence)
 FROM conversions
-WHERE linked_goal_id IS NOT NULL
+WHERE link_method IS NOT NULL
 GROUP BY link_method;
 
 -- Verify Shopify orders synced
@@ -998,7 +942,7 @@ All connectors should implement:
 - `fetchData()` for sync
 - `writeToD1()` for storage
 - `extractIdentities()` for attribution linking
-- `matchGoals()` for conversion linking
+- `extractConversions()` for conversion extraction
 
 See `clearlift-cron/docs/SHARED_CODE.md §20` for full roadmap.
 
@@ -1013,8 +957,6 @@ Five foundational backend improvements enabling the UI overhaul and scaling to 1
 | Service | File | Purpose |
 |---------|------|---------|
 | FunnelGraphService | `src/services/funnel-graph.ts` | OR/AND funnel branching, path validation |
-| ConversionValueService | `src/services/conversion-value.ts` | Multi-goal value allocation |
-| GoalGroupService | `src/services/conversion-value.ts` | Goal group management |
 
 ### New Migrations
 
@@ -1043,47 +985,19 @@ Five foundational backend improvements enabling the UI overhaul and scaling to 1
 
 ### Funnel Branching (Phase 4)
 
-**New Columns on `goal_relationships`:**
-- `relationship_operator` - 'OR' or 'AND'
-- `flow_tag` - Tags like 'self_serve', 'sales_led'
-- `is_exclusive` - Mutually exclusive paths
-
-**New Tables:**
-- `goal_branches` - Branch points (split/join)
-- ~~`acquisition_instances`~~ - **DROPPED** (migration 0081, Feb 2026 audit) — never populated
-- ~~`conversion_configs`~~ - **DROPPED** (migration 0081, Feb 2026 audit) — replaced by `conversion_goals` + ConversionEventPicker
+**Note (Feb 2026):** `goal_relationships`, `goal_branches`, `conversion_configs`, and `acquisition_instances` have all been **DROPPED**. Conversion criteria now live in `platform_connections.settings` JSON. The funnel branching concept is handled by the FlowBuilder 3-layer architecture.
 
 **Endpoints:**
 - `GET /v1/goals/graph` - Full funnel graph for Flow Builder
-- `POST /v1/goals/relationships/v2` - Create with OR/AND
 - `POST /v1/goals/branch` - Create split point
 - `POST /v1/goals/merge` - Create join point
 - `GET /v1/goals/paths` - Valid paths to a goal
 
 ### Multi-Conversion (Phase 5)
 
-**New Tables:**
-- `goal_groups` - Logical groupings (e.g., "All Revenue Events")
-- `goal_group_members` - Maps goals to groups with weights
-- `conversion_value_allocations` - Tracks value distribution
+**Note (Feb 2026):** `goal_groups`, `goal_group_members`, and `conversion_value_allocations` have been **DROPPED** as part of the goal system removal. Conversion criteria now live in `platform_connections.settings` JSON. The `conversions` table no longer has `goal_ids`, `goal_values`, or `attribution_group_id` columns.
 
-**New Columns on `conversions`:**
-- `goal_ids` - JSON array of matched goals
-- `goal_values` - JSON object: {goal_id: value_cents}
-- `attribution_group_id` - Link to goal group
-
-**Endpoints:**
-- `GET/POST /v1/goals/groups` - List/create groups
-- `GET/PUT /v1/goals/groups/:id/members` - Manage members
-- `POST /v1/goals/groups/:id/default` - Set default attribution
-- `DELETE /v1/goals/groups/:id` - Delete group
-
-**Allocation Methods:**
-- `equal` - Split evenly across matched goals
-- `weighted` - Use weights from goal_group_members
-- `explicit` - Use each goal's fixed_value_cents
-
-See `clearlift-cron/docs/SHARED_CODE.md §24` for complete documentation.
+See `clearlift-cron/docs/SHARED_CODE.md §24` for historical documentation.
 
 ---
 
@@ -1158,3 +1072,68 @@ The Flow Builder now uses `ConnectorRegistryContext` instead of the deprecated `
 - Dynamic connector discovery from the API
 - SSR fallback with 25+ FALLBACK_CONNECTORS
 - Grouped dropdown UI (Connected / Available to Connect / Coming Soon)
+
+---
+
+## D1 Consolidation Migration (Feb 2026)
+
+### Status: In Progress
+
+Migration from 4 old databases → 2 consolidated databases:
+- Old: `DB` (clearlift-db-prod) + `AI_DB` (clearlift-ai-prod) + `ANALYTICS_DB` (clearlift-analytics-prod) + `SHARD_0-3`
+- New: `DB` (adbliss-core) + `ANALYTICS_DB` (adbliss-analytics-0)
+
+### Migration Script
+
+**File:** `scripts/migrate-org-production.ts`
+
+```bash
+# List all production orgs
+npx tsx scripts/migrate-org-production.ts --list
+
+# Dry run for selected orgs
+npx tsx scripts/migrate-org-production.ts --orgs bandago,unagi --dry-run
+
+# Execute migration (copies auth + OAuth tokens + settings only)
+npx tsx scripts/migrate-org-production.ts --orgs bandago,unagi
+
+# Verify row counts
+npx tsx scripts/migrate-org-production.ts --orgs bandago,unagi --verify-only
+
+# After cutover: trigger connector resyncs + CAC backfill
+npx tsx scripts/migrate-org-production.ts --orgs bandago,unagi --trigger-sync --api-token <token>
+
+# Staging dress rehearsal
+npx tsx scripts/migrate-org-production.ts --orgs <slug> --env staging --dry-run
+```
+
+### What Gets Copied (Tier 1 — ~16 tables per org)
+
+Auth, OAuth tokens, org settings, dashboard config, tracking domains/links, script hashes, webhook endpoints, consent configs. These are irreplaceable — encrypted OAuth tokens cannot be re-created.
+
+### What Re-syncs Automatically
+
+All ANALYTICS_DB tables rebuild from connector syncs (30-day backfill). CAC, attribution, and identity recompute via clearlift-cron pipelines.
+
+### Cron Ownership (Feb 2026)
+
+| Cron | Owner | Notes |
+|------|-------|-------|
+| Daily aggregation (`0 5 * * *`) | **clearlift-cron** | Removed from API worker |
+| Periodic sync (`0 */6 * * *`) | **clearlift-cron** | Removed from API worker |
+| Stale job cleanup (`*/15 * * * *`) | **API worker** | Kept — retries stuck jobs, token expiry checks, webhook retries |
+| Hourly analytics pipeline | **clearlift-cron** | CAC + attribution inline |
+| Daily identity pipeline (3 AM) | **clearlift-cron** | Identity extraction → conversion linking |
+
+### Cutover Checklist
+
+- [ ] Create new D1 databases (`adbliss-core` + `adbliss-analytics-0`)
+- [ ] Add temporary bindings (`DB_NEW`, `ANALYTICS_DB_NEW`) to wrangler.jsonc
+- [ ] Apply migrations to new databases
+- [ ] Run migration script for selected orgs
+- [ ] Verify with `--verify-only`
+- [ ] Swap DB/ANALYTICS_DB database IDs in both wrangler configs (API + queue consumer)
+- [ ] Deploy both workers simultaneously
+- [ ] Run `--trigger-sync` to resync connectors
+- [ ] Wait for crons to recompute CAC, attribution, identity
+- [ ] 30 days later: delete old databases
