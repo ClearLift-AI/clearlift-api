@@ -471,6 +471,65 @@ export class HubSpotWebhookHandler implements WebhookHandler {
 }
 
 // =============================================================================
+// Generic Webhook Handler
+// =============================================================================
+
+/**
+ * Generic Webhook Handler — events go through R2/AE pipeline (not direct to conversions).
+ * Verifies HMAC-SHA256 signature using X-Webhook-Signature header.
+ */
+export class GenericWebhookHandler implements WebhookHandler {
+  connector = "webhook";
+
+  async verifySignature(
+    headers: Headers,
+    body: string,
+    secret: string
+  ): Promise<boolean> {
+    const signature = headers.get("X-Webhook-Signature") || headers.get("x-webhook-signature");
+    if (!signature) return false;
+
+    try {
+      const expectedSignature = createHmac("sha256", secret)
+        .update(body)
+        .digest("hex");
+
+      const sigBuffer = Buffer.from(signature, "hex");
+      const expectedBuffer = Buffer.from(expectedSignature, "hex");
+
+      return sigBuffer.length === expectedBuffer.length &&
+        timingSafeEqual(sigBuffer, expectedBuffer);
+    } catch {
+      return false;
+    }
+  }
+
+  parseEvent(body: string): WebhookEvent {
+    const data = JSON.parse(body);
+    return {
+      id: data.id?.toString() || null,
+      type: data.event_type || data.type || data.event || "webhook_event",
+      payload: data,
+      timestamp: data.timestamp || data.created_at || undefined,
+    };
+  }
+
+  getEventType(event: WebhookEvent): string {
+    return event.type;
+  }
+
+  getEventId(event: WebhookEvent): string | null {
+    return event.id;
+  }
+
+  getUnifiedEventType(_event: WebhookEvent): UnifiedEventType | null {
+    // Generic webhooks don't have unified event mapping
+    // They go through R2/AE → AggregationWorkflow matching
+    return null;
+  }
+}
+
+// =============================================================================
 // Handler Registry
 // =============================================================================
 
@@ -478,6 +537,7 @@ const handlers: Record<string, WebhookHandler> = {
   stripe: new StripeWebhookHandler(),
   shopify: new ShopifyWebhookHandler(),
   hubspot: new HubSpotWebhookHandler(),
+  webhook: new GenericWebhookHandler(),
 };
 
 export function getWebhookHandler(connector: string): WebhookHandler | null {

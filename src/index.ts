@@ -188,6 +188,7 @@ import {
   ConnectRecurly,
   TestRecurlyConnection
 } from "./endpoints/v1/connectors/recurly";
+import { EnsureTagConnection } from "./endpoints/v1/connectors/tag";
 import {
   CreateFilterRule,
   ListFilterRules,
@@ -600,6 +601,9 @@ openapi.post("/v1/connectors/chargebee/:connection_id/test", auth, TestChargebee
 // Recurly-specific connector endpoints
 openapi.post("/v1/connectors/recurly/connect", auth, ConnectRecurly);
 openapi.post("/v1/connectors/recurly/:connection_id/test", auth, TestRecurlyConnection);
+
+// Tag connection ensure endpoint (auto-creates platform_connections row)
+openapi.post("/v1/connectors/tag/ensure", auth, requireOrg, EnsureTagConnection);
 
 // Shopify App Store install endpoint (no auth - Shopify redirects merchants here)
 openapi.get("/v1/connectors/shopify/install", ShopifyInstall);

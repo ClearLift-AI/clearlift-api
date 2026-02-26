@@ -499,9 +499,26 @@ export class CreateWebhookEndpoint extends OpenAPIRoute {
       )
       .run();
 
+    // For generic webhook connector, auto-create platform_connections row
+    if (connector === 'webhook') {
+      const session = c.get("session");
+      const pcId = crypto.randomUUID();
+      await c.env.DB.prepare(`
+        INSERT INTO platform_connections (
+          id, organization_id, platform, account_id, account_name,
+          connected_by, connected_at, is_active, settings
+        ) VALUES (?, ?, 'webhook', 'internal', ?, ?, datetime('now'), 1,
+          json('{"auto_sync":false}'))
+        ON CONFLICT(organization_id, platform, account_id) DO NOTHING
+      `).bind(pcId, orgId, `Webhook (${endpointId.slice(0, 8)})`, session.user_id).run();
+    }
+
     // Build webhook URL
+    // Generic webhooks go through events worker for R2/AE pipeline
     const baseUrl = c.env.OAUTH_CALLBACK_BASE || "https://api.adbliss.io";
-    const webhookUrl = `${baseUrl}/v1/webhooks/${connector}?org_id=${orgId}`;
+    const webhookUrl = connector === 'webhook'
+      ? `https://iris.adbliss.io/w/${endpointId}`
+      : `${baseUrl}/v1/webhooks/${connector}?org_id=${orgId}`;
 
     return success(c, {
       id: endpointId,
