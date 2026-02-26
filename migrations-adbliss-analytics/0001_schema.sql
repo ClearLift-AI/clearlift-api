@@ -37,6 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_ce_pipeline ON connector_events(organization_id, 
 CREATE INDEX IF NOT EXISTS idx_ce_display ON connector_events(organization_id, transacted_at);
 CREATE INDEX IF NOT EXISTS idx_ce_customer ON connector_events(organization_id, customer_external_id);
 CREATE INDEX IF NOT EXISTS idx_ce_email ON connector_events(organization_id, customer_email_hash);
+CREATE INDEX IF NOT EXISTS idx_ce_aggregation ON connector_events(organization_id, source_platform, event_type, status, transacted_at DESC);
 
 CREATE TABLE IF NOT EXISTS connector_customers (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -623,6 +624,8 @@ CREATE INDEX idx_conv_refund_status ON conversions(organization_id, refund_statu
 CREATE INDEX idx_conv_source ON conversions(organization_id, conversion_source);
 CREATE UNIQUE INDEX idx_conv_source_unique ON conversions(organization_id, conversion_source, source_id) WHERE source_id IS NOT NULL;
 CREATE INDEX idx_conv_unified_type ON conversions(organization_id, unified_event_type);
+CREATE INDEX idx_conv_source_source_id ON conversions(conversion_source, source_id);
+CREATE INDEX idx_conv_dedup_key_only ON conversions(dedup_key) WHERE dedup_key IS NOT NULL;
 CREATE INDEX idx_conversions_attribution_group ON conversions(organization_id, attribution_group_id) WHERE attribution_group_id IS NOT NULL;
 CREATE INDEX idx_conversions_goal_ids ON conversions(organization_id) WHERE goal_ids IS NOT NULL;
 CREATE INDEX idx_conversions_link_method ON conversions(organization_id, link_method) WHERE link_method IS NOT NULL;

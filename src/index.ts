@@ -3,7 +3,7 @@ import { Hono } from "hono";
 
 // Middleware
 import { corsMiddleware } from "./middleware/cors";
-import { auth, requireOrg, requireOrgAdmin, requireOrgOwner } from "./middleware/auth";
+import { auth, requireOrg, requireOrgAdmin, requireOrgOwner, requireSuperAdmin } from "./middleware/auth";
 import { errorHandler } from "./middleware/errorHandler";
 import { auditMiddleware } from "./middleware/audit";
 import { rateLimitMiddleware } from "./middleware/rateLimit";
@@ -188,6 +188,7 @@ import {
   ConnectRecurly,
   TestRecurlyConnection
 } from "./endpoints/v1/connectors/recurly";
+import { EnsureTagConnection } from "./endpoints/v1/connectors/tag";
 import {
   CreateFilterRule,
   ListFilterRules,
@@ -601,6 +602,9 @@ openapi.post("/v1/connectors/chargebee/:connection_id/test", auth, TestChargebee
 openapi.post("/v1/connectors/recurly/connect", auth, ConnectRecurly);
 openapi.post("/v1/connectors/recurly/:connection_id/test", auth, TestRecurlyConnection);
 
+// Tag connection ensure endpoint (auto-creates platform_connections row)
+openapi.post("/v1/connectors/tag/ensure", auth, requireOrg, EnsureTagConnection);
+
 // Shopify App Store install endpoint (no auth - Shopify redirects merchants here)
 openapi.get("/v1/connectors/shopify/install", ShopifyInstall);
 
@@ -674,7 +678,7 @@ openapi.post("/v1/settings/ai-decisions/:decision_id/rate", auth, requireOrg, Ra
 
 
 // AI Analysis endpoints (hierarchical insights)
-openapi.post("/v1/analysis/run", auth, requireOrg, RunAnalysis);
+openapi.post("/v1/analysis/run", auth, requireOrg, requireSuperAdmin, RunAnalysis);
 openapi.get("/v1/analysis/status/:job_id", auth, requireOrg, GetAnalysisStatus);
 openapi.get("/v1/analysis/latest", auth, requireOrg, GetLatestAnalysis);
 openapi.get("/v1/analysis/entity/:level/:entity_id", auth, requireOrg, GetEntityAnalysis);

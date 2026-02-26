@@ -300,3 +300,34 @@ export const requireOrgAdmin = requireRole(['admin', 'owner']);
  * - Billing changes
  */
 export const requireOrgOwner = requireRole(['owner']);
+
+/**
+ * Middleware: Requires super admin (is_admin = true on user record)
+ * Must be used after auth middleware.
+ *
+ * Use this for platform-level operations like:
+ * - Triggering ad-hoc AI analysis
+ * - Admin-only management actions
+ */
+export async function requireSuperAdmin(c: AppContext, next: Next) {
+  const session = c.get("session");
+  if (!session) {
+    return c.json({
+      success: false,
+      error: { code: "UNAUTHORIZED", message: "Authentication required" }
+    }, 401);
+  }
+
+  const { D1Adapter } = await import("../adapters/d1");
+  const d1 = new D1Adapter(c.env.DB);
+  const user = await d1.getUser(session.user_id);
+
+  if (!Boolean(user?.is_admin)) {
+    return c.json({
+      success: false,
+      error: { code: "FORBIDDEN", message: "Super admin access required" }
+    }, 403);
+  }
+
+  await next();
+}

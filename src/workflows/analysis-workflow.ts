@@ -439,8 +439,6 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     // Run agentic iterations as separate steps
     // Loop continues until: we have an insight AND 3 action recs, OR max iterations, OR early termination
     const budgetStrategy = config?.budgetStrategy || 'moderate';
-    let nudgeCount = 0;  // Track nudge attempts (max 2 to avoid infinite loops)
-
     // Sequential pattern tracker: detect when LLM makes one exploration call per turn
     let consecutiveSingleExplore = 0;
     let lastSingleExploreTool = '';
@@ -459,7 +457,7 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
         iterations <= minExplorationTurns
           ? ` Exploration phase: ${minExplorationTurns - iterations} turns remaining. Action tools are BLOCKED — focus on drilling into ad groups AND individual ads.`
           : remainingSlots > 0
-            ? ` You have ${remainingSlots} unfilled action slot(s). Do NOT call terminate_analysis until all ${maxActionRecommendations} slots are filled. Simulate → recommend → repeat.`
+            ? ` You have ${remainingSlots} unfilled action slot(s). Simulate → recommend → repeat. Call terminate_analysis when you are done.`
             : ' All slots filled. Call terminate_analysis with your summary.'
       }`;
 
@@ -602,153 +600,6 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
       }
 
       if (iterResult.shouldStop) {
-        // Unfilled slots nudge: one chance to fill remaining action slots before accepting
-        // termination. Only fires once (nudgeCount < 1) — if the agent still wants to quit
-        // after being nudged, respect that decision instead of burning tokens on retries.
-        if (
-          nudgeCount < 1 &&
-          actionRecommendations.length > 0 &&
-          actionRecommendations.length < maxActionRecommendations &&
-          (iterResult.stopReason === 'early_termination')
-        ) {
-          nudgeCount++;
-          const remaining = maxActionRecommendations - actionRecommendations.length;
-          const actionTypes = new Set(actionRecommendations.map(r => r.tool));
-          const existingActions = actionRecommendations.map(r => `${r.tool}: ${(r as any).entity_name || 'unknown'}`).join(', ');
-
-          // Tailor guidance based on what's already been recommended
-          let suggestion: string;
-          if (actionTypes.has('set_status') && !actionTypes.has('reallocate_budget')) {
-            suggestion = `You paused a campaign — use reallocate_budget to redirect that freed budget to your highest-efficiency campaign. This completes the optimization story: cut waste AND reinvest savings.`;
-          } else if (actionTypes.has('set_budget') && !actionTypes.has('set_status')) {
-            suggestion = `Consider using set_status to pause any campaign with zero conversions or a declining trend. Budget cuts alone leave underperformers still spending.`;
-          } else if (!actionTypes.has('reallocate_budget')) {
-            suggestion = `Consider reallocate_budget to shift spend from the weakest remaining campaign to the strongest. Budget-neutral swaps are low-risk, high-value.`;
-          } else {
-            suggestion = `Look for the next-weakest campaign by efficiency score. Even small optimizations compound — simulate a budget adjustment or status change.`;
-          }
-
-          // Run strategist to scout unexplored data before nudging the agent back in
-          let nudgeBriefing = '';
-          if (enableExploration && preLoopExplorationTools.length > 0) {
-            try {
-              const recentEvents = await this.env.DB.prepare(
-                `SELECT tool_name, tool_input_summary FROM analysis_events
-                 WHERE job_id = ? AND tool_name IS NOT NULL
-                 ORDER BY iteration DESC LIMIT 30`
-              ).bind(jobId).all<{ tool_name: string; tool_input_summary: string | null }>();
-              const toolLog = (recentEvents.results || []).map(
-                (e) => `${e.tool_name}: ${e.tool_input_summary || ''}`
-              );
-
-              const nudgeStrategist = await step.do(`strategist_nudge_${iterations}`, {
-                retries: { limit: 1, delay: '5 seconds' },
-                timeout: '2 minutes'
-              }, async () => {
-                return await this.runStrategistBriefing(
-                  agenticClient,
-                  agenticContext.contextPrompt,
-                  entityTree,
-                  preLoopExplorationTools as AgenticToolDef[],
-                  orgId,
-                  jobId,
-                  {
-                    recommendations: actionRecommendations,
-                    toolCallLog: toolLog,
-                    previousBriefing: strategistBriefing,
-                    iteration: iterations
-                  }
-                );
-              });
-
-              totalInputTokens += nudgeStrategist.inputTokens;
-              totalOutputTokens += nudgeStrategist.outputTokens;
-              nudgeBriefing = nudgeStrategist.briefing;
-              strategistBriefing = nudgeBriefing;
-
-              // Update system prompt with fresh briefing
-              activeSystemPrompt = agenticContext.systemPrompt +
-                `\n\n## STRATEGIST BRIEFING (updated at nudge, iteration ${iterations})\n\n${nudgeBriefing}`;
-
-              console.log(`[Analysis] Strategist re-run for unfilled slots nudge (${nudgeStrategist.inputTokens} in / ${nudgeStrategist.outputTokens} out tokens)`);
-            } catch (e) {
-              console.error('[Analysis] Strategist nudge refresh failed:', e);
-            }
-          }
-
-          const strategistHint = nudgeBriefing
-            ? `\n\n## STRATEGIST RECON (fresh data for your remaining slot)\n${nudgeBriefing}`
-            : '';
-
-          agenticMessages = [
-            ...iterResult.messages,
-            agenticClient.buildUserMessage(
-              `UNFILLED ACTION SLOTS: You've made ${actionRecommendations.length} recommendation(s) (${existingActions}) but have ${remaining} action slot(s) remaining. ` +
-              `The user is paying for a complete optimization — use all ${maxActionRecommendations} slots.\n\n` +
-              `${suggestion}${strategistHint}\n\n` +
-              `Use simulate_change on a specific entity, then create the recommendation. Do NOT call terminate_analysis until all ${maxActionRecommendations} slots are filled.`
-            )
-          ];
-          console.log(`[Analysis] Unfilled slots nudge: ${actionRecommendations.length}/${maxActionRecommendations} actions, pushing for ${remaining} more`);
-          continue;  // Re-enter the loop
-        }
-
-        // Pre-termination nudge: if the agent is stopping with zero actions, push it to
-        // generate at least one concrete recommendation before giving up. Users pay for
-        // analysis — "everything looks great" with no actions is not acceptable output.
-        if (
-          nudgeCount < 2 &&
-          actionRecommendations.length === 0 &&
-          (iterResult.stopReason === 'no_tool_calls' || iterResult.stopReason === 'early_termination')
-        ) {
-          nudgeCount++;
-
-          if (nudgeCount === 1) {
-            // First nudge: strategy-specific guidance
-            const strategyNudge = budgetStrategy === 'aggressive'
-              ? `You are in AGGRESSIVE budget mode — the user expects bold action recommendations.\n` +
-                `- Increase budget on the highest-efficiency campaign by 15-20%\n` +
-                `- Re-enable paused campaigns with strong historical ROAS\n`
-              : budgetStrategy === 'conservative'
-              ? `You are in CONSERVATIVE budget mode — the user wants to cut waste and protect margins.\n` +
-                `- Decrease budget on the WEAKEST active campaign (lowest efficiency score) by 15-20%\n` +
-                `- If any campaign has a declining trend (CVR dropping, CPA increasing), decrease its budget\n`
-              : `You are in MODERATE budget mode — reallocate for better results.\n` +
-                `- Use reallocate_budget to shift 10-15% from the weakest campaign to the strongest\n` +
-                `- If any campaign has declining trends, reduce its budget and redistribute\n`;
-
-            agenticMessages = [
-              ...iterResult.messages,
-              agenticClient.buildUserMessage(
-                `IMPORTANT: You have not made any action recommendations yet. Insights alone are not enough — ` +
-                `the user is paying for actionable optimization suggestions, not just observations.\n\n` +
-                `${strategyNudge}\n` +
-                `Even if the portfolio is performing well overall, there are ALWAYS optimization opportunities:\n` +
-                `- The weakest campaign can always have budget shifted to the strongest\n` +
-                `- Campaigns with declining trends should have budgets reduced proactively\n` +
-                `- Budget allocation can always be optimized to match efficiency scores\n\n` +
-                `DO NOT use general_insight. Use simulate_change on a specific entity, then call set_budget or reallocate_budget.`
-              )
-            ];
-            console.log(`[Analysis] Pre-termination nudge #1: LLM stopped with no actions (${budgetStrategy} mode)`);
-          } else {
-            // Second nudge: direct instruction — pick the weakest campaign and act
-            agenticMessages = [
-              ...iterResult.messages,
-              agenticClient.buildUserMessage(
-                `FINAL WARNING: You MUST produce at least one action recommendation. Do NOT call general_insight or terminate_analysis.\n\n` +
-                `Here is exactly what to do:\n` +
-                `1. Find the campaign with the LOWEST efficiency score or the WORST declining trend\n` +
-                `2. Call simulate_change with action='decrease_budget' (or 'pause' if it has zero conversions) on that entity\n` +
-                `3. Based on the simulation result, call set_budget (or set_status) to recommend the change\n\n` +
-                `This is your last chance to produce an action. If you call terminate_analysis or general_insight instead, the analysis will be marked as failed.`
-              )
-            ];
-            console.log(`[Analysis] Pre-termination nudge #2 (final): forcing action on weakest entity (${budgetStrategy} mode)`);
-          }
-          continue;  // Re-enter the loop for another iteration
-        }
-
         stoppedReason = iterResult.stopReason || 'no_tool_calls';
         terminationReason = iterResult.terminationReason;
         break;
@@ -3212,8 +3063,8 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     if (existing) return;
 
     const id = crypto.randomUUID().replace(/-/g, '');
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
+    // Use explicit arithmetic — Cloudflare Workflows may freeze Date objects for replay determinism
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     // Build current_state from the LLM's tool input parameters
     const currentState: Record<string, any> = {};
@@ -3266,8 +3117,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     analysisRunId: string
   ): Promise<string> {
     const id = crypto.randomUUID().replace(/-/g, '');
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     await this.env.DB.prepare(`
       INSERT INTO ai_decisions (

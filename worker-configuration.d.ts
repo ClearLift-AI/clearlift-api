@@ -34,12 +34,7 @@ declare namespace Cloudflare {
 	interface ProductionEnv {
 		CACHE: KVNamespace;
 		DB: D1Database;
-		AI_DB: D1Database;
 		ANALYTICS_DB: D1Database;
-		SHARD_0: D1Database;
-		SHARD_1: D1Database;
-		SHARD_2: D1Database;
-		SHARD_3: D1Database;
 		SYNC_QUEUE: Queue;
 		ENCRYPTION_KEY: SecretsStoreSecret;
 		R2_SQL_TOKEN: SecretsStoreSecret;
@@ -83,12 +78,7 @@ declare namespace Cloudflare {
 	interface StagingEnv {
 		CACHE: KVNamespace;
 		DB: D1Database;
-		AI_DB: D1Database;
 		ANALYTICS_DB: D1Database;
-		SHARD_0: D1Database;
-		SHARD_1: D1Database;
-		SHARD_2: D1Database;
-		SHARD_3: D1Database;
 		ANALYTICS: AnalyticsEngineDataset;
 		SYNC_QUEUE: Queue;
 		ENCRYPTION_KEY: SecretsStoreSecret;
@@ -156,11 +146,6 @@ declare namespace Cloudflare {
 		R2_SQL_TABLE: "clearlift.event_data_v4_1" | "clearlift.event_data_v5_staging";
 		USE_D1_ANALYTICS: "true";
 		ANALYSIS_WORKFLOW: Workflow<Parameters<import("./src/index").AnalysisWorkflow['run']>[0]['payload']>;
-		AI_DB?: D1Database;
-		SHARD_0?: D1Database;
-		SHARD_1?: D1Database;
-		SHARD_2?: D1Database;
-		SHARD_3?: D1Database;
 		TIKTOK_APP_ID?: SecretsStoreSecret;
 		TIKTOK_APP_SECRET?: SecretsStoreSecret;
 		SHOPIFY_CLIENT_ID?: SecretsStoreSecret;
