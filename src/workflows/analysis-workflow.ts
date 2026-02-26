@@ -289,10 +289,9 @@ export class AnalysisWorkflow extends WorkflowEntrypoint<Env, AnalysisWorkflowPa
     // Active tree is the full entity tree — agent uses exploration tools for drill-down
     const activeTree = entityTree;
 
-    // Steps 7+: Agentic loop — real limit is context length, not iteration count.
-    // Gemini Flash: 1M context, Claude: 200K. Set iteration cap high enough that
-    // context exhaustion is always the binding constraint.
-    const maxIterations = 1000;
+    // Steps 7+: Agentic loop — hard cap at 200 iterations to prevent runaway loops.
+    // In practice, context exhaustion or action slot filling should stop much earlier.
+    const maxIterations = 200;
 
     // Scale action recommendation slots with account size + growth strategy
     const baseScaledMax = activeCampaignCount >= 20 ? 7
