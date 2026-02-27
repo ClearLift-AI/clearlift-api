@@ -3,6 +3,8 @@ import { z } from "zod";
 import { AppContext } from "../../types";
 import { OnboardingService } from "../../services/onboarding";
 import { success, error } from "../../utils/response";
+import { JobManager } from "../../services/analysis";
+import { structuredLog } from "../../utils/structured-logger";
 
 /**
  * GET /v1/onboarding/status - Get current onboarding progress
@@ -358,7 +360,61 @@ export class CompleteOnboardingStep extends OpenAPIRoute {
       orgResult?.organization_id
     );
 
-    return success(c, { progress });
+    // Fire-and-forget: trigger AI analysis when onboarding completes
+    let analysis_job_id: string | undefined;
+    if (step_name === 'first_sync' && progress.current_step === 'completed' && orgResult?.organization_id) {
+      try {
+        const orgId = orgResult.organization_id;
+
+        // Dedup: skip if analysis already running (<30 min old)
+        const existingJob = await c.env.DB.prepare(`
+          SELECT id FROM analysis_jobs
+          WHERE organization_id = ? AND status IN ('pending', 'in_progress', 'running')
+            AND created_at > datetime('now', '-30 minutes')
+          ORDER BY created_at DESC LIMIT 1
+        `).bind(orgId).first<{ id: string }>();
+
+        if (existingJob) {
+          analysis_job_id = existingJob.id;
+        } else {
+          const jobs = new JobManager(c.env.DB);
+          const jobId = await jobs.createJob(orgId, 7);
+          analysis_job_id = jobId;
+
+          await c.env.ANALYSIS_WORKFLOW.create({
+            id: jobId,
+            params: {
+              orgId,
+              days: 7,
+              jobId,
+              customInstructions: null,
+              config: {
+                llm: { defaultProvider: 'auto', claudeModel: 'haiku', geminiModel: 'flash' },
+                agentic: { maxRecommendations: 3, enableExploration: true },
+                budgetStrategy: 'moderate',
+                businessType: 'ecommerce',
+              },
+            },
+          });
+
+          structuredLog('INFO', 'Auto-triggered analysis on onboarding completion', {
+            endpoint: 'onboarding',
+            step: 'complete-step',
+            org_id: orgId,
+            job_id: jobId,
+          });
+        }
+      } catch (err) {
+        structuredLog('WARN', 'Failed to auto-trigger analysis on onboarding completion', {
+          endpoint: 'onboarding',
+          step: 'complete-step',
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // Never block onboarding if analysis fails
+      }
+    }
+
+    return success(c, { progress, analysis_job_id });
   }
 }
 
