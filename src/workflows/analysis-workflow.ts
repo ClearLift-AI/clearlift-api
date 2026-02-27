@@ -2891,17 +2891,18 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
           );
 
           if (!simResult.success) {
+            const eventStatus = simResult.error === 'DUPLICATE_ENTITY' ? 'duplicate_entity' : 'simulation_required';
             toolResults.push({
               toolCallId: toolCall.id,
               name: toolCall.name,
               content: {
-                status: 'simulation_required',
+                status: eventStatus,
                 error: simResult.error,
                 message: simResult.message,
                 recommendation: simResult.recommendation
               }
             });
-            await logEvent(toolCall.name, summarizeToolInput(toolCall), 'simulation_required', toolCall.input, { status: 'simulation_required', error: simResult.error, recommendation: simResult.recommendation });
+            await logEvent(toolCall.name, summarizeToolInput(toolCall), eventStatus, toolCall.input, { status: eventStatus, error: simResult.error, recommendation: simResult.recommendation });
             continue;
           }
 
@@ -2967,11 +2968,32 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
 
         // For other tools (set_audience, reallocate_budget), use direct logging
         const rec = parseToolCallToRecommendation(toolCall.name, toolCall.input);
+
+        // Log to ai_decisions — check for duplicate
+        const logResult = await this.logRecommendation(orgId, rec, runId);
+
+        if (logResult.isDuplicate) {
+          // Nudge the LLM to update or delete the existing recommendation instead
+          toolResults.push({
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            content: {
+              status: 'duplicate_entity',
+              message: `⚠ A pending recommendation already exists for ${rec.entity_name} (${toolCall.name}). ` +
+                `Use update_recommendation(original_entity_id="${rec.entity_id}", original_tool="${toolCall.name}", ...) to revise it, ` +
+                `or delete_recommendation to withdraw it and free the action slot. ` +
+                `Duplicate recommendations for the same entity are not stored.`,
+              existing_recommendation_id: logResult.existingId,
+              entity_id: rec.entity_id,
+              entity_name: rec.entity_name
+            }
+          });
+          await logEvent(toolCall.name, summarizeToolInput(toolCall), 'duplicate_entity', toolCall.input, { status: 'duplicate_entity', existing_id: logResult.existingId });
+          continue;
+        }
+
         recommendations.push(rec);
         actionRecommendations.push(rec);
-
-        // Log to ai_decisions
-        await this.logRecommendation(orgId, rec, runId);
 
         toolResults.push({
           toolCallId: toolCall.id,
@@ -3050,8 +3072,8 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
     rec: Recommendation,
     analysisRunId: string,
     simulationResult?: SimulationResult | null
-  ): Promise<void> {
-    // Dedup: skip if an identical pending decision already exists (workflow retry safety)
+  ): Promise<{ isDuplicate: boolean; existingId?: string }> {
+    // Check if a pending decision already exists for this entity+tool
     const existing = await this.env.DB.prepare(`
       SELECT id FROM ai_decisions
       WHERE organization_id = ? AND tool = ? AND platform = ? AND entity_type = ? AND entity_id = ?
@@ -3059,7 +3081,7 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
       LIMIT 1
     `).bind(orgId, rec.tool, rec.platform, rec.entity_type, rec.entity_id).first<{ id: string }>();
 
-    if (existing) return;
+    if (existing) return { isDuplicate: true, existingId: existing.id };
 
     const id = crypto.randomUUID().replace(/-/g, '');
     // Use explicit arithmetic — Cloudflare Workflows may freeze Date objects for replay determinism
@@ -3105,6 +3127,8 @@ The terminate_analysis reason is displayed to users as an explanation, so write 
       simulationData,
       simulationConfidence
     ).run();
+
+    return { isDuplicate: false };
   }
 
   /**
