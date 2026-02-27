@@ -102,7 +102,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
 
       // Call Google Ads API to list accessible customer accounts
       // https://developers.google.com/google-ads/api/rest/reference/rest/v22/customers/listAccessibleCustomers
-      const apiUrl = 'https://googleads.googleapis.com/v22/customers:listAccessibleCustomers';
+      const apiUrl = 'https://googleads.googleapis.com/v23/customers:listAccessibleCustomers';
       structuredLog('INFO', 'Calling Google Ads listAccessibleCustomers API', {
         service: 'google-oauth',
         hasAccessToken: !!accessToken,
@@ -164,7 +164,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
         customerIds.map(async (customerId: string) => {
           try {
             // Use the Google Ads search API to get customer details
-            const searchUrl = `https://googleads.googleapis.com/v22/customers/${customerId}/googleAds:search`;
+            const searchUrl = `https://googleads.googleapis.com/v23/customers/${customerId}/googleAds:search`;
             const query = `SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.manager FROM customer`;
 
             const detailResponse = await fetch(searchUrl, {
@@ -250,7 +250,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
     campaignId: string,
     status: 'ENABLED' | 'PAUSED' | 'REMOVED'
   ): Promise<any> {
-    const url = `https://googleads.googleapis.com/v22/customers/${customerId}/campaigns:mutate`;
+    const url = `https://googleads.googleapis.com/v23/customers/${customerId}/campaigns:mutate`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -290,7 +290,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
     budgetAmountMicros: number
   ): Promise<any> {
     // First, get the campaign's budget resource name
-    const searchUrl = `https://googleads.googleapis.com/v22/customers/${customerId}/googleAds:search`;
+    const searchUrl = `https://googleads.googleapis.com/v23/customers/${customerId}/googleAds:search`;
     const query = `SELECT campaign.campaign_budget FROM campaign WHERE campaign.id = ${campaignId}`;
 
     const searchResponse = await fetch(searchUrl, {
@@ -317,7 +317,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
     }
 
     // Update the budget via the campaignBudgets:mutate endpoint
-    const url = `https://googleads.googleapis.com/v22/customers/${customerId}/campaignBudgets:mutate`;
+    const url = `https://googleads.googleapis.com/v23/customers/${customerId}/campaignBudgets:mutate`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -356,7 +356,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
     adGroupId: string,
     status: 'ENABLED' | 'PAUSED' | 'REMOVED'
   ): Promise<any> {
-    const url = `https://googleads.googleapis.com/v22/customers/${customerId}/adGroups:mutate`;
+    const url = `https://googleads.googleapis.com/v23/customers/${customerId}/adGroups:mutate`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -408,7 +408,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
       target_roas?: number;        // for maximize_conversion_value (e.g. 2.0 = 200% ROAS)
     }
   ): Promise<any> {
-    const url = `https://googleads.googleapis.com/v22/customers/${customerId}/campaigns:mutate`;
+    const url = `https://googleads.googleapis.com/v23/customers/${customerId}/campaigns:mutate`;
 
     // Build the bidding strategy field based on type
     const campaignUpdate: any = {
@@ -475,7 +475,7 @@ export class GoogleAdsOAuthProvider extends OAuthProvider {
     customerId: string,
     campaignId: string
   ): Promise<{ budget_amount_micros: number; budget_resource_name: string }> {
-    const searchUrl = `https://googleads.googleapis.com/v22/customers/${customerId}/googleAds:search`;
+    const searchUrl = `https://googleads.googleapis.com/v23/customers/${customerId}/googleAds:search`;
     const query = `SELECT campaign.campaign_budget, campaign_budget.amount_micros FROM campaign WHERE campaign.id = ${campaignId}`;
 
     const response = await fetch(searchUrl, {

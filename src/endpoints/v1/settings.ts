@@ -495,6 +495,55 @@ export class AcceptAIDecision extends OpenAPIRoute {
     // Accept both, prefer recommended_budget_cents.
     const budgetCents = params.recommended_budget_cents ?? params.amount_cents;
 
+    // ── compound_action: execute sub-actions sequentially ──
+    if (tool === 'compound_action') {
+      const actions: Array<{ tool: string; entity_type?: string; entity_id: string; entity_name: string; parameters: any }> = params.actions;
+      if (!actions || actions.length === 0) throw new Error('compound_action requires at least one sub-action');
+
+      const results: any[] = [];
+      const completedActions: Array<{ index: number; tool: string; entity_id: string }> = [];
+
+      for (let i = 0; i < actions.length; i++) {
+        const subAction = actions[i];
+        try {
+          // Build a synthetic decision object for the sub-action
+          const subDecision = {
+            ...decision,
+            tool: subAction.tool,
+            entity_type: subAction.entity_type || entity_type,
+            entity_id: subAction.entity_id,
+            parameters: JSON.stringify(subAction.parameters),
+            platform: params.platform || platform,
+          };
+          const subResult = await this.executeDecision(c, subDecision, orgId);
+          results.push({ step: i + 1, tool: subAction.tool, entity: subAction.entity_name, success: true, result: subResult });
+          completedActions.push({ index: i, tool: subAction.tool, entity_id: subAction.entity_id });
+        } catch (err: any) {
+          // Record the failure and stop — don't execute remaining steps
+          results.push({ step: i + 1, tool: subAction.tool, entity: subAction.entity_name, success: false, error: err.message });
+          return {
+            success: false,
+            strategy: params.strategy,
+            completed_steps: completedActions.length,
+            total_steps: actions.length,
+            error: `Step ${i + 1}/${actions.length} failed: ${subAction.tool} on ${subAction.entity_name}: ${err.message}`,
+            results,
+            note: completedActions.length > 0
+              ? `${completedActions.length} step(s) already executed before failure. Manual review may be needed.`
+              : 'No steps were executed before failure.',
+          };
+        }
+      }
+
+      return {
+        success: true,
+        strategy: params.strategy,
+        completed_steps: actions.length,
+        total_steps: actions.length,
+        results,
+      };
+    }
+
     // ── Get platform connection + access token ──
     const connection = await c.env.DB.prepare(`
       SELECT id, account_id FROM platform_connections
