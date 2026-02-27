@@ -323,10 +323,16 @@ export async function executeRecommendationWithSimulation(
     };
   }
 
-  // For compound_action, extract entity_id from the primary sub-action
+  // Extract entity_id based on tool type:
+  // - compound_action: from the primary sub-action
+  // - reallocate_budget: uses from_entity_id (not entity_id)
+  // - all others: entity_id
   const entityId = toolName === 'compound_action'
     ? (toolInput.actions?.[0]?.entity_id || toolInput.entity_id)
-    : toolInput.entity_id;
+    : toolName === 'reallocate_budget'
+      ? (toolInput.from_entity_id || toolInput.entity_id)
+      : toolInput.entity_id;
+  const entityType = toolInput.entity_type || toolInput.from_entity_type || 'campaign';
   const simKey = getSimulationKey(action, entityId);
   const existingSimulation = context.simulationCache.simulations.get(simKey);
 
@@ -339,7 +345,7 @@ export async function executeRecommendationWithSimulation(
 
     const simParams: SimulateChangeParams = {
       action: action as any,
-      entity_type: toolInput.entity_type,
+      entity_type: entityType as any,
       entity_id: entityId
     };
 
@@ -452,6 +458,18 @@ If these numbers don't support your recommendation, do NOT proceed.`,
   // ═══════════════════════════════════════════════════════════════════════
 
   const sim = existingSimulation;
+
+  // Guard: don't store recommendations when simulation failed (e.g. no metrics found)
+  if (sim.success === false) {
+    // Clear the failed simulation from cache
+    context.simulationCache.simulations.delete(simKey);
+    return {
+      success: false,
+      error: 'SIMULATION_FAILED',
+      message: `Cannot create recommendation: ${sim.math_explanation || 'simulation returned no data'}. ` +
+        `Try calling simulate_change explicitly for the specific entity first.`
+    };
+  }
 
   // Build the recommendation with CALCULATED impact
   const recommendation: Recommendation = {
