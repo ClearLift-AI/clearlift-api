@@ -172,9 +172,10 @@ export class GetOnboardingStatus extends OpenAPIRoute {
 
     // 5. Check if first sync completed (first_sync → completed)
     if (progress.current_step === 'first_sync' && !progress.first_sync_completed) {
+      // Check for a completed sync with actual data (records_synced > 0)
       const completedSync = await c.env.DB.prepare(`
         SELECT 1 FROM sync_jobs
-        WHERE organization_id = ? AND status = 'completed'
+        WHERE organization_id = ? AND status = 'completed' AND records_synced > 0
         LIMIT 1
       `).bind(orgId).first();
 
@@ -183,6 +184,20 @@ export class GetOnboardingStatus extends OpenAPIRoute {
         progress.first_sync_completed = true;
         progress = await onboarding.getProgress(session.user_id) as typeof progress;
         console.log(`[ONBOARDING_HEAL] Marked first_sync_completed for user ${session.user_id}`);
+      } else {
+        // Tag-only users: if ALL connections are adbliss_tag, auto-complete first_sync
+        // (tag connections don't generate sync_jobs, so waiting for one would block forever)
+        const nonTagConnections = await c.env.DB.prepare(`
+          SELECT COUNT(*) as count FROM platform_connections
+          WHERE organization_id = ? AND is_active = 1 AND platform != 'adbliss_tag'
+        `).bind(orgId).first<{ count: number }>();
+
+        if ((nonTagConnections?.count || 0) === 0 && actualConnections > 0) {
+          await onboarding.markFirstSyncCompleted(session.user_id);
+          progress.first_sync_completed = true;
+          progress = await onboarding.getProgress(session.user_id) as typeof progress;
+          console.log(`[ONBOARDING_HEAL] Tag-only user ${session.user_id} — auto-completed first_sync`);
+        }
       }
     }
 
@@ -328,8 +343,20 @@ export class CompleteOnboardingStep extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>();
     const { step_name } = data.body;
 
+    // Look up organization_id so completeStep can auto-create if needed
+    const orgResult = await c.env.DB.prepare(`
+      SELECT organization_id FROM organization_members
+      WHERE user_id = ?
+      ORDER BY joined_at ASC
+      LIMIT 1
+    `).bind(session.user_id).first<{ organization_id: string }>();
+
     const onboarding = new OnboardingService(c.env.DB);
-    const progress = await onboarding.completeStep(session.user_id, step_name);
+    const progress = await onboarding.completeStep(
+      session.user_id,
+      step_name,
+      orgResult?.organization_id
+    );
 
     return success(c, { progress });
   }
