@@ -126,11 +126,14 @@ export class OnboardingService {
   /**
    * Mark a step as completed and advance to next step
    */
-  async completeStep(userId: string, stepName: string): Promise<OnboardingProgress> {
-    const progress = await this.getProgress(userId);
+  async completeStep(userId: string, stepName: string, organizationId?: string): Promise<OnboardingProgress> {
+    let progress = await this.getProgress(userId);
 
     if (!progress) {
-      throw new Error('Onboarding not started');
+      if (!organizationId) {
+        throw new Error('Onboarding not started and no organization_id provided');
+      }
+      progress = await this.startOnboarding(userId, organizationId);
     }
 
     // Add step to completed list if not already there
@@ -297,12 +300,7 @@ export class OnboardingService {
       return false;
     }
 
-    // Complete if all requirements met or legacy completed
-    return (
-      progress.services_connected > 0 &&
-      progress.has_verified_tag &&
-      progress.has_defined_goal
-    ) || progress.current_step === 'completed';
+    return progress.current_step === 'completed';
   }
 
   /**

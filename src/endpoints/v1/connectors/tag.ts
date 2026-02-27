@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { structuredLog } from "../../../utils/structured-logger";
+import { OnboardingService } from "../../../services/onboarding";
 
 export class EnsureTagConnection extends OpenAPIRoute {
   public schema = {
@@ -68,6 +69,26 @@ export class EnsureTagConnection extends OpenAPIRoute {
         organization_id: orgId,
         connection_id: connectionId
       });
+
+      // Update onboarding state for tag-only users
+      try {
+        const onboarding = new OnboardingService(c.env.DB);
+        // Ensure onboarding_progress record exists
+        await onboarding.startOnboarding(session.user_id, orgId);
+        // Count this as a connected service
+        await onboarding.incrementServicesConnected(session.user_id);
+        structuredLog('INFO', 'Onboarding updated for tag connection', {
+          endpoint: 'tag-ensure',
+          organization_id: orgId
+        });
+      } catch (onboardingErr) {
+        // Non-fatal — don't break tag connection creation if onboarding update fails
+        structuredLog('WARN', 'Failed to update onboarding for tag connection', {
+          endpoint: 'tag-ensure',
+          organization_id: orgId,
+          error: onboardingErr instanceof Error ? onboardingErr.message : String(onboardingErr)
+        });
+      }
 
       return success(c, { connection_id: connectionId, created: true });
     } catch (err: any) {
