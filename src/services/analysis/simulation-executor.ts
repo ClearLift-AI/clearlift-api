@@ -473,14 +473,32 @@ If these numbers don't support your recommendation, do NOT proceed.`,
   };
 
   // Store in database
-  const recId = await storeRecommendation(context.aiDb, context.orgId, context.analysisRunId, recommendation, sim);
+  const storeResult = await storeRecommendation(context.aiDb, context.orgId, context.analysisRunId, recommendation, sim);
 
   // Clear from cache (one-time use)
   context.simulationCache.simulations.delete(simKey);
 
+  // If a pending decision already exists for this entity, nudge the LLM to update/delete first
+  if (storeResult.isDuplicate) {
+    return {
+      success: false,
+      error: 'DUPLICATE_ENTITY',
+      message: `⚠ A pending recommendation already exists for ${recommendation.entity_name} (${toolName}). ` +
+        `Use update_recommendation to revise it, or delete_recommendation to withdraw it and free the action slot. ` +
+        `Duplicate recommendations for the same entity are not stored.`,
+      recommendation: 'UPDATE_OR_DELETE',
+      data: {
+        existing_recommendation_id: storeResult.id,
+        entity_id: recommendation.entity_id,
+        entity_name: recommendation.entity_name,
+        tool: toolName
+      }
+    };
+  }
+
   return {
     success: true,
-    recommendation_id: recId,
+    recommendation_id: storeResult.id,
     message: `
 ✓ RECOMMENDATION CREATED
 
@@ -491,7 +509,7 @@ If these numbers don't support your recommendation, do NOT proceed.`,
 The recommendation has been saved with full simulation data.
 The user will see the mathematical explanation when reviewing.`,
     data: {
-      recommendation_id: recId,
+      recommendation_id: storeResult.id,
       calculated_impact: sim.simulated_state.cac_change_percent,
       confidence: sim.confidence,
       projected_cac_cents: sim.simulated_state.blended_cac_cents,
@@ -510,7 +528,7 @@ async function storeRecommendation(
   analysisRunId: string,
   recommendation: Recommendation,
   simulation: SimulationResult
-): Promise<string> {
+): Promise<{ id: string; isDuplicate: boolean }> {
   // Store canonical tool name — dashboard switches on 'set_status', not 'pause'/'enable'.
   // The recommended_status field inside parameters carries the directional intent.
   const tool = recommendation.tool;
@@ -522,7 +540,7 @@ async function storeRecommendation(
   const entityName = recommendation.entity_name || 'unknown';
   const reason = recommendation.reason || '';
 
-  // Dedup: skip if an identical pending decision already exists (workflow retry safety)
+  // Check if a pending decision already exists for this entity+tool combination
   const existing = await aiDb.prepare(`
     SELECT id FROM ai_decisions
     WHERE organization_id = ? AND tool = ? AND platform = ? AND entity_type = ? AND entity_id = ?
@@ -531,7 +549,7 @@ async function storeRecommendation(
   `).bind(orgId, tool, platform, entityType, entityId)
     .first<{ id: string }>();
 
-  if (existing) return existing.id;
+  if (existing) return { id: existing.id, isDuplicate: true };
 
   const id = crypto.randomUUID().replace(/-/g, '').slice(0, 32);
   const expiresAt = addDays(new Date(), 7).toISOString();
@@ -570,7 +588,7 @@ async function storeRecommendation(
     expiresAt
   ).run();
 
-  return id;
+  return { id, isDuplicate: false };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
