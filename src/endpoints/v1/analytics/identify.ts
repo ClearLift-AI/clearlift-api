@@ -12,52 +12,14 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { D1Adapter } from "../../../adapters/d1";
-import { getSecret } from "../../../utils/secrets";
 import { structuredLog } from "../../../utils/structured-logger";
 
-/**
- * Verify internal auth (shared secret or API key)
- *
- * CF-Worker header alone is spoofable - require shared secret validation.
- * Service bindings between workers should pass the INTERNAL_API_KEY.
- */
-async function verifyInternalAuth(c: AppContext): Promise<boolean> {
-  const internalKey = c.req.header("X-Internal-Key");
-  if (!internalKey) {
-    return false;
-  }
+// Internal auth extracted to shared utility
+import { verifyInternalAuth as _verifyInternalAuth } from "../../../utils/internal-auth";
 
-  try {
-    const internalApiKeyBinding = (c.env as any).INTERNAL_API_KEY;
-    if (!internalApiKeyBinding) {
-      // If INTERNAL_API_KEY is not configured, deny all internal requests
-      structuredLog('WARN', 'INTERNAL_API_KEY binding not configured, denying internal request', { endpoint: 'identify', step: 'auth_check' });
-      return false;
-    }
-    const expectedKey = await getSecret(internalApiKeyBinding);
-    if (!expectedKey) {
-      return false;
-    }
-    // Constant-time comparison
-    const encoder = new TextEncoder();
-    const a = encoder.encode(internalKey);
-    const b = encoder.encode(expectedKey);
-    if (a.byteLength !== b.byteLength) return false;
-    const keyA = await crypto.subtle.importKey('raw', a, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    const sigA = await crypto.subtle.sign('HMAC', keyA, b);
-    const keyB = await crypto.subtle.importKey('raw', b, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    const sigB = await crypto.subtle.sign('HMAC', keyB, a);
-    const sigArrayA = new Uint8Array(sigA);
-    const sigArrayB = new Uint8Array(sigB);
-    let result = 0;
-    for (let i = 0; i < sigArrayA.length; i++) {
-      result |= sigArrayA[i] ^ sigArrayB[i];
-    }
-    return result === 0;
-  } catch (e) {
-    structuredLog('ERROR', 'Internal auth verification failed', { endpoint: 'identify', step: 'auth_check', error: e instanceof Error ? e.message : String(e) });
-    return false;
-  }
+/** Wrapper that adapts Hono context to the shared verifyInternalAuth interface */
+async function verifyInternalAuth(c: AppContext): Promise<boolean> {
+  return _verifyInternalAuth(c.req, c.env as any);
 }
 
 /**

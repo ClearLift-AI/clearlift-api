@@ -266,6 +266,7 @@ import {
   GetEntityAnalysis,
   GetAnalysisAudit
 } from "./endpoints/v1/analysis";
+import { handleInternalAnalysisTrigger } from "./endpoints/v1/analysis/internal-trigger";
 import {
   GetTagConfig,
   GetTrackingConfig,
@@ -683,6 +684,9 @@ openapi.get("/v1/analysis/status/:job_id", auth, requireOrg, GetAnalysisStatus);
 openapi.get("/v1/analysis/latest", auth, requireOrg, GetLatestAnalysis);
 openapi.get("/v1/analysis/entity/:level/:entity_id", auth, requireOrg, GetEntityAnalysis);
 openapi.get("/v1/analysis/runs/:run_id/audit", auth, requireOrg, GetAnalysisAudit);
+
+// Internal: Auto-trigger analysis (called by clearlift-cron via service binding)
+app.post("/internal/analysis/trigger", handleInternalAnalysisTrigger);
 
 // Shopify GDPR mandatory compliance webhooks (no auth - uses HMAC verification)
 // Registered before generic :connector route to ensure exact match takes priority
