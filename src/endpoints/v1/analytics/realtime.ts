@@ -10,6 +10,39 @@ import { z } from "zod";
 import { AppContext } from "../../../types";
 import { success, error } from "../../../utils/response";
 import { structuredLog } from "../../../utils/structured-logger";
+import { AnalyticsEngineService } from "../../../services/analytics-engine";
+
+type AnalyticsSource = 'd1' | 'ae' | 'dual';
+
+/**
+ * Resolve organization_id to org_tag for AE queries.
+ * AE uses org_tag (index1) as partition key, but API endpoints receive organization_id.
+ */
+async function resolveOrgTag(db: D1Database, orgId: string): Promise<string | null> {
+  const row = await db.prepare(
+    `SELECT short_tag FROM org_tag_mappings WHERE organization_id = ? AND is_active = 1`
+  ).bind(orgId).first<{ short_tag: string }>();
+  return row?.short_tag || null;
+}
+
+/**
+ * Create an AnalyticsEngineService from env bindings.
+ */
+function createAEService(env: Env): AnalyticsEngineService | null {
+  const accountId = env.CLOUDFLARE_ACCOUNT_ID;
+  const apiToken = (env as any).AE_API_TOKEN;
+  if (!accountId || !apiToken) return null;
+  return new AnalyticsEngineService(accountId, apiToken);
+}
+
+/**
+ * Get the analytics source from env. Defaults to 'd1'.
+ */
+function getAnalyticsSource(env: Env): AnalyticsSource {
+  const src = ((env as any).ANALYTICS_SOURCE || 'd1') as string;
+  if (src === 'ae' || src === 'dual') return src;
+  return 'd1';
+}
 
 /**
  * GET /v1/analytics/realtime/summary
@@ -64,45 +97,73 @@ export class GetRealtimeSummary extends OpenAPIRoute {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
+    const source = getAnalyticsSource(c.env);
+
     try {
-      // Query hourly_metrics for the last N hours
-      const result = await analyticsDb.prepare(`
-        SELECT
-          COALESCE(SUM(total_events), 0) as total_events,
-          COALESCE(SUM(sessions), 0) as sessions,
-          COALESCE(SUM(users), 0) as users,
-          COALESCE(SUM(conversions), 0) as conversions,
-          COALESCE(SUM(revenue_cents), 0) as revenue_cents,
-          COALESCE(SUM(page_views), 0) as page_views
-        FROM hourly_metrics
-        WHERE organization_id = ?
-          AND hour >= datetime('now', '-' || ? || ' hours')
-      `).bind(orgId, hours).first() as {
-        total_events: number;
-        sessions: number;
-        users: number;
-        conversions: number;
-        revenue_cents: number;
-        page_views: number;
-      } | null;
+      // --- AE path ---
+      if (source === 'ae' || source === 'dual') {
+        const orgTag = await resolveOrgTag(c.env.DB, orgId);
+        const aeService = createAEService(c.env);
 
-      // Note: users column may be 0 if aggregation doesn't track unique visitors
-      // Fall back to sessions as an estimate (typically users ~= 0.8 * sessions for return visitors)
-      const users = result?.users || 0;
-      const estimatedUsers = users > 0 ? users : Math.round((result?.sessions || 0) * 0.85);
+        if (aeService && orgTag) {
+          const aeSummary = await aeService.getSummary(orgTag, hours);
 
-      return success(c, {
-        totalEvents: result?.total_events || 0,
-        sessions: result?.sessions || 0,
-        users: estimatedUsers,
-        conversions: result?.conversions || 0,
-        revenue: (result?.revenue_cents || 0) / 100,
-        pageViews: result?.page_views || 0
-      });
+          if (source === 'dual') {
+            // In dual mode, also run D1 for comparison logging, but return AE result
+            const d1Result = await this.queryD1Summary(analyticsDb, orgId, hours);
+            structuredLog('INFO', 'Dual-mode summary comparison', {
+              endpoint: 'realtime', step: 'summary',
+              ae: aeSummary,
+              d1: d1Result,
+            });
+          }
+
+          return success(c, aeSummary);
+        }
+        // Fall through to D1 if AE not available
+      }
+
+      // --- D1 path (default) ---
+      const d1Result = await this.queryD1Summary(analyticsDb, orgId, hours);
+      return success(c, d1Result);
     } catch (err) {
       structuredLog('ERROR', 'Summary query failed', { endpoint: 'realtime', step: 'summary', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
+  }
+
+  private async queryD1Summary(analyticsDb: D1Database, orgId: string, hours: number) {
+    const result = await analyticsDb.prepare(`
+      SELECT
+        COALESCE(SUM(total_events), 0) as total_events,
+        COALESCE(SUM(sessions), 0) as sessions,
+        COALESCE(SUM(users), 0) as users,
+        COALESCE(SUM(conversions), 0) as conversions,
+        COALESCE(SUM(revenue_cents), 0) as revenue_cents,
+        COALESCE(SUM(page_views), 0) as page_views
+      FROM hourly_metrics
+      WHERE organization_id = ?
+        AND hour >= datetime('now', '-' || ? || ' hours')
+    `).bind(orgId, hours).first() as {
+      total_events: number;
+      sessions: number;
+      users: number;
+      conversions: number;
+      revenue_cents: number;
+      page_views: number;
+    } | null;
+
+    const users = result?.users || 0;
+    const estimatedUsers = users > 0 ? users : Math.round((result?.sessions || 0) * 0.85);
+
+    return {
+      totalEvents: result?.total_events || 0,
+      sessions: result?.sessions || 0,
+      users: estimatedUsers,
+      conversions: result?.conversions || 0,
+      revenue: (result?.revenue_cents || 0) / 100,
+      pageViews: result?.page_views || 0,
+    };
   }
 }
 
@@ -148,6 +209,7 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
   async handle(c: AppContext) {
     const orgId = c.req.query("org_id") || c.get("org_id");
     const hours = parseInt(c.req.query("hours") || "24");
+    const interval = (c.req.query("interval") || "hour") as 'hour' | '15min';
 
     if (!orgId) {
       return error(c, "NO_ORGANIZATION", "No organization specified", 400);
@@ -158,39 +220,67 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
-    try {
-      // Query hourly_metrics for time series
-      interface TimeSeriesRow {
-        bucket: string;
-        events: number;
-        sessions: number;
-        page_views: number;
-        conversions: number;
-      }
-      const result = await analyticsDb.prepare(`
-        SELECT
-          hour as bucket,
-          total_events as events,
-          sessions,
-          page_views,
-          conversions
-        FROM hourly_metrics
-        WHERE organization_id = ?
-          AND hour >= datetime('now', '-' || ? || ' hours')
-        ORDER BY hour ASC
-      `).bind(orgId, hours).all();
+    const source = getAnalyticsSource(c.env);
 
-      return success(c, ((result.results || []) as unknown as TimeSeriesRow[]).map((row: TimeSeriesRow) => ({
-        bucket: row.bucket,
-        events: row.events || 0,
-        sessions: row.sessions || 0,
-        pageViews: row.page_views || 0,
-        conversions: row.conversions || 0
-      })));
+    try {
+      // --- AE path ---
+      if (source === 'ae' || source === 'dual') {
+        const orgTag = await resolveOrgTag(c.env.DB, orgId);
+        const aeService = createAEService(c.env);
+
+        if (aeService && orgTag) {
+          const aeResult = await aeService.getTimeSeries(orgTag, hours, interval);
+
+          if (source === 'dual') {
+            const d1Result = await this.queryD1TimeSeries(analyticsDb, orgId, hours);
+            structuredLog('INFO', 'Dual-mode timeseries comparison', {
+              endpoint: 'realtime', step: 'timeseries',
+              ae_count: aeResult.length,
+              d1_count: d1Result.length,
+            });
+          }
+
+          return success(c, aeResult);
+        }
+      }
+
+      // --- D1 path (default) ---
+      const d1Result = await this.queryD1TimeSeries(analyticsDb, orgId, hours);
+      return success(c, d1Result);
     } catch (err) {
       structuredLog('ERROR', 'Time series query failed', { endpoint: 'realtime', step: 'timeseries', error: err instanceof Error ? err.message : String(err) });
       return error(c, "QUERY_FAILED", err instanceof Error ? err.message : "Query failed", 500);
     }
+  }
+
+  private async queryD1TimeSeries(analyticsDb: D1Database, orgId: string, hours: number) {
+    interface TimeSeriesRow {
+      bucket: string;
+      events: number;
+      sessions: number;
+      page_views: number;
+      conversions: number;
+    }
+    const result = await analyticsDb.prepare(`
+      SELECT
+        hour as bucket,
+        total_events as events,
+        sessions,
+        page_views,
+        conversions
+      FROM hourly_metrics
+      WHERE organization_id = ?
+        AND hour >= datetime('now', '-' || ? || ' hours')
+      ORDER BY hour ASC
+    `).bind(orgId, hours).all();
+
+    return ((result.results || []) as unknown as TimeSeriesRow[]).map((row: TimeSeriesRow) => ({
+      bucket: row.bucket,
+      events: row.events || 0,
+      sessions: row.sessions || 0,
+      pageViews: row.page_views || 0,
+      conversions: row.conversions || 0,
+    }));
   }
 }
 
@@ -208,7 +298,7 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
     request: {
       query: z.object({
         org_id: z.string().optional().describe("Organization ID"),
-        dimension: z.enum(["utm_source", "utm_medium", "utm_campaign", "device", "country", "page", "browser", "channel"]).describe("Dimension to group by"),
+        dimension: z.enum(["utm_source", "utm_medium", "utm_campaign", "device", "country", "page", "browser", "os", "referrer", "region", "city", "channel"]).describe("Dimension to group by"),
         hours: z.coerce.number().int().min(1).max(168).optional().default(24).describe("Hours to look back")
       })
     },
@@ -251,7 +341,38 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
+    const source = getAnalyticsSource(c.env);
+
+    // AE-supported dimensions (superset of D1 — includes utm_medium, utm_campaign, country, browser, os, referrer, region, city)
+    const aeDimensions = new Set(['utm_source', 'utm_medium', 'utm_campaign', 'device', 'country', 'page', 'browser', 'os', 'referrer', 'region', 'city']);
+
     try {
+      // --- AE path ---
+      if ((source === 'ae' || source === 'dual') && aeDimensions.has(dimension)) {
+        const orgTag = await resolveOrgTag(c.env.DB, orgId);
+        const aeService = createAEService(c.env);
+
+        if (aeService && orgTag) {
+          const aeResult = await aeService.getBreakdown(
+            orgTag,
+            dimension as Parameters<AnalyticsEngineService['getBreakdown']>[1],
+            hours
+          );
+
+          if (source === 'dual') {
+            structuredLog('INFO', 'Dual-mode breakdown comparison', {
+              endpoint: 'realtime', step: 'breakdown', dimension,
+              ae_count: aeResult.length,
+            });
+          }
+
+          return success(c, aeResult);
+        }
+        // Fall through to D1 if AE not available
+      }
+
+      // --- D1 path (default) ---
+
       // For channel/device breakdowns, use the JSON fields in hourly_metrics
       if (dimension === 'channel' || dimension === 'utm_source') {
         const result = await analyticsDb.prepare(`
@@ -435,7 +556,31 @@ export class GetRealtimeEvents extends OpenAPIRoute {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
+    const source = getAnalyticsSource(c.env);
+    const minutes = parseInt(c.req.query("minutes") || "5");
+
     try {
+      // --- AE path ---
+      if (source === 'ae' || source === 'dual') {
+        const orgTag = await resolveOrgTag(c.env.DB, orgId);
+        const aeService = createAEService(c.env);
+
+        if (aeService && orgTag) {
+          const aeResult = await aeService.getRecentEvents(orgTag, minutes, limit);
+
+          if (source === 'dual') {
+            structuredLog('INFO', 'Dual-mode events comparison', {
+              endpoint: 'realtime', step: 'recent_events',
+              ae_count: aeResult.length,
+            });
+          }
+
+          return success(c, aeResult);
+        }
+      }
+
+      // --- D1 path (default) ---
+
       // Get recent hourly data with by_page breakdown to simulate individual events
       const result = await analyticsDb.prepare(`
         SELECT
@@ -557,7 +702,30 @@ export class GetRealtimeEventTypes extends OpenAPIRoute {
       return error(c, "CONFIG_ERROR", "ANALYTICS_DB not configured", 500);
     }
 
+    const source = getAnalyticsSource(c.env);
+
     try {
+      // --- AE path ---
+      if (source === 'ae' || source === 'dual') {
+        const orgTag = await resolveOrgTag(c.env.DB, orgId);
+        const aeService = createAEService(c.env);
+
+        if (aeService && orgTag) {
+          const aeResult = await aeService.getEventTypes(orgTag, hours);
+
+          if (source === 'dual') {
+            structuredLog('INFO', 'Dual-mode event-types comparison', {
+              endpoint: 'realtime', step: 'event_types',
+              ae_count: aeResult.length,
+            });
+          }
+
+          return success(c, aeResult);
+        }
+      }
+
+      // --- D1 path (default) ---
+
       // Return aggregated event types from hourly_metrics
       const result = await analyticsDb.prepare(`
         SELECT
