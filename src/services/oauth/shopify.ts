@@ -52,7 +52,7 @@ export interface ShopifyShopInfo {
 
 export class ShopifyOAuthProvider extends OAuthProvider {
   private shopDomain: string;
-  private readonly API_VERSION = '2025-01';
+  private readonly API_VERSION = '2026-01';
 
   constructor(clientId: string, clientSecret: string, redirectUri: string, shopDomain: string) {
     // Validate shop domain before creating provider
