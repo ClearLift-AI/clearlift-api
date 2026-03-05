@@ -20,7 +20,7 @@
     "APP_BASE_URL": "https://app.adbliss.io",
     "CDN_BASE_URL": "https://cdn.adbliss.io",
     "IRIS_BASE_URL": "https://iris.adbliss.io",
-    "ANALYTICS_SOURCE": "d1"
+    "ANALYTICS_SOURCE": "dual"
   },
 
   // Secrets Store bindings - required for OAuth and encryption
