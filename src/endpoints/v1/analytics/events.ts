@@ -83,7 +83,7 @@ export class GetEvents extends OpenAPIRoute {
     try {
       const domainClaimsResult = await c.env.DB.prepare(`
         SELECT domain_pattern FROM domain_claims
-        WHERE claimed_org_tag = ? AND released_at IS NULL
+        WHERE org_tag = ? AND released_at IS NULL
       `).bind(orgTag).all<{ domain_pattern: string }>();
 
       domainPatterns = (domainClaimsResult.results || []).map(d => d.domain_pattern);
