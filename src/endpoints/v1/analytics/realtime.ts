@@ -106,19 +106,24 @@ export class GetRealtimeSummary extends OpenAPIRoute {
         const aeService = createAEService(c.env);
 
         if (aeService && orgTag) {
+          const aeStart = performance.now();
           const aeSummary = await aeService.getSummary(orgTag, hours);
+          const ae_ms = Math.round(performance.now() - aeStart);
 
           if (source === 'dual') {
-            // In dual mode, also run D1 for comparison logging, but return AE result
+            const d1Start = performance.now();
             const d1Result = await this.queryD1Summary(analyticsDb, orgId, hours);
+            const d1_ms = Math.round(performance.now() - d1Start);
             structuredLog('INFO', 'Dual-mode summary comparison', {
               endpoint: 'realtime', step: 'summary',
+              ae_ms, d1_ms,
               ae: aeSummary,
               d1: d1Result,
             });
+            return success(c, { ...aeSummary, _timing: { ae_ms, d1_ms, source: 'dual' } });
           }
 
-          return success(c, aeSummary);
+          return success(c, { ...aeSummary, _timing: { ae_ms, source: 'ae' } });
         }
         // Fall through to D1 if AE not available
       }
@@ -229,18 +234,24 @@ export class GetRealtimeTimeSeries extends OpenAPIRoute {
         const aeService = createAEService(c.env);
 
         if (aeService && orgTag) {
+          const aeStart = performance.now();
           const aeResult = await aeService.getTimeSeries(orgTag, hours, interval);
+          const ae_ms = Math.round(performance.now() - aeStart);
 
           if (source === 'dual') {
+            const d1Start = performance.now();
             const d1Result = await this.queryD1TimeSeries(analyticsDb, orgId, hours);
+            const d1_ms = Math.round(performance.now() - d1Start);
             structuredLog('INFO', 'Dual-mode timeseries comparison', {
               endpoint: 'realtime', step: 'timeseries',
+              ae_ms, d1_ms,
               ae_count: aeResult.length,
               d1_count: d1Result.length,
             });
+            return success(c, { timeseries: aeResult, _timing: { ae_ms, d1_ms, source: 'dual' } });
           }
 
-          return success(c, aeResult);
+          return success(c, { timeseries: aeResult, _timing: { ae_ms, source: 'ae' } });
         }
       }
 
@@ -353,20 +364,23 @@ export class GetRealtimeBreakdown extends OpenAPIRoute {
         const aeService = createAEService(c.env);
 
         if (aeService && orgTag) {
+          const aeStart = performance.now();
           const aeResult = await aeService.getBreakdown(
             orgTag,
             dimension as Parameters<AnalyticsEngineService['getBreakdown']>[1],
             hours
           );
+          const ae_ms = Math.round(performance.now() - aeStart);
 
           if (source === 'dual') {
             structuredLog('INFO', 'Dual-mode breakdown comparison', {
               endpoint: 'realtime', step: 'breakdown', dimension,
-              ae_count: aeResult.length,
+              ae_ms, ae_count: aeResult.length,
             });
+            return success(c, { breakdown: aeResult, _timing: { ae_ms, source: 'dual', dimension } });
           }
 
-          return success(c, aeResult);
+          return success(c, { breakdown: aeResult, _timing: { ae_ms, source: 'ae', dimension } });
         }
         // Fall through to D1 if AE not available
       }
@@ -566,16 +580,19 @@ export class GetRealtimeEvents extends OpenAPIRoute {
         const aeService = createAEService(c.env);
 
         if (aeService && orgTag) {
+          const aeStart = performance.now();
           const aeResult = await aeService.getRecentEvents(orgTag, minutes, limit);
+          const ae_ms = Math.round(performance.now() - aeStart);
 
           if (source === 'dual') {
             structuredLog('INFO', 'Dual-mode events comparison', {
               endpoint: 'realtime', step: 'recent_events',
-              ae_count: aeResult.length,
+              ae_ms, ae_count: aeResult.length,
             });
+            return success(c, { events: aeResult, _timing: { ae_ms, source: 'dual' } });
           }
 
-          return success(c, aeResult);
+          return success(c, { events: aeResult, _timing: { ae_ms, source: 'ae' } });
         }
       }
 
@@ -711,16 +728,19 @@ export class GetRealtimeEventTypes extends OpenAPIRoute {
         const aeService = createAEService(c.env);
 
         if (aeService && orgTag) {
+          const aeStart = performance.now();
           const aeResult = await aeService.getEventTypes(orgTag, hours);
+          const ae_ms = Math.round(performance.now() - aeStart);
 
           if (source === 'dual') {
             structuredLog('INFO', 'Dual-mode event-types comparison', {
               endpoint: 'realtime', step: 'event_types',
-              ae_count: aeResult.length,
+              ae_ms, ae_count: aeResult.length,
             });
+            return success(c, { event_types: aeResult, _timing: { ae_ms, source: 'dual' } });
           }
 
-          return success(c, aeResult);
+          return success(c, { event_types: aeResult, _timing: { ae_ms, source: 'ae' } });
         }
       }
 
