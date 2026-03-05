@@ -399,7 +399,7 @@
         "CDN_BASE_URL": "https://cdn.clearlift.ai",
         "IRIS_BASE_URL": "https://iris-dev.clearlift.ai",
         "EMAIL_DRY_RUN": "true",
-        "ANALYTICS_SOURCE": "dual",
+        "ANALYTICS_SOURCE": "ae",
         "AE_DATASET": "adbliss_events_staging"
       },
       "d1_databases": [
