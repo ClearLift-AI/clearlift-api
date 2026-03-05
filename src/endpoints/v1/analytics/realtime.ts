@@ -32,7 +32,8 @@ function createAEService(env: Env): AnalyticsEngineService | null {
   const accountId = env.CLOUDFLARE_ACCOUNT_ID;
   const apiToken = (env as any).AE_API_TOKEN;
   if (!accountId || !apiToken) return null;
-  return new AnalyticsEngineService(accountId, apiToken);
+  const dataset = (env as any).AE_DATASET || 'adbliss_events';
+  return new AnalyticsEngineService(accountId, apiToken, dataset);
 }
 
 /**
