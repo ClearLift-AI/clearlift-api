@@ -144,6 +144,71 @@ export function deserializeEntityTree(serialized: SerializedEntityTree): EntityT
 }
 
 /**
+ * Case-insensitive check for "active" statuses across ad platforms.
+ * Handles: active, ACTIVE, ENABLED, enabled, RUNNING, running, LIVE, live
+ */
+export function isActiveStatus(status: string | undefined): boolean {
+  if (!status) return false;
+  const normalized = status.toLowerCase();
+  return ['active', 'enabled', 'running', 'live'].includes(normalized);
+}
+
+/**
+ * Collect all entities at a specific level from a serialized entity tree.
+ */
+export function getEntitiesAtLevel(tree: SerializedEntityTree, level: string): SerializedEntity[] {
+  const entities: SerializedEntity[] = [];
+
+  const collect = (entity: SerializedEntity) => {
+    if (entity.level === level) {
+      entities.push(entity);
+    }
+    for (const child of entity.children) {
+      collect(child);
+    }
+  };
+
+  for (const [, account] of tree.accounts) {
+    collect(account);
+  }
+
+  return entities;
+}
+
+/**
+ * Build a set of entity IDs to skip — children of inactive parents.
+ * Used to avoid analyzing entities under paused/archived campaigns.
+ */
+export function buildHierarchySkipSet(tree: SerializedEntityTree): Set<string> {
+  const skipSet = new Set<string>();
+
+  const addDescendants = (entity: SerializedEntity) => {
+    for (const child of entity.children) {
+      skipSet.add(child.id);
+      addDescendants(child);
+    }
+  };
+
+  const processEntity = (entity: SerializedEntity) => {
+    if (!isActiveStatus(entity.status)) {
+      addDescendants(entity);
+    } else {
+      for (const child of entity.children) {
+        processEntity(child);
+      }
+    }
+  };
+
+  for (const [, account] of tree.accounts) {
+    for (const child of account.children) {
+      processEntity(child);
+    }
+  }
+
+  return skipSet;
+}
+
+/**
  * Parameters for the analysis workflow
  */
 export interface AnalysisWorkflowParams {
