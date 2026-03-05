@@ -399,7 +399,8 @@
         "CDN_BASE_URL": "https://cdn.clearlift.ai",
         "IRIS_BASE_URL": "https://iris-dev.clearlift.ai",
         "EMAIL_DRY_RUN": "true",
-        "ANALYTICS_SOURCE": "dual"
+        "ANALYTICS_SOURCE": "dual",
+        "AE_DATASET": "adbliss_events_staging"
       },
       "d1_databases": [
         { "binding": "DB",           "database_name": "adbliss-core-staging",      "database_id": "9b76b070-c22c-4cfe-a74b-0e7ff796a821", "migrations_dir": "migrations-adbliss-core" },
