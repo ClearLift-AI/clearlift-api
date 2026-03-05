@@ -213,7 +213,7 @@ describe('CORS Headers', () => {
       }
     });
 
-    expect(response.headers.get('access-control-allow-origin')).toBeDefined();
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://app.clearlift.ai');
   });
 
   it('should handle OPTIONS preflight requests', async () => {

@@ -19,7 +19,8 @@
     "OAUTH_CALLBACK_BASE": "https://api.adbliss.io",
     "APP_BASE_URL": "https://app.adbliss.io",
     "CDN_BASE_URL": "https://cdn.adbliss.io",
-    "IRIS_BASE_URL": "https://iris.adbliss.io"
+    "IRIS_BASE_URL": "https://iris.adbliss.io",
+    "ANALYTICS_SOURCE": "dual"
   },
 
   // Secrets Store bindings - required for OAuth and encryption
@@ -155,7 +156,7 @@
   "analytics_engine_datasets": [
     {
       "binding": "ANALYTICS",
-      "dataset": "clearlift_events"
+      "dataset": "adbliss_events"
     }
   ],
 
@@ -397,7 +398,9 @@
         "APP_BASE_URL": "https://dev.clearlift.ai",
         "CDN_BASE_URL": "https://cdn.clearlift.ai",
         "IRIS_BASE_URL": "https://iris-dev.clearlift.ai",
-        "EMAIL_DRY_RUN": "true"
+        "EMAIL_DRY_RUN": "true",
+        "ANALYTICS_SOURCE": "ae",
+        "AE_DATASET": "adbliss_events_staging"
       },
       "d1_databases": [
         { "binding": "DB",           "database_name": "adbliss-core-staging",      "database_id": "9b76b070-c22c-4cfe-a74b-0e7ff796a821", "migrations_dir": "migrations-adbliss-core" },
@@ -405,7 +408,7 @@
       ],
       "kv_namespaces": [{ "binding": "CACHE", "id": "4ac9423601984ea1a03f382eba42af93" }],
       "queues": { "producers": [{ "binding": "SYNC_QUEUE", "queue": "sync-jobs-staging" }] },
-      "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "clearlift_events_staging" }],
+      "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "adbliss_events_staging" }],
       "workflows": [
         { "name": "analysis-workflow-staging",    "binding": "ANALYSIS_WORKFLOW",    "class_name": "AnalysisWorkflow" }
       ],
