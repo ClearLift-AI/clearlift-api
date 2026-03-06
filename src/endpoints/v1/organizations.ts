@@ -1537,7 +1537,7 @@ export class ResyncTrackingDomain extends OpenAPIRoute {
 /**
  * GET /v1/organizations/:org_id/script-hash - Get the unique script URL hash for an organization
  *
- * Returns the hash that can be used to load the tracking script at cdn.adbliss.io/<hash>.js
+ * Returns the hash that can be used to load the tracking script at iris.adbliss.io/<hash>.js
  * This is the NEW recommended installation method - the URL itself identifies the organization.
  */
 export class GetScriptHash extends OpenAPIRoute {
@@ -1610,7 +1610,7 @@ export class GetScriptHash extends OpenAPIRoute {
       scriptHash = { hash: newHash, org_tag: tagMapping.short_tag };
     }
 
-    const cdnBase = c.env.CDN_BASE_URL || 'https://cdn.adbliss.io';
+    const cdnBase = c.env.CDN_BASE_URL || 'https://iris.adbliss.io';
     const scriptUrl = `${cdnBase}/${scriptHash.hash}.js`;
     const installationSnippet = `<!-- ClearLift Pixel -->
 <script src="${scriptUrl}" async></script>`;
