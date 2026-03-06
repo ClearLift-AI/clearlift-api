@@ -799,7 +799,7 @@ export class BackfillCACHistory extends OpenAPIRoute {
 
         if (platform.spend_cents === 0 && primaryConversions === 0) continue;
 
-        const cacCents = primaryConversions > 0 ? Math.round(platform.spend_cents / primaryConversions) : 0;
+        const cacCents = primaryConversions > 0 ? Math.round(platform.spend_cents / primaryConversions) : null;
 
         const perSourceJson = JSON.stringify(goal?.perSource || {});
 
@@ -956,7 +956,7 @@ export class GetCACSummary extends OpenAPIRoute {
 
       // Determine dominant conversion source
       const conversionSource = conversionsGoal > 0 ? 'goal' : 'platform';
-      const cacCents = conversions > 0 ? Math.round(spendCents / conversions) : 0;
+      const cacCents = conversions > 0 ? Math.round(spendCents / conversions) : null;
 
       // Get connector names if using goal-linked conversions
       let goalCount = 0;
