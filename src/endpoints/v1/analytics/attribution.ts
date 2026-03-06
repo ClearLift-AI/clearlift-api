@@ -142,7 +142,7 @@ async function checkVerificationStatus(
       };
     }
 
-    // Get linked conversions (with link_confidence >= 0.7)
+    // Get linked conversions (any confidence — time-proximity matches at 0.3-0.8 are still valid links)
     const linkedResult = await analyticsDb.prepare(`
       SELECT
         COUNT(*) as verified_count,
@@ -150,7 +150,6 @@ async function checkVerificationStatus(
       FROM conversions
       WHERE organization_id = ?
         AND linked_goal_id IS NOT NULL
-        AND link_confidence >= 0.7
         AND conversion_timestamp >= ?
         AND conversion_timestamp <= ?
     `).bind(orgId, dateRange.start, dateRange.end + 'T23:59:59Z').first<{
@@ -167,7 +166,6 @@ async function checkVerificationStatus(
       FROM conversions
       WHERE organization_id = ?
         AND linked_goal_id IS NOT NULL
-        AND link_confidence >= 0.7
         AND conversion_timestamp >= ?
         AND conversion_timestamp <= ?
       GROUP BY link_method
