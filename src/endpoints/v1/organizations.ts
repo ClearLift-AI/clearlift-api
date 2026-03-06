@@ -125,6 +125,16 @@ export class CreateOrganization extends OpenAPIRoute {
         VALUES (?, ?, ?, ?)
       `).bind(tagMappingId, orgId, shortTag, now).run();
 
+      // Auto-create script hash for tracking tag installation
+      const scriptHashId = `sh_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const hashBytes = new Uint8Array(4);
+      crypto.getRandomValues(hashBytes);
+      const scriptHash = Array.from(hashBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+      await c.env.DB.prepare(`
+        INSERT INTO script_hashes (id, organization_id, hash, org_tag, version)
+        VALUES (?, ?, ?, ?, '3.0.0')
+      `).bind(scriptHashId, orgId, scriptHash, shortTag).run();
+
       // AI recommendations are generated from real synced data via POST /v1/analysis/run
 
       return c.json({
