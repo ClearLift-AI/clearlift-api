@@ -97,10 +97,11 @@ export class GetCACTimeline extends OpenAPIRoute {
         revenue_goal_cents: number | null;
       }>();
 
-      // Live-compute today's CAC if missing from cac_history
-      // (cron backfill may not have run yet for today)
+      // Live-compute today's CAC if missing OR stale (0 conversions) in cac_history
+      // The cron may have run early in the day before conversions arrived
       const todayStr = new Date().toISOString().split('T')[0];
-      const hasTodayInHistory = (historyResult.results || []).some(r => r.date === todayStr);
+      const todayRow = (historyResult.results || []).find(r => r.date === todayStr);
+      const hasTodayInHistory = todayRow != null && (todayRow.conversions ?? 0) > 0;
 
       if (!hasTodayInHistory && todayStr >= startDateStr && todayStr <= endDateStr) {
         try {
@@ -132,6 +133,10 @@ export class GetCACTimeline extends OpenAPIRoute {
             const cacCents = primaryConversions > 0 ? Math.round(todaySpend / primaryConversions) : 0;
 
             historyResult.results = historyResult.results || [];
+            // Remove stale cron row for today (0-conversion) if present
+            if (todayRow) {
+              historyResult.results = historyResult.results.filter(r => r.date !== todayStr);
+            }
             historyResult.results.push({
               date: todayStr,
               cac_cents: cacCents,
