@@ -1610,7 +1610,7 @@ export class GetScriptHash extends OpenAPIRoute {
       scriptHash = { hash: newHash, org_tag: tagMapping.short_tag };
     }
 
-    const cdnBase = c.env.CDN_BASE_URL || 'https://cdn.adbliss.io';
+    const cdnBase = c.env.CDN_BASE_URL || 'https://iris.adbliss.io';
     const scriptUrl = `${cdnBase}/${scriptHash.hash}.js`;
     const installationSnippet = `<!-- ClearLift Pixel -->
 <script src="${scriptUrl}" async></script>`;
