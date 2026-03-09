@@ -428,7 +428,7 @@ export class GenerateTrackingSnippet extends OpenAPIRoute {
         ? `\n    data-goals='${JSON.stringify(goals)}'`
         : '';
 
-      const cdnBase = c.env.CDN_BASE_URL || 'https://cdn.adbliss.io';
+      const cdnBase = c.env.CDN_BASE_URL || 'https://iris.adbliss.io';
       snippet = `<!-- Clearlift Analytics - Simple Integration -->
 <script
     src="${cdnBase}/v3/clearlift-3.0.0.js"
@@ -442,7 +442,7 @@ export class GenerateTrackingSnippet extends OpenAPIRoute {
   clearlift.setGoals(${JSON.stringify(goals, null, 2)});`
         : '';
 
-      const cdnBaseAdv = c.env.CDN_BASE_URL || 'https://cdn.adbliss.io';
+      const cdnBaseAdv = c.env.CDN_BASE_URL || 'https://iris.adbliss.io';
       snippet = `<!-- Clearlift Analytics - Advanced Integration -->
 <script
     src="${cdnBaseAdv}/v3/clearlift-3.0.0.js"

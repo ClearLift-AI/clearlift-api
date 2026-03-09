@@ -18,7 +18,7 @@
     "USE_D1_ANALYTICS": "true",
     "OAUTH_CALLBACK_BASE": "https://api.adbliss.io",
     "APP_BASE_URL": "https://app.adbliss.io",
-    "CDN_BASE_URL": "https://cdn.adbliss.io",
+    "CDN_BASE_URL": "https://iris.adbliss.io",
     "IRIS_BASE_URL": "https://iris.adbliss.io",
     "ANALYTICS_SOURCE": "dual"
   },
@@ -396,7 +396,7 @@
         "USE_D1_ANALYTICS": "true",
         "OAUTH_CALLBACK_BASE": "https://api-dev.clearlift.ai",
         "APP_BASE_URL": "https://dev.clearlift.ai",
-        "CDN_BASE_URL": "https://cdn.clearlift.ai",
+        "CDN_BASE_URL": "https://iris-dev.clearlift.ai",
         "IRIS_BASE_URL": "https://iris-dev.clearlift.ai",
         "EMAIL_DRY_RUN": "true",
         "ANALYTICS_SOURCE": "ae",
