@@ -420,19 +420,30 @@ export class GenerateTrackingSnippet extends OpenAPIRoute {
     const complexity = data.body.complexity;
     const goals = data.body.goals || {};
 
+    // Look up hash-based script URL (preferred over data-org-tag)
+    const scriptHash = await c.env.DB.prepare(`
+      SELECT hash FROM script_hashes WHERE organization_id = ? LIMIT 1
+    `).bind(orgId).first<{ hash: string }>();
+
+    const cdnBase = c.env.CDN_BASE_URL || 'https://iris.adbliss.io';
+
+    // Hash-based URL is preferred — org_tag is pre-injected by the events worker
+    // Fall back to data-org-tag for legacy orgs without a hash
+    const scriptUrl = scriptHash
+      ? `${cdnBase}/${scriptHash.hash}.js`
+      : `${cdnBase}/adbliss.js`;
+    const orgTagAttr = scriptHash ? '' : `\n    data-org-tag="${orgTag}"`;
+
     let snippet = '';
 
     if (complexity === 'simple') {
-      // Simple snippet with data attributes only
       const goalsAttr = Object.keys(goals).length > 0
         ? `\n    data-goals='${JSON.stringify(goals)}'`
         : '';
 
-      const cdnBase = c.env.CDN_BASE_URL || 'https://iris.adbliss.io';
-      snippet = `<!-- Clearlift Analytics - Simple Integration -->
+      snippet = `<!-- AdBliss Pixel -->
 <script
-    src="${cdnBase}/v3/clearlift-3.0.0.js"
-    data-org-tag="${orgTag}"${goalsAttr}
+    src="${scriptUrl}"${orgTagAttr}${goalsAttr}
     async
 ></script>`;
     } else {
@@ -442,16 +453,10 @@ export class GenerateTrackingSnippet extends OpenAPIRoute {
   clearlift.setGoals(${JSON.stringify(goals, null, 2)});`
         : '';
 
-      const cdnBaseAdv = c.env.CDN_BASE_URL || 'https://iris.adbliss.io';
-      snippet = `<!-- Clearlift Analytics - Advanced Integration -->
-<script
-    src="${cdnBaseAdv}/v3/clearlift-3.0.0.js"
-    data-org-tag="${orgTag}"
-    async
-></script>
+      snippet = `<!-- AdBliss Pixel -->
+<script src="${scriptUrl}"${orgTagAttr} async></script>
 
 <script>
-  // Wait for clearlift to load
   window.addEventListener('load', function() {
     if (window.clearlift) {${goalsCode}
 
@@ -470,7 +475,9 @@ export class GenerateTrackingSnippet extends OpenAPIRoute {
 
     return success(c, {
       snippet,
-      org_tag: orgTag
+      org_tag: orgTag,
+      script_url: scriptUrl,
+      hash: scriptHash?.hash || null
     });
   }
 }
